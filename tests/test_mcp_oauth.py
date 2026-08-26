@@ -15,14 +15,14 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
-from sylliptor_agent_cli.mcp import token_store as token_store_mod
-from sylliptor_agent_cli.mcp.errors import (
+from alysis_code.mcp import token_store as token_store_mod
+from alysis_code.mcp.errors import (
     McpTokenStoreCorruptError,
     McpTokenStoreMigrationError,
     McpTokenStoreUnavailableError,
     McpTokenStoreVersionError,
 )
-from sylliptor_agent_cli.mcp.oauth import (
+from alysis_code.mcp.oauth import (
     McpOAuthCallbackError,
     McpOAuthConfigError,
     McpOAuthDiscoveryError,
@@ -40,8 +40,8 @@ from sylliptor_agent_cli.mcp.oauth import (
     refresh_access_token,
     resolve_requested_scopes,
 )
-from sylliptor_agent_cli.mcp.oauth_runtime import perform_authorization_code_login
-from sylliptor_agent_cli.mcp.oauth_store import (
+from alysis_code.mcp.oauth_runtime import perform_authorization_code_login
+from alysis_code.mcp.oauth_store import (
     McpOAuthTokenRecord,
     McpOAuthTokenStoreError,
     delete_oauth_token_record,
@@ -198,7 +198,7 @@ def test_token_store_path_uses_config_dir_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     assert mcp_oauth_token_store_path() == cfg_dir / "mcp_oauth_tokens.json"
 
@@ -207,7 +207,7 @@ def test_token_store_save_load_delete_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     record = _record(access_token="access-one", refresh_token="refresh-one")
     save_oauth_token_record("alpha", record)
@@ -226,7 +226,7 @@ def test_token_store_atomic_overwrite_replaces_entry_and_preserves_other_servers
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
@@ -258,7 +258,7 @@ def test_token_store_refresh_token_replacement_semantics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
@@ -277,7 +277,7 @@ def test_token_store_keyring_envelope_happy_path_generates_master_key_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     keyring_values = _install_memory_keyring(monkeypatch)
     set_calls: list[str] = []
 
@@ -311,7 +311,7 @@ def test_token_store_filesystem_random_fallback_round_trip_is_silent_and_private
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
 
@@ -400,7 +400,7 @@ def test_token_store_keyring_read_failure_logs_without_leaking_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
 
@@ -419,7 +419,7 @@ def test_token_store_keyring_write_failure_logs_without_leaking_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setattr(token_store_mod, "_get_keyring_password", lambda service, account: None)
 
     def _raise(*args: object, **kwargs: object) -> None:
@@ -449,7 +449,7 @@ def test_token_store_falls_back_when_the_keyring_silently_discards_the_key(
     """
 
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setattr(token_store_mod, "_get_keyring_password", lambda service, account: None)
     monkeypatch.setattr(
         token_store_mod,
@@ -521,7 +521,7 @@ def test_stored_key_source_reads_the_envelope_without_decrypting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
     save_oauth_token_record("alpha", _record(access_token="a", refresh_token="r"))
@@ -537,7 +537,7 @@ def test_token_store_windows_dpapi_fallback_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Windows")
     calls: dict[str, int] = {"protect": 0, "unprotect": 0}
@@ -614,7 +614,7 @@ def test_token_store_legacy_plaintext_migrates_to_encrypted_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     legacy_record = _record(access_token="legacy-access", refresh_token="legacy-refresh")
     _write_legacy_store(_legacy_payload(legacy_record))
 
@@ -628,7 +628,7 @@ def test_token_store_legacy_plaintext_missing_load_still_migrates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     legacy_record = _record(access_token="legacy-access", refresh_token="legacy-refresh")
     _write_legacy_store(_legacy_payload(legacy_record))
 
@@ -643,7 +643,7 @@ def test_token_store_legacy_plaintext_missing_delete_still_migrates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     legacy_record = _record(access_token="legacy-access", refresh_token="legacy-refresh")
     _write_legacy_store(_legacy_payload(legacy_record))
 
@@ -658,7 +658,7 @@ def test_token_store_legacy_plaintext_invalid_record_is_not_migrated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     original = _write_legacy_store(
         {
             "alpha": {
@@ -682,7 +682,7 @@ def test_token_store_legacy_plaintext_server_id_matching_envelope_field_migrates
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     record = _record(access_token="version-access", refresh_token="version-refresh")
     _write_legacy_store({"version": record.as_payload()})
 
@@ -696,7 +696,7 @@ def test_token_store_legacy_plaintext_two_envelope_field_server_ids_migrate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     version_record = _record(access_token="version-access", refresh_token="version-refresh")
     key_source_record = _record(access_token="source-access", refresh_token="source-refresh")
     _write_legacy_store(
@@ -724,7 +724,7 @@ def test_token_store_legacy_plaintext_three_envelope_field_server_ids_migrate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     version_record = _record(access_token="version-access", refresh_token="version-refresh")
     key_source_record = _record(access_token="source-access", refresh_token="source-refresh")
     nonce_record = _record(access_token="nonce-access", refresh_token="nonce-refresh")
@@ -757,7 +757,7 @@ def test_token_store_legacy_plaintext_all_envelope_field_server_ids_migrate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     version_record = _record(access_token="version-access", refresh_token="version-refresh")
     key_source_record = _record(access_token="source-access", refresh_token="source-refresh")
     nonce_record = _record(access_token="nonce-access", refresh_token="nonce-refresh")
@@ -795,7 +795,7 @@ def test_token_store_rejects_envelope_with_extra_fields_as_corrupt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     path = mcp_oauth_token_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = {
@@ -815,7 +815,7 @@ def test_token_store_rejects_partial_envelope_markers_as_corrupt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     path = mcp_oauth_token_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = {
@@ -833,7 +833,7 @@ def test_token_store_rejects_ambiguous_envelope_marker_payload_as_corrupt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     path = mcp_oauth_token_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = {
@@ -854,7 +854,7 @@ def test_token_store_legacy_plaintext_survives_failed_migration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     original = _write_legacy_store(_legacy_payload())
 
     def _boom(*args: object, **kwargs: object) -> None:
@@ -872,7 +872,7 @@ def test_token_store_rejects_corrupt_envelope_with_typed_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     path = mcp_oauth_token_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -895,7 +895,7 @@ def test_token_store_rejects_newer_envelope_version_without_rewrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     path = mcp_oauth_token_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(
@@ -920,7 +920,7 @@ def test_token_store_permissions_are_restrictive_on_posix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
@@ -936,8 +936,8 @@ def test_token_store_never_writes_into_project_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    project_store_path = tmp_path / ".sylliptor" / "mcp_oauth_tokens.json"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    project_store_path = tmp_path / ".alysis" / "mcp_oauth_tokens.json"
 
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
@@ -951,7 +951,7 @@ def test_token_store_repr_and_errors_do_not_leak_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     record = _record(access_token="secret-access", refresh_token="secret-refresh")
     assert "secret-access" not in repr(record)
@@ -983,7 +983,7 @@ def test_token_store_save_preserves_previous_envelope_when_atomic_write_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
     )
@@ -1009,7 +1009,7 @@ def test_token_store_delete_wraps_atomic_write_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     save_oauth_token_record(
         "alpha", _record(access_token="access-one", refresh_token="refresh-one")
     )
@@ -1031,7 +1031,7 @@ def test_token_store_reencrypts_filesystem_fallback_when_keyring_becomes_availab
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
     save_oauth_token_record(
@@ -1054,7 +1054,7 @@ def test_token_store_migrates_v1_weak_fallback_to_random_filesystem_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
     current_version = token_store_mod.CURRENT_ENVELOPE_VERSION
@@ -1083,7 +1083,7 @@ def test_token_store_rotation_preferred_key_failure_is_best_effort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _disable_keyring(monkeypatch)
     monkeypatch.setattr(token_store_mod, "_platform_system", lambda: "Linux")
     record = _record(access_token="secret-access", refresh_token="secret-refresh")
@@ -1113,7 +1113,7 @@ def test_token_store_rotation_rewrite_failure_is_best_effort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     record = _record(access_token="secret-access", refresh_token="secret-refresh")
     save_oauth_token_record("alpha", record)
     original = mcp_oauth_token_store_path().read_text(encoding="utf-8")
@@ -1142,7 +1142,7 @@ def test_token_store_reencrypts_older_supported_envelope_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     current_version = token_store_mod.CURRENT_ENVELOPE_VERSION
     monkeypatch.setattr(token_store_mod, "CURRENT_ENVELOPE_VERSION", 1)
     save_oauth_token_record(
@@ -1525,7 +1525,7 @@ def test_localhost_callback_login_succeeds_and_persists_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
     oauth_fixture_server.expected_authorize_resource = oauth_fixture_server.protected_url
     oauth_fixture_server.expected_token_resource = oauth_fixture_server.protected_url
@@ -1567,7 +1567,7 @@ def test_browser_open_failure_prints_manual_url_and_login_still_completes(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
     requests: list[threading.Thread] = []
 
@@ -1604,7 +1604,7 @@ def test_login_fails_on_callback_state_mismatch_without_leaking_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
 
     def _browser_opener(url: str) -> bool:
@@ -1634,7 +1634,7 @@ def test_login_times_out_waiting_for_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
 
     with pytest.raises(McpOAuthCallbackError) as excinfo:
@@ -1656,7 +1656,7 @@ def test_login_interrupt_raises_callback_error_and_shuts_down_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
     invoked = {"count": 0}
 
@@ -1684,7 +1684,7 @@ def test_refresh_access_token_rotates_refresh_token_and_can_be_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     metadata = _discovered_metadata(oauth_fixture_server)
     oauth_fixture_server.expected_token_resource = oauth_fixture_server.protected_url
     save_oauth_token_record(
@@ -1715,7 +1715,7 @@ def test_refresh_access_token_preserves_existing_refresh_token_when_server_does_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     oauth_fixture_server.rotate_refresh_token = False
     metadata = _discovered_metadata(oauth_fixture_server)
     oauth_fixture_server.expected_token_resource = oauth_fixture_server.protected_url
@@ -1745,7 +1745,7 @@ def test_refresh_access_token_preserves_existing_granted_scopes_when_response_om
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     oauth_fixture_server.rotate_refresh_token = False
     oauth_fixture_server.refresh_response_override = {
         "access_token": "refreshed_access",
@@ -1775,7 +1775,7 @@ def test_localhost_callback_login_rejects_non_bearer_token_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     oauth_fixture_server.authorization_code_response_override = {
         "access_token": "test_access",
         "token_type": "MAC",
@@ -1807,7 +1807,7 @@ def test_refresh_access_token_rejects_non_bearer_token_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     oauth_fixture_server.refresh_response_override = {
         "access_token": "refreshed_access",
         "token_type": "MAC",

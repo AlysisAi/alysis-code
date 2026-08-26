@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, build_tools, create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
-from sylliptor_agent_cli.surface import ApprovalDecision, ApprovalRequest
-from sylliptor_agent_cli.surface.hidden_surface import HiddenApprovalSurface
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
+from alysis_code.agent_loop import AgentRuntimeError, build_tools, create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import SessionStore, read_session_events
+from alysis_code.surface import ApprovalDecision, ApprovalRequest
+from alysis_code.surface.hidden_surface import HiddenApprovalSurface
+from alysis_code.surface.noop_surface import NoopSurface
 
 
 def _store(root: Path) -> SessionStore:

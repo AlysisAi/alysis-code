@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sylliptor_agent_cli.session_metrics import score_session_events, score_session_log
+from alysis_code.session_metrics import score_session_events, score_session_log
 
 
 def _write_jsonl(path: Path, events: list[dict[str, object]]) -> None:
@@ -35,7 +35,7 @@ def test_score_session_events_collects_core_metrics() -> None:
             "payload": {
                 "name": "fs_write",
                 "step": 2,
-                "result": {"error": "Blocked write to protected path: .sylliptor/state.txt"},
+                "result": {"error": "Blocked write to protected path: .alysis/state.txt"},
             },
         },
         {
@@ -463,7 +463,7 @@ def test_score_session_events_classifies_custom_tool_capabilities() -> None:
                 "custom_tool": {
                     "manifest_version": 1,
                     "source_scope": "project",
-                    "relative_tool_path": ".sylliptor/tools/jira_lookup.py",
+                    "relative_tool_path": ".alysis/tools/jira_lookup.py",
                     "capabilities": {
                         "read_only": True,
                         "destructive": False,
@@ -485,7 +485,7 @@ def test_score_session_events_classifies_custom_tool_capabilities() -> None:
                 "custom_tool": {
                     "manifest_version": 1,
                     "source_scope": "project",
-                    "relative_tool_path": ".sylliptor/tools/cleanup.py",
+                    "relative_tool_path": ".alysis/tools/cleanup.py",
                     "capabilities": {
                         "read_only": False,
                         "destructive": True,

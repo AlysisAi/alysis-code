@@ -1,7 +1,7 @@
 """Verification-command selection is an optimization, never a precondition.
 
 Selecting an authoritative command used to be able to abort a run before the
-agent had done any work: an inferred command Sylliptor could not classify (most
+agent had done any work: an inferred command Alysis Code could not classify (most
 often ``python -m doctest README.rst`` on an old-style repo) raised and the whole
 session exited non-zero having produced nothing. These tests pin the replacement
 behaviour -- degrade, warn, and keep working.
@@ -14,23 +14,23 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.repo_scan import (
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.config import AppConfig
+from alysis_code.repo_scan import (
     RepoScanResult,
     detect_fallback_test_commands,
     scan_workspace,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.verify_gate import (
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import read_session_events
+from alysis_code.verify_gate import (
     ResolvedVerifyCommands,
     VerifyError,
     command_is_docs_doctest,
     repair_invalid_verify_command_selection,
     resolve_verify_command_selection,
 )
-from sylliptor_agent_cli.workspace_context import resolve_workspace_context
+from alysis_code.workspace_context import resolve_workspace_context
 
 _UNKNOWN_COMMAND = "mystery-runner --all"
 _DOCS_DOCTEST_COMMAND = "python -m doctest README.rst"
@@ -84,7 +84,7 @@ def _prepare(
     [
         "python -m doctest README.rst",
         "python3 -m doctest README.md",
-        "/opt/sylliptor-venv/bin/python -m doctest README.rst",
+        "/opt/alysis-venv/bin/python -m doctest README.rst",
         "python -m doctest docs/usage.rst docs/install.rst",
         "PYTHONPATH=. python -m doctest README.md",
         "uv run python -m doctest README.md",
@@ -128,7 +128,7 @@ def test_reported_readme_doctest_startup_failure_no_longer_aborts_the_run(
         monkeypatch=monkeypatch,
         likely_test_commands=[
             "pytest -q",
-            "/opt/sylliptor-venv/bin/python -m doctest README.rst",
+            "/opt/alysis-venv/bin/python -m doctest README.rst",
         ],
     )
 
@@ -208,7 +208,7 @@ def test_explicitly_requested_command_is_kept_with_a_warning(tmp_path: Path) -> 
     ],
 )
 def test_a_refused_command_still_fails_fast(tmp_path: Path, command: str, reason: str) -> None:
-    """Degrading is for commands Sylliptor cannot classify, not ones it refuses.
+    """Degrading is for commands Alysis Code cannot classify, not ones it refuses.
 
     A vacuous or failure-masking verifier would report a pass it did not earn,
     so quietly accepting it as the session's contract is worse than stopping.

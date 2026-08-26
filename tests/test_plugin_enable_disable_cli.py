@@ -6,16 +6,16 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.extensions.install import EnableResult, PluginInstallError
-from sylliptor_agent_cli.extensions.registry import RegistryFile
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.extensions.install import EnableResult, PluginInstallError
+from alysis_code.extensions.registry import RegistryFile
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "config"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "config"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -58,7 +58,7 @@ def test_cli_ext_enable_exit_0_prints_confirmation(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(cli_mod, "enable_plugin", fake_enable_plugin)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "enable", "acme.demo", "--yes"],
         env=_env(tmp_path),
     )
@@ -76,7 +76,7 @@ def test_cli_ext_enable_not_installed_exit_1(tmp_path: Path, monkeypatch) -> Non
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "enable", "missing.plugin", "--yes"],
         env=_env(tmp_path),
     )
@@ -90,7 +90,7 @@ def test_cli_ext_disable_after_enable_round_trip(tmp_path: Path) -> None:
     _write_state(tmp_path, enabled=True)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "disable", "acme.demo", "--yes"],
         env=_env(tmp_path),
     )
@@ -107,13 +107,13 @@ def test_cli_ext_enable_project_writes_project_file(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "enable", "acme.demo", "--project", "--path", os.fspath(repo), "--yes"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 0
-    raw = json.loads((repo / ".sylliptor" / "extensions.json").read_text())
+    raw = json.loads((repo / ".alysis" / "extensions.json").read_text())
     assert raw["enabled"] == ["acme.demo"]
 
 
@@ -125,7 +125,7 @@ def test_cli_ext_info_shows_enabled_scope_and_effective_state(
     _write_state(tmp_path, enabled=True)
     monkeypatch.setattr(cli_mod, "load_registry", lambda: RegistryFile(extensions=[]))
 
-    result = runner.invoke(sylliptor_app, ["ext", "info", "acme.demo"], env=_env(tmp_path))
+    result = runner.invoke(alysis_app, ["ext", "info", "acme.demo"], env=_env(tmp_path))
 
     assert result.exit_code == 0
     assert "installed scopes" in result.output
@@ -140,13 +140,13 @@ def test_cli_ext_info_shows_workspace_trust_status_when_overrides_exist(
     runner = CliRunner()
     _write_state(tmp_path, enabled=True)
     repo = tmp_path / "repo"
-    overrides = repo / ".sylliptor" / "extensions.json"
+    overrides = repo / ".alysis" / "extensions.json"
     overrides.parent.mkdir(parents=True, exist_ok=True)
     overrides.write_text(json.dumps({"schema_version": 1, "enabled": ["acme.demo"]}))
     monkeypatch.setattr(cli_mod, "load_registry", lambda: RegistryFile(extensions=[]))
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "info", "acme.demo", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -173,7 +173,7 @@ def test_cli_ext_enable_prompts_and_accepts(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(cli_mod, "enable_plugin", fake_enable_plugin)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "enable", "acme.demo"],
         input="y\n",
         env=_env(tmp_path),

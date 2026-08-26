@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible bug in Sylliptor.
+description: Report a reproducible bug in Alysis Code.
 title: "bug: "
 labels: ["bug"]
 body:
@@ -13,7 +13,7 @@ body:
     attributes:
       label: Summary
       description: A short, clear description of the bug.
-      placeholder: e.g. `sylliptor chat` exits after the provider returns an empty response.
+      placeholder: e.g. `alysis chat` exits after the provider returns an empty response.
     validations:
       required: true
   - type: textarea
@@ -43,8 +43,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: Sylliptor version
-      description: Output of `sylliptor --version` (or commit SHA if running from source).
+      label: Alysis Code version
+      description: Output of `alysis --version` (or commit SHA if running from source).
       placeholder: 0.9.1
     validations:
       required: true

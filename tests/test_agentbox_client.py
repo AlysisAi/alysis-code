@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agentbox_client import AgentBoxClient
+from alysis_code.agentbox_client import AgentBoxClient
 
 
 class _FakeResponse:
@@ -76,7 +76,7 @@ def test_client_enqueues_contract_safe_metadata_and_omits_unknown_cost(
     assert turn_end["payload"]["input_tokens"] == 3
     assert turn_end["payload"]["output_tokens"] == 2
     assert "usd" not in turn_end["payload"]
-    assert all(event["runtime"] == "sylliptor" for event in events)
+    assert all(event["runtime"] == "alysis" for event in events)
     if os.name != "nt":
         mode = stat.S_IMODE((queue_dir / "events.ndjson").stat().st_mode)
         assert mode == 0o600
@@ -145,7 +145,7 @@ def test_offline_queue_replays_and_log_scrubs_sensitive_paths(
     client._ship_once()
 
     assert _queued_events(queue_dir)
-    log = (home / "sylliptor-agentbox.log").read_text(encoding="utf-8")
+    log = (home / "alysis-agentbox.log").read_text(encoding="utf-8")
     assert "secret.example.test" not in log
     assert "/Users/me/repo" not in log
 

@@ -10,11 +10,11 @@ from typing import Any
 
 from rich.console import Console
 
-import sylliptor_agent_cli.cli_impl.chat as chat_impl_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.background_runner import BackgroundProcessSpawn
-from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings
-from sylliptor_agent_cli.terminal_manager import TerminalManager
+import alysis_code.cli_impl.chat as chat_impl_mod
+from alysis_code import cli as cli_mod
+from alysis_code.background_runner import BackgroundProcessSpawn
+from alysis_code.sandbox_settings import ShellSandboxSettings
+from alysis_code.terminal_manager import TerminalManager
 
 
 class FakeBackgroundPopen:

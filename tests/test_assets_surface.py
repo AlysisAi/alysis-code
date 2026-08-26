@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import (
+from alysis_code.assets import (
     AssetAlreadyExistsError,
     AssetIndex,
     AssetSurface,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
 
 
 def _surface(

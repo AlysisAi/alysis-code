@@ -1,15 +1,11 @@
-"""
-Public Harbor installed-agent adapter for Sylliptor.
-
-This adapter installs a prebuilt Sylliptor wheel into each Terminal-Bench task
-container, then runs ``sylliptor run`` non-interactively.
-"""
-
 from __future__ import annotations
 
+import math
 import os
 import shlex
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +14,7 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if _SRC_ROOT.exists() and os.fspath(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(_SRC_ROOT))
 
-from sylliptor_agent_cli.run_outcome import (  # noqa: E402
+from alysis_code.run_outcome import (  # noqa: E402
     AGENT_FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
     extract_process_exit_code,
@@ -29,6 +25,7 @@ try:
     from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
     from harbor.environments.base import BaseEnvironment
     from harbor.models.agent.context import AgentContext
+    from harbor.models.trial.paths import EnvironmentPaths
 except ModuleNotFoundError as exc:
     if exc.name and not exc.name.startswith("harbor"):
         raise
@@ -39,6 +36,11 @@ except ModuleNotFoundError as exc:
 
     class BaseEnvironment:  # type: ignore[no-redef]
         pass
+
+    class _EnvironmentPaths:  # type: ignore[no-redef]
+        agent_dir = Path("/logs/agent")
+
+    EnvironmentPaths = _EnvironmentPaths()  # type: ignore[assignment]
 
     def with_prompt_template(fn: Any) -> Any:  # type: ignore[no-redef]
         return fn
@@ -68,255 +70,348 @@ except ModuleNotFoundError as exc:
             return os.environ.get(key)
 
 
-_WHEEL_DIR = "/tmp/sylliptor-agent"
-_CONFIG_DIR = "/tmp/sylliptor-cfg"
-_ART_DIR = "/logs/artifacts"
-_SESSION_DIR = f"{_ART_DIR}/sylliptor-session"
-_CRASH_LOG = f"{_ART_DIR}/sylliptor-crash.jsonl"
-_SETUP_DIR = "/installed-agent/sylliptor-source/benchmarks/terminal_bench"
-_SETUP_SCRIPT = f"{_SETUP_DIR}/setup.sh"
-_SETUP_TIMEOUT_SEC = 1800
+DEFAULT_INSTALL_SPEC = "alysis-code"
+DEFAULT_MAX_STEPS = "1000"
+DEFAULT_TEMPERATURE = "0.2"
+DEFAULT_LLM_TIMEOUT_S = "240"
+DEFAULT_COMMAND_TIMEOUT_SEC = "7200"
+DEFAULT_SHUTDOWN_RESERVE_SEC = "120"
+DEFAULT_SUBAGENTS = True
+SETUP_TIMEOUT_SEC = 1800
+AGENT_ARTIFACT_DIR = "/logs/agent/alysis"
 
 
-class SylliptorAgent(BaseInstalledAgent):
-    """Installed-agent wrapper around ``sylliptor run``."""
-
-    SUPPORTS_ATIF = False
+class AlysisHarborAgent(BaseInstalledAgent):
+    """Run Alysis Code as a Harbor installed agent for Terminal-Bench 2.x."""
 
     @staticmethod
     def name() -> str:
-        return "sylliptor"
+        return "alysis-harbor"
 
-    def version(self) -> str | None:
-        explicit = self._get_env("SYLLIPTOR_BENCH_VERSION")
-        if explicit and explicit.strip():
-            return explicit.strip()
-        inherited = getattr(self, "_version", None)
-        if inherited:
-            return str(inherited)
-        wheel = self._get_env("SYLLIPTOR_WHEEL")
-        return Path(wheel).stem if wheel else "local"
+    def __init__(
+        self,
+        logs_dir: Path | str = Path("."),
+        model_name: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        install_spec: str | None = None,
+        max_steps: int | str | None = None,
+        temperature: float | str | None = None,
+        llm_timeout_s: float | str | None = None,
+        command_timeout_sec: float | str | None = None,
+        shutdown_reserve_sec: float | str | None = None,
+        subagents: bool | str | None = None,
+        tbench_web_search_mode: str | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        self._api_key_arg = _clean(api_key)
+        self._base_url_arg = _clean(base_url)
+        self._install_spec_arg = _clean(install_spec)
+        self._max_steps_arg = _clean(max_steps)
+        self._temperature_arg = _clean(temperature)
+        self._llm_timeout_s_arg = _clean(llm_timeout_s)
+        self._command_timeout_arg = _clean(command_timeout_sec)
+        self._shutdown_reserve_arg = _clean(shutdown_reserve_sec)
+        self._subagents_arg = subagents
+        self._web_search_mode_arg = _clean(tbench_web_search_mode)
+        super().__init__(Path(logs_dir), *args, model_name=model_name, **kwargs)
 
-    def _host_wheel_path(self) -> str:
-        wheel = self._get_env("SYLLIPTOR_WHEEL")
-        if not wheel or not wheel.strip():
-            raise RuntimeError(
-                "SYLLIPTOR_WHEEL is not set. Point it at the Sylliptor wheel built "
-                "from the benchmark branch."
+        self._model_name = _first_clean(
+            model_name,
+            self._get_env("ALYSIS_MODEL"),
+            self._get_env("OPENAI_MODEL"),
+        )
+        if not self._model_name:
+            raise ValueError(
+                "Set ALYSIS_MODEL, OPENAI_MODEL, or pass --agent-kwarg model_name=<model>."
             )
-        wheel = wheel.strip()
-        if not Path(wheel).is_file():
-            raise RuntimeError(f"SYLLIPTOR_WHEEL file not found: {wheel}")
-        return wheel
-
-    def _host_setup_script_path(self) -> str:
-        setup = self._get_env("SYLLIPTOR_TBENCH_SETUP_SH")
-        if setup:
-            path = Path(setup)
-        else:
-            path = Path(__file__).with_name("setup.sh")
-        if not path.is_file():
-            raise RuntimeError(f"Terminal-Bench setup.sh not found: {path}")
-        return path.as_posix()
-
-    def _container_wheel_path(self) -> str:
-        return f"{_WHEEL_DIR}/{Path(self._host_wheel_path()).name}"
-
-    def _model(self) -> str:
-        model = self._get_env("SYLLIPTOR_MODEL")
-        if model and model.strip():
-            return model.strip()
-        mn = getattr(self, "model_name", None)
-        if mn and str(mn).strip():
-            return str(mn).strip()
-        raise RuntimeError("SYLLIPTOR_MODEL is not set and no model_name was provided.")
-
-    def _base_url(self) -> str:
-        base_url = self._get_env("SYLLIPTOR_BASE_URL")
-        if not base_url or not base_url.strip():
-            raise RuntimeError(
-                "SYLLIPTOR_BASE_URL is not set. Point it at an OpenAI-compatible endpoint."
+        self._base_url = _first_clean(
+            self._base_url_arg,
+            self._get_env("ALYSIS_BASE_URL"),
+            self._get_env("OPENAI_BASE_URL"),
+        )
+        if not self._base_url:
+            raise ValueError(
+                "Set ALYSIS_BASE_URL, OPENAI_BASE_URL, or pass --agent-kwarg "
+                "base_url=<OpenAI-compatible endpoint>."
             )
-        return base_url.strip()
-
-    def _install_env(self) -> dict[str, str]:
-        env = {
-            "PYTHONUNBUFFERED": "1",
-            "SYLLIPTOR_BASE_URL": self._base_url(),
-            "SYLLIPTOR_CONFIG_DIR": _CONFIG_DIR,
-            "SYLLIPTOR_INSTALL_SPEC": self._get_env("SYLLIPTOR_INSTALL_SPEC")
-            or "sylliptor-agent-cli",
-            "SYLLIPTOR_MODEL": self._model(),
-            "SYLLIPTOR_MODEL_METADATA_POLICY": "warn",
-            "SYLLIPTOR_SETUP_ARTIFACT_DIR": f"{_ART_DIR}/setup",
-            "SYLLIPTOR_SETUP_LOG_DIR": "/logs/agent/setup",
-            "SYLLIPTOR_TBENCH_WEB_SEARCH_MODE": self._get_env("SYLLIPTOR_WEB_SEARCH_MODE") or "off",
-            "SYLLIPTOR_VERIFY_SANDBOX_MODE": "off",
-            "SYLLIPTOR_WHEEL": self._container_wheel_path(),
-        }
-        return env
-
-    def _container_env(self) -> dict[str, str]:
-        env = {
-            "SYLLIPTOR_CONFIG_DIR": _CONFIG_DIR,
-            "CI": "1",
-            "TERM": "dumb",
-            "NO_COLOR": "1",
-            "SYLLIPTOR_SHELL_SANDBOX_MODE": self._get_env("SYLLIPTOR_SHELL_SANDBOX_MODE") or "off",
-        }
-        api_key = self._get_env("SYLLIPTOR_API_KEY")
-        if not api_key or not api_key.strip():
-            raise RuntimeError("SYLLIPTOR_API_KEY is not set on the host.")
-        env["SYLLIPTOR_API_KEY"] = api_key.strip()
-        env["SYLLIPTOR_BASE_URL"] = self._base_url()
-        ws_key = self._get_env("SYLLIPTOR_WEB_SEARCH_API_KEY")
-        if ws_key:
-            env["SYLLIPTOR_WEB_SEARCH_API_KEY"] = ws_key
-        llm_timeout = self._get_env("SYLLIPTOR_LLM_TIMEOUT_S")
-        if llm_timeout:
-            env["SYLLIPTOR_LLM_TIMEOUT_S"] = llm_timeout
-        return env
-
-    def _install_command(self) -> str:
-        return (
-            f"mkdir -p {shlex.quote(_WHEEL_DIR)} {shlex.quote(_SETUP_DIR)} "
-            f"{shlex.quote(_ART_DIR)}/setup /logs/agent/setup "
-            f"&& chmod 1777 {shlex.quote(_WHEEL_DIR)} "
-            f"&& chmod +x {shlex.quote(_SETUP_SCRIPT)} "
-            f"&& {shlex.quote(_SETUP_SCRIPT)}"
+        self._install_spec = _first_clean(
+            self._install_spec_arg,
+            self._get_env("ALYSIS_INSTALL_SPEC"),
+            DEFAULT_INSTALL_SPEC,
+        )
+        self._max_steps = _first_clean(
+            self._max_steps_arg,
+            self._get_env("ALYSIS_MAX_STEPS"),
+            DEFAULT_MAX_STEPS,
+        )
+        self._temperature = _first_clean(
+            self._temperature_arg,
+            self._get_env("ALYSIS_TEMPERATURE"),
+            DEFAULT_TEMPERATURE,
+        )
+        self._llm_timeout_s = _first_clean(
+            self._llm_timeout_s_arg,
+            self._get_env("ALYSIS_LLM_TIMEOUT_S"),
+            DEFAULT_LLM_TIMEOUT_S,
+        )
+        self._command_timeout_sec = _positive_float(
+            _first_clean(
+                self._command_timeout_arg,
+                self._get_env("ALYSIS_TBENCH_COMMAND_TIMEOUT_SEC"),
+                self._get_env("TB_AGENT_TIMEOUT_SEC"),
+                DEFAULT_COMMAND_TIMEOUT_SEC,
+            )
+        )
+        self._shutdown_reserve_sec = _positive_float(
+            _first_clean(
+                self._shutdown_reserve_arg,
+                self._get_env("ALYSIS_MANAGED_HOST_SHUTDOWN_RESERVE_SEC"),
+                DEFAULT_SHUTDOWN_RESERVE_SEC,
+            )
+        )
+        self._subagents = _bool_value(
+            self._subagents_arg,
+            env_value=self._get_env("ALYSIS_SUBAGENTS"),
+            default=DEFAULT_SUBAGENTS,
+        )
+        self._web_search_mode = _first_clean(
+            self._web_search_mode_arg,
+            self._get_env("ALYSIS_TBENCH_WEB_SEARCH_MODE"),
+            "off",
         )
 
+    def get_version_command(self) -> str | None:
+        return "alysis --version"
+
+    def version(self) -> str | None:
+        return getattr(self, "_version", None)
+
     async def install(self, environment: BaseEnvironment) -> None:
+        with tempfile.TemporaryDirectory(prefix="alysis-harbor-source-") as tmp:
+            snapshot = Path(tmp) / "source"
+            _copy_source_snapshot(snapshot)
+            await environment.upload_dir(snapshot, "/installed-agent/alysis-source")
+
         await self.exec_as_root(  # type: ignore[attr-defined]
             environment,
             command=(
-                f"mkdir -p {shlex.quote(_WHEEL_DIR)} {shlex.quote(_SETUP_DIR)} "
-                f"{shlex.quote(_ART_DIR)}/setup /logs/agent/setup "
-                f"&& chmod 1777 {shlex.quote(_WHEEL_DIR)}"
+                "chmod +x /installed-agent/alysis-source/benchmarks/terminal_bench/setup.sh "
+                "&& /installed-agent/alysis-source/benchmarks/terminal_bench/setup.sh"
             ),
-        )
-        await environment.upload_file(self._host_setup_script_path(), _SETUP_SCRIPT)
-        await environment.upload_file(self._host_wheel_path(), self._container_wheel_path())
-        await self.exec_as_root(  # type: ignore[attr-defined]
-            environment,
-            command=self._install_command(),
             env=self._install_env(),
-            timeout_sec=_SETUP_TIMEOUT_SEC,
-        )
-
-    def _config_set_cmds(self) -> list[str]:
-        cmds: list[str] = []
-        base_url = self._get_env("SYLLIPTOR_BASE_URL")
-        if base_url:
-            cmds.append(f"sylliptor config set base_url {shlex.quote(base_url)}")
-        model = self._model()
-        if model:
-            cmds.append(f"sylliptor config set model {shlex.quote(model)}")
-        ws = {
-            "web_search_mode": "SYLLIPTOR_WEB_SEARCH_MODE",
-            "web_search_adapter": "SYLLIPTOR_WEB_SEARCH_ADAPTER",
-            "web_search_base_url": "SYLLIPTOR_WEB_SEARCH_BASE_URL",
-            "web_search_model": "SYLLIPTOR_WEB_SEARCH_MODEL",
-            "web_search_timeout_s": "SYLLIPTOR_WEB_SEARCH_TIMEOUT_S",
-        }
-        for cfg_key, env_name in ws.items():
-            val = self._get_env(env_name)
-            if val:
-                cmds.append(f"sylliptor config set {cfg_key} {shlex.quote(val)}")
-        steps = self._get_env("SYLLIPTOR_MAX_STEPS")
-        if steps:
-            for cfg_key in ("max_steps", "task_max_steps", "subagent_max_steps"):
-                cmds.append(f"sylliptor config set {cfg_key} {shlex.quote(steps)}")
-        cmds.append(f"sylliptor config set session_log_dir {shlex.quote(_SESSION_DIR)}")
-        cmds.append(f"sylliptor config set crash_diagnostic_log_path {shlex.quote(_CRASH_LOG)}")
-        return cmds
-
-    def _extra_cli_args(self) -> list[str]:
-        raw = self._get_env("SYLLIPTOR_EXTRA_ARGS")
-        if not raw:
-            return []
-        try:
-            return shlex.split(raw)
-        except ValueError as exc:
-            raise RuntimeError(f"Invalid SYLLIPTOR_EXTRA_ARGS: {exc}") from exc
-
-    def _build_run_command(self, instruction: str, *, model: str, base_url: str) -> str:
-        profile = (self._get_env("SYLLIPTOR_RUN_PROFILE") or "auto").strip().lower()
-        parts = [
-            "sylliptor",
-            "run",
-            "--path",
-            ".",
-            "--allow-broad-workspace",
-            "--yes",
-            "--model",
-            shlex.quote(model),
-            "--base-url",
-            shlex.quote(base_url),
-            "--api-key-env",
-            "SYLLIPTOR_API_KEY",
-        ]
-        if profile == "benchmark":
-            parts.append("--benchmark")
-        else:
-            parts += ["--mode", shlex.quote(profile)]
-
-        steps = self._get_env("SYLLIPTOR_MAX_STEPS")
-        if steps:
-            parts += ["--max-steps", shlex.quote(steps)]
-        deadline = self._get_env("SYLLIPTOR_DEADLINE_SECONDS")
-        if deadline:
-            parts += ["--deadline-seconds", shlex.quote(deadline)]
-        parts.extend(shlex.quote(part) for part in self._extra_cli_args())
-        parts += ["--", shlex.quote(instruction)]
-
-        return (
-            "mkdir -p /logs/agent 2>/dev/null; "
-            + " ".join(parts)
-            + f" </dev/null 2>&1 | tee {_ART_DIR}/sylliptor.txt /logs/agent/sylliptor.txt"
+            timeout_sec=SETUP_TIMEOUT_SEC,
         )
 
     @with_prompt_template
     async def run(
-        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+        self,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
     ) -> None:
-        _ = context
-        env = self._container_env()
-        model = self._model()
-        base_url = env["SYLLIPTOR_BASE_URL"]
-        await self.exec_as_agent(  # type: ignore[attr-defined]
-            environment,
-            command=f"mkdir -p {shlex.quote(_SESSION_DIR)} /logs/agent 2>/dev/null || true",
-            env=env,
-        )
-        await self.exec_as_agent(  # type: ignore[attr-defined]
-            environment,
-            command=" && ".join(self._config_set_cmds()),
-            env=env,
-        )
-
-        cmd = self._build_run_command(instruction, model=model, base_url=base_url)
+        command = self._build_run_command(instruction)
+        env = self._runtime_env()
+        timeout = _ceil_timeout(self._command_timeout_sec)
+        run_error: Exception | None = None
         try:
-            await self.exec_as_agent(  # type: ignore[attr-defined]
-                environment,
-                command=cmd,
-                env=env,
-            )
-        except Exception as exc:
-            exit_code = extract_process_exit_code(exc)
-            context.metadata = {
-                **(context.metadata or {}),
-                **run_outcome_metadata(
-                    exit_code if exit_code is not None else AGENT_FAILURE_EXIT_CODE
-                ),
-            }
-            raise
-        else:
-            context.metadata = {
-                **(context.metadata or {}),
-                **run_outcome_metadata(SUCCESS_EXIT_CODE),
-            }
+            try:
+                await self.exec_as_agent(  # type: ignore[attr-defined]
+                    environment,
+                    command=command,
+                    env=env,
+                    timeout_sec=timeout,
+                )
+            except Exception as exc:
+                run_error = exc
+                raise
+        finally:
+            try:
+                await self._copy_runtime_artifacts(environment)
+            finally:
+                exit_code = (
+                    extract_process_exit_code(run_error)
+                    if run_error is not None
+                    else SUCCESS_EXIT_CODE
+                )
+                context.metadata = {
+                    **(context.metadata or {}),
+                    "alysis_model": self._model_name,
+                    "alysis_base_url": self._base_url,
+                    "alysis_max_steps": int(float(self._max_steps)),
+                    "alysis_subagents": self._subagents,
+                    "alysis_artifacts_hint": AGENT_ARTIFACT_DIR,
+                    **run_outcome_metadata(
+                        exit_code if exit_code is not None else AGENT_FAILURE_EXIT_CODE
+                    ),
+                }
 
-    def populate_context_post_run(self, context: AgentContext) -> None:
-        _ = context
-        return
+    def _build_run_command(self, instruction: str) -> str:
+        parts = [
+            "alysis",
+            "run",
+            "--path",
+            ".",
+            "--allow-broad-workspace",
+            "--mode",
+            "fullaccess",
+            "--yes",
+            "--no-stream",
+            "--max-steps",
+            self._max_steps,
+            "--temperature",
+            self._temperature,
+        ]
+        deadline = self._deadline_seconds()
+        if deadline is not None:
+            parts.extend(["--deadline-seconds", _format_seconds(deadline), "--require-deadline"])
+        if self._subagents:
+            parts.append("--subagents")
+        else:
+            parts.append("--no-subagents")
+        parts.extend(
+            [
+                "--api-key-env",
+                "ALYSIS_API_KEY",
+                "--base-url",
+                self._base_url,
+                "--model",
+                self._model_name,
+                "--",
+                instruction,
+            ]
+        )
+        return " ".join(shlex.quote(str(part)) for part in parts)
+
+    def _deadline_seconds(self) -> float | None:
+        if self._command_timeout_sec is None:
+            return None
+        reserve = float(self._shutdown_reserve_sec or 0)
+        deadline = self._command_timeout_sec - reserve
+        if deadline <= 0:
+            raise ValueError(
+                "Alysis Code Harbor deadline configuration error: "
+                "command_timeout_sec must be greater than shutdown_reserve_sec"
+            )
+        return deadline
+
+    def _install_env(self) -> dict[str, str]:
+        return self._shared_env()
+
+    def _runtime_env(self) -> dict[str, str]:
+        api_key = _first_clean(
+            self._api_key_arg,
+            self._get_env("ALYSIS_API_KEY"),
+            self._get_env("OPENROUTER_API_KEY"),
+            self._get_env("DASHSCOPE_API_KEY"),
+            self._get_env("OPENAI_API_KEY"),
+        )
+        if not api_key:
+            raise ValueError(
+                "Set ALYSIS_API_KEY, OPENROUTER_API_KEY, DASHSCOPE_API_KEY, OPENAI_API_KEY, "
+                "or pass --agent-kwarg api_key=<key>."
+            )
+        env = self._shared_env()
+        env.update(
+            {
+                "ALYSIS_API_KEY": api_key,
+                "ALYSIS_RUN_DEADLINE_SECONDS": _format_seconds(self._deadline_seconds())
+                if self._deadline_seconds() is not None
+                else "",
+            }
+        )
+        return env
+
+    def _shared_env(self) -> dict[str, str]:
+        return {
+            "PYTHONUNBUFFERED": "1",
+            "ALYSIS_BASE_URL": self._base_url,
+            "ALYSIS_INSTALL_SPEC": self._install_spec,
+            "ALYSIS_LLM_TIMEOUT_S": self._llm_timeout_s,
+            "ALYSIS_MODEL": self._model_name,
+            "ALYSIS_MODEL_METADATA_POLICY": "warn",
+            "ALYSIS_SHELL_SANDBOX_MODE": "off",
+            "ALYSIS_TBENCH_WEB_SEARCH_MODE": self._web_search_mode,
+            "ALYSIS_VERIFY_SANDBOX_MODE": "off",
+        }
+
+    async def _copy_runtime_artifacts(self, environment: BaseEnvironment) -> None:
+        command = (
+            f"mkdir -p {shlex.quote(AGENT_ARTIFACT_DIR)}\n"
+            "if [ -d .alysis ]; then\n"
+            f"  rm -rf {shlex.quote(AGENT_ARTIFACT_DIR)}/runtime\n"
+            f"  cp -R .alysis {shlex.quote(AGENT_ARTIFACT_DIR)}/runtime\n"
+            "fi\n"
+            f"if [ -f {shlex.quote(str(EnvironmentPaths.agent_dir))}/alysis.out ]; then :; fi"
+        )
+        try:
+            await self.exec_as_agent(environment, command=command)  # type: ignore[attr-defined]
+        except Exception:
+            return
+
+
+def _copy_source_snapshot(snapshot: Path) -> None:
+    snapshot.mkdir(parents=True, exist_ok=True)
+    for filename in ("pyproject.toml", "README.md", "LICENSE", "NOTICE"):
+        source = _REPO_ROOT / filename
+        if source.exists():
+            shutil.copy2(source, snapshot / filename)
+    shutil.copytree(
+        _REPO_ROOT / "src",
+        snapshot / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+    bench_dir = snapshot / "benchmarks" / "terminal_bench"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_REPO_ROOT / "benchmarks" / "terminal_bench" / "setup.sh", bench_dir / "setup.sh")
+
+
+def _clean(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _first_clean(*values: object) -> str:
+    for value in values:
+        cleaned = _clean(value)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _positive_float(value: str) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return parsed
+
+
+def _ceil_timeout(value: float | None) -> int | None:
+    if value is None:
+        return None
+    return max(1, int(math.ceil(value)))
+
+
+def _format_seconds(value: float | None) -> str:
+    if value is None:
+        return ""
+    formatted = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
+def _bool_value(value: object, *, env_value: object, default: bool) -> bool:
+    if value is None:
+        value = env_value
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default

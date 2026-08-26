@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import sylliptor_agent_cli.agent.tools_assembly as tools_assembly
-import sylliptor_agent_cli.agent_loop as agent_loop
-from sylliptor_agent_cli.agent_loop import ToolDef, build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.tools.web_search import WebSearchRuntimeStatus
+import alysis_code.agent.tools_assembly as tools_assembly
+import alysis_code.agent_loop as agent_loop
+from alysis_code.agent_loop import ToolDef, build_tools
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.session_store import SessionStore
+from alysis_code.tools.web_search import WebSearchRuntimeStatus
 
 
 def _store(tmp_path: Path) -> SessionStore:

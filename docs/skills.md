@@ -1,6 +1,6 @@
 # Skills
 
-Skills are named instruction bundles rooted at a `SKILL.md` file. They let teams package repeatable guidance, references, scripts, and assets without changing Sylliptor itself.
+Skills are named instruction bundles rooted at a `SKILL.md` file. They let teams package repeatable guidance, references, scripts, and assets without changing Alysis Code itself.
 
 Skills are prompt context, not privileged host policy. Higher-priority system instructions, direct user instructions, execution modes, workspace boundaries, and tool policy still apply.
 
@@ -42,19 +42,19 @@ Unknown frontmatter keys are ignored for interoperability.
 
 Project-local roots:
 
-- `./.sylliptor_skills/<skill_name>/SKILL.md`
+- `./.alysis_skills/<skill_name>/SKILL.md`
 - `./.agents/skills/<skill_name>/SKILL.md`
 - `./.claude/skills/<skill_name>/SKILL.md`
 - `./.github/skills/<skill_name>/SKILL.md`
 
 User-global roots:
 
-- `~/.config/sylliptor/skills/<skill_name>/SKILL.md`
+- `~/.config/alysis/skills/<skill_name>/SKILL.md`
 - `~/.config/agents/skills/<skill_name>/SKILL.md`
 - `~/.claude/skills/<skill_name>/SKILL.md`
 - `~/.copilot/skills/<skill_name>/SKILL.md`
 
-Sylliptor discovers only approved roots. It does not scan arbitrary `skills/` directories.
+Alysis Code discovers only approved roots. It does not scan arbitrary `skills/` directories.
 
 When multiple skills have the same name:
 
@@ -67,7 +67,7 @@ Malformed skills are skipped and reported as discovery issues instead of crashin
 
 ## How Skills Are Used
 
-When `skills_enabled=true`, Sylliptor advertises discovered skill names and short descriptions to the session. Full skill bodies are not injected by default.
+When `skills_enabled=true`, Alysis Code advertises discovered skill names and short descriptions to the session. Full skill bodies are not injected by default.
 
 The model can read a skill on demand with the read-only built-in tool:
 
@@ -103,39 +103,39 @@ Explicit skill attachment does not persist across later turns.
 Inspect skills:
 
 ```bash
-sylliptor skill list
-sylliptor skill info migrations
+alysis skill list
+alysis skill info migrations
 ```
 
 Create a skill:
 
 ```bash
-sylliptor skill init migrations --description "Help inspect and verify DB migrations"
-sylliptor skill create docs-consistency --portable
+alysis skill init migrations --description "Help inspect and verify DB migrations"
+alysis skill create docs-consistency --portable
 ```
 
 Validate skills:
 
 ```bash
-sylliptor skill validate ./.sylliptor_skills/migrations
-sylliptor skill validate --name migrations --path .
-sylliptor skill validate --all --path .
+alysis skill validate ./.alysis_skills/migrations
+alysis skill validate --name migrations --path .
+alysis skill validate --all --path .
 ```
 
 Install skills:
 
 ```bash
-sylliptor skill install ./vendor/skills/migrations
-sylliptor skill install ./downloads/migrations.zip
-sylliptor skill install https://example.com/team/skills.git --subdir skills/migrations
+alysis skill install ./vendor/skills/migrations
+alysis skill install ./downloads/migrations.zip
+alysis skill install https://example.com/team/skills.git --subdir skills/migrations
 ```
 
 Enable, disable, or remove:
 
 ```bash
-sylliptor skill disable migrations
-sylliptor skill enable migrations
-sylliptor skill remove migrations
+alysis skill disable migrations
+alysis skill enable migrations
+alysis skill remove migrations
 ```
 
 Use `--project --path <workspace>` when a lifecycle operation should apply to a project scope instead of the user-global scope.
@@ -146,15 +146,15 @@ See [Skills lifecycle](skills_lifecycle.md) for the full authoring, install, val
 
 Managed native roots:
 
-- project-local: `./.sylliptor_skills/`
-- user-global: `~/.config/sylliptor/skills/`
+- project-local: `./.alysis_skills/`
+- user-global: `~/.config/alysis/skills/`
 
 Managed state files:
 
-- project: `./.sylliptor/skills.json`
-- user: `~/.config/sylliptor/skills.json`
+- project: `./.alysis/skills.json`
+- user: `~/.config/alysis/skills.json`
 
-Lifecycle commands create and remove managed native skills. Interop roots remain discoverable, but Sylliptor does not delete arbitrary foreign-root bundles.
+Lifecycle commands create and remove managed native skills. Interop roots remain discoverable, but Alysis Code does not delete arbitrary foreign-root bundles.
 
 ## Trust Model
 
@@ -165,8 +165,8 @@ Review skills before relying on them, especially when they recommend commands, e
 ## Configuration
 
 ```bash
-sylliptor config set skills_enabled true
-sylliptor config set skills_auto_invoke true
+alysis config set skills_enabled true
+alysis config set skills_auto_invoke true
 ```
 
 Defaults:

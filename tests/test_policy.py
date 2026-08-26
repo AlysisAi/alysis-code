@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.policy import evaluate_shell_command
+from alysis_code.policy import evaluate_shell_command
 
 
 @pytest.mark.parametrize(

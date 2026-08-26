@@ -5,7 +5,7 @@ from textwrap import dedent
 
 import pytest
 
-from sylliptor_agent_cli.extensions.manifest import (
+from alysis_code.extensions.manifest import (
     MANIFEST_FILENAME,
     MAX_MANIFEST_BYTES,
     PluginManifest,
@@ -60,7 +60,7 @@ def _manifest_text(
         [
             "",
             "[compatibility]",
-            'sylliptor = ">=0.1"',
+            'alysis = ">=0.1"',
         ]
     )
     compatibility_suffix = dedent(compatibility_extra).strip()
@@ -356,16 +356,16 @@ def test_toml_syntax_error_wrapped(tmp_path: Path) -> None:
     assert "toml parse error" in str(excinfo.value)
 
 
-def test_sylliptor_version_specifier_invalid(tmp_path: Path) -> None:
+def test_alysis_version_specifier_invalid(tmp_path: Path) -> None:
     _write_manifest(
         tmp_path,
-        _manifest_text().replace('sylliptor = ">=0.1"', 'sylliptor = "not-a-spec"'),
+        _manifest_text().replace('alysis = ">=0.1"', 'alysis = "not-a-spec"'),
     )
 
     with pytest.raises(PluginManifestError) as excinfo:
         load_manifest(tmp_path)
 
-    assert "compatibility.sylliptor" in str(excinfo.value)
+    assert "compatibility.alysis" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -543,7 +543,7 @@ def test_uncommon_license_warns_but_loads(tmp_path: Path) -> None:
         license = "Custom-Internal"
 
         [compatibility]
-        sylliptor = ">=0.1"
+        alysis = ">=0.1"
 
         [[components.skill]]
         path = "skills/review"
@@ -572,7 +572,7 @@ def test_errors_are_aggregated(tmp_path: Path) -> None:
         license = "MIT"
 
         [compatibility]
-        sylliptor = "not-a-spec"
+        alysis = "not-a-spec"
 
         [[components.tool]]
         path = "tools/bad.py"
@@ -589,7 +589,7 @@ def test_errors_are_aggregated(tmp_path: Path) -> None:
     message = str(excinfo.value)
     assert message.count("\n  - ") == 3
     assert "plugin.id" in message
-    assert "compatibility.sylliptor" in message
+    assert "compatibility.alysis" in message
     assert "required_env[0]" in message
 
 

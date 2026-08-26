@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.agent.completion_certificate import (
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     CompletionCertificateStatus,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent.regression_baseline import (
+from alysis_code.agent.regression_baseline import (
     BaselineRecord,
     _regression_baseline_enabled,
     aggregate_regression_results,
@@ -19,7 +19,7 @@ from sylliptor_agent_cli.agent.regression_baseline import (
     parse_test_report,
     parse_unittest_report,
 )
-from sylliptor_agent_cli.agent.verification import (
+from alysis_code.agent.verification import (
     HONEST_UNVERIFIED_FINALIZATION_MARKER,
     REGRESSION_BASELINE_PRE_EDIT_ADVISORY,
     TurnExecutionState,
@@ -29,7 +29,7 @@ from sylliptor_agent_cli.agent.verification import (
     build_regressions_unresolved_marker,
     build_unattributed_failures_marker,
 )
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
+from alysis_code.config import AppConfig, ConfigError, set_config_value
 
 # ---------------------------------------------------------------------------
 # Test 1: parsers (fact extraction; conservative on ambiguity; deterministic)
@@ -639,7 +639,7 @@ def test_gate_unattributed_one_round_policy_surfaces_problem() -> None:
 
 
 def test_gate_kill_switch_env_and_config(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_REGRESSION_BASELINE", raising=False)
+    monkeypatch.delenv("ALYSIS_REGRESSION_BASELINE", raising=False)
     assert (
         _regression_baseline_enabled(AppConfig(model="x", regression_baseline_enabled=True)) is True
     )
@@ -647,12 +647,12 @@ def test_gate_kill_switch_env_and_config(monkeypatch) -> None:
         _regression_baseline_enabled(AppConfig(model="x", regression_baseline_enabled=False))
         is False
     )
-    monkeypatch.setenv("SYLLIPTOR_REGRESSION_BASELINE", "off")
+    monkeypatch.setenv("ALYSIS_REGRESSION_BASELINE", "off")
     assert (
         _regression_baseline_enabled(AppConfig(model="x", regression_baseline_enabled=True))
         is False
     )
-    monkeypatch.setenv("SYLLIPTOR_REGRESSION_BASELINE", "on")
+    monkeypatch.setenv("ALYSIS_REGRESSION_BASELINE", "on")
     assert (
         _regression_baseline_enabled(AppConfig(model="x", regression_baseline_enabled=False))
         is True
@@ -766,8 +766,8 @@ def test_pre_edit_advisory_is_advisory_and_nonblocking() -> None:
 
 
 def test_prompt_bytes_identical_regardless_of_kill_switch(monkeypatch) -> None:
-    from sylliptor_agent_cli.agent.prompt_context import _compose_session_system_prompt
-    from sylliptor_agent_cli.agent_loop import SYSTEM_PROMPT
+    from alysis_code.agent.prompt_context import _compose_session_system_prompt
+    from alysis_code.agent_loop import SYSTEM_PROMPT
 
     def compose() -> str:
         return _compose_session_system_prompt(
@@ -780,12 +780,12 @@ def test_prompt_bytes_identical_regardless_of_kill_switch(monkeypatch) -> None:
             include_one_shot_guidance=True,
         )
 
-    monkeypatch.setenv("SYLLIPTOR_REGRESSION_BASELINE", "on")
+    monkeypatch.setenv("ALYSIS_REGRESSION_BASELINE", "on")
     prompt_on = compose()
-    monkeypatch.setenv("SYLLIPTOR_REGRESSION_BASELINE", "off")
+    monkeypatch.setenv("ALYSIS_REGRESSION_BASELINE", "off")
     prompt_off = compose()
 
     assert prompt_on.encode("utf-8") == prompt_off.encode("utf-8")
     assert "REGRESSION_BASELINE" not in prompt_on
     assert "regression_baseline" not in prompt_on
-    assert "SYLLIPTOR_REGRESSION_BASELINE" not in prompt_on
+    assert "ALYSIS_REGRESSION_BASELINE" not in prompt_on

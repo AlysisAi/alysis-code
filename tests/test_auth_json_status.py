@@ -16,14 +16,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import auth_diagnostics as auth_diagnostics_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent_runtimes.base import RuntimeAccountStatus
-from sylliptor_agent_cli.cli import app
-from sylliptor_agent_cli.cli_impl.commands import auth as auth_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.mcp import token_store as token_store_mod
-from sylliptor_agent_cli.provider_auth import (
+from alysis_code import cli as cli_mod
+from alysis_code.agent_runtimes.base import RuntimeAccountStatus
+from alysis_code.cli import app
+from alysis_code.cli_impl.commands import auth as auth_mod
+from alysis_code.config import AppConfig
+from alysis_code.mcp import token_store as token_store_mod
+from alysis_code.provider_auth import (
     ProviderAccountStatus,
     ProviderAuthError,
 )
@@ -104,7 +103,7 @@ def test_auth_status_json_reports_available_keyring_without_a_fallback(
 ) -> None:
     monkeypatch.setattr(cli_mod, "load_config", AppConfig)
     monkeypatch.setattr(
-        auth_diagnostics_mod,
+        token_store_mod,
         "keyring_availability",
         lambda **_kwargs: token_store_mod.KeyringOutcome(available=True, backend="test.Backend"),
     )
@@ -126,7 +125,7 @@ def test_auth_status_json_reports_available_keyring_without_a_fallback(
     payload = _sole_json_object(result.stdout)
     assert payload["authenticated"] is True
     assert payload["account_label"] == "developer@example.test"
-    assert payload["transport"] == "native Sylliptor client (openai_responses)"
+    assert payload["transport"] == "native Alysis Code client (openai_responses)"
     assert payload["keyring_available"] is True
     assert payload["credential_fallback"] is None
 
@@ -353,8 +352,8 @@ def test_auth_status_human_output_names_the_keyring_fallback(
     assert token_store_mod.KEY_SOURCE_FILESYSTEM in result.output
 
 
-def test_whoami_json_reports_the_sylliptor_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sylliptor_agent_cli import account_login
+def test_whoami_json_reports_the_alysis_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    from alysis_code import account_login
 
     cfg = AppConfig()
     monkeypatch.setattr(cli_mod, "load_config", lambda: cfg)
@@ -363,7 +362,7 @@ def test_whoami_json_reports_the_sylliptor_account(monkeypatch: pytest.MonkeyPat
         "login_status",
         lambda _cfg: account_login.LoginStatus(
             logged_in=True,
-            profile_name="sylliptor",
+            profile_name="alysis",
             base_url="https://proxy.example.test/v1",
             active=True,
             key_preview="abcd1234…",
@@ -376,19 +375,23 @@ def test_whoami_json_reports_the_sylliptor_account(monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 0, result.output
     payload = _sole_json_object(result.stdout)
     assert _STATUS_KEYS <= set(payload)
-    assert payload["connection"] == "sylliptor"
+    assert payload["connection"] == "alysis"
     assert payload["authenticated"] is True
     assert payload["method"] == "access-key"
     assert payload["transport"] == "https://proxy.example.test/v1"
     assert payload["profile_active"] is True
     # Local state is authoritative; plan/credits live on the account page.
-    assert "sylliptor.alysisai.com/account" in str(payload["detail"])
+    # Derived from alysis_cloud rather than hardcoded, so moving the product
+    # site is one constant and does not require editing this assertion.
+    from alysis_code.alysis_cloud import site_host
+
+    assert f"{site_host()}/account" in str(payload["detail"])
 
 
 def test_whoami_json_reports_a_disconnected_account_with_exit_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli import account_login
+    from alysis_code import account_login
 
     monkeypatch.setattr(cli_mod, "load_config", AppConfig)
     monkeypatch.setattr(
@@ -396,7 +399,7 @@ def test_whoami_json_reports_a_disconnected_account_with_exit_zero(
         "login_status",
         lambda _cfg: account_login.LoginStatus(
             logged_in=False,
-            profile_name="sylliptor",
+            profile_name="alysis",
             base_url="https://proxy.example.test/v1",
             active=False,
             key_preview=None,
@@ -415,7 +418,7 @@ def test_whoami_json_reports_a_disconnected_account_with_exit_zero(
 def test_doctor_auth_json_reports_env_keyring_and_store_health(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, null_keyring: None
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
 
     result = CliRunner().invoke(app, ["doctor", "auth", "--json"])
 
@@ -444,7 +447,7 @@ def test_doctor_auth_json_reports_an_unreadable_credential_store(
 ) -> None:
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     (cfg_dir / "provider_auth_tokens.json").write_text("{not json", encoding="utf-8")
 
     result = CliRunner().invoke(app, ["doctor", "auth", "--json"])
@@ -462,12 +465,12 @@ def test_doctor_auth_json_reports_an_unreadable_credential_store(
 def test_doctor_auth_human_output_stays_the_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
 
     result = CliRunner().invoke(app, ["doctor", "auth"])
 
     assert result.exit_code == 0, result.output
-    assert "sylliptor doctor auth" in result.output
+    assert "alysis doctor auth" in result.output
     assert "keyring_available" in result.output
     with pytest.raises(json.JSONDecodeError):
         json.loads(result.stdout)
@@ -504,14 +507,14 @@ def test_auth_status_json_in_a_spawned_process_with_the_ci_keyring_backend(
 
     env = dict(os.environ)
     env["PYTHON_KEYRING_BACKEND"] = _NULL_BACKEND
-    env["SYLLIPTOR_CONFIG_DIR"] = os.fspath(tmp_path / "cfg")
+    env["ALYSIS_CONFIG_DIR"] = os.fspath(tmp_path / "cfg")
     env["PYTHONPATH"] = os.fspath(Path(__file__).resolve().parents[1] / "src")
 
     completed = subprocess.run(
         [
             sys.executable,
             "-m",
-            "sylliptor_agent_cli.cli",
+            "alysis_code.cli",
             "auth",
             "status",
             "openai-codex",

@@ -5,18 +5,18 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.litellm_static_provider import BUNDLED_MODEL_CATALOG_SOURCE
-from sylliptor_agent_cli.llm.types import BillingMode, CostSource, LLMUsage
-from sylliptor_agent_cli.model_registry import ModelMeta, ModelRegistry
-from sylliptor_agent_cli.request_estimation import (
+from alysis_code.config import AppConfig
+from alysis_code.litellm_static_provider import BUNDLED_MODEL_CATALOG_SOURCE
+from alysis_code.llm.types import BillingMode, CostSource, LLMUsage
+from alysis_code.model_registry import ModelMeta, ModelRegistry
+from alysis_code.request_estimation import (
     estimate_request_token_breakdown,
     request_contains_media,
     request_message_signatures,
     tool_schema_signature,
 )
-from sylliptor_agent_cli.token_budget import compute_input_budget
-from sylliptor_agent_cli.usage_tracker import (
+from alysis_code.token_budget import compute_input_budget
+from alysis_code.usage_tracker import (
     RequestContextMeasurement,
     UsageRecord,
     UsageSummary,
@@ -350,7 +350,7 @@ def test_partial_authoritative_response_keeps_reported_prompt_count_confidence()
 
 
 def test_usage_normalization_supports_provider_output_that_excludes_reasoning() -> None:
-    from sylliptor_agent_cli.llm.types import LLMUsage
+    from alysis_code.llm.types import LLMUsage
 
     registry = _FakeRegistry(
         {
@@ -522,11 +522,11 @@ def test_build_usage_record_captures_cached_prompt_and_request_breakdown() -> No
         },
         {
             "role": "user",
-            "content": '<<<SYLLIPTOR_CONVERSATION_MEMORY_JSON>>>\n{"summary":"keep this"}',
+            "content": '<<<ALYSIS_CONVERSATION_MEMORY_JSON>>>\n{"summary":"keep this"}',
         },
         {
             "role": "user",
-            "content": '<<<SYLLIPTOR_CONVERSATION_PINS_JSON>>>\n[{"path":"tests/test_app.py"}]',
+            "content": '<<<ALYSIS_CONVERSATION_PINS_JSON>>>\n[{"path":"tests/test_app.py"}]',
         },
     ]
     tool_list = [
@@ -776,6 +776,51 @@ def test_subscription_usage_is_not_presented_as_zero_cost() -> None:
     assert totals["subscription_calls"] == 1
     assert totals["unknown_cost_calls"] == 0
     assert totals["known_cost_calls"] == 0
+
+
+def test_included_and_local_usage_ignore_catalog_rates() -> None:
+    registry = _FakeRegistry(
+        {
+            "nonmetered-model": ModelMeta(
+                model_name="nonmetered-model",
+                context_window_tokens=200000,
+                max_output_tokens=8192,
+                input_cost_per_token=0.5,
+                output_cost_per_token=1.0,
+                raw_metadata={},
+                source=BUNDLED_MODEL_CATALOG_SOURCE,
+            )
+        }
+    )
+
+    for billing_mode, expected_source, counter in (
+        (BillingMode.INCLUDED, CostSource.INCLUDED, "included_calls"),
+        (BillingMode.LOCAL, CostSource.LOCAL, "local_calls"),
+    ):
+        record = build_usage_record(
+            role="main",
+            requested_model="nonmetered-model",
+            response_model="nonmetered-model",
+            messages=[{"role": "user", "content": "hello"}],
+            response_content="world",
+            response_tool_calls=[],
+            api_prompt_tokens=100,
+            api_completion_tokens=10,
+            api_total_tokens=110,
+            registry=registry,  # type: ignore[arg-type]
+            billing_mode=billing_mode.value,
+        )
+
+        assert record.cost_usd is None
+        assert record.billing_mode == billing_mode.value
+        assert record.cost_source == expected_source.value
+
+        summary = UsageSummary()
+        summary.add_record(record)
+        totals = summary.totals()
+        assert totals[counter] == 1
+        assert totals["unknown_cost_calls"] == 0
+        assert totals["known_cost_calls"] == 0
 
 
 def test_usage_summary_preserves_cache_reporting_coverage() -> None:
@@ -1196,8 +1241,44 @@ def test_usage_summary_accepts_legacy_usage_payload_without_schema_version() -> 
     assert summary.totals()["cache_read_input_tokens"] == 6
 
 
+def test_usage_summary_reports_cache_efficiency_and_largest_uncached_call() -> None:
+    summary = UsageSummary()
+    for position, (cached, uncached) in enumerate(((80, 20), (25, 75), (90, 10)), start=1):
+        summary.add_event_payload(
+            {
+                "event_type": "llm_usage",
+                "timestamp": f"2026-08-20T00:00:0{position}Z",
+                "role": "main" if position != 2 else "main:subagent:verifier",
+                "requested_model": "test-model",
+                "prompt_tokens": cached + uncached,
+                "completion_tokens": 1,
+                "total_tokens": cached + uncached + 1,
+                "cached_prompt_tokens": cached,
+                "uncached_prompt_tokens": uncached,
+                "usage_source": "api",
+            }
+        )
+
+    cache = summary.cache_efficiency_summary()
+
+    assert cache == {
+        "reported_calls": 3,
+        "cached_prompt_tokens": 195,
+        "uncached_prompt_tokens": 105,
+        "hit_ratio": 0.65,
+        "largest_uncached_call": {
+            "call_position": 2,
+            "uncached_prompt_tokens": 75,
+            "role": "main:subagent:verifier",
+            "requested_model": "test-model",
+            "timestamp": "2026-08-20T00:00:02Z",
+        },
+    }
+    assert summary.totals()["cache_efficiency"] == cache
+
+
 def test_usage_context_uses_normalized_provider_contract() -> None:
-    from sylliptor_agent_cli.llm.types import UsageConfidence, UsageContract
+    from alysis_code.llm.types import UsageConfidence, UsageContract
 
     client = SimpleNamespace(
         model="provider-model",

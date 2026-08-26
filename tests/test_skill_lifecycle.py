@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.atomic_io import atomic_write_json as _real_atomic_write_json
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.skills import (
+from alysis_code.agent_loop import create_session
+from alysis_code.atomic_io import atomic_write_json as _real_atomic_write_json
+from alysis_code.config import AppConfig
+from alysis_code.skills import (
     SkillLifecycleState,
     discover_skills,
     install_skill_bundle,
@@ -23,7 +23,7 @@ from sylliptor_agent_cli.skills import (
     set_project_skill_override,
     validate_skill_bundle,
 )
-from sylliptor_agent_cli.subagents import load_subagent_registry
+from alysis_code.subagents import load_subagent_registry
 
 
 def _write_skill_bundle(
@@ -43,11 +43,11 @@ def _write_skill_bundle(
 
 def _patch_user_config_dir(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.paths.canonical_user_config_dir",
+        "alysis_code.skills.paths.canonical_user_config_dir",
         lambda: path,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.discovery.canonical_user_config_dir",
+        "alysis_code.skills.discovery.canonical_user_config_dir",
         lambda: path,
     )
 
@@ -67,7 +67,7 @@ def test_scaffold_skill_bundle_selects_native_and_portable_project_roots(tmp_pat
         family="agents",
     )
 
-    assert native.bundle_path == tmp_path / ".sylliptor_skills" / "pytest-debug"
+    assert native.bundle_path == tmp_path / ".alysis_skills" / "pytest-debug"
     assert native.managed is True
     assert portable.bundle_path == tmp_path / ".agents" / "skills" / "docs-consistency"
     assert portable.managed is False
@@ -97,7 +97,7 @@ def test_scaffold_global_native_records_managed_state(
 
 
 def test_scaffold_project_managed_fails_before_mutation_on_malformed_state(tmp_path: Path) -> None:
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{broken json", encoding="utf-8")
 
@@ -109,7 +109,7 @@ def test_scaffold_project_managed_fails_before_mutation_on_malformed_state(tmp_p
             project=True,
         )
 
-    assert not (tmp_path / ".sylliptor_skills" / "pytest-debug").exists()
+    assert not (tmp_path / ".alysis_skills" / "pytest-debug").exists()
 
 
 def test_scaffold_global_managed_fails_before_mutation_on_malformed_state(
@@ -163,7 +163,7 @@ def test_inaccessible_skill_bundle_is_reported_without_breaking_discovery(
 ) -> None:
     workspace = tmp_path / "workspace"
     bundle = _write_skill_bundle(
-        workspace / ".sylliptor_skills" / "blocked",
+        workspace / ".alysis_skills" / "blocked",
         name="blocked",
         description="A bundle whose metadata cannot be inspected.",
     )
@@ -226,7 +226,7 @@ def test_install_skill_bundle_project_managed_fails_before_mutation_on_malformed
         name="docs-consistency",
         description="Keep docs aligned.",
     )
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{broken json", encoding="utf-8")
 
@@ -237,7 +237,7 @@ def test_install_skill_bundle_project_managed_fails_before_mutation_on_malformed
             project=True,
         )
 
-    assert not (tmp_path / ".sylliptor_skills" / "docs-consistency").exists()
+    assert not (tmp_path / ".alysis_skills" / "docs-consistency").exists()
 
 
 def test_install_skill_bundle_global_managed_fails_before_mutation_on_malformed_state(
@@ -447,7 +447,7 @@ def test_resolve_skill_catalog_applies_global_and_project_enable_disable(
     global_state = set_global_skill_disabled(
         catalog.global_state, name="verification-playbook", disabled=True
     )
-    from sylliptor_agent_cli.skills import save_global_skill_state, save_project_skill_state
+    from alysis_code.skills import save_global_skill_state, save_project_skill_state
 
     save_global_skill_state(global_state, user_config_dir=user_cfg)
     disabled_catalog = resolve_skill_catalog(
@@ -501,7 +501,7 @@ def test_scaffold_project_force_preserves_existing_bundle_when_state_is_malforme
         project=True,
     )
     original_text = (initial.bundle_path / "SKILL.md").read_text(encoding="utf-8")
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.write_text("{broken json", encoding="utf-8")
 
     with pytest.raises(Exception, match="Invalid JSON"):
@@ -547,7 +547,7 @@ def test_install_skill_bundle_force_restores_existing_global_bundle_on_state_sav
         raise RuntimeError("state save failed")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.install.save_global_skill_state",
+        "alysis_code.skills.install.save_global_skill_state",
         _fail_save,
     )
 
@@ -587,7 +587,7 @@ def test_remove_managed_skill_restores_bundle_on_state_save_failure(
         raise RuntimeError("state save failed")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.install.save_global_skill_state",
+        "alysis_code.skills.install.save_global_skill_state",
         _fail_save,
     )
 
@@ -641,7 +641,7 @@ def test_remove_managed_skill_rejects_project_bundle_dir_escape(tmp_path: Path) 
     victim = tmp_path / "victim-project"
     victim.mkdir(parents=True)
     (victim / "keep.txt").write_text("still here\n", encoding="utf-8")
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         json.dumps(
@@ -677,7 +677,7 @@ def test_save_global_skill_state_uses_atomic_write_json(
         _real_atomic_write_json(path, payload, **kwargs)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.state.atomic_write_json",
+        "alysis_code.skills.state.atomic_write_json",
         _tracked_atomic_write_json,
     )
 
@@ -694,11 +694,11 @@ def test_save_global_skill_state_uses_atomic_write_json(
 
 def test_shared_frontmatter_helpers_keep_skill_and_subagent_parsing_working(tmp_path: Path) -> None:
     _write_skill_bundle(
-        tmp_path / ".sylliptor_skills" / "docs-consistency",
+        tmp_path / ".alysis_skills" / "docs-consistency",
         name="docs-consistency",
         description="Keep docs aligned.",
     )
-    agent_dir = tmp_path / ".sylliptor_agents"
+    agent_dir = tmp_path / ".alysis_agents"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "reviewer.md").write_text(
         (
@@ -730,7 +730,7 @@ def test_create_session_uses_effective_enabled_skills(
         name="verification-playbook",
         description="Choose good verify commands.",
     )
-    from sylliptor_agent_cli.skills import save_global_skill_state
+    from alysis_code.skills import save_global_skill_state
 
     discovered = discover_skills(
         focus_path=tmp_path,
@@ -773,11 +773,11 @@ def test_create_session_tolerates_invalid_project_skill_state(
     user_cfg = tmp_path / "usercfg"
     _patch_user_config_dir(monkeypatch, user_cfg)
     _write_skill_bundle(
-        tmp_path / ".sylliptor_skills" / "docs-consistency",
+        tmp_path / ".alysis_skills" / "docs-consistency",
         name="docs-consistency",
         description="Keep docs aligned.",
     )
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{not valid json", encoding="utf-8")
 

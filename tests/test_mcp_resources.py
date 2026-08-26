@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.mcp.resources import (
+from alysis_code.mcp.resources import (
     McpReadResourceContent,
     McpResourceNormalizationError,
     normalize_list_resources_result,
     normalize_read_resource_result,
     resources_runtime_supported,
 )
-from sylliptor_agent_cli.mcp.untrusted_content import build_untrusted_mcp_text_block
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.mcp.untrusted_content import build_untrusted_mcp_text_block
+from alysis_code.runtime_kind import RuntimeKind
 
 
 @pytest.mark.parametrize(

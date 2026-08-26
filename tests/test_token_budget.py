@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.token_budget import (
+from alysis_code.model_registry import ModelMeta
+from alysis_code.token_budget import (
     _TOKEN_ENCODING_NAME,
     _fallback_estimate_tokens,
     compute_input_budget,

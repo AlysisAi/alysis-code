@@ -5,17 +5,17 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.anthropic_messages import AnthropicMessagesClient
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
+from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     attach_provider_metadata_to_assistant_message,
     stamp_provider_metadata_for_route,
     strip_provider_metadata_from_message,
 )
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.llm.request_plan import LLMRequestPlan, RequestCachePlan
-from sylliptor_agent_cli.llm.types import LLMError
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.request_plan import LLMRequestPlan, RequestCachePlan
+from alysis_code.llm.types import LLMError
+from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     reset_provider_telemetry_for_tests,
 )
@@ -35,7 +35,7 @@ def _web_search_function_tool() -> dict[str, object]:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         },
     }
@@ -1242,7 +1242,7 @@ def test_chat_auto_mode_prefers_anthropic_hosted_web_search_for_auto_adapter() -
     ]
 
 
-def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
+def test_chat_external_mode_uses_only_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1268,7 +1268,7 @@ def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
     assert captured["tools"] == [
         {
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "input_schema": {"type": "object"},
         }
     ]
@@ -1300,7 +1300,7 @@ def test_chat_off_mode_removes_all_web_search_tools() -> None:
     assert "tools" not in captured
 
 
-def test_chat_auto_mode_with_external_adapter_uses_sylliptor_web_search_function() -> None:
+def test_chat_auto_mode_with_external_adapter_uses_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:

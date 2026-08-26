@@ -13,7 +13,7 @@ pytest.importorskip("termios", reason="show-owl PTY matrix requires POSIX termin
 pty = pytest.importorskip("pty", reason="show-owl PTY matrix requires the POSIX pty module")
 
 ROOT = Path(__file__).resolve().parents[1]
-SHOW_OWL = ROOT / "src" / "sylliptor_agent_cli" / "assets" / "owl" / "show-owl.sh"
+SHOW_OWL = ROOT / "src" / "alysis_code" / "assets" / "owl" / "show-owl.sh"
 
 
 def _run_with_pty(command: list[str], *, env: dict[str, str]) -> tuple[int, str, str]:
@@ -70,14 +70,14 @@ def test_show_owl_matrix_subset(scenario_id: int) -> None:
         "COLORFGBG",
         "NO_COLOR",
         "OWL_THEME",
-        "SYLLIPTOR_THEME",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
         "TERM",
         "WT_SESSION",
         "WSL_DISTRO_NAME",
         "WSL_INTEROP",
         "CI",
-        "SYLLIPTOR_CI",
+        "ALYSIS_CI",
     ):
         env.pop(key, None)
     env.update({str(key): str(value) for key, value in scenario.get("env", {}).items()})

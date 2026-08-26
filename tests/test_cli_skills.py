@@ -7,10 +7,10 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.skills import discover_skills
-from sylliptor_agent_cli.workspace_context import WorkspaceContext
+from alysis_code import cli as cli_mod
+from alysis_code.config import AppConfig
+from alysis_code.skills import discover_skills
+from alysis_code.workspace_context import WorkspaceContext
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +65,7 @@ def _write_invalid_utf8_skill(root: Path, rel_root: str, bundle_name: str) -> No
 def test_skill_list_cli_lists_discovered_skills_with_source_metadata(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -78,7 +78,7 @@ def test_skill_list_cli_lists_discovered_skills_with_source_metadata(tmp_path: P
     assert "python" in result.output
     assert "project" in result.output
     assert "native" in result.output
-    assert ".sylliptor_skills" in result.output
+    assert ".alysis_skills" in result.output
 
 
 def test_skill_info_cli_shows_skill_details(tmp_path: Path) -> None:
@@ -105,7 +105,7 @@ def test_skill_info_cli_shows_skill_details(tmp_path: Path) -> None:
 def test_chat_skill_command_lists_discovered_skills_and_info(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -175,7 +175,7 @@ def test_chat_skill_command_lists_discovered_skills_and_info(tmp_path: Path) -> 
 def test_chat_skill_command_returns_one_turn_execution_request(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -228,7 +228,7 @@ def test_chat_skill_command_returns_one_turn_execution_request(tmp_path: Path) -
 def test_chat_skill_command_rejects_when_skills_are_disabled(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -265,13 +265,13 @@ def test_cli_skill_list_and_info_skip_invalid_utf8_skill_without_crashing(
 ) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
         body="Python instructions.",
     )
-    _write_invalid_utf8_skill(tmp_path, ".sylliptor_skills", "broken")
+    _write_invalid_utf8_skill(tmp_path, ".alysis_skills", "broken")
 
     list_result = CliRunner().invoke(cli_mod.app, ["skill", "list", "--path", str(tmp_path)])
     info_result = CliRunner().invoke(

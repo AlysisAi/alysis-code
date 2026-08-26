@@ -6,15 +6,15 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.review_gate import ReviewOutcome
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.review_gate import ReviewOutcome
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -24,13 +24,13 @@ def _load_json(path: Path) -> dict:
 
 def _prepare_run_with_task(runner: CliRunner, repo: Path, tmp_path: Path) -> tuple[str, Path]:
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Review test\n/task Implement src/feature.py\n/done\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     plan_path = run_dir / "plan" / "plan.json"
     plan = _load_json(plan_path)
@@ -62,7 +62,7 @@ def test_review_command_exit_zero_when_approved(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr(cli_mod, "review_task", fake_review_task)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "review",
@@ -106,7 +106,7 @@ def test_review_command_exit_zero_when_not_approved(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr(cli_mod, "review_task", fake_review_task)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "review",

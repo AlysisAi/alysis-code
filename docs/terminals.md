@@ -2,56 +2,45 @@
 
 ## Overview
 
-Background terminals let Sylliptor start long-running shell commands without blocking the agent loop.
+Background terminals let Alysis Code start long-running shell commands without blocking the agent loop.
 They are meant for dev servers, file watchers, test runners in watch mode, log tailers, and similar
 processes where the agent needs to keep working while output accumulates in the background.
 
 The feature is session-scoped. A background process belongs to the current chat session, can be
-listed or inspected later, and is shut down when the session closes. Use durable services only when
-the task explicitly needs a server or daemon to remain available after the session ends.
+listed or inspected later, and is shut down when the session closes.
+
+When a task explicitly requires a server or daemon to remain alive after the agent finalizes, use
+the durable service tools instead. Durable services are tracked by `service_id`, write detached logs
+under the runtime sessions directory, and are not reaped by `AgentSession.close`.
 
 ## Tools
 
-The LLM can use five background-terminal tools in write-capable chat modes.
+The LLM can use background-terminal tools in write-capable chat modes.
 
 | Tool | Description |
 |---|---|
 | `shell_background` | Start a background process under the workspace root. |
 | `shell_output` | Read accumulated stdout and stderr from a background process. |
-| `shell_wait` | Wait briefly for a background process to emit output, exit, or either condition. |
+| `shell_wait` | Wait briefly for new output or process exit without busy polling. |
 | `shell_kill` | Terminate a background process by `process_id`. |
 | `shell_list` | List background processes tracked by the current session. |
+| `shell_service_start` | Start an explicit durable service with a readiness probe. |
+| `shell_service_status` | Recheck durable service status and readiness by `service_id`. |
+| `shell_service_stop` | Stop a durable service by `service_id`. |
 
 `shell_background` uses the same command safety checks as `shell_run`. In review mode, starting a
 background process can request approval before the process is spawned.
 
-`shell_output`, `shell_wait`, `shell_kill`, and `shell_list` operate on already-started processes.
-They do not run new shell commands.
+`shell_output`, `shell_wait`, `shell_kill`, and `shell_list` operate on
+already-started processes. They do not run new shell commands. `shell_wait`
+accepts a `since` cursor and an `until` mode of `output_available`,
+`process_exited`, or `either`; its wait time is clamped by the active run
+deadline and by the finalization window.
 
-Durable service tools are also available for explicit long-lived services:
-
-| Tool | Description |
-|---|---|
-| `shell_service_start` | Start a durable service under the workspace root with optional readiness checks. |
-| `shell_service_status` | Check a durable service and re-run its readiness probe. |
-| `shell_service_stop` | Stop a durable service by `service_id`. |
-
-Unlike `shell_background`, durable services are not reaped when the chat session closes. They must
-be stopped with `shell_service_stop` when no longer needed. Prefer `shell_background` for ordinary
-dev servers, file watchers, and commands that only need to live during the current session.
-
-Static workspace previews use a dedicated durable tool:
-
-| Tool | Description |
-|---|---|
-| `workspace_preview_start` | Serve HTML/CSS/JS or other static workspace files with constrained local or LAN access. |
-
-## Workspace Previews
-
-Ask the agent to preview a static workspace directory with
-`workspace_preview_start`. Local access binds to loopback; LAN access requires
-approval and uses an authenticated URL. The tool returns a durable `service_id`
-that can be inspected or stopped with the existing service tools.
+`shell_service_start` uses the same shell safety checks, plus the same checks for command-based
+readiness probes. Supported readiness probes are process-alive, TCP host/port, Unix socket
+existence, and bounded command probes. `shell_service_status` re-runs the stored readiness probe.
+`shell_service_stop` removes runtime metadata after stopping the service.
 
 ## Slash command
 
@@ -114,19 +103,16 @@ reader keeps that text as pending data. When the stream closes, the pending part
 into the output buffer.
 
 For very chatty commands, poll more often with `shell_output` or inspect the process through
-`/terminals show`. For quiet long-running commands, use `shell_wait` instead of repeatedly polling
-when no new output is available. If `dropped_lines` is greater than zero, older output has already
-been evicted.
+`/terminals show`. If `dropped_lines` is greater than zero, older output has already been evicted.
 
 ## Lifecycle
 
-Background terminals are scoped to one Sylliptor session.
+Background terminals are scoped to one Alysis Code session.
 
 Starting a process returns a `process_id`. That id is stable for the lifetime of the process record
 and can be passed to:
 
 - `shell_output`
-- `shell_wait`
 - `shell_kill`
 - `/terminals show`
 - `/terminals kill`
@@ -134,22 +120,18 @@ and can be passed to:
 When a process exits naturally, the session keeps its summary and recent output until the manager
 prunes old terminal records.
 
-When a process is killed, Sylliptor first sends a graceful termination signal:
+When a process is killed, Alysis Code first sends a graceful termination signal:
 
 - POSIX process-group runners receive `SIGTERM`.
 - Windows runners receive the platform control-break equivalent where supported.
 - Direct runners, such as Docker background cleanup, terminate the tracked process directly.
 
-If the process does not exit within `background_kill_timeout_s`, Sylliptor escalates to a forced
+If the process does not exit within `background_kill_timeout_s`, Alysis Code escalates to a forced
 kill.
 
 When the chat session closes, all running background processes are terminated. Dev servers,
 watchers, and log tailers started by `shell_background` do not survive past the chat session.
-
-Durable services return a `service_id` instead of a `process_id`. A service can use a readiness
-probe based on process liveness, a TCP host and port, a Unix socket path, or a command. Durable
-services are intended for explicit handoff to later work and should be stopped when that handoff is
-complete.
+Durable services started by `shell_service_start` survive session close until stopped explicitly.
 
 ## Sandbox compatibility
 
@@ -159,12 +141,17 @@ In host mode, a background command runs on the host with process isolation appro
 platform.
 
 In Docker mode, each background process gets its own container. Container names use the
-`sylliptor-bgsbx-` prefix so they are distinguishable from synchronous shell sandbox containers.
+`alysis-bgsbx-` prefix so they are distinguishable from synchronous shell sandbox containers.
 Cleanup is best-effort and removes the container when the process exits or is killed.
 
 In bubblewrap mode, background commands use the same generated bubblewrap argv as synchronous shell
 runs. Bubblewrap background processes use `--die-with-parent` and `--unshare-pid` so the sandbox
 process tree is tied to the tracked parent process.
+
+Durable services reuse the sandbox backend but detach from the session parent. Bubblewrap durable
+services remove `--die-with-parent`, and Docker durable services keep a named container that
+`shell_service_stop` cleans up. Metadata records the backend, PID/PGID or container name, readiness
+configuration, and stdout/stderr log paths.
 
 The default network policy is `network=off`. With networking disabled, a background dev server
 started inside a sandbox is not reachable from the host browser. Enable shell sandbox networking
@@ -174,10 +161,10 @@ only when that access is required and acceptable for the repository.
 
 | Setting | Config key | Env var | Default |
 |---|---|---|---|
-| Max concurrent | `shell_sandbox.background_max_concurrent` | `SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT` | `4` |
-| Output max lines, combined stdout/stderr | `shell_sandbox.background_output_max_lines` | `SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES` | `2000` |
-| Output max bytes, combined stdout/stderr | `shell_sandbox.background_output_max_bytes` | `SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES` | `262144` |
-| Kill grace period, seconds | `shell_sandbox.background_kill_timeout_s` | `SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S` | `10.0` |
+| Max concurrent | `shell_sandbox.background_max_concurrent` | `ALYSIS_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT` | `4` |
+| Output max lines, combined stdout/stderr | `shell_sandbox.background_output_max_lines` | `ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES` | `2000` |
+| Output max bytes, combined stdout/stderr | `shell_sandbox.background_output_max_bytes` | `ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES` | `262144` |
+| Kill grace period, seconds | `shell_sandbox.background_kill_timeout_s` | `ALYSIS_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S` | `10.0` |
 
 Example config:
 
@@ -192,10 +179,10 @@ background_kill_timeout_s = 10.0
 Environment variables override config values:
 
 ```bash
-export SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT=6
-export SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES=4000
-export SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES=524288
-export SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S=5.0
+export ALYSIS_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT=6
+export ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES=4000
+export ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES=524288
+export ALYSIS_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S=5.0
 ```
 
 ## Examples
@@ -289,14 +276,18 @@ Use an explicit command when state is needed:
 cd /path/to/repo && . .venv/bin/activate && python -m http.server 8000
 ```
 
-Output is buffered, not streamed live. The agent and user inspect output with `shell_output`,
-`shell_wait`, or `/terminals show`.
+Output is buffered, not streamed live. The agent and user can inspect current
+output with `shell_output` or `/terminals show`; agents can use `shell_wait`
+when a background process is expected to produce output after a short delay.
 
 A single line larger than `background_output_max_bytes` is dropped rather than truncated. This keeps
 buffer accounting simple and avoids storing oversized records.
 
 Background processes are not durable jobs. Closing the chat session terminates running processes.
-Use durable service tools only when the process must intentionally outlive the session.
+Use `shell_service_start` only when post-finalization service persistence is an explicit acceptance
+requirement.
 
-`shell_wait` is bounded and non-interactive. It waits for output or process exit; it does not create
-a persistent shell or attach to a PTY.
+Repeated empty `shell_output` reads on a running process include guidance to use
+`shell_wait` with the returned cursor. Use `shell_run` for commands expected to
+complete quickly, and `shell_service_start` for explicit durable-service
+requirements.

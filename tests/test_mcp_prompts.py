@@ -8,13 +8,13 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.mcp.prompts import (
+from alysis_code import cli as cli_mod
+from alysis_code.mcp.prompts import (
     McpPromptMessage,
     normalize_get_prompt_result,
     normalize_list_prompts_result,
 )
-from sylliptor_agent_cli.mcp.untrusted_content import build_untrusted_mcp_text_block
+from alysis_code.mcp.untrusted_content import build_untrusted_mcp_text_block
 
 _FIXTURE_SERVER = (
     Path(__file__).resolve().parent / "fixtures" / "mcp_servers" / "minimal_stdio_server.py"
@@ -41,7 +41,7 @@ def _write_user_stdio_prompt_config(
         "command": sys.executable,
         "args": [os.fspath(_FIXTURE_SERVER)],
         "env": {
-            "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+            "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
         },
         "prompts_mode": prompts_mode,
     }
@@ -55,7 +55,7 @@ def _write_user_stdio_prompt_config(
             }
         },
     )
-    return {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    return {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
 
 def _write_user_multi_server_prompt_config(
@@ -78,7 +78,7 @@ def _write_user_multi_server_prompt_config(
             _write_json(fixture_path, fixture_payload)
             payload["args"] = [os.fspath(_FIXTURE_SERVER)]
             payload["env"] = {
-                "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+                "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
             }
         elif "args" in spec:
             payload["args"] = list(spec["args"])
@@ -87,7 +87,7 @@ def _write_user_multi_server_prompt_config(
             payload["enabled_in"] = list(enabled_in)
         config_servers[server_id] = payload
     _write_json(cfg_dir / "mcp.json", {"servers": config_servers})
-    return {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    return {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
 
 def test_normalize_list_prompts_result_is_deterministic() -> None:
@@ -125,6 +125,12 @@ def test_normalize_list_prompts_result_is_deterministic() -> None:
     ]
 
 
+# The summary asserts a literal character count, so the fixture and the
+# expectation have to move together. Naming it once stops them drifting apart —
+# the rename shortened this string from 20 chars to 17 and broke the assertion.
+_JSON_FIXTURE = '{"repo":"alysis"}'
+
+
 def test_normalize_get_prompt_result_builds_safe_readable_summary() -> None:
     normalized = normalize_get_prompt_result(
         {
@@ -144,7 +150,7 @@ def test_normalize_get_prompt_result_builds_safe_readable_summary() -> None:
                         {
                             "type": "text",
                             "mimeType": "application/json",
-                            "text": '{"repo":"sylliptor"}',
+                            "text": _JSON_FIXTURE,
                         },
                         {
                             "type": "image",
@@ -159,10 +165,11 @@ def test_normalize_get_prompt_result_builds_safe_readable_summary() -> None:
     )
 
     assert normalized.description == "Review helper"
-    assert normalized.text == 'Review PR 123 carefully.\n\n{"repo":"sylliptor"}'
+    assert normalized.text == f"Review PR 123 carefully.\n\n{_JSON_FIXTURE}"
     assert "system: text(24 chars)" in normalized.content_summary
-    assert "user: application/json text(20 chars), image/png image item omitted" in (
-        normalized.content_summary
+    assert (
+        f"user: application/json text({len(_JSON_FIXTURE)} chars), image/png image item omitted"
+        in (normalized.content_summary)
     )
     assert normalized.messages[1].content[1]["summary"] == "image/png image item omitted"
 
@@ -262,7 +269,7 @@ def test_mcp_prompts_get_cli_supports_arg_parsing_and_json_output(tmp_path: Path
                             "role": "user",
                             "content": {
                                 "type": "text",
-                                "text": "Review repo owner/sylliptor.",
+                                "text": "Review repo owner/alysis.",
                             },
                         }
                     ],
@@ -282,7 +289,7 @@ def test_mcp_prompts_get_cli_supports_arg_parsing_and_json_output(tmp_path: Path
             "--path",
             str(tmp_path),
             "--arg",
-            "repo=owner/sylliptor",
+            "repo=owner/alysis",
             "--json",
         ],
         env=env,
@@ -294,13 +301,13 @@ def test_mcp_prompts_get_cli_supports_arg_parsing_and_json_output(tmp_path: Path
     assert payload["server_id"] == "alpha"
     assert payload["name"] == "review_pr"
     assert payload["title"] == "Review Pull Request"
-    assert payload["applied_arguments"] == {"repo": "owner/sylliptor"}
+    assert payload["applied_arguments"] == {"repo": "owner/alysis"}
     assert payload["messages"][0]["role"] == "user"
     expected_text = build_untrusted_mcp_text_block(
         source_type="prompt_get",
         server_id="alpha",
         source_name="review_pr",
-        text="Review repo owner/sylliptor.",
+        text="Review repo owner/alysis.",
     )
     assert payload["text"] == expected_text
     assert payload["messages"][0]["text"] == expected_text
@@ -321,7 +328,7 @@ def test_mcp_prompts_get_cli_human_output_renders_wrapped_text_literally(tmp_pat
                             "role": "user",
                             "content": {
                                 "type": "text",
-                                "text": "Review repo owner/sylliptor.",
+                                "text": "Review repo owner/alysis.",
                             },
                         }
                     ],
@@ -349,7 +356,7 @@ def test_mcp_prompts_get_cli_human_output_renders_wrapped_text_literally(tmp_pat
     assert "MarkupError" not in result.output
     assert "[MCP_UNTRUSTED_TEXT]" in result.output
     assert "[/MCP_UNTRUSTED_TEXT]" in result.output
-    assert "Review repo owner/sylliptor." in result.output
+    assert "Review repo owner/alysis." in result.output
 
 
 def test_mcp_prompt_cli_refresh_flags_are_host_controlled_and_deterministic(
@@ -489,7 +496,7 @@ def test_mcp_prompts_list_cli_resolves_project_root_from_nested_path(tmp_path: P
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {

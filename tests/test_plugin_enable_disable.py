@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.extensions import install as install_mod
-from sylliptor_agent_cli.extensions.install import (
+from alysis_code.extensions import install as install_mod
+from alysis_code.extensions.install import (
     PluginInstallError,
     disable_plugin,
     enable_plugin,
 )
-from sylliptor_agent_cli.extensions.models import ExtensionState, InstalledExtensionState
-from sylliptor_agent_cli.extensions.state import load_global_state, load_project_overrides
+from alysis_code.extensions.models import ExtensionState, InstalledExtensionState
+from alysis_code.extensions.state import load_global_state, load_project_overrides
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
 
 
 def _write_global_state(tmp_path: Path, *, enabled: bool = False) -> None:
@@ -43,7 +43,7 @@ def _write_global_state(tmp_path: Path, *, enabled: bool = False) -> None:
 
 
 def _write_project_state(repo: Path, *, plugin_id: str = "acme.demo") -> None:
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -98,7 +98,7 @@ def test_enable_user_scope_already_enabled_is_noop_no_write(
     def fail_write(*args: object, **kwargs: object) -> None:
         raise AssertionError("write should not happen")
 
-    monkeypatch.setattr("sylliptor_agent_cli.extensions.state.atomic_write_json", fail_write)
+    monkeypatch.setattr("alysis_code.extensions.state.atomic_write_json", fail_write)
 
     result = enable_plugin(plugin_id="acme.demo", repo_root=tmp_path)
 
@@ -132,7 +132,7 @@ def test_enable_project_scope_creates_overrides_file(
     result = enable_plugin(plugin_id="acme.demo", repo_root=repo, project=True)
 
     assert result.scope == "project"
-    assert (repo / ".sylliptor" / "extensions.json").exists()
+    assert (repo / ".alysis" / "extensions.json").exists()
     assert load_project_overrides(repo).enabled == ["acme.demo"]
 
 
@@ -143,7 +143,7 @@ def test_enable_project_scope_removes_from_disabled(
     _env(monkeypatch, tmp_path)
     _write_global_state(tmp_path, enabled=False)
     repo = tmp_path / "repo"
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"schema_version": 1, "disabled": ["acme.demo"]}))
 
@@ -161,7 +161,7 @@ def test_disable_project_scope_adds_disabled_and_removes_enabled(
     _env(monkeypatch, tmp_path)
     _write_global_state(tmp_path, enabled=True)
     repo = tmp_path / "repo"
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"schema_version": 1, "enabled": ["acme.demo"]}))
 
@@ -205,7 +205,7 @@ def test_project_override_atomic_failure_leaves_prior_state(
     _env(monkeypatch, tmp_path)
     _write_global_state(tmp_path, enabled=False)
     repo = tmp_path / "repo"
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True)
     original = {"schema_version": 1, "enabled": ["other.plugin"]}
     path.write_text(json.dumps(original), encoding="utf-8")

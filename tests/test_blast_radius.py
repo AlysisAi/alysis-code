@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.blast_radius import (
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.blast_radius import (
     DEFAULT_OVER_BROAD_THRESHOLD,
     MIN_SCOPE_FILES,
     BlastRadiusPolicy,
@@ -50,23 +50,23 @@ from sylliptor_agent_cli.agent.blast_radius import (
     selection_covers,
     shrink_scope_for_runtime,
 )
-from sylliptor_agent_cli.agent.completion_certificate import (
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     CompletionCertificateStatus,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent.regression_baseline import parse_test_report
-from sylliptor_agent_cli.agent.verification import (
+from alysis_code.agent.regression_baseline import parse_test_report
+from alysis_code.agent.verification import (
     TurnExecutionState,
     _completion_gate_nudge_message,
     _completion_gate_problems,
     _completion_gate_repair_stage,
     _record_tool_effect,
 )
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
 
 # ---------------------------------------------------------------------------
 # Synthetic repo + drivers
@@ -725,6 +725,21 @@ def test_summary_names_an_unattributed_result_as_unattributed(repo: Path) -> Non
     )
     assert "UNATTRIBUTED" in summary
     assert "tests/test_core.py::test_widen" in summary
+    assert "failures are mine: tests/test_core.py::test_widen" in summary
+
+
+def test_summary_handles_unattributed_run_with_no_failures(repo: Path) -> None:
+    state = _scoped_state(repo)
+    _edit(state, repo, "src/pkg/core.py")
+    _run_tests(state, repo, state.blast_radius_scope.suggested_command())
+
+    summary = build_blast_radius_status_summary(
+        state.compute_blast_radius_assessment(enabled=True, turn_intent="execute")
+    )
+
+    assert "no failures were reported" in summary
+    assert "clean result is UNATTRIBUTED" in summary
+    assert "failures are mine: ." not in summary
 
 
 def test_summary_is_silent_when_the_protocol_does_not_apply(repo: Path) -> None:
@@ -954,6 +969,45 @@ def test_an_unreadable_scope_run_is_not_reported_as_never_run(repo: Path) -> Non
     assert "could not read per-test results" in summary
 
 
+def test_structured_verify_pass_overrides_truncated_runner_output(repo: Path) -> None:
+    state = _scoped_state(repo)
+    command = state.blast_radius_scope.suggested_command()
+    _run_tests(state, repo, command)
+    _edit(state, repo, "src/pkg/core.py")
+    _record_tool_effect(
+        root=repo,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": [command]},
+        status="ok",
+        result={
+            "commands": [command],
+            "all_passed": True,
+            "command_results": [
+                {
+                    "command": command,
+                    "effective_command": command,
+                    "exit_code": 0,
+                    "status": "passed",
+                    "ok": True,
+                    "real_execution": True,
+                    "output_preview": "... output truncated before summary ...",
+                    "output_truncated": True,
+                }
+            ],
+        },
+        known_verification_commands=[command],
+        verification_authoritative=True,
+    )
+
+    assessment = state.compute_blast_radius_assessment(enabled=True, turn_intent="execute")
+    summary = build_blast_radius_status_summary(assessment)
+
+    assert assessment.status == BlastRadiusStatus.CLEAN
+    assert "nothing that passed before it fails now" in summary
+    assert "could not read per-test results" not in summary
+
+
 def test_the_file_cap_records_what_it_dropped(repo: Path) -> None:
     scope = select_blast_radius_scope(
         touched_paths=["src/pkg/core.py"],
@@ -987,11 +1041,11 @@ def test_a_run_duration_is_captured_from_the_tool_call(repo: Path) -> None:
 
 def test_kill_switch_env_wins_over_config(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = AppConfig(blast_radius_gate_enabled=True)
-    monkeypatch.setenv("SYLLIPTOR_BLAST_RADIUS", "off")
+    monkeypatch.setenv("ALYSIS_BLAST_RADIUS", "off")
     assert _blast_radius_gate_enabled(cfg) is False
-    monkeypatch.setenv("SYLLIPTOR_BLAST_RADIUS", "on")
+    monkeypatch.setenv("ALYSIS_BLAST_RADIUS", "on")
     assert _blast_radius_gate_enabled(AppConfig(blast_radius_gate_enabled=False)) is True
-    monkeypatch.delenv("SYLLIPTOR_BLAST_RADIUS")
+    monkeypatch.delenv("ALYSIS_BLAST_RADIUS")
     assert _blast_radius_gate_enabled(cfg) is True
     assert _blast_radius_gate_enabled(AppConfig(blast_radius_gate_enabled=False)) is False
 
@@ -1304,7 +1358,7 @@ def test_scripted_run_with_the_gate_disabled_is_untouched(
     repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_BLAST_RADIUS", "off")
+    monkeypatch.setenv("ALYSIS_BLAST_RADIUS", "off")
     monkeypatch.setattr(agent_loop_mod, "shell_run", _fake_shell_run_breaking_a_neighbour(repo))
     session = _scripted_session(repo, "blast-radius-off")
     session.client = _ScriptedClient(

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.compaction.tool_output_offload import ToolOutputOffloader
-from sylliptor_agent_cli.session_artifacts import SessionArtifactLayout
-from sylliptor_agent_cli.tools.history import HistorySearchError, history_search
+from alysis_code.compaction.tool_output_offload import ToolOutputOffloader
+from alysis_code.session_artifacts import SessionArtifactLayout
+from alysis_code.tools.history import HistorySearchError, history_search
 
 
 def _write(path: Path, content: str) -> None:
@@ -15,7 +15,7 @@ def _write(path: Path, content: str) -> None:
 
 
 def test_history_search_finds_matches_across_artifacts(tmp_path: Path) -> None:
-    base = tmp_path / ".sylliptor" / "sessions" / "sid"
+    base = tmp_path / ".alysis" / "sessions" / "sid"
     _write(
         base / "history" / "chunk_0001.jsonl",
         '{"idx":1,"message":{"role":"user","content":"MUST keep API stable"}}\n',
@@ -41,11 +41,11 @@ def test_history_search_finds_matches_across_artifacts(tmp_path: Path) -> None:
     assert "history" in kinds
     assert "tool_output" in kinds
     assert "memory" in kinds
-    assert all(str(row["path"]).startswith(".sylliptor/sessions/sid/") for row in matches)
+    assert all(str(row["path"]).startswith(".alysis/sessions/sid/") for row in matches)
 
 
 def test_history_search_respects_max_results_and_max_file_bytes(tmp_path: Path) -> None:
-    base = tmp_path / ".sylliptor" / "sessions" / "sid"
+    base = tmp_path / ".alysis" / "sessions" / "sid"
     _write(
         base / "history" / "chunk_0001.jsonl",
         "\n".join(f'{{"idx":{i},"message":"match-{i}"}}' for i in range(10)) + "\n",
@@ -92,7 +92,7 @@ def test_history_search_missing_session_dir_returns_empty(tmp_path: Path) -> Non
 
 
 def test_history_search_uses_session_artifact_root_for_tool_outputs(tmp_path: Path) -> None:
-    legacy_base = tmp_path / ".sylliptor" / "sessions" / "sid"
+    legacy_base = tmp_path / ".alysis" / "sessions" / "sid"
     external_base = tmp_path.parent / f"{tmp_path.name}-external-sessions" / "sid"
     _write(
         legacy_base / "history" / "chunk_0001.jsonl",
@@ -136,7 +136,7 @@ def test_history_search_finds_offload_after_restart_and_redacts_secret(
     workspace.mkdir()
     session_id = "restart-session"
     secret = "history-secret-canary"
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", secret)
+    monkeypatch.setenv("ALYSIS_API_KEY", secret)
     offloader = ToolOutputOffloader(
         artifact_layout=SessionArtifactLayout(filesystem_root=tmp_path / "external" / session_id),
         workspace_root=workspace,
@@ -185,7 +185,7 @@ def test_history_search_rejects_unscoped_root_and_symlink_escape(tmp_path: Path)
     )
     assert unscoped["matches"] == []
 
-    owned_root = workspace / ".sylliptor" / "sessions" / "owned-session"
+    owned_root = workspace / ".alysis" / "sessions" / "owned-session"
     outside = tmp_path / "outside.json"
     outside.write_text("escaped-needle", encoding="utf-8")
     link = owned_root / "tool_outputs" / "escape.json"

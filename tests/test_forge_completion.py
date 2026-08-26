@@ -16,19 +16,19 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli_impl import chat as chat_impl_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.forge_completion import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli_impl import chat as chat_impl_mod
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, load_plan, save_plan
+from alysis_code.forge_completion import (
     build_forge_completion_report,
     detect_run_hints,
 )
-from sylliptor_agent_cli.swarm_trace import build_swarm_trace_event
+from alysis_code.swarm_trace import build_swarm_trace_event
 
 
 def _report_paths(tmp_path: Path) -> SimpleNamespace:
-    execution_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "execution"
+    execution_dir = tmp_path / ".alysis" / "runs" / "wf" / "execution"
     execution_dir.mkdir(parents=True, exist_ok=True)
     return SimpleNamespace(
         root=tmp_path,

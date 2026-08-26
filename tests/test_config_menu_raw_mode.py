@@ -9,9 +9,9 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.config import AppConfig, load_config, save_config
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.config import AppConfig, load_config, save_config
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
 
 
 class PromptScript:
@@ -42,7 +42,7 @@ def _seed_config(
     routing_mode: str = "auto",
     step_budget_policy: str = "adaptive",
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     cfg.model = model
     cfg.routing_mode = routing_mode
@@ -128,7 +128,7 @@ def test_run_config_menu_raw_picker_sequence_persists_expected_changes(
 def test_top_level_live_menu_renders_unknown_key_message(monkeypatch, tmp_path: Path) -> None:
     import prompt_toolkit.input as prompt_input
 
-    import sylliptor_agent_cli.cli as cli_mod
+    import alysis_code.cli as cli_mod
 
     _seed_config(tmp_path, monkeypatch)
     _patch_console(monkeypatch)
@@ -200,7 +200,7 @@ def test_prompt_main_action_falls_back_to_numeric_when_terminal_is_non_interacti
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    import sylliptor_agent_cli.cli as cli_mod
+    import alysis_code.cli as cli_mod
 
     _seed_config(tmp_path, monkeypatch)
     output = _patch_console(monkeypatch)

@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli import agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code import agent_loop as agent_loop_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
 
 
 class _LoopingToolClient:
@@ -269,10 +269,13 @@ def test_deadline_exhausted_before_first_llm_skips_model_and_not_step_budget(
     finally:
         session.close()
 
-    assert exit_code == 1
+    # A budget stop is a normal outcome and exits clean, even though the model
+    # was never reached: nothing went wrong, there was simply no time left.
+    assert exit_code == 0
     assert client.calls == 0
     deadline_events = _event_payloads(log_path, "deadline_exhausted")
-    assert deadline_events[-1]["operation"] == "main_llm"
+    assert deadline_events[-1]["operation"] == "step_loop"
+    assert deadline_events[-1]["stop_reason"] == "run_budget_exhausted"
     assert deadline_events[-1]["deadline_exhausted"] is True
     forced_summary_requests = _event_payloads(log_path, "forced_final_summary_requested")
     assert forced_summary_requests[-1]["termination_kind"] == "deadline_exhausted"

@@ -5,10 +5,10 @@ from pathlib import Path
 
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.tools.repo_map import repo_map
+from alysis_code.agent_loop import build_tools
+from alysis_code.config import AppConfig
+from alysis_code.session_store import SessionStore
+from alysis_code.tools.repo_map import repo_map
 
 
 def _store(root: Path) -> SessionStore:

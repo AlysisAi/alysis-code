@@ -5,22 +5,22 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, set_config_value
-from sylliptor_agent_cli.llm.gemini_interactions import (
+from alysis_code.config import AppConfig, set_config_value
+from alysis_code.llm.gemini_interactions import (
     GEMINI_INTERACTIONS_CONFIG_FLAG,
     GEMINI_INTERACTIONS_EXPERIMENT_ENV,
     GeminiInteractionsClient,
     gemini_interactions_enabled,
 )
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.llm.metadata import (
     GEMINI_INTERACTIONS_PROVIDER_METADATA_KEY,
     ROUTE_IDENTITY_PROVIDER_METADATA_KEY,
 )
-from sylliptor_agent_cli.llm.types import LLMError, ReasoningOutputKind
+from alysis_code.llm.types import LLMError, ReasoningOutputKind
 
 
 def test_usage_from_response_folds_thoughts_into_completion() -> None:
-    from sylliptor_agent_cli.llm.gemini_interactions import _usage_from_response
+    from alysis_code.llm.gemini_interactions import _usage_from_response
 
     usage = _usage_from_response(
         {
@@ -40,7 +40,7 @@ def test_usage_from_response_folds_thoughts_into_completion() -> None:
 
 
 def test_usage_from_interactions_schema_folds_total_thought_tokens_into_output() -> None:
-    from sylliptor_agent_cli.llm.gemini_interactions import _usage_from_response
+    from alysis_code.llm.gemini_interactions import _usage_from_response
 
     usage = _usage_from_response(
         {
@@ -61,7 +61,7 @@ def test_usage_from_interactions_schema_folds_total_thought_tokens_into_output()
 
 
 def test_usage_from_response_includes_tool_use_prompt_tokens() -> None:
-    from sylliptor_agent_cli.llm.gemini_interactions import _usage_from_response
+    from alysis_code.llm.gemini_interactions import _usage_from_response
 
     usage = _usage_from_response(
         {

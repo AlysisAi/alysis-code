@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.agent.verification import _completion_gate_nudge_message
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent.verification import _completion_gate_nudge_message
+from alysis_code.agent_loop import (
     CompletionGateControllerState,
     CompletionGateDecisionKind,
     TurnExecutionState,

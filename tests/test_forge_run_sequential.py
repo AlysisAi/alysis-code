@@ -1,4 +1,4 @@
-"""End-to-end coverage for `sylliptor forge run`, the sequential execution path.
+"""End-to-end coverage for `alysis forge run`, the sequential execution path.
 
 These tests drive a real git repository so the branch/commit/verify/merge cycle is
 exercised for real, and they hard-fail if any worktree machinery is touched: the
@@ -14,24 +14,24 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import conflict_auto_resolver as conflict_auto_resolver_mod
-from sylliptor_agent_cli import git_worktrees as git_worktrees_mod
-from sylliptor_agent_cli import swarm_orchestrator as swarm_orchestrator_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.forge_events import parse_event_line
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code import cli as cli_mod
+from alysis_code import conflict_auto_resolver as conflict_auto_resolver_mod
+from alysis_code import git_worktrees as git_worktrees_mod
+from alysis_code import swarm_orchestrator as swarm_orchestrator_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.forge_events import parse_event_line
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 _WORKTREE_ENTRYPOINTS = ("ensure_task_worktree", "remove_task_worktree", "prune_worktrees")
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -175,7 +175,7 @@ def test_forge_run_executes_dependent_tasks_in_order_without_worktrees(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -312,7 +312,7 @@ def test_forge_run_stops_at_first_failure_and_leaves_dependents_unstarted(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -429,7 +429,7 @@ def test_forge_run_keep_going_branches_later_tasks_from_the_pinned_base(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "run",
@@ -494,7 +494,7 @@ def test_forge_run_human_output_renders_order_and_summary(tmp_path: Path, monkey
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "run",
@@ -554,7 +554,7 @@ def test_forge_swarm_parallel_one_delegates_to_the_sequential_engine(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -608,7 +608,7 @@ def test_forge_swarm_parallel_one_keeps_swarm_when_a_swarm_only_flag_is_used(
     monkeypatch.setattr(cli_mod, "run_agent", _no_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -655,7 +655,7 @@ def test_forge_run_degrades_to_no_pr_without_a_git_head(tmp_path: Path, monkeypa
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -707,7 +707,7 @@ def test_forge_run_rejects_explicit_pr_without_a_git_head(tmp_path: Path, monkey
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -747,7 +747,7 @@ def test_forge_run_dry_run_reports_dependency_order_and_runs_nothing(
     monkeypatch.setattr(cli_mod, "run_agent", _no_agent)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",

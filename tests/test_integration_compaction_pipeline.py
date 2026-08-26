@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent_loop import AgentSession, create_session
-from sylliptor_agent_cli.compaction.conversation_compactor import MEMORY_MARKER, PINS_MARKER
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMError, LLMResponse, ToolCall
-from sylliptor_agent_cli.token_budget import estimate_tokens
+from alysis_code.agent_loop import AgentSession, create_session
+from alysis_code.compaction.conversation_compactor import MEMORY_MARKER, PINS_MARKER
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMError, LLMResponse, ToolCall
+from alysis_code.token_budget import estimate_tokens
 
 
 class ScriptedClient:
@@ -167,7 +167,7 @@ def test_run_turn_compaction_and_offload_creates_artifacts_and_pins(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_COMPACTOR", "compactor-model")
+    monkeypatch.setenv("ALYSIS_MODEL_COMPACTOR", "compactor-model")
     big_file = tmp_path / "big.txt"
     big_file.write_text("A" * 24000, encoding="utf-8")
 
@@ -179,7 +179,7 @@ def test_run_turn_compaction_and_offload_creates_artifacts_and_pins(
         max_steps=6,
         no_log=False,
         api_key_override="override-key",
-        session_log_dir_override=tmp_path / ".sylliptor" / "sessions",
+        session_log_dir_override=tmp_path / ".alysis" / "sessions",
         session_id_override="integration-sid",
         enable_compaction=True,
     )
@@ -275,7 +275,9 @@ def test_run_turn_compaction_and_offload_creates_artifacts_and_pins(
         )
         assert tool_stub.get("artifact_readable_via_fs") is True
         assert tool_stub.get("raw_saved_in_session_log") is False
-        assert "use fs_read on that path" in str(tool_stub.get("full_output") or "")
+        assert "use session_artifact_read with that locator" in str(
+            tool_stub.get("full_output") or ""
+        )
 
         pins_data = json.loads(pins_path.read_text(encoding="utf-8"))
         assert any(
@@ -303,7 +305,7 @@ def test_compactor_context_length_retry_then_success_end_to_end(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_COMPACTOR", "compactor-model")
+    monkeypatch.setenv("ALYSIS_MODEL_COMPACTOR", "compactor-model")
     session = create_session(
         cfg=_build_cfg(),
         root=tmp_path,
@@ -357,7 +359,7 @@ def test_compactor_fails_both_attempts_preserves_chunk_and_still_completes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_COMPACTOR", "compactor-model")
+    monkeypatch.setenv("ALYSIS_MODEL_COMPACTOR", "compactor-model")
     session = create_session(
         cfg=_build_cfg(),
         root=tmp_path,
@@ -412,7 +414,7 @@ def test_main_provider_context_overflow_compacts_exact_request_and_retries_once(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_COMPACTOR", "compactor-model")
+    monkeypatch.setenv("ALYSIS_MODEL_COMPACTOR", "compactor-model")
     cfg = _build_cfg()
     models = cfg.extra_fields["model_metadata_overrides"]["models"]  # type: ignore[index]
     models["test-model"] = {"context_window_tokens": 100_000, "max_output_tokens": 4096}

@@ -9,25 +9,25 @@ from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.budget_allocator import (
+from alysis_code import cli as cli_mod
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.budget_allocator import (
     AssetInclusionDecision,
     TaskAssetAllocation,
 )
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import forge as forge_cli_impl
-from sylliptor_agent_cli.cli_impl.commands.forge_helpers import _show_forge_plan_summary
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import forge as forge_cli_impl
+from alysis_code.cli_impl.commands.forge_helpers import _show_forge_plan_summary
+from alysis_code.config import AppConfig
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -124,7 +124,7 @@ def test_forge_exec_injects_task_assets_and_asset_tools(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -146,7 +146,7 @@ def test_forge_exec_injects_task_assets_and_asset_tools(
     assert asset.id in instruction
     assert "asset guidance for implemented.txt" in instruction
     assert {"asset_read", "asset_load"}.issubset(set(captured["tool_aliases"]))  # type: ignore[arg-type]
-    assert (repo / ".sylliptor" / "task_assets" / "manifest.json").exists()
+    assert (repo / ".alysis" / "task_assets" / "manifest.json").exists()
     allocation_payload = json.loads(
         (paths.execution_asset_briefings_dir / f"{task['id']}.json").read_text("utf-8")
     )
@@ -181,7 +181,7 @@ def test_forge_summary_and_status_count_indexed_assets_when_plan_assets_empty(
     assert "Assets · 1" in summary_output
 
     status_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "status", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -218,7 +218,7 @@ def test_forge_summary_status_and_show_count_mixed_indexed_and_legacy_assets(
     assert "Assets · 2" in summary_output
 
     status_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "status", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -226,7 +226,7 @@ def test_forge_summary_status_and_show_count_mixed_indexed_and_legacy_assets(
     assert re.search(r"assets\s+│\s+2", status_result.output)
 
     show_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )

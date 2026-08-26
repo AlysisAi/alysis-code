@@ -6,17 +6,17 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     ToolDef,
     _resolve_session_pinned_prefix_len,
     _session_task_brief_content,
     create_session,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMError, LLMResponse, ToolCall
-from sylliptor_agent_cli.session_metrics import score_session_events
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.tools.availability import (
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMError, LLMResponse, ToolCall
+from alysis_code.session_metrics import score_session_events
+from alysis_code.session_store import read_session_events
+from alysis_code.tools.availability import (
     _reset_tool_availability_for_tests,
     mark_available,
     mark_unavailable,
@@ -492,7 +492,7 @@ def test_run_turn_returns_optional_unavailable_tool_result_without_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _reset_tool_availability_for_tests()
-    caplog.set_level("INFO", logger="sylliptor_agent_cli.tools.availability")
+    caplog.set_level("INFO", logger="alysis_code.tools.availability")
     reason = "module not importable: fake_optional_dependency"
     register_tool_availability("fake_optional_tool", optional=True)
     mark_unavailable("fake_optional_tool", reason)

@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.cache_capabilities import (
+from alysis_code.config import AppConfig
+from alysis_code.llm.cache_capabilities import (
     CACHE_STRATEGY_OPENAI_PROMPT_CACHE,
     CacheCapabilitySpec,
     resolve_effective_cache_capability,
 )
-from sylliptor_agent_cli.llm.cache_policy import (
+from alysis_code.llm.cache_policy import (
     build_prompt_cache_namespace,
+    derive_prompt_cache_stream_key,
     resolve_prompt_cache_policy,
 )
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     OPENAI_RESPONSES_PROTOCOL,
@@ -24,6 +25,50 @@ def _capabilities(provider: str, protocol: str):
     capabilities = get_provider_protocol_capabilities(provider_key=provider, protocol=protocol)
     assert capabilities is not None
     return capabilities
+
+
+def test_prompt_cache_stream_key_is_parent_scoped_and_shared_by_children() -> None:
+    parent = derive_prompt_cache_stream_key(session_id="parent-session")
+    first_child = derive_prompt_cache_stream_key(
+        session_id="child-session-a",
+        parent_session_id="parent-session",
+    )
+    second_child = derive_prompt_cache_stream_key(
+        session_id="child-session-b",
+        parent_session_id="parent-session",
+    )
+
+    assert parent == "parent-session"
+    assert first_child == second_child
+    assert first_child != parent
+    assert "parent-session" not in first_child
+
+
+def test_prompt_cache_key_toggle_disables_supported_and_unsupported_paths() -> None:
+    disabled = AppConfig(cache={"prompt_cache_key_enabled": False})
+    openai_policy = resolve_prompt_cache_policy(
+        cfg=disabled,
+        capabilities=_capabilities("openai", OPENAI_RESPONSES_PROTOCOL),
+        provider_key="openai",
+        protocol=OPENAI_RESPONSES_PROTOCOL,
+        model="gpt-test",
+        prompt_cache_key="parent-session",
+        prompt_cache_retention=None,
+    )
+    unsupported_policy = resolve_prompt_cache_policy(
+        cfg=AppConfig(),
+        capabilities=_capabilities("gemini", GEMINI_GENERATE_CONTENT_PROTOCOL),
+        provider_key="gemini",
+        protocol=GEMINI_GENERATE_CONTENT_PROTOCOL,
+        model="gemini-3-flash-preview",
+        prompt_cache_key="parent-session",
+        prompt_cache_retention=None,
+    )
+
+    assert openai_policy.prompt_cache_key is None
+    assert "prompt_cache_key" not in openai_policy.emitted_fields
+    assert unsupported_policy.prompt_cache_key is None
+    assert "prompt_cache_key" not in unsupported_policy.emitted_fields
 
 
 def test_auto_prompt_cache_policy_derives_hashed_openai_key(tmp_path: Path) -> None:
@@ -45,7 +90,7 @@ def test_auto_prompt_cache_policy_derives_hashed_openai_key(tmp_path: Path) -> N
     )
 
     assert policy.prompt_cache_key is not None
-    assert policy.prompt_cache_key.startswith("sylliptor:openai:")
+    assert policy.prompt_cache_key.startswith("alysis:openai:")
     assert str(tmp_path) not in policy.prompt_cache_key
     assert policy.prompt_cache_retention is None
     assert policy.anthropic_cache_control_enabled is False
@@ -137,6 +182,9 @@ def test_manual_prompt_cache_policy_preserves_explicit_supported_fields() -> Non
     assert policy.allowed_fields == ("prompt_cache_key", "prompt_cache_retention")
     assert policy.emitted_fields == ("prompt_cache_key", "prompt_cache_retention")
     assert policy.status == "enabled"
+    assert policy.telemetry_metadata()["prompt_cache_key_hash"] == (
+        "34d1041998a82cc916f8350e4adeecee7dde455059ee49f16fbcb7a153aefe1f"
+    )
 
 
 def test_prompt_cache_policy_uses_effective_profile_capability() -> None:

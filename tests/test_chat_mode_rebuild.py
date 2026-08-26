@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,12 +10,21 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-import sylliptor_agent_cli.verify_gate as verify_gate_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.config import AppConfig, clone_cfg
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.verify_gate import VerifyError
+import alysis_code.agent_loop as agent_loop_mod
+import alysis_code.verify_gate as verify_gate_mod
+from alysis_code import cli as cli_mod
+from alysis_code.agent.steering import SteerInbox
+from alysis_code.agent.turn.core import _can_prelaunch_parallel_subagent_batch
+from alysis_code.agent_loop import ToolDef
+from alysis_code.cli_impl.tui.app import _poll_selected_subagent
+from alysis_code.cli_impl.tui.surface import TuiSurface
+from alysis_code.cli_impl.tui.transcript import TuiTranscript
+from alysis_code.config import AppConfig, clone_cfg
+from alysis_code.session_store import SessionStore
+from alysis_code.subagents import built_in_subagents
+from alysis_code.surface.types import SubagentStartEvent, ToolEndEvent, ToolStartEvent
+from alysis_code.usage_tracker import UsageSummary
+from alysis_code.verify_gate import VerifyError
 
 
 def _store(root: Path, *, session_id: str = "chat-rebuild-test") -> SessionStore:
@@ -142,7 +152,7 @@ def test_rebuild_session_tools_preserves_mcp_bindings_in_write_capable_modes(
 def test_rebuild_with_persona_scope_blocks_unbounded_execution_tools(
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.agent.errors import AgentRuntimeError
+    from alysis_code.agent.errors import AgentRuntimeError
 
     session = _make_session(
         tmp_path,
@@ -270,3 +280,395 @@ def test_rebuild_session_tools_preserves_active_workdir_defaults(tmp_path: Path)
         assert runner.calls[0]["cwd"] == nested.resolve()
     finally:
         session.store.close()
+
+
+def test_rebuilt_session_scheduler_tracks_deferred_failure_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = built_in_subagents()
+    starts: list[SubagentStartEvent] = []
+    surface = TuiSurface(
+        TuiTranscript(),
+        on_subagent_run_started=starts.append,
+    )
+    child_sequence = 0
+    debugger_runs = 0
+    sequence_lock = threading.Lock()
+
+    class _ChildSession:
+        def __init__(self, *, child_surface: Any, role: str, session_id: str) -> None:
+            definition = registry[role]
+            self.surface = child_surface
+            self.store = SessionStore(
+                enabled=False,
+                sessions_dir=tmp_path / "child-sessions",
+                session_id=session_id,
+                cwd=str(tmp_path),
+                repo_root=str(tmp_path),
+            )
+            self.tools = {
+                name: ToolDef(
+                    name=name,
+                    description=f"runtime {name}",
+                    parameters={"type": "object", "properties": {}, "required": []},
+                    run=lambda _args: {"ok": True},
+                )
+                for name in definition.allow_tools
+            }
+            self.tool_list = [tool.as_openai_tool() for tool in self.tools.values()]
+            self.messages: list[dict[str, Any]] = []
+            self.usage_summary = UsageSummary()
+            self.exit_code = 0
+            if role == "debugger":
+                nonlocal debugger_runs
+                with sequence_lock:
+                    debugger_runs += 1
+                    if debugger_runs == 1:
+                        self.exit_code = 1
+
+        def run_turn(self, task: str, *, cancellation_token: Any | None = None) -> int:
+            _ = cancellation_token
+            call_id = f"call-{self.store.session_id}"
+            self.store.append(
+                "tool_call",
+                {"name": "fs_read", "arguments": {"path": "README.md"}},
+            )
+            self.surface.on_tool_start(
+                ToolStartEvent(
+                    tool_call_id=call_id,
+                    name="fs_read",
+                    args={"path": "README.md"},
+                    step=1,
+                )
+            )
+            self.surface.on_tool_end(
+                ToolEndEvent(
+                    tool_call_id=call_id,
+                    name="fs_read",
+                    status="done",
+                    elapsed_ms=1,
+                    meta={},
+                )
+            )
+            report = f"runtime report for {task}"
+            self.messages.append({"role": "assistant", "content": report})
+            self.store.append("assistant_message", {"content": report})
+            self.store.append("final", {"content": report})
+            return self.exit_code
+
+        def close(self) -> None:
+            self.store.close()
+
+    def _create_child_session(**kwargs: Any) -> _ChildSession:
+        nonlocal child_sequence
+        role = str(kwargs["usage_role"]).rsplit(":", 1)[-1]
+        with sequence_lock:
+            child_sequence += 1
+            session_id = f"runtime-child-{child_sequence}"
+        return _ChildSession(
+            child_surface=kwargs["surface"],
+            role=role,
+            session_id=session_id,
+        )
+
+    monkeypatch.setattr(agent_loop_mod, "create_session", _create_child_session)
+    cfg = AppConfig(model="test-model", web_search_mode="off")
+    cfg.subagent_orchestration.parallel_nonwriting_shared = False
+    session = _make_session(
+        tmp_path,
+        cfg=cfg,
+        surface=surface,
+        mode="auto",
+        api_key="test-key",
+        subagents_enabled=True,
+        subagent_registry=registry,
+    )
+    session.steer_inbox = SteerInbox()
+    schedulers: list[Any] = []
+    try:
+        cli_mod._rebuild_session_tools_for_mode(session=session, mode="auto")
+        initial_launcher = session.tools["subagent_run"].run.__self__
+        initial_scheduler = initial_launcher.child_scheduler
+        assert initial_scheduler is not None
+        session.child_scheduler = initial_scheduler
+        schedulers.append(initial_scheduler)
+        lifecycle_events: list[dict[str, Any]] = []
+        lifecycle_listener = lifecycle_events.append
+        initial_scheduler.set_lifecycle_listener(lifecycle_listener)
+
+        cli_mod._rebuild_session_tools_for_mode(session=session, mode="auto")
+        rebuilt_launcher = session.tools["subagent_run"].run.__self__
+        rebuilt_scheduler = rebuilt_launcher.child_scheduler
+        assert rebuilt_scheduler is not None
+        assert rebuilt_scheduler is not initial_scheduler
+        assert session.child_scheduler is rebuilt_scheduler
+        assert rebuilt_scheduler.lifecycle_listener is lifecycle_listener
+        assert rebuilt_scheduler.parent_steer_inbox is session.steer_inbox
+        schedulers.append(rebuilt_scheduler)
+
+        calls = [
+            SimpleNamespace(
+                id="call-explorer",
+                name="subagent_run",
+                arguments={"name": "explorer", "task": "initial explorer"},
+            ),
+            SimpleNamespace(
+                id="call-reviewer",
+                name="subagent_run",
+                arguments={"name": "code-reviewer", "task": "initial review"},
+            ),
+            SimpleNamespace(
+                id="call-debugger",
+                name="subagent_run",
+                arguments={"name": "debugger", "task": "deferred debugger"},
+            ),
+        ]
+        partition = _can_prelaunch_parallel_subagent_batch(
+            tool_calls=calls,
+            turn_tools=session.tools,
+            subagent_registry=registry,
+            parent_mode="auto",
+            failed_tool_call_counts={},
+            hook_dispatcher=None,
+            subagent_policy_reason="repo_execution_turn",
+            deadline_can_start=True,
+            parallel_nonwriting_shared=False,
+        )
+        assert [call.id for call in partition.eligible] == [
+            "call-explorer",
+            "call-reviewer",
+        ]
+        assert [call.id for call in partition.deferred] == ["call-debugger"]
+
+        initial_run_ids = session.child_scheduler.submit_parallel_batch(
+            [dict(call.arguments) for call in partition.eligible]
+        )
+        initial_results = session.child_scheduler.collect(
+            run_id=initial_run_ids,
+            timeout_s=None,
+        )
+        assert not initial_results["pending_run_ids"]
+
+        deferred_args = dict(partition.deferred[0].arguments)
+        failed_result = session.tools["subagent_run"].run(deferred_args)
+        retried_result = session.tools["subagent_run"].run(deferred_args)
+        assert failed_result.get("error")
+        assert "error" not in retried_result
+
+        deferred_starts = [event for event in starts if event.name == "debugger"]
+        assert len(deferred_starts) == 2
+        retried_run_id = str(deferred_starts[-1].subagent_run_id or "")
+        assert retried_run_id
+        panel_state: dict[str, Any] = {
+            "selected_run_id": retried_run_id,
+            "run_order": [retried_run_id],
+            "cursors": {retried_run_id: 0},
+            "entries": {retried_run_id: []},
+            "statuses": {},
+            "lifecycles": {},
+            "poll_failures": {},
+            "last_poll": None,
+        }
+        failures: list[tuple[str, str]] = []
+
+        assert _poll_selected_subagent(
+            panel_state,
+            session.child_scheduler,
+            now=1.0,
+            on_failure=lambda run_id, condition: failures.append((run_id, condition)),
+        )
+
+        assert failures == []
+        assert panel_state["poll_failures"] == {}
+        assert panel_state["statuses"][retried_run_id]["state"] == "joined"
+        assert panel_state["statuses"][retried_run_id]["steps_completed"] == 1
+        assert panel_state["entries"][retried_run_id][-1] == {
+            "kind": "assistant",
+            "summary": "runtime report for deferred debugger",
+        }
+        assert any(
+            event["run_id"] == retried_run_id
+            and event["state"] == "joined"
+            and event["collected"] is True
+            for event in lifecycle_events
+        )
+    finally:
+        for scheduler in dict.fromkeys(schedulers):
+            scheduler.shutdown(cancel_pending=True)
+        session.store.close()
+
+
+def test_runtime_tui_clears_panel_when_scheduler_is_rebuilt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui.app import run_tui
+    from alysis_code.cli_impl.tui.state import TuiState
+
+    registry = built_in_subagents()
+    child_started = [threading.Event(), threading.Event()]
+    release_child = [threading.Event(), threading.Event()]
+    child_sequence = 0
+    runtime: dict[str, Any] = {}
+
+    class _ChildSession:
+        def __init__(self, *, child_surface: Any, index: int) -> None:
+            self.surface = child_surface
+            self.store = SessionStore(
+                enabled=False,
+                sessions_dir=tmp_path / "runtime-tui-child-sessions",
+                session_id=f"runtime-tui-child-{index}",
+                cwd=str(tmp_path),
+                repo_root=str(tmp_path),
+            )
+            self.tools = {
+                "fs_read": ToolDef(
+                    name="fs_read",
+                    description="runtime read",
+                    parameters={"type": "object", "properties": {}, "required": []},
+                    run=lambda _args: {"ok": True},
+                )
+            }
+            self.tool_list = [tool.as_openai_tool() for tool in self.tools.values()]
+            self.messages: list[dict[str, Any]] = []
+            self.usage_summary = UsageSummary()
+            self.index = index
+
+        def run_turn(self, task: str, *, cancellation_token: Any | None = None) -> int:
+            child_started[self.index].set()
+            assert release_child[self.index].wait(timeout=3.0)
+            report = f"runtime panel report for {task}"
+            self.messages.append({"role": "assistant", "content": report})
+            self.store.append("assistant_message", {"content": report})
+            self.store.append("final", {"content": report})
+            return 0
+
+        def close(self) -> None:
+            self.store.close()
+
+    def _create_child_session(**kwargs: Any) -> _ChildSession:
+        nonlocal child_sequence
+        index = child_sequence
+        child_sequence += 1
+        return _ChildSession(child_surface=kwargs["surface"], index=index)
+
+    monkeypatch.setattr(agent_loop_mod, "create_session", _create_child_session)
+    original_application_run = Application.run
+
+    def _capture_application(app: Application, *args: Any, **kwargs: Any) -> Any:
+        runtime["app"] = app
+        return original_application_run(app, *args, **kwargs)
+
+    monkeypatch.setattr(Application, "run", _capture_application)
+
+    def _build(surface: TuiSurface) -> Any:
+        session = _make_session(
+            tmp_path,
+            cfg=AppConfig(model="test-model", web_search_mode="off"),
+            surface=surface,
+            mode="auto",
+            api_key="test-key",
+            subagents_enabled=True,
+            subagent_registry=registry,
+        )
+        cli_mod._rebuild_session_tools_for_mode(session=session, mode="auto")
+        runtime["session"] = session
+        runtime["schedulers"] = [session.child_scheduler]
+
+        def _run_turn(_text: str, *, cancellation_token: Any | None = None) -> int:
+            first = session.tools["subagent_spawn"].run(
+                {"name": "explorer", "task": "before rebuild"}
+            )
+            runtime["first_run_id"] = first["run_id"]
+            assert child_started[0].wait(timeout=2.0)
+            assert release_child[0].wait(timeout=3.0)
+            session.child_scheduler.collect(run_id=first["run_id"], timeout_s=2.0)
+
+            cli_mod._rebuild_session_tools_for_mode(session=session, mode="auto")
+            runtime["schedulers"].append(session.child_scheduler)
+            runtime["rebuild_done"].set()
+
+            second = session.tools["subagent_spawn"].run(
+                {"name": "explorer", "task": "after rebuild"}
+            )
+            runtime["second_run_id"] = second["run_id"]
+            assert child_started[1].wait(timeout=2.0)
+            assert release_child[1].wait(timeout=3.0)
+            session.child_scheduler.collect(run_id=second["run_id"], timeout_s=2.0)
+            runtime["turn_done"].set()
+            return 0
+
+        session.run_turn = _run_turn
+        return session
+
+    runtime["rebuild_done"] = threading.Event()
+    runtime["turn_done"] = threading.Event()
+    with create_pipe_input() as pipe:
+
+        def _send_keys() -> None:
+            pipe.send_text("go\r")
+            assert child_started[0].wait(timeout=2.0)
+            pipe.send_text("\x0e")
+            time.sleep(0.05)
+            panel = runtime["app"].layout.container.content.children[2]
+            runtime["selected_before"] = panel.filter()
+            release_child[0].set()
+            assert runtime["rebuild_done"].wait(timeout=3.0)
+            time.sleep(0.05)
+            runtime["selected_after"] = panel.filter()
+            assert child_started[1].wait(timeout=2.0)
+            pipe.send_text("\x0e")
+            time.sleep(0.05)
+            runtime["selected_new"] = panel.filter()
+            release_child[1].set()
+            assert runtime["turn_done"].wait(timeout=3.0)
+            time.sleep(0.05)
+            pipe.send_text("/exit\r")
+
+        sender = threading.Thread(target=_send_keys)
+        sender.start()
+        _result, transcript = run_tui(
+            TuiState(),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=_build,
+        )
+        sender.join(timeout=3.0)
+
+    try:
+        assert runtime["selected_before"] is True
+        assert runtime["selected_after"] is False
+        assert runtime["selected_new"] is True
+        assert transcript.count(("info", "subagent history cleared: settings applied")) == 1
+        assert not any("Subagent panel refresh failed" in text for _role, text in transcript)
+
+        second_run_id = runtime["second_run_id"]
+        panel_state: dict[str, Any] = {
+            "selected_run_id": second_run_id,
+            "run_order": [second_run_id],
+            "cursors": {second_run_id: 0},
+            "entries": {second_run_id: []},
+            "statuses": {},
+            "lifecycles": {},
+            "poll_failures": {},
+            "last_poll": None,
+        }
+        assert _poll_selected_subagent(
+            panel_state,
+            runtime["session"].child_scheduler,
+            now=1.0,
+        )
+        assert panel_state["poll_failures"] == {}
+        assert panel_state["statuses"][second_run_id]["state"] == "joined"
+    finally:
+        for scheduler in dict.fromkeys(runtime.get("schedulers", [])):
+            scheduler.shutdown(cancel_pending=True)
+        runtime["session"].store.close()

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.plan_validation import (
+from alysis_code.failure_category import FailureCategory
+from alysis_code.plan_validation import (
     PlannerFailedError,
     find_plan_acceptance_issues,
     raise_for_execution_ready_plan,
     validate_plan,
     validate_plan_against_assets,
 )
-from sylliptor_agent_cli.task_readiness import find_execution_unready_mutating_tasks
+from alysis_code.task_readiness import find_execution_unready_mutating_tasks
 
 
 def test_validate_plan_warns_unknown_deps_and_missing_fields() -> None:
@@ -232,7 +232,7 @@ def test_validate_plan_reports_mutating_task_with_invalid_scope_entries() -> Non
                 "dependencies": [],
                 "acceptance_criteria": ["Login works."],
                 "estimated_files": ["fix login bug"],
-                "write_scope": [".sylliptor/current_run.json"],
+                "write_scope": [".alysis/current_run.json"],
             }
         ]
     }
@@ -436,8 +436,8 @@ def test_execution_readiness_rejects_internal_only_write_scope_fixture() -> None
                 "description": "Update implementation code.",
                 "dependencies": [],
                 "acceptance_criteria": ["Calculator seed behavior is implemented."],
-                "estimated_files": [".sylliptor/something.json"],
-                "write_scope": [".sylliptor/something.json"],
+                "estimated_files": [".alysis/something.json"],
+                "write_scope": [".alysis/something.json"],
                 "status": "planned",
             }
         ]
@@ -448,7 +448,7 @@ def test_execution_readiness_rejects_internal_only_write_scope_fixture() -> None
 
     assert exc_info.value.failure_category == FailureCategory.PLANNER_FAILED
     assert "R2" in str(exc_info.value)
-    assert "all write_scope paths under .sylliptor/" in str(exc_info.value)
+    assert "all write_scope paths under .alysis/" in str(exc_info.value)
 
 
 def test_execution_readiness_rejects_code_task_with_docs_only_write_scope() -> None:

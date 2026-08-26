@@ -3,8 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from sylliptor_agent_cli.runtime_artifacts import is_runtime_artifact_path
-from sylliptor_agent_cli.task_scope import (
+from alysis_code.runtime_artifacts import is_runtime_artifact_path
+from alysis_code.task_scope import (
     SCOPE_CLASS_DANGEROUS_UNRELATED,
     SCOPE_CLASS_EXPECTED_COMPANION,
     SCOPE_CLASS_FORBIDDEN,
@@ -20,7 +20,7 @@ from sylliptor_agent_cli.task_scope import (
     is_agent_internal_scope_path,
     is_existing_test_layout_path,
     is_explicit_repo_path_pattern,
-    is_internal_sylliptor_path,
+    is_internal_alysis_path,
     is_non_material_untracked_path,
     is_untracked_source_path,
     list_changed_files_including_untracked,
@@ -357,12 +357,12 @@ def test_extract_forbidden_repo_path_hints_keeps_future_user_permission_forbidde
     assert extract_forbidden_repo_path_hints(text) == ["formatting.py"]
 
 
-def test_is_internal_sylliptor_path_detects_internal_prefixes() -> None:
-    assert is_internal_sylliptor_path(".sylliptor/runs/x/plan.json") is True
-    assert is_internal_sylliptor_path(".sylliptor_images/cache.png") is True
-    assert is_internal_sylliptor_path("sylliptor-feedback/report.zip") is True
+def test_is_internal_alysis_path_detects_internal_prefixes() -> None:
+    assert is_internal_alysis_path(".alysis/runs/x/plan.json") is True
+    assert is_internal_alysis_path(".alysis_images/cache.png") is True
+    assert is_internal_alysis_path("alysis-feedback/report.zip") is True
     assert is_agent_internal_scope_path(".forge/scratch.json") is True
-    assert is_internal_sylliptor_path("src/app.py") is False
+    assert is_internal_alysis_path("src/app.py") is False
 
 
 def test_check_scope_detects_violations() -> None:
@@ -421,11 +421,11 @@ def test_check_scope_keeps_extensionless_file_scope_narrow_without_directory(
     assert descendant_violations == ["calc/helper.py"]
 
 
-def test_check_scope_ignores_internal_sylliptor_artifacts() -> None:
+def test_check_scope_ignores_internal_alysis_artifacts() -> None:
     changed = [
-        ".sylliptor/runs/x/plan/plan.json",
-        "./.sylliptor_images/cache.png",
-        "sylliptor-feedback/report.zip",
+        ".alysis/runs/x/plan/plan.json",
+        "./.alysis_images/cache.png",
+        "alysis-feedback/report.zip",
         "src/main.py",
     ]
     allowed = ["src/main.py"]
@@ -757,7 +757,7 @@ def test_check_scope_still_flags_unrelated_files_next_to_allowed_ancestor_direct
 def test_list_changed_files_including_untracked_parses_porcelain(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
         if args[-2:] == ["status", "--porcelain"]:
@@ -787,7 +787,7 @@ def test_list_changed_files_including_untracked_parses_porcelain(
 def test_list_changed_files_including_untracked_uses_leaf_untracked_files_and_filters_egg_info(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
         if args[-2:] == ["status", "--porcelain"]:
@@ -824,7 +824,7 @@ def test_list_changed_files_including_untracked_uses_leaf_untracked_files_and_fi
 def test_list_untracked_packaging_metadata_paths_returns_exact_leaf_files(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
         if args[-4:] == ["ls-files", "--others", "--exclude-standard", "-z"]:
@@ -851,7 +851,7 @@ def test_list_untracked_packaging_metadata_paths_returns_exact_leaf_files(
 def test_list_changed_files_including_untracked_returns_empty_on_git_timeout(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.task_scope.shutil.which", lambda _cmd: "/usr/bin/git")
     seen_envs: list[dict[str, str]] = []
     seen_timeouts: list[float] = []
 
@@ -1108,7 +1108,7 @@ def test_known_root_scratch_artifacts_are_moved_to_artifacts(tmp_path: Path) -> 
     subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
     (tmp_path / "_test_dump.txt").write_text("debug\n", encoding="utf-8")
     (tmp_path / "test_lines_dump.txt").write_text("lines\n", encoding="utf-8")
-    artifact_dir = tmp_path / ".sylliptor" / "runs" / "run_1" / "execution" / "scratch" / "T01"
+    artifact_dir = tmp_path / ".alysis" / "runs" / "run_1" / "execution" / "scratch" / "T01"
 
     diagnostics = relocate_known_scratch_artifacts(root=tmp_path, artifact_dir=artifact_dir)
 

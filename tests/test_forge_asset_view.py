@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sylliptor_agent_cli.cli_impl.commands import forge_asset_view
+from alysis_code.cli_impl.commands import forge_asset_view
 
 
 def test_forge_asset_view_retries_empty_index_after_legacy_migration(monkeypatch) -> None:
@@ -22,11 +22,9 @@ def test_forge_asset_view_retries_empty_index_after_legacy_migration(monkeypatch
                 SimpleNamespace(
                     id="ast_requirements",
                     original_filename="requirements.txt",
-                    stored_path=".sylliptor/runs/r/assets/raw/ast_requirements/requirements.txt",
+                    stored_path=".alysis/runs/r/assets/raw/ast_requirements/requirements.txt",
                     size_bytes=14,
-                    added_by={
-                        "legacy_stored_path": ".sylliptor/runs/r/plan/assets/requirements.txt"
-                    },
+                    added_by={"legacy_stored_path": ".alysis/runs/r/plan/assets/requirements.txt"},
                 )
             ]
 

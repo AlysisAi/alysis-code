@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from sylliptor_agent_cli.execution_deadline import (
+from alysis_code.execution_deadline import (
     DEFAULT_LLM_ATTEMPT_TIMEOUT_CEILING_SECONDS,
     DeadlinePhase,
     ExecutionDeadline,
@@ -19,7 +19,7 @@ from sylliptor_agent_cli.execution_deadline import (
     temporarily_clamp_client_timeout,
 )
 
-_ENV = "SYLLIPTOR_LLM_ATTEMPT_TIMEOUT_S"
+_ENV = "ALYSIS_LLM_ATTEMPT_TIMEOUT_S"
 
 
 class _FakeClock:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.agent.turn_contract import TurnOutcome, TurnSemantics
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent.turn_contract import TurnOutcome, TurnSemantics
+from alysis_code.agent_loop import (
     _SYSTEM_PROMPT_ONE_SHOT_SECTION,
     SYSTEM_PROMPT,
     _completion_gate_nudge_message,

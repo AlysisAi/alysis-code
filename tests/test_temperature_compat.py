@@ -5,8 +5,8 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
-from sylliptor_agent_cli.llm.temperature_compat import (
+from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.temperature_compat import (
     ANTHROPIC_DEPRECATED_SAMPLING_PARAMETERS,
     DEEPSEEK_THINKING_TEMPERATURE_UNSUPPORTED,
     GEMINI_3_DEFAULT_TEMPERATURE,

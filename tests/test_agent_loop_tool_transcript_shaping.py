@@ -7,18 +7,18 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.metadata import (
     ANTHROPIC_MESSAGES_PROVIDER_METADATA_KEY,
     GEMINI_GENERATE_CONTENT_PROVIDER_METADATA_KEY,
     OPENAI_RESPONSES_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
     strip_provider_metadata_from_message,
 )
-from sylliptor_agent_cli.llm.types import LLMResponse, ToolCall
-from sylliptor_agent_cli.safety.subagent_report import sanitize_subagent_report
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.llm.types import LLMResponse, ToolCall
+from alysis_code.safety.subagent_report import sanitize_subagent_report
+from alysis_code.session_store import read_session_events
 
 
 class _ScriptedClient:
@@ -311,7 +311,7 @@ def test_subagent_injection_synthesis_receives_no_permission_override_or_tool_de
                         "type": "web_search_call",
                         "id": "ws_1",
                         "status": "completed",
-                        "action": {"type": "search", "query": "Sylliptor metadata"},
+                        "action": {"type": "search", "query": "Alysis Code metadata"},
                     },
                     {
                         "type": "message",
@@ -344,7 +344,7 @@ def test_subagent_injection_synthesis_receives_no_permission_override_or_tool_de
                         "type": "server_tool_use",
                         "id": "srvtoolu_1",
                         "name": "web_search",
-                        "input": {"query": "Sylliptor metadata"},
+                        "input": {"query": "Alysis Code metadata"},
                     },
                     {
                         "type": "text",
@@ -389,7 +389,7 @@ def test_subagent_injection_synthesis_receives_no_permission_override_or_tool_de
                     ],
                 },
                 "groundingMetadata": {
-                    "webSearchQueries": ["Sylliptor metadata"],
+                    "webSearchQueries": ["Alysis Code metadata"],
                     "groundingChunks": [
                         {
                             "web": {
@@ -399,7 +399,7 @@ def test_subagent_injection_synthesis_receives_no_permission_override_or_tool_de
                         }
                     ],
                 },
-                "search_queries": ["Sylliptor metadata"],
+                "search_queries": ["Alysis Code metadata"],
             },
             "Gemini grounding found the release notes.",
         ),
@@ -490,7 +490,7 @@ def test_run_turn_persists_duplicate_final_text_native_provider_metadata(
                 "type": "web_search_call",
                 "id": "ws_duplicate_final",
                 "status": "completed",
-                "action": {"type": "search", "query": "Sylliptor release notes"},
+                "action": {"type": "search", "query": "Alysis Code release notes"},
             },
             {
                 "type": "message",

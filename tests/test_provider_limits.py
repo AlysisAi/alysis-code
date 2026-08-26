@@ -7,12 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 
-import sylliptor_agent_cli.llm.openai_compat as openai_compat_mod
-import sylliptor_agent_cli.llm.provider_limits as provider_limits_mod
-import sylliptor_agent_cli.model_registry as model_registry_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMError, OpenAICompatClient
-from sylliptor_agent_cli.llm.provider_limits import (
+import alysis_code.llm.openai_compat as openai_compat_mod
+import alysis_code.llm.provider_limits as provider_limits_mod
+import alysis_code.model_registry as model_registry_mod
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMError, OpenAICompatClient
+from alysis_code.llm.provider_limits import (
     ProviderRetrySettings,
     best_effort_provider_key,
     canonical_provider_key,
@@ -22,8 +22,8 @@ from sylliptor_agent_cli.llm.provider_limits import (
     resolve_provider_concurrency_cap,
     run_provider_limited_call,
 )
-from sylliptor_agent_cli.model_registry import resolve_model_provider_key
-from sylliptor_agent_cli.tools.web_search_dashscope import dashscope_chat_search
+from alysis_code.model_registry import resolve_model_provider_key
+from alysis_code.tools.web_search_dashscope import dashscope_chat_search
 
 
 def teardown_function() -> None:
@@ -97,7 +97,7 @@ def test_qwen_aliases_fold_to_single_canonical_key() -> None:
         ("https://api.mistral.ai/v1", "mistral-large-latest", "mistral"),
         ("https://api.x.ai/v1", "grok-4", "xai"),
         ("https://api.kimi.com/coding/v1", "k3", "kimi-code"),
-        # The Sylliptor hosted proxy (llm Edge Function) forwards to DeepSeek.
+        # The Alysis Code hosted proxy (llm Edge Function) forwards to DeepSeek.
         (
             "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1",
             "deepseek-v4-flash",
@@ -341,30 +341,59 @@ def test_backoff_success_after_transient_provider_unavailable_error() -> None:
     assert sleeps == [1.0, 2.0]
 
 
-def test_default_provider_retry_schedule_makes_six_attempts_over_about_five_minutes() -> None:
+def test_default_provider_retry_schedule_caps_at_two_attempts() -> None:
     attempts = 0
     sleeps: list[float] = []
 
     def call() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 6:
+        raise LLMError("LLM error 503: service unavailable")
+
+    with pytest.raises(LLMError, match="503"):
+        run_provider_limited_call(
+            call=call,
+            provider_key="openai",
+            provider_concurrency_caps={},
+            operation="default_retry_schedule",
+            sleep_fn=sleeps.append,
+            random_fn=lambda: 0.5,
+        )
+
+    assert attempts == 2
+    assert sleeps == [10.0]
+
+
+def test_retry_event_observer_receives_content_free_live_payload() -> None:
+    attempts = 0
+    events: list[dict[str, object]] = []
+    clock_values = iter((10.0, 10.25))
+
+    def call() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
             raise LLMError("LLM error 503: service unavailable")
         return "ok"
 
-    result = run_provider_limited_call(
+    assert run_provider_limited_call(
         call=call,
-        provider_key="openai",
-        provider_concurrency_caps={},
-        operation="default_retry_schedule",
-        sleep_fn=sleeps.append,
+        provider_key="deepseek",
+        retry_settings=ProviderRetrySettings(max_retries=1),
+        operation="chat",
+        sleep_fn=lambda _seconds: None,
         random_fn=lambda: 0.5,
-    )
-
-    assert result == "ok"
-    assert attempts == 6
-    assert sleeps == [10.0, 20.0, 40.0, 80.0, 120.0]
-    assert sum(sleeps) == 270.0
+        clock_fn=lambda: next(clock_values),
+        on_retry_event=events.append,
+    ) == "ok"
+    assert events == [
+        {
+            "provider": "deepseek",
+            "attempt": 2,
+            "reason": "provider_unavailable",
+            "elapsed_ms": 250,
+        }
+    ]
 
 
 def test_provider_unavailable_retry_wall_clock_cap_blocks_backoff() -> None:

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.git_ops import (
+from alysis_code.forge import create_plan_run
+from alysis_code.git_ops import (
     GitOpsError,
     branch_exists,
     changed_files_between,
@@ -120,7 +120,7 @@ def test_checkout_branch_creates_when_missing(monkeypatch, tmp_path: Path) -> No
 def test_commit_all_uses_deterministic_author(monkeypatch, tmp_path: Path) -> None:
     seen_cmds: list[list[str]] = []
     hooks_dir = tmp_path / "hooks"
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS_PATH", str(hooks_dir))
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS_PATH", str(hooks_dir))
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         seen_cmds.append(cmd)
@@ -138,8 +138,8 @@ def test_commit_all_uses_deterministic_author(monkeypatch, tmp_path: Path) -> No
 
     commit_cmd = next(cmd for cmd in seen_cmds if "commit" in cmd)
     assert "-c" in commit_cmd
-    assert "user.name=sylliptor-agent" in commit_cmd
-    assert "user.email=sylliptor-agent@local" in commit_cmd
+    assert "user.name=alysis-agent" in commit_cmd
+    assert "user.email=alysis-agent@local" in commit_cmd
     assert any(str(part).startswith("core.hooksPath=") for part in commit_cmd)
 
 
@@ -192,7 +192,7 @@ def test_ensure_info_exclude_entries_appends_missing_lines(monkeypatch, tmp_path
     git_dir = tmp_path / ".git"
     (git_dir / "info").mkdir(parents=True)
     exclude_path = git_dir / "info" / "exclude"
-    exclude_path.write_text("# existing\n/.sylliptor/\n", encoding="utf-8")
+    exclude_path.write_text("# existing\n/.alysis/\n", encoding="utf-8")
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
@@ -202,13 +202,13 @@ def test_ensure_info_exclude_entries_appends_missing_lines(monkeypatch, tmp_path
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    resolved = ensure_info_exclude_entries(tmp_path, ["/.sylliptor/", "/.sylliptor_images/"])
+    resolved = ensure_info_exclude_entries(tmp_path, ["/.alysis/", "/.alysis_images/"])
 
     assert resolved == exclude_path
     assert exclude_path.read_text(encoding="utf-8").splitlines() == [
         "# existing",
-        "/.sylliptor/",
-        "/.sylliptor_images/",
+        "/.alysis/",
+        "/.alysis_images/",
     ]
 
 
@@ -231,10 +231,10 @@ def test_ensure_runtime_artifact_excludes_installs_shared_entries(
 
     assert resolved == exclude_path
     assert exclude_path.read_text(encoding="utf-8").splitlines() == [
-        "# BEGIN sylliptor runtime artifacts",
-        "/.sylliptor/",
-        "/.sylliptor_images/",
-        "/sylliptor-feedback/",
+        "# BEGIN alysis runtime artifacts",
+        "/.alysis/",
+        "/.alysis_images/",
+        "/alysis-feedback/",
         "__pycache__/",
         ".mypy_cache/",
         ".pytest_cache/",
@@ -242,7 +242,7 @@ def test_ensure_runtime_artifact_excludes_installs_shared_entries(
         ".coverage",
         "*.pyc",
         "*.pyo",
-        "# END sylliptor runtime artifacts",
+        "# END alysis runtime artifacts",
     ]
 
 
@@ -273,10 +273,10 @@ def test_ensure_runtime_artifact_excludes_adds_grounded_rust_target_entries(
     ensure_runtime_artifact_excludes(tmp_path)
 
     assert exclude_path.read_text(encoding="utf-8").splitlines() == [
-        "# BEGIN sylliptor runtime artifacts",
-        "/.sylliptor/",
-        "/.sylliptor_images/",
-        "/sylliptor-feedback/",
+        "# BEGIN alysis runtime artifacts",
+        "/.alysis/",
+        "/.alysis_images/",
+        "/alysis-feedback/",
         "__pycache__/",
         ".mypy_cache/",
         ".pytest_cache/",
@@ -286,7 +286,7 @@ def test_ensure_runtime_artifact_excludes_adds_grounded_rust_target_entries(
         "*.pyo",
         "/target/",
         "/crates/demo/target/",
-        "# END sylliptor runtime artifacts",
+        "# END alysis runtime artifacts",
     ]
 
 
@@ -311,10 +311,10 @@ def test_ensure_runtime_artifact_excludes_removes_legacy_broad_target_entry(
     assert exclude_path.read_text(encoding="utf-8").splitlines() == [
         "# keep me",
         "",
-        "# BEGIN sylliptor runtime artifacts",
-        "/.sylliptor/",
-        "/.sylliptor_images/",
-        "/sylliptor-feedback/",
+        "# BEGIN alysis runtime artifacts",
+        "/.alysis/",
+        "/.alysis_images/",
+        "/alysis-feedback/",
         "__pycache__/",
         ".mypy_cache/",
         ".pytest_cache/",
@@ -322,7 +322,7 @@ def test_ensure_runtime_artifact_excludes_removes_legacy_broad_target_entry(
         ".coverage",
         "*.pyc",
         "*.pyo",
-        "# END sylliptor runtime artifacts",
+        "# END alysis runtime artifacts",
     ]
 
 
@@ -421,8 +421,8 @@ def test_format_patch_stdout_returns_patch_text(monkeypatch, tmp_path: Path) -> 
 
 def test_commit_all_omits_hooks_override_when_enabled(monkeypatch, tmp_path: Path) -> None:
     seen_cmds: list[list[str]] = []
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS", "enable")
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS", "enable")
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         seen_cmds.append(cmd)
@@ -440,8 +440,8 @@ def test_commit_all_omits_hooks_override_when_enabled(monkeypatch, tmp_path: Pat
 
     commit_cmd = next(cmd for cmd in seen_cmds if "commit" in cmd)
     assert all(not str(part).startswith("core.hooksPath=") for part in commit_cmd)
-    assert "user.name=sylliptor-agent" in commit_cmd
-    assert "user.email=sylliptor-agent@local" in commit_cmd
+    assert "user.name=alysis-agent" in commit_cmd
+    assert "user.email=alysis-agent@local" in commit_cmd
 
 
 def test_changed_files_between_returns_paths(monkeypatch, tmp_path: Path) -> None:
@@ -461,13 +461,13 @@ def test_ensure_not_staged_prefixes_blocks_protected_paths(monkeypatch, tmp_path
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
         if args == ["diff", "--cached", "--name-only"]:
-            return _cp(returncode=0, stdout=".sylliptor/current_run.json\nsrc/app.py\n")
+            return _cp(returncode=0, stdout=".alysis/current_run.json\nsrc/app.py\n")
         raise AssertionError(f"unexpected git args: {args}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     with pytest.raises(GitOpsError, match="protected path"):
-        ensure_not_staged_prefixes(tmp_path, [".sylliptor", ".sylliptor_images"])
+        ensure_not_staged_prefixes(tmp_path, [".alysis", ".alysis_images"])
 
 
 def test_unstage_staged_prefixes_removes_protected_paths(monkeypatch, tmp_path: Path) -> None:
@@ -477,22 +477,22 @@ def test_unstage_staged_prefixes_removes_protected_paths(monkeypatch, tmp_path: 
         args = _git_args(cmd)
         seen.append(args)
         if args == ["diff", "--cached", "--name-only"]:
-            return _cp(returncode=0, stdout="./.sylliptor/runs/abc/plan.json\nsrc/app.py\n")
-        if args == ["reset", "HEAD", "--", "./.sylliptor/runs/abc/plan.json"]:
+            return _cp(returncode=0, stdout="./.alysis/runs/abc/plan.json\nsrc/app.py\n")
+        if args == ["reset", "HEAD", "--", "./.alysis/runs/abc/plan.json"]:
             return _cp(returncode=0, stdout="")
         raise AssertionError(f"unexpected git args: {args}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    unstaged = unstage_staged_prefixes(tmp_path, [".sylliptor", ".sylliptor_images"])
-    assert unstaged == ["./.sylliptor/runs/abc/plan.json"]
-    assert ["reset", "HEAD", "--", "./.sylliptor/runs/abc/plan.json"] in seen
+    unstaged = unstage_staged_prefixes(tmp_path, [".alysis", ".alysis_images"])
+    assert unstaged == ["./.alysis/runs/abc/plan.json"]
+    assert ["reset", "HEAD", "--", "./.alysis/runs/abc/plan.json"] in seen
 
 
 def test_merge_no_ff_returns_merge_commit_hash(monkeypatch, tmp_path: Path) -> None:
     seen_cmds: list[list[str]] = []
     hooks_dir = tmp_path / "hooks"
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS_PATH", str(hooks_dir))
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS_PATH", str(hooks_dir))
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         seen_cmds.append(cmd)
@@ -516,15 +516,15 @@ def test_merge_no_ff_returns_merge_commit_hash(monkeypatch, tmp_path: Path) -> N
     assert merge_hash == "merge123"
 
     merge_cmd = next(cmd for cmd in seen_cmds if "merge" in cmd)
-    assert "user.name=sylliptor-agent" in merge_cmd
-    assert "user.email=sylliptor-agent@local" in merge_cmd
+    assert "user.name=alysis-agent" in merge_cmd
+    assert "user.email=alysis-agent@local" in merge_cmd
     assert any(str(part).startswith("core.hooksPath=") for part in merge_cmd)
 
 
 def test_merge_no_ff_omits_hooks_override_when_enabled(monkeypatch, tmp_path: Path) -> None:
     seen_cmds: list[list[str]] = []
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS", "enable")
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS", "enable")
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         seen_cmds.append(cmd)
@@ -549,8 +549,8 @@ def test_merge_no_ff_omits_hooks_override_when_enabled(monkeypatch, tmp_path: Pa
 
     merge_cmd = next(cmd for cmd in seen_cmds if "merge" in cmd)
     assert all(not str(part).startswith("core.hooksPath=") for part in merge_cmd)
-    assert "user.name=sylliptor-agent" in merge_cmd
-    assert "user.email=sylliptor-agent@local" in merge_cmd
+    assert "user.name=alysis-agent" in merge_cmd
+    assert "user.email=alysis-agent@local" in merge_cmd
 
 
 def test_merge_no_ff_succeeds_without_configured_git_identity(tmp_path: Path, monkeypatch) -> None:
@@ -630,8 +630,8 @@ def test_ensure_clean_for_pr_ignores_framework_and_runtime_artifacts_in_real_rep
 
     exclude_path = repo / ".git" / "info" / "exclude"
     entries = set(exclude_path.read_text(encoding="utf-8").splitlines())
-    assert "/.sylliptor/" in entries
-    assert "/.sylliptor_images/" in entries
+    assert "/.alysis/" in entries
+    assert "/.alysis_images/" in entries
     assert "__pycache__/" in entries
     assert ".pytest_cache/" in entries
     assert ".ruff_cache/" in entries

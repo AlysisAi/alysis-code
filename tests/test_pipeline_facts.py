@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.pipeline_facts import (
+from alysis_code.pipeline_facts import (
     PIPELINE_STATUS_SENTINEL,
     build_pipeline_status_capture_command,
     command_has_top_level_pipe,

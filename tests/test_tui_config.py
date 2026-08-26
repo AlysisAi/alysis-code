@@ -10,35 +10,38 @@ bare ``/config`` opens it (and is not routed to the command runner), ``q`` close
 from __future__ import annotations
 
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.cli_impl.tui import config_flow as flow_mod
-from sylliptor_agent_cli.cli_impl.tui.config_flow import ConfigFlow
-from sylliptor_agent_cli.config import (
+from alysis_code.cli_impl.tui import config_flow as flow_mod
+from alysis_code.cli_impl.tui.app import ConfigReloadOutcome
+from alysis_code.cli_impl.tui.config_flow import ConfigFlow
+from alysis_code.config import (
     AppConfig,
     load_config,
     load_persisted_profile_keys,
 )
-from sylliptor_agent_cli.profile_presets import PROFILE_PRESETS, make_profile_from_preset
-from sylliptor_agent_cli.profiles import ProfileSpec
-from sylliptor_agent_cli.provider_auth import ProviderAccountStatus
+from alysis_code.profile_presets import PROFILE_PRESETS, make_profile_from_preset
+from alysis_code.profiles import ProfileSpec
+from alysis_code.provider_auth import ProviderAccountStatus
 
 # --------------------------------------------------------------------------- helpers
 
 
 def _config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
     for var in (
-        "SYLLIPTOR_API_KEY",
+        "ALYSIS_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
-        "SYLLIPTOR_SHELL_SANDBOX_MODE",
-        "SYLLIPTOR_VERIFY_SANDBOX_MODE",
+        "ALYSIS_SHELL_SANDBOX_MODE",
+        "ALYSIS_VERIFY_SANDBOX_MODE",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -119,7 +122,7 @@ def test_execution_backend_flow_creates_native_subscription_profile():
     assert flow.stage == "execution_backend"
     access_screen = flow.screen()
     assert access_screen.title == "Model Access"
-    assert access_screen.subtitle == "How would you like to connect Sylliptor to AI models?"
+    assert access_screen.subtitle == "How would you like to connect Alysis Code to AI models?"
     assert [row.value for row in access_screen.rows] == ["native", "delegated"]
     assert [row.label for row in access_screen.rows] == [
         "Use an API key",
@@ -728,7 +731,7 @@ def test_add_preset_chains_into_api_key_then_model():
 
 
 def test_add_nvidia_preset_chains_through_model_specific_reasoning(monkeypatch):
-    from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
+    from alysis_code.cli_impl import config_menu as config_menu_mod
 
     monkeypatch.setattr(
         config_menu_mod,
@@ -883,7 +886,7 @@ def test_save_persists_sandbox_change(monkeypatch, tmp_path):
     flow.run_busy()
     assert flow.stage == "done" and flow.success is True and flow.saved is True
     assert flow.changes_count >= 1
-    from sylliptor_agent_cli.sandbox_settings import sandbox_mode_from_config
+    from alysis_code.sandbox_settings import sandbox_mode_from_config
 
     assert sandbox_mode_from_config(load_config()) == "off"
 
@@ -1001,8 +1004,8 @@ def test_set_save_failure_surfaces_on_apply():
 
 
 def test_thinking_labels_follow_reasoning_contracts():
-    from sylliptor_agent_cli.cli_impl.tui.config_flow import _thinking_labels_allowed_by_contract
-    from sylliptor_agent_cli.reasoning_contracts import (
+    from alysis_code.cli_impl.tui.config_flow import _thinking_labels_allowed_by_contract
+    from alysis_code.reasoning_contracts import (
         UNKNOWN_CONTRACT,
         reasoning_contract_for,
     )
@@ -1130,13 +1133,48 @@ def _run_headless(keys: str, **kwargs: Any):
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from sylliptor_agent_cli.cli_impl.tui import run_tui
-    from sylliptor_agent_cli.cli_impl.tui.state import TuiState
+    from alysis_code.cli_impl.tui import run_tui
+    from alysis_code.cli_impl.tui.state import TuiState
 
     state = TuiState(model_name="m", username="t")
     with create_pipe_input() as pipe:
         pipe.send_text(keys)
         return run_tui(state, owl_color=False, input=pipe, output=DummyOutput(), **kwargs)
+
+
+def _run_live_headless(feed: Any, **kwargs: Any):
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import run_tui
+    from alysis_code.cli_impl.tui.state import TuiState
+
+    with create_pipe_input() as pipe:
+        feed_errors: list[BaseException] = []
+
+        def run_feed() -> None:
+            try:
+                feed(pipe)
+            except BaseException as exc:  # noqa: BLE001 - report feeder failures
+                feed_errors.append(exc)
+                pipe.send_text("\x03")
+                time.sleep(0.05)
+                pipe.send_text("\x03")
+
+        feeder = threading.Thread(target=run_feed, daemon=True)
+        feeder.start()
+        result = run_tui(
+            TuiState(model_name="m", username="t"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            **kwargs,
+        )
+        feeder.join(timeout=2)
+
+    assert not feeder.is_alive()
+    assert feed_errors == []
+    return result
 
 
 def test_headless_config_opens_overlay_not_routed_to_runner():
@@ -1178,3 +1216,297 @@ def test_headless_config_can_open_on_start():
     assert opened["n"] == 1
     assert result == "/exit"
     assert transcript == []
+
+
+@pytest.mark.parametrize(
+    ("command", "factory_name"),
+    [("/config", "config_flow_factory")],
+)
+def test_config_overlays_open_immediately_during_a_turn(command: str, factory_name: str) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    opened = threading.Event()
+    runner_calls: list[str] = []
+
+    class BlockingSession(_FakeSession):
+        def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
+            _ = text, cancellation_token
+            started.set()
+            assert release.wait(timeout=3)
+            return 0
+
+    def factory() -> ConfigFlow:
+        opened.set()
+        return ConfigFlow(cfg=_cfg())
+
+    def runner(_session: Any, text: str, _width: int):
+        stripped = text.strip()
+        runner_calls.append(stripped)
+        if stripped == "/exit":
+            return "exit", "", None, None
+        return "run", "", stripped, {}
+
+    def feed(pipe: Any) -> None:
+        pipe.send_text("work\r")
+        assert started.wait(timeout=2)
+        pipe.send_text(command + "\r")
+        assert opened.wait(timeout=2)
+        pipe.send_text("q")
+        time.sleep(0.05)
+        release.set()
+        time.sleep(0.1)
+        pipe.send_text("/exit\r")
+
+    kwargs = {factory_name: factory}
+    (result, transcript) = _run_live_headless(
+        feed,
+        session_builder=BlockingSession,
+        command_runner=runner,
+        background_turns=True,
+        **kwargs,
+    )
+
+    assert result == "/exit"
+    assert command not in runner_calls
+    assert ("user", command) not in transcript
+
+
+def test_mid_turn_config_saves_coalesce_reload_before_queued_turn() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    queued_started = threading.Event()
+    opened = [threading.Event(), threading.Event()]
+    saved = [threading.Event(), threading.Event()]
+    events: list[str] = []
+    factory_calls = {"n": 0}
+    reload_calls = {"n": 0}
+
+    class BlockingSession(_FakeSession):
+        def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
+            _ = cancellation_token
+            events.append(f"turn:{text}")
+            if text == "work":
+                started.set()
+                assert release.wait(timeout=3)
+            elif text == "queued":
+                queued_started.set()
+            return 0
+
+    class SignalingFlow(ConfigFlow):
+        def __init__(self, index: int) -> None:
+            super().__init__(cfg=_cfg())
+            self._test_index = index
+
+        def perform_save(self) -> None:
+            self.changes_count = 1
+            self._save_outcome = ("saved", "")
+
+        def apply_save_outcome(self) -> None:
+            super().apply_save_outcome()
+            saved[self._test_index].set()
+
+    def factory() -> ConfigFlow:
+        index = factory_calls["n"]
+        factory_calls["n"] += 1
+        opened[index].set()
+        return SignalingFlow(index)
+
+    def on_config_saved() -> bool:
+        reload_calls["n"] += 1
+        events.append("reload")
+        return False
+
+    def runner(_session: Any, text: str, _width: int):
+        stripped = text.strip()
+        if stripped == "/exit":
+            return "exit", "", None, None
+        return "run", "", stripped, {}
+
+    def feed(pipe: Any) -> None:
+        pipe.send_text("work\r")
+        assert started.wait(timeout=2)
+        for index in range(2):
+            pipe.send_text("/config\r")
+            assert opened[index].wait(timeout=2)
+            pipe.send_text("s")
+            assert saved[index].wait(timeout=2)
+            time.sleep(0.05)
+            assert reload_calls["n"] == 0
+        pipe.send_text("queued\x11")
+        time.sleep(0.05)
+        release.set()
+        assert queued_started.wait(timeout=2)
+        time.sleep(0.1)
+        pipe.send_text("/exit\r")
+
+    result, transcript = _run_live_headless(
+        feed,
+        session_builder=BlockingSession,
+        command_runner=runner,
+        config_flow_factory=factory,
+        on_config_saved=on_config_saved,
+        background_turns=True,
+    )
+
+    assert result == "/exit"
+    assert reload_calls["n"] == 1
+    assert events.index("reload") < events.index("turn:queued")
+    assert sum("running session will reload" in text for _role, text in transcript) == 2
+    assert any("could not be reloaded" in text for role, text in transcript if role == "error")
+
+
+@pytest.mark.parametrize("save_before_command", [True, False])
+def test_mid_turn_config_reload_and_command_keep_submission_order(
+    save_before_command: bool,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    queued_started = threading.Event()
+    opened = threading.Event()
+    saved = threading.Event()
+    events: list[str] = []
+
+    class BlockingSession(_FakeSession):
+        def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
+            _ = cancellation_token
+            events.append(f"turn:{text}")
+            if text == "work":
+                started.set()
+                assert release.wait(timeout=3)
+            elif text == "queued":
+                queued_started.set()
+            return 0
+
+    class SignalingFlow(ConfigFlow):
+        def perform_save(self) -> None:
+            self.changes_count = 1
+            self._save_outcome = ("saved", "")
+
+        def apply_save_outcome(self) -> None:
+            super().apply_save_outcome()
+            saved.set()
+
+    def factory() -> ConfigFlow:
+        opened.set()
+        return SignalingFlow(cfg=_cfg())
+
+    def on_config_saved() -> ConfigReloadOutcome:
+        events.append("reload")
+        return ConfigReloadOutcome.APPLIED
+
+    def runner(_session: Any, text: str, _width: int):
+        stripped = text.strip()
+        if stripped == "/exit":
+            return "exit", "", None, None
+        if stripped == "/model staged-model":
+            events.append("command:/model staged-model")
+            return "handled", "model applied", None, None
+        return "run", "", stripped, {}
+
+    def save_config(pipe: Any) -> None:
+        pipe.send_text("/config\r")
+        assert opened.wait(timeout=2)
+        pipe.send_text("s")
+        assert saved.wait(timeout=2)
+        time.sleep(0.05)
+
+    def feed(pipe: Any) -> None:
+        pipe.send_text("work\r")
+        assert started.wait(timeout=2)
+        if save_before_command:
+            save_config(pipe)
+            pipe.send_text("/model staged-model\r")
+        else:
+            pipe.send_text("/model staged-model\r")
+            save_config(pipe)
+        pipe.send_text("queued\x11")
+        time.sleep(0.05)
+        release.set()
+        assert queued_started.wait(timeout=2)
+        time.sleep(0.1)
+        pipe.send_text("/exit\r")
+
+    result, _transcript = _run_live_headless(
+        feed,
+        session_builder=BlockingSession,
+        command_runner=runner,
+        config_flow_factory=factory,
+        on_config_saved=on_config_saved,
+        background_turns=True,
+    )
+
+    assert result == "/exit"
+    command_index = events.index("command:/model staged-model")
+    reload_index = events.index("reload")
+    queued_index = events.index("turn:queued")
+    if save_before_command:
+        assert reload_index < command_index < queued_index
+    else:
+        assert command_index < reload_index < queued_index
+
+
+def test_restart_outcome_discards_queued_turn_without_starting_it() -> None:
+    from prompt_toolkit.application.current import get_app
+
+    started = threading.Event()
+    release = threading.Event()
+    opened = threading.Event()
+    saved = threading.Event()
+    calls: list[str] = []
+
+    class BlockingSession(_FakeSession):
+        def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
+            _ = cancellation_token
+            calls.append(text)
+            started.set()
+            assert release.wait(timeout=3)
+            return 0
+
+    class SignalingFlow(ConfigFlow):
+        def perform_save(self) -> None:
+            self.changes_count = 1
+            self._save_outcome = ("saved", "")
+
+        def apply_save_outcome(self) -> None:
+            super().apply_save_outcome()
+            saved.set()
+
+    def factory() -> ConfigFlow:
+        opened.set()
+        return SignalingFlow(cfg=_cfg())
+
+    def on_config_saved() -> ConfigReloadOutcome:
+        get_app().exit(result=("restart_config", "/workspace"))
+        return ConfigReloadOutcome.RESTART
+
+    def runner(_session: Any, text: str, _width: int):
+        stripped = text.strip()
+        return "run", "", stripped, {}
+
+    def feed(pipe: Any) -> None:
+        pipe.send_text("work\r")
+        assert started.wait(timeout=2)
+        pipe.send_text("/config\r")
+        assert opened.wait(timeout=2)
+        pipe.send_text("s")
+        assert saved.wait(timeout=2)
+        pipe.send_text("must not start\x11")
+        time.sleep(0.05)
+        release.set()
+
+    (result, transcript) = _run_live_headless(
+        feed,
+        session_builder=BlockingSession,
+        command_runner=runner,
+        config_flow_factory=factory,
+        on_config_saved=on_config_saved,
+        background_turns=True,
+    )
+
+    assert result == ("restart_config", "/workspace")
+    assert calls == ["work"]
+    assert any(
+        "Discarded 1 pending item because this session is closing" in text
+        for role, text in transcript
+        if role == "warn"
+    )

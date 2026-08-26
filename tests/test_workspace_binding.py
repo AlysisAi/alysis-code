@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.workspace_binding import (
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.workspace_binding import (
     WorkspaceAction,
     WorkspaceBindingError,
     WorkspaceRiskLevel,
     discover_workspace_candidates,
     resolve_workspace_binding,
 )
-from sylliptor_agent_cli.workspace_binding_ui import resolve_startup_workspace_binding
+from alysis_code.workspace_binding_ui import resolve_startup_workspace_binding
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -149,8 +149,8 @@ def test_discover_workspace_candidates_is_shallow_and_deterministic(tmp_path: Pa
     home.mkdir()
     (home / "notes").mkdir()
     (home / "misc").mkdir()
-    (home / "sylliptor-feedback").mkdir()
-    (home / "sylliptor-feedback" / "bundle.zip").write_bytes(b"zip")
+    (home / "alysis-feedback").mkdir()
+    (home / "alysis-feedback" / "bundle.zip").write_bytes(b"zip")
 
     repo = home / "repo-alpha"
     _init_git_repo_with_commit(repo)

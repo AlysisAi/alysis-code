@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Notification hook that renders a macOS banner via osascript.
 
-Wire it in .sylliptor/hooks.json:
+Wire it in .alysis/hooks.json:
 
     {
       "hooks": {
@@ -49,9 +49,9 @@ def main() -> int:
     if osascript is None:
         return 0
     payload = _read_payload()
-    message = str(payload.get("message") or "sylliptor")
+    message = str(payload.get("message") or "alysis")
     cause = str(payload.get("cause") or "notification")
-    title = f"sylliptor • {cause}"
+    title = f"alysis • {cause}"
     script = f'display notification "{_escape(message)}" with title "{_escape(title)}"'
     try:
         subprocess.run(

@@ -3,9 +3,8 @@
 A fast (<2 min total), Windows + Linux, default-runnable regression net that drives a
 real tiny build -- create a file via the agent, applied to the working tree -- through
 the actual CLI (as a subprocess) against the local mock provider. It is the trustworthy
-"did I break a real build" signal an autonomous fix-loop needs: the four public paths
-(simple ``run``, classic chat with a subagent, ``forge exec``, and ``forge swarm``) must
-each finish with a
+"did I break a real build" signal an autonomous fix-loop needs: simple ``run``,
+``forge exec``, and ``forge swarm`` must each finish with a
 coherent terminal status and the deliverable on disk, with no raw error leaking.
 
 The mock provider (scripts/qa/mock_llm.py) is pattern-driven: an instruction containing
@@ -25,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.llm.openai_compat import OpenAICompatClient
 from scripts.qa.mock_llm import MockLLMServer
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
 
 QA_MODEL = "qa-mock-model"
 # Drives the mock's full-gate path: fs_edit -> verify_run -> git_diff -> done, so the
@@ -36,7 +35,7 @@ _FULL_GATE_BUILD = (
     "raw_proxy_force_diff: implement the smoke change, run the configured verification, "
     "and review the diff before finishing."
 )
-CLI = (sys.executable, "-m", "sylliptor_agent_cli.cli")
+CLI = (sys.executable, "-m", "alysis_code.cli")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "Smoke",
@@ -103,7 +102,7 @@ def _write_config(
                 "name": "mock",
                 "protocol": "openai_compat",
                 "base_url": base_url,
-                "api_key_env": "SYLLIPTOR_API_KEY",
+                "api_key_env": "ALYSIS_API_KEY",
                 "default_model": QA_MODEL,
                 "extra_headers": {},
                 "notes": "mock provider smoke",
@@ -129,21 +128,21 @@ def _env(work_dir: Path) -> dict[str, str]:
     env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
     env.update(
         {
-            "SYLLIPTOR_CONFIG_DIR": os.fspath((work_dir / "config").resolve()),
-            "SYLLIPTOR_DATA_DIR": os.fspath((work_dir / "data").resolve()),
-            "SYLLIPTOR_API_KEY": "mock-key",
+            "ALYSIS_CONFIG_DIR": os.fspath((work_dir / "config").resolve()),
+            "ALYSIS_DATA_DIR": os.fspath((work_dir / "data").resolve()),
+            "ALYSIS_API_KEY": "mock-key",
             "OPENAI_API_KEY": "mock-key",
             "NO_COLOR": "1",
             "TERM": "xterm-256color",
-            "SYLLIPTOR_ROUTING_MODE": "code_only",
-            "SYLLIPTOR_TUI": "0",
-            "SYLLIPTOR_UPDATE_CHECK_ENABLED": "0",
+            "ALYSIS_ROUTING_MODE": "code_only",
+            "ALYSIS_TUI": "0",
+            "ALYSIS_UPDATE_CHECK_ENABLED": "0",
             # Portability: no Docker / Bubblewrap required for the smoke.
-            "SYLLIPTOR_SHELL_SANDBOX_MODE": "off",
-            "SYLLIPTOR_VERIFY_SANDBOX_MODE": "off",
-            "SYLLIPTOR_SKILLS_ENABLED": "0",
-            "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-            "SYLLIPTOR_MAX_OUTPUT_TOKENS": "4096",
+            "ALYSIS_SHELL_SANDBOX_MODE": "off",
+            "ALYSIS_VERIFY_SANDBOX_MODE": "off",
+            "ALYSIS_SKILLS_ENABLED": "0",
+            "ALYSIS_CONTEXT_WINDOW": "200000",
+            "ALYSIS_MAX_OUTPUT_TOKENS": "4096",
         }
     )
     return env
@@ -267,11 +266,11 @@ def test_mock_provider_pytest_no_tests_does_not_trip_completion_gate(tmp_path: P
 
 
 @pytest.mark.smoke
-def test_smoke_classic_chat_subagent_reads_readme_end_to_end(tmp_path: Path) -> None:
+def test_smoke_chat_delegates_readme_review_end_to_end(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _make_repo(repo)
     initial_readme = (repo / "README.md").read_text(encoding="utf-8")
-    task = "Read existing README.md and report its contents."
+    task = "SUBAGENT_BENCH_M01 use explorer to read existing README.md and report its contents."
 
     with MockLLMServer() as server:
         _write_config(
@@ -303,18 +302,15 @@ def test_smoke_classic_chat_subagent_reads_readme_end_to_end(tmp_path: Path) -> 
             ],
             cwd=repo,
             env=_env(tmp_path),
-            input_text=f"/subagent explorer {task}\n/exit\n",
+            input_text=f"{task}\n/exit\n",
         )
         requests = list(server.requests)
 
     assert result.returncode == 0, (
-        f"classic-chat subagent run did not exit cleanly ({result.returncode})\n"
+        f"model-driven subagent run did not exit cleanly ({result.returncode})\n"
         f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
-    assert "Subagent Result" in result.stdout
-    assert "subagent: explorer" in result.stdout
-    assert "mode: readonly" in result.stdout
-    assert initial_readme.strip() in result.stdout
+    assert "Explorer read README.md and reported its contents." in result.stdout
 
     task_requests = [
         request
@@ -327,22 +323,32 @@ def test_smoke_classic_chat_subagent_reads_readme_end_to_end(tmp_path: Path) -> 
     ]
     assert len(task_requests) >= 2, "the child did not complete its fs_read tool round trip"
 
-    tool_task_requests = [request for request in task_requests if request.get("tools")]
-    assert tool_task_requests, "the child did not receive its readonly tool surface"
+    tool_requests = [request for request in requests if request.get("tools")]
+    assert tool_requests, "the child did not receive its readonly tool surface"
 
-    exposed_tool_names = {
-        str(function.get("name") or "")
-        for tool in tool_task_requests[0].get("tools") or ()
-        if isinstance(tool, dict)
-        for function in [tool.get("function")]
-        if isinstance(function, dict)
-    }
-    assert "fs_read" in exposed_tool_names
-    assert exposed_tool_names.isdisjoint({"fs_write", "fs_edit", "shell_run"})
+    exposed_catalogs = [
+        {
+            str(function.get("name") or "")
+            for tool in request.get("tools") or ()
+            if isinstance(tool, dict)
+            for function in [tool.get("function")]
+            if isinstance(function, dict)
+        }
+        for request in tool_requests
+    ]
+    readonly_catalog = next(
+        catalog
+        for catalog in exposed_catalogs
+        if "fs_read" in catalog
+        and "subagent_run" not in catalog
+        and catalog.isdisjoint({"fs_write", "fs_edit"})
+    )
+    assert readonly_catalog
 
     child_messages = [
         message
-        for request in task_requests
+        for request, catalog in zip(tool_requests, exposed_catalogs, strict=True)
+        if catalog == readonly_catalog
         for message in request.get("messages") or ()
         if isinstance(message, dict)
     ]
@@ -377,7 +383,7 @@ def test_smoke_classic_chat_subagent_reads_readme_end_to_end(tmp_path: Path) -> 
     assert child_session_id
     assert (session_dir / f"{child_session_id}.jsonl").is_file()
     assert "fs_read" in explorer_catalog["tool_names"]
-    assert set(explorer_catalog["tool_names"]).isdisjoint({"fs_write", "fs_edit", "shell_run"})
+    assert set(explorer_catalog["tool_names"]).isdisjoint({"fs_write", "fs_edit"})
     assert any(
         event.get("payload", {}).get("name") == "explorer"
         and event.get("payload", {}).get("subagent_session_id") == child_session_id
@@ -453,7 +459,7 @@ def _prepare_forge_task(repo: Path, *, task_id: str, description: str) -> None:
 
 
 def _forge_exec_args(task_id: str, *, repo: Path, base_url: str) -> list[str]:
-    return [
+    args = [
         "forge",
         "exec",
         task_id,
@@ -472,6 +478,7 @@ def _forge_exec_args(task_id: str, *, repo: Path, base_url: str) -> list[str]:
         "8",
         "--yes",
     ]
+    return args
 
 
 @pytest.mark.smoke

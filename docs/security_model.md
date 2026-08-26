@@ -1,6 +1,6 @@
 # Security Model
 
-Sylliptor is a local coding agent. The host process owns policy decisions, tool registration,
+Alysis Code is a local coding agent. The host process owns policy decisions, tool registration,
 workspace binding, and session logging. Model-authored text can request tools, but host-owned
 runtime checks decide which tools exist and what inputs are accepted.
 
@@ -15,7 +15,7 @@ Treat these inputs as untrusted:
 - image/OCR/asset text
 - model responses
 
-Sylliptor keeps those inputs behind host-owned wrappers where possible. These wrappers reduce prompt
+Alysis Code keeps those inputs behind host-owned wrappers where possible. These wrappers reduce prompt
 confusion, but they are not a substitute for reviewing changes before running them.
 
 ## Execution Modes
@@ -24,6 +24,16 @@ confusion, but they are not a substitute for reviewing changes before running th
 - `review` asks before writes and shell commands.
 - `auto` can make approved changes with fewer prompts.
 - `fullaccess` removes mode-level write and shell approval prompts.
+
+The execution mode is the only approval authority. There is no second
+"auto-approve" switch that can answer prompts on your behalf: if the footer badge
+says `safe`, writes and shell commands stop and ask. In the TUI, Shift+Tab cycles
+the mode (`read → safe → fast → full`) and `/mode` selects one directly; both
+print a warning whenever the session lands in `fullaccess`.
+
+`--yes` is scoped to `auto` mode, where it skips the file-deletion and
+sensitive-command confirmations. It does not relax `review` and does not grant
+Workspace Trust.
 
 `fullaccess` is for trusted workspaces only. It is not a sandbox boundary and should not be used for
 untrusted repositories, unknown prompts, or commands you would not run directly.
@@ -36,11 +46,52 @@ keep sandbox mode strict, network disabled unless needed, and Docker images pinn
 The sandbox reduces the blast radius of local command execution. It does not make arbitrary code
 safe, and it does not replace source review, dependency review, or operating-system permissions.
 
+Verification and acceptance evidence also has a provenance boundary. Host
+verification commands, explicit user checks, pre-existing repo-native tests,
+pre-existing task checkers, direct black-box commands, self-authored tests, and
+ad hoc observations are recorded separately. Tests or checkers created during
+the same turn can help diagnose behavior, but they are supplemental when a
+required acceptance criterion still lacks independent evidence or has direct
+contrary evidence.
+
+Verification commands carry a separate typed command contract. Exact shell
+expressions with pipelines, redirections, or chaining are trusted only when they
+come from host configuration, an explicit user command, or a pre-existing
+repo/task checker; model-inferred shell chaining remains invalid even if it
+looks like a test. Interpreter snippets are accepted only after language and
+syntax preflight and are executed through an interpreter invocation rather than
+raw `/bin/sh`. Generic pytest fallback is not security authority by itself: it
+requires a trustworthy pre-existing Python test surface, and tests created
+during the current turn cannot retroactively establish that surface.
+
+Acceptance paths keep a trust boundary too. A path mentioned by a prompt is
+classified with a role before it can affect finalization: required output,
+existing input, preservation target, verification checker, or advisory
+reference. Workspace-internal absolute paths are normalized to workspace
+relative form; external absolute paths and unresolved parent traversal are not
+silently joined under the workspace or probed to satisfy a heuristic. Only hard
+criteria can block completion. Advisory parser inferences remain visible in
+payloads but do not become security-sensitive finalization requirements.
+
+Acceptance preservation checks compare explicit unchanged/only-touch
+constraints against material touched paths after filtering runtime artifacts.
+Threshold checks remain failed when measured output misses the requested
+target; performance-style thresholds require repeated samples before they are
+treated as conclusive.
+
+Persistent service evidence has an additional ownership boundary. A
+`shell_background` process is owned by the session and is terminated by
+`AgentSession.close`, so it is not durable evidence. A `shell_service_start`
+process is explicitly durable, stores only sanitized identity/readiness/log
+metadata in the runtime sessions directory, detaches stdin/stdout/stderr from
+the agent process, and uses PID/container identity checks before `shell_service_stop`
+signals anything.
+
 See [Shell sandbox](shell_sandbox.md) for setup, image pinning, signatures, provenance, and troubleshooting.
 
 ## HTTP And SSRF Protection
 
-Sylliptor validates outbound HTTP targets used by web fetch/search helpers and MCP OAuth metadata
+Alysis Code validates outbound HTTP targets used by web fetch/search helpers and MCP OAuth metadata
 fetching before connecting.
 
 The safe HTTP guard rejects:
@@ -54,6 +105,23 @@ The safe HTTP guard rejects:
 
 Where supported, requests connect to a validated resolved address while preserving the original
 `Host` header, and redirects are revalidated at each hop.
+
+`web_fetch` has a separate provenance gate before the safe HTTP request is
+started. A fetchable URL must come from the user, from a configured
+`web_search` result, from an observed canonical redirect, or from a bounded
+same-origin/search-mediated recovery path. URLs discovered inside trusted
+fetched pages, trusted local file reads, and registered tool or shell output are
+kept as bounded source-linked provenance records; source content is not persisted
+in the provenance graph. Canonicalization may ignore fragments, default ports,
+and harmless trailing slashes, but it does not relax scheme, credential, DNS/IP,
+redirect, or byte-cap validation. Recovery search is not attempted during
+deadline finalization.
+
+Unknown-tool recovery is also deliberately narrow. The runtime reports available
+tool names and nearest suggestions, but does not expose hidden schema details,
+environment data, credentials, or plugin implementation metadata. Only
+hard-coded schema-compatible compatibility aliases can execute automatically;
+ambiguous names produce correction guidance instead.
 
 ## MCP Boundaries
 

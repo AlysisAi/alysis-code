@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.crash_diagnostics import (
+from alysis_code.crash_diagnostics import (
     CRASH_DIAGNOSTIC_SCHEMA_VERSION,
     CrashDiagnosticLogger,
     build_crash_diagnostic_logger,

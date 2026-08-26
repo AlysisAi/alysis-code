@@ -8,13 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop
-from sylliptor_agent_cli.cli_impl.config_menu import (
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.cli_impl.chat import loop as chat_loop
+from alysis_code.cli_impl.config_menu import (
     ConfigMenuState,
     thinking_label_from_cfg,
 )
-from sylliptor_agent_cli.config import (
+from alysis_code.config import (
     AppConfig,
     ConfigError,
     load_config,
@@ -22,14 +22,14 @@ from sylliptor_agent_cli.config import (
     save_config,
     save_persisted_profile_key,
 )
-from sylliptor_agent_cli.llm.cache_policy import build_prompt_cache_namespace
-from sylliptor_agent_cli.llm.factory import make_llm_client
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.cache_policy import build_prompt_cache_namespace
+from alysis_code.llm.factory import make_llm_client
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     OPENAI_COMPAT_PROTOCOL,
 )
-from sylliptor_agent_cli.profiles import (
+from alysis_code.profiles import (
     ProfileSpec,
     add_profile,
     get_active_profile,
@@ -38,7 +38,7 @@ from sylliptor_agent_cli.profiles import (
 
 
 def test_state_tracks_dirty_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     state = ConfigMenuState.from_cfg(AppConfig(model="old"))
 
     state.set_field("model", "new")
@@ -51,7 +51,7 @@ def test_state_tracks_dirty_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 def test_subscription_execution_uses_native_profile_and_preserves_api_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli import provider_auth as provider_auth_mod
+    from alysis_code import provider_auth as provider_auth_mod
 
     cfg = AppConfig(model="native-model", base_url="https://api.openai.com/v1")
     cfg.extra_fields = {
@@ -290,7 +290,7 @@ def test_classic_subscription_back_returns_to_model_access(
 
 
 def test_commit_persists_model_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     cfg.model = "old"
     save_config(cfg)
@@ -356,7 +356,7 @@ def test_config_menu_rejects_invalid_subagent_timeout(value: str) -> None:
 def test_commit_persists_default_model_section_to_active_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig(model="old")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
@@ -389,7 +389,7 @@ def test_commit_persists_default_model_section_to_active_profile(
 def test_commit_persists_prompt_cache_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig(model="default")
     save_config(cfg)
 
@@ -422,7 +422,7 @@ def test_commit_persists_prompt_cache_settings(
 def test_commit_persists_web_search_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig(model="default")
     save_config(cfg)
 
@@ -450,7 +450,7 @@ def test_commit_persists_web_search_settings(
 def test_commit_persists_subagent_role_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     state = ConfigMenuState.from_cfg(AppConfig(model="default"))
     state.set_role_model("coding", "anthropic/claude-sonnet-4-6")
     cfg_to_save = load_config()
@@ -465,7 +465,7 @@ def test_commit_persists_subagent_role_override(
 def test_commit_clears_role_override_when_emptied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     cfg.extra_fields["role_models"] = {"coding": "x"}
     save_config(cfg)
@@ -483,7 +483,7 @@ def test_commit_clears_role_override_when_emptied(
 def test_commit_persists_forge_role_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     state = ConfigMenuState.from_cfg(AppConfig(model="default"))
     state.set_forge_role_model("planner", "anthropic/claude-opus-4-7")
     cfg_to_save = load_config()
@@ -519,21 +519,21 @@ def test_state_from_cfg_tolerates_invalid_reasoning_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "extreme")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "extreme")
 
     state = ConfigMenuState.from_cfg(AppConfig(model="default"))
 
     assert state.thinking_label == "auto"
     assert state.config_warning is not None
-    assert "SYLLIPTOR_LLM_REASONING_EFFORT" in state.config_warning
+    assert "ALYSIS_LLM_REASONING_EFFORT" in state.config_warning
 
 
 def test_switching_profile_refreshes_api_key_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     cfg = AppConfig(model="gpt-test")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(cfg, ProfileSpec(name="openai", base_url="https://api.openai.com/v1"))
@@ -575,7 +575,7 @@ def test_default_model_rows_include_active_profile_preset_suggestions() -> None:
 def test_nvidia_default_model_rows_merge_live_third_party_catalog_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
     preset = get_preset("nvidia")
     assert preset is not None
@@ -627,7 +627,7 @@ def test_nvidia_default_model_rows_merge_live_third_party_catalog_once(
 
 
 def test_switching_to_nvidia_resets_effort_inherited_from_another_provider() -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
     openai = get_preset("openai")
     nvidia = get_preset("nvidia")
@@ -659,7 +659,7 @@ def test_switching_to_nvidia_resets_effort_inherited_from_another_provider() -> 
 
 
 def test_loading_active_nvidia_profile_normalizes_stale_effort_to_auto() -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
     nvidia = get_preset("nvidia")
     assert nvidia is not None
@@ -679,7 +679,7 @@ def test_loading_active_nvidia_profile_normalizes_stale_effort_to_auto() -> None
 
 
 def test_zai_coding_plan_drops_stale_effort_and_never_offers_reasoning_off() -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
     zai = get_preset("zai-coding-plan")
     assert zai is not None
@@ -704,23 +704,23 @@ def test_zai_coding_plan_drops_stale_effort_and_never_offers_reasoning_off() -> 
     )
 
 
-def test_default_model_rows_include_discovered_sylliptor_trial_models(
+def test_default_model_rows_include_discovered_alysis_trial_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
     # Live gateway advertises a provider-prefixed variant of a curated model,
     # plus a genuinely new one.
     monkeypatch.setattr(
-        "sylliptor_agent_cli.account_login.list_trial_models",
+        "alysis_code.account_login.list_trial_models",
         lambda _cfg: ["deepseek/deepseek-v4-flash", "deepseek-v5-preview"],
     )
 
     cfg = AppConfig(model="deepseek-v4-flash")
-    add_profile(cfg, make_profile_from_preset(get_preset("sylliptor"), name="sylliptor"))
-    set_active_profile(cfg, "sylliptor")
+    add_profile(cfg, make_profile_from_preset(get_preset("alysis"), name="alysis"))
+    set_active_profile(cfg, "alysis")
     state = ConfigMenuState.from_cfg(cfg)
 
     model_values = [
@@ -735,22 +735,22 @@ def test_default_model_rows_include_discovered_sylliptor_trial_models(
     assert "deepseek-v5-preview" in model_values
 
 
-def test_default_model_rows_survive_sylliptor_discovery_failure(
+def test_default_model_rows_survive_alysis_discovery_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
 
     def _boom(_cfg: object) -> list[str]:
         raise RuntimeError("proxy down")
 
-    monkeypatch.setattr("sylliptor_agent_cli.account_login.list_trial_models", _boom)
+    monkeypatch.setattr("alysis_code.account_login.list_trial_models", _boom)
 
     cfg = AppConfig(model="deepseek-v4-flash")
-    add_profile(cfg, make_profile_from_preset(get_preset("sylliptor"), name="sylliptor"))
-    set_active_profile(cfg, "sylliptor")
+    add_profile(cfg, make_profile_from_preset(get_preset("alysis"), name="alysis"))
+    set_active_profile(cfg, "alysis")
     state = ConfigMenuState.from_cfg(cfg)
 
     # Discovery blew up, but the static preset rows must still render the menu.
@@ -795,8 +795,8 @@ def test_default_model_rows_fallback_to_base_url_provider() -> None:
 def test_config_reload_updates_clients_with_effective_profile_base_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-test")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
     cfg = AppConfig(model="claude-sonnet-4-6", base_url="https://api.openai.com/v1")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
@@ -859,8 +859,8 @@ def test_config_reload_updates_clients_with_effective_profile_base_url(
 def test_config_reload_recomputes_auto_reasoning_trace_capability_for_model_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-test")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
     cfg = AppConfig(
         model="deepseek-reasoner",
         base_url="https://gateway.example/v1",
@@ -937,9 +937,9 @@ def test_staged_api_key_stays_bound_to_its_profile_across_switch_and_save(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+    from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
     gemini_preset = get_preset("gemini")
     anthropic_preset = get_preset("anthropic")
@@ -989,8 +989,8 @@ def test_removing_profile_discards_its_staged_api_key() -> None:
 def test_config_reload_updates_gemini_cached_content_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "test-key")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "test-key")
     cfg = AppConfig(
         model="gemini-3-flash-preview",
         base_url="https://generativelanguage.googleapis.com/v1beta",
@@ -1093,9 +1093,9 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
     fixed_step_override: int | None,
     expected_max_steps: int,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-test")
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
     cfg = AppConfig(model="coding-v2", routing_mode="auto", max_steps=73)
     cfg.extra_fields = {"role_models": {"router": "router-v2"}}
     client = SimpleNamespace(
@@ -1175,7 +1175,7 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
     assert first_main_route.model == "coding-v2"
     assert first_main_route.credential_scope
 
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-next-credential")
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-next-credential")
     next_cfg = AppConfig(model="coding-v3", routing_mode="auto", max_steps=73)
     next_cfg.extra_fields = {"role_models": {"router": "router-v3"}}
     add_profile(
@@ -1217,9 +1217,9 @@ def test_config_reload_preserves_factory_route_for_unrelated_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "stable-credential")
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "stable-credential")
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
     profile = ProfileSpec(
         name=f"route-{protocol}",
         protocol=protocol,
@@ -1374,10 +1374,10 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli.model_registry import ModelRegistry
+    from alysis_code.model_registry import ModelRegistry
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
 
     def make_cfg(*, model: str, base_url: str) -> tuple[AppConfig, ProfileSpec]:
         profile = ProfileSpec(
@@ -1491,9 +1491,9 @@ def test_config_reload_applies_routing_mode_change_in_place(
     # Router-free path: routing_mode is a deprecated no-op field, so changing
     # it is an ordinary live reload — no restart is required and the session
     # simply tracks the configured value.
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-test")
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
     current_cfg = AppConfig(model="coding-v1", routing_mode=current_mode, max_steps=25)
     next_cfg = AppConfig(model="coding-v2", routing_mode=next_mode, max_steps=73)
     client = SimpleNamespace(
@@ -1565,7 +1565,7 @@ def test_classic_config_reload_applies_routing_mode_change_without_closing(
     applied: list[AppConfig] = []
     output: list[str] = []
     console = SimpleNamespace(print=lambda value="": output.append(str(value)))
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
     monkeypatch.setattr(
         config_menu_mod,
         "run_config_menu",
@@ -1638,7 +1638,7 @@ def test_thinking_label_round_trip(label: str) -> None:
 def test_commit_does_not_persist_env_reasoning_effort_for_unrelated_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "high")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "high")
     cfg = AppConfig(model="old")
     state = ConfigMenuState.from_cfg(cfg)
 
@@ -1655,7 +1655,7 @@ def test_commit_does_not_persist_env_reasoning_effort_for_unrelated_change(
 def test_commit_persists_explicit_env_reasoning_effort_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "high")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "high")
     cfg = AppConfig(model="default")
     state = ConfigMenuState.from_cfg(cfg)
 
@@ -1668,7 +1668,7 @@ def test_commit_persists_explicit_env_reasoning_effort_selection(
 
 
 def _state_with_active_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigMenuState:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig(model="claude-sonnet-4-6")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
@@ -1689,9 +1689,9 @@ def test_invalid_prompt_cache_mode_env_logs_warning_and_summary_degrades(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     state = _state_with_active_profile(tmp_path, monkeypatch)
-    monkeypatch.setenv("SYLLIPTOR_PROMPT_CACHE_MODE", "bogus")
+    monkeypatch.setenv("ALYSIS_PROMPT_CACHE_MODE", "bogus")
 
-    with caplog.at_level(logging.WARNING, logger="sylliptor_agent_cli.cli_impl.config_menu"):
+    with caplog.at_level(logging.WARNING, logger="alysis_code.cli_impl.config_menu"):
         policy = config_menu_mod._resolved_cache_policy_for_state(state)
         summary = config_menu_mod._cache_summary_text(state)
 
@@ -1703,15 +1703,15 @@ def test_invalid_prompt_cache_mode_env_logs_warning_and_summary_degrades(
         and "cache policy resolution failed" in record.getMessage().lower()
     ]
     assert warnings
-    assert "SYLLIPTOR_PROMPT_CACHE_MODE" in warnings[0].getMessage()
-    assert "policy unavailable: SYLLIPTOR_PROMPT_CACHE_MODE must be one of" in summary
+    assert "ALYSIS_PROMPT_CACHE_MODE" in warnings[0].getMessage()
+    assert "policy unavailable: ALYSIS_PROMPT_CACHE_MODE must be one of" in summary
     assert "policy unknown" not in summary
 
 
 def test_cache_policy_summary_without_profile_stays_policy_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     state = ConfigMenuState.from_cfg(AppConfig(model="default"))
     state.active_profile = ""
 
@@ -1731,7 +1731,7 @@ def test_effective_cache_capability_failure_logs_warning(
         raise RuntimeError("preset lookup exploded")
 
     monkeypatch.setattr(config_menu_mod, "find_preset_for_profile", _boom)
-    with caplog.at_level(logging.WARNING, logger="sylliptor_agent_cli.cli_impl.config_menu"):
+    with caplog.at_level(logging.WARNING, logger="alysis_code.cli_impl.config_menu"):
         capability = config_menu_mod._effective_cache_capability_for_state(state)
 
     assert capability is None

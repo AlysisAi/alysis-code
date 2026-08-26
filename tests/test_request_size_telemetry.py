@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.request_estimation import (
+from alysis_code.request_estimation import (
     RequestTokenBreakdown,
     estimate_provider_payload_tokens,
     estimate_request_token_breakdown,
@@ -30,11 +30,11 @@ def test_request_token_breakdown_splits_bootstrap_history_tools_memory_and_pins(
         },
         {
             "role": "user",
-            "content": '<<<SYLLIPTOR_CONVERSATION_MEMORY_JSON>>>\n{"summary":"parser bug affects nested forms"}',
+            "content": '<<<ALYSIS_CONVERSATION_MEMORY_JSON>>>\n{"summary":"parser bug affects nested forms"}',
         },
         {
             "role": "user",
-            "content": '<<<SYLLIPTOR_CONVERSATION_PINS_JSON>>>\n[{"path":"src/parser.py"}]',
+            "content": '<<<ALYSIS_CONVERSATION_PINS_JSON>>>\n[{"path":"src/parser.py"}]',
         },
         {"role": "assistant", "content": "The bug is in the nested expression branch."},
     ]

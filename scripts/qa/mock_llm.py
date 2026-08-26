@@ -133,13 +133,41 @@ def _raw_agent_proxy_response(
     text: str,
 ) -> dict[str, Any] | None:
     lowered = text.lower()
-    last_user_lowered = _last_user_text(messages).lower()
+    if "subagent_bench_m01" in lowered:
+        is_child = "<subagent_turn_context>" not in lowered
+        if not is_child:
+            if _has_tool_call(messages, "subagent_run"):
+                return _response("Explorer read README.md and reported its contents.")
+            return _tool_response(
+                "subagent_run",
+                {
+                    "name": "explorer",
+                    "task": "SUBAGENT_BENCH_M01 read existing README.md and report its contents.",
+                },
+            )
+        if _has_tool_call(messages, "fs_read"):
+            return _response("README.md contents: `# Smoke`")
+        return _tool_response("fs_read", {"path": "README.md"})
     if (
-        last_user_lowered.strip() == "read existing readme.md and report its contents."
+        "read existing readme.md and report its contents." in lowered
         and _has_tool_call(messages, "fs_read")
     ):
         return _response("README.md contents: `# Smoke`")
     if "subagent_bench_m03" in lowered:
+        is_child = "<subagent_turn_context>" not in lowered
+        if not is_child:
+            if _has_tool_call(messages, "subagent_run"):
+                return _response("Implementer completed and verified the requested files.")
+            return _tool_response(
+                "subagent_run",
+                {
+                    "name": "implementer",
+                    "task": (
+                        "SUBAGENT_BENCH_M03 update src/a.py and tests/test_a.py, "
+                        "run focused tests, and report changed files."
+                    ),
+                },
+            )
         if _has_tool_call(messages, "verify_run"):
             return _response(
                 "Implemented src/a.py and tests/test_a.py; the focused verification passed."
@@ -162,11 +190,17 @@ def _raw_agent_proxy_response(
                 ),
             )
         )
-    if "subagent_bench_m04_child_" in last_user_lowered:
-        if _has_tool_call(messages, "fs_read"):
+    if (
+        "subagent_bench_m04_child_" in lowered
+        and not _has_tool_call(messages, "subagent_run")
+    ):
+        if _has_tool_call(messages, "fs_read_lines"):
             return _response("Readonly inspection completed with file-backed evidence.")
-        path = "src/app.py" if "child_beta" in last_user_lowered else "README.md"
-        return _tool_response("fs_read", {"path": path})
+        path = "src/app.py" if "child_beta" in lowered else "README.md"
+        return _tool_response(
+            "fs_read_lines",
+            {"path": path, "start_line": 1, "end_line": 40},
+        )
     if "subagent_bench_m04" in lowered:
         if _has_tool_call(messages, "subagent_run"):
             return _response(
@@ -359,8 +393,12 @@ class _Handler(BaseHTTPRequestHandler):
         messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
         user_text = _last_user_text(messages).lower()
         all_text = _all_message_text(messages)
-        if "subagent_bench_m04_child_" in user_text and not _has_tool_call(messages, "fs_read"):
-            child_label = "beta" if "child_beta" in user_text else "alpha"
+        if (
+            "subagent_bench_m04_child_" in all_text.lower()
+            and not _has_tool_call(messages, "subagent_run")
+            and not _has_tool_call(messages, "fs_read_lines")
+        ):
+            child_label = "beta" if "child_beta" in all_text.lower() else "alpha"
             with self.server.benchmark_parallel_lock:
                 self.server.benchmark_parallel_arrivals.add(child_label)
                 if len(self.server.benchmark_parallel_arrivals) == 2:
@@ -410,7 +448,6 @@ class _Handler(BaseHTTPRequestHandler):
         if _has_tool_result(messages):
             self._send_json(200, _response("Done. Tool completed and result was inspected."))
             return
-
         if "non-existent" in user_text or "missing file" in user_text:
             self._send_json(200, _tool_response("fs_read", {"path": "missing.txt"}))
             return

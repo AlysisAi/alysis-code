@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.safety.mcp_sanitize import (
+from alysis_code.safety.mcp_sanitize import (
     MAX_MCP_TOOL_DESCRIPTION_CHARS,
     sanitize_mcp_tool_description,
 )

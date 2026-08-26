@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
 
 
 class _ScriptedClient:

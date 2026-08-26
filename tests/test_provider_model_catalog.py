@@ -6,19 +6,19 @@ from typing import Any
 import httpx
 import pytest
 
-import sylliptor_agent_cli.provider_model_catalog as catalog_mod
-from sylliptor_agent_cli.llm.protocols import (
+import alysis_code.provider_model_catalog as catalog_mod
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     OPENAI_COMPAT_PROTOCOL,
 )
-from sylliptor_agent_cli.profile_presets import (
+from alysis_code.profile_presets import (
     PROFILE_PRESETS,
     make_profile_from_preset,
     profile_provider_family,
 )
-from sylliptor_agent_cli.profiles import ProfileSpec
-from sylliptor_agent_cli.provider_model_catalog import (
+from alysis_code.profiles import ProfileSpec
+from alysis_code.provider_model_catalog import (
     ProviderModelCatalogError,
     ProviderModelOption,
     discover_provider_models,
@@ -233,7 +233,7 @@ def test_openai_style_catalog_classifies_capabilities_without_name_guessing() ->
         base_url="https://openrouter.example/api/v1/",
         extra_headers={
             "authorization": "Bearer profile-override",
-            "HTTP-Referer": "https://sylliptor.example",
+            "HTTP-Referer": "https://alysis.example",
         },
     )
     models = discover_provider_models(
@@ -259,7 +259,7 @@ def test_openai_style_catalog_classifies_capabilities_without_name_guessing() ->
     assert len(requests) == 1
     assert requests[0].url.path == "/api/v1/models"
     assert requests[0].headers.get_list("authorization") == ["Bearer profile-override"]
-    assert requests[0].headers["http-referer"] == "https://sylliptor.example"
+    assert requests[0].headers["http-referer"] == "https://alysis.example"
 
 
 def test_openai_style_catalog_accepts_a_root_list_and_public_endpoint() -> None:

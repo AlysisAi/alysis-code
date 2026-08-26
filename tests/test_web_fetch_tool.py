@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-import sylliptor_agent_cli.tools.web as web_mod
+import alysis_code.tools.web as web_mod
 
 
 def test_web_fetch_html_extracts_title_and_readable_text(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.extensions.activation import resolve_active_plugins
-from sylliptor_agent_cli.extensions.workspace_trust import (
+from alysis_code.extensions.activation import resolve_active_plugins
+from alysis_code.extensions.workspace_trust import (
     WORKSPACE_TRUST_SCHEMA_VERSION,
     grant_workspace_trust,
     is_workspace_trusted,
@@ -18,8 +18,8 @@ from sylliptor_agent_cli.extensions.workspace_trust import (
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
 
 
 def _write_global_enabled(tmp_path: Path, plugin_id: str = "acme.demo") -> None:
@@ -38,7 +38,7 @@ def _write_global_enabled(tmp_path: Path, plugin_id: str = "acme.demo") -> None:
 
 
 def _write_overrides(repo: Path, payload: dict[str, object]) -> bytes:
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(payload, sort_keys=True).encode("utf-8")
     path.write_bytes(raw)

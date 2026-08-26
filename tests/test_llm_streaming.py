@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.llm.streaming import iter_sse_frames, parse_sse_json_frame
-from sylliptor_agent_cli.llm.types import LLMError
+from alysis_code.llm.streaming import iter_sse_frames, parse_sse_json_frame
+from alysis_code.llm.types import LLMError
 
 
 def test_iter_sse_frames_handles_multiline_data_and_done_sentinel() -> None:

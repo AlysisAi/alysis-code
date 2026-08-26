@@ -1,6 +1,6 @@
 # Custom Tool Examples
 
-This directory contains examples for Sylliptor custom tools. Files here are
+This directory contains examples for Alysis Code custom tools. Files here are
 documentation aids; they are not discovered from this directory at runtime.
 
 ## Files
@@ -10,9 +10,9 @@ documentation aids; they are not discovered from this directory at runtime.
 
 ## Notes
 
-Workspace custom tools are discovered from `<workspace>/.sylliptor/tools/*.py`.
+Workspace custom tools are discovered from `<workspace>/.alysis/tools/*.py`.
 After adapting an example into that location, review the source before trusting
-it with `sylliptor tool trust`.
+it with `alysis tool trust`.
 
 Project-tool trust is tied to the workspace, relative path, and file hash.
 

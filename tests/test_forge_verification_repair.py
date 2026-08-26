@@ -24,20 +24,20 @@ from pathlib import Path
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failed_task_evidence import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig
+from alysis_code.failed_task_evidence import (
     METADATA_FILE_NAME,
     PATCH_FILE_NAME,
     VERIFICATION_LOG_FILE_NAME,
     evidence_dir_for,
     preserve_failed_task_evidence,
 )
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.swarm_orchestrator import run_swarm
-from sylliptor_agent_cli.swarm_worker import TaskWorkerResult
-from sylliptor_agent_cli.verification_repair import (
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.swarm_orchestrator import run_swarm
+from alysis_code.swarm_worker import TaskWorkerResult
+from alysis_code.verification_repair import (
     DEFAULT_VERIFICATION_REPAIR_ATTEMPTS,
     TASK_STATUS_COMPLETED_UNVERIFIED,
     RepairAttemptExecution,
@@ -46,7 +46,7 @@ from sylliptor_agent_cli.verification_repair import (
     run_verification_repair_loop,
     verification_failure_excerpts,
 )
-from sylliptor_agent_cli.verify_gate import (
+from alysis_code.verify_gate import (
     ResolvedVerifyCommands,
     VerifyCommandResult,
     VerifyRunResult,
@@ -59,10 +59,10 @@ from sylliptor_agent_cli.verify_gate import (
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -112,7 +112,7 @@ def _prepare_plan(repo: Path) -> tuple[Path, str]:
 
 
 def _run_dir(repo: Path) -> Path:
-    pointer = json.loads((repo / ".sylliptor" / "current_run.json").read_text(encoding="utf-8"))
+    pointer = json.loads((repo / ".alysis" / "current_run.json").read_text(encoding="utf-8"))
     return repo / pointer["run_path"]
 
 
@@ -219,7 +219,7 @@ def test_exec_strict_without_authoritative_commands_completes_unverified(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         _exec_argv(repo, task_id, "--machine"),
         env=_env(tmp_path),
     )
@@ -272,7 +272,7 @@ def test_exec_strict_without_commands_still_fails_when_the_work_itself_failed(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         _exec_argv(repo, task_id),
         env=_env(tmp_path),
     )
@@ -321,7 +321,7 @@ def test_exec_strict_repairs_failing_verification_then_merges(tmp_path: Path, mo
     monkeypatch.setattr(cli_mod, "resolve_model_for_role", lambda **_kwargs: "test-model")
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         _exec_argv(repo, task_id, "--verify-cmd", "pytest -q"),
         env=_env(tmp_path),
     )
@@ -368,7 +368,7 @@ def test_exec_strict_repair_can_be_disabled(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(cli_mod, "resolve_model_for_role", lambda **_kwargs: "test-model")
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         _exec_argv(
             repo,
             task_id,
@@ -420,7 +420,7 @@ def test_exec_strict_exhausted_repair_fails_task_but_keeps_patch_artifact(
     monkeypatch.setattr(cli_mod, "resolve_model_for_role", lambda **_kwargs: "test-model")
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         _exec_argv(repo, task_id, "--verify-cmd", "pytest -q", "--machine"),
         env=_env(tmp_path),
     )
@@ -542,12 +542,12 @@ def test_repair_loop_does_not_run_for_unrepairable_failures() -> None:
 
 def test_repair_budget_precedence_and_clamping() -> None:
     assert resolve_repair_attempt_budget(None, env={}) == DEFAULT_VERIFICATION_REPAIR_ATTEMPTS
-    assert resolve_repair_attempt_budget(None, env={"SYLLIPTOR_VERIFY_REPAIR_ATTEMPTS": "4"}) == 4
-    assert resolve_repair_attempt_budget(0, env={"SYLLIPTOR_VERIFY_REPAIR_ATTEMPTS": "4"}) == 0
+    assert resolve_repair_attempt_budget(None, env={"ALYSIS_VERIFY_REPAIR_ATTEMPTS": "4"}) == 4
+    assert resolve_repair_attempt_budget(0, env={"ALYSIS_VERIFY_REPAIR_ATTEMPTS": "4"}) == 0
     assert resolve_repair_attempt_budget(-3, env={}) == 0
     assert resolve_repair_attempt_budget(999, env={}) == 10
     assert (
-        resolve_repair_attempt_budget(None, env={"SYLLIPTOR_VERIFY_REPAIR_ATTEMPTS": "nope"})
+        resolve_repair_attempt_budget(None, env={"ALYSIS_VERIFY_REPAIR_ATTEMPTS": "nope"})
         == DEFAULT_VERIFICATION_REPAIR_ATTEMPTS
     )
 
@@ -678,10 +678,10 @@ def test_swarm_keeps_unverifiable_task_as_completed_unverified_and_does_not_merg
             summary="worker completed but nothing verified it",
             commit_hash="deadbeef",
             error=None,
-            report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-            patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-            log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-            log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+            report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+            patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+            log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+            log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
             warnings=[],
             changed_files=["docs/a.md"],
             verify_failed=False,
@@ -757,10 +757,10 @@ def test_swarm_writes_failed_task_evidence_before_deleting_the_worktree(
             summary="worker failed",
             commit_hash=None,
             error="worker failed",
-            report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-            patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-            log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-            log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+            report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+            patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+            log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+            log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
             warnings=[],
             changed_files=[],
             verify_failed=True,

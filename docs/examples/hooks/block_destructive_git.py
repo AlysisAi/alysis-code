@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse hook that blocks git_apply_patch for destructive patches.
 
-Wire it in .sylliptor/hooks.json:
+Wire it in .alysis/hooks.json:
 
     {
       "hooks": {

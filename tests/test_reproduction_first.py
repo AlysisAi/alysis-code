@@ -14,13 +14,13 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.completion_certificate import (
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     CompletionCertificateStatus,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent.reproduction_first import (
+from alysis_code.agent.reproduction_first import (
     MAX_REPRO_REVISION_ROUNDS,
     REPRO_NOT_REPRODUCING_ADVISORY,
     ReproAssessment,
@@ -41,18 +41,18 @@ from sylliptor_agent_cli.agent.reproduction_first import (
     surviving_repro_artifacts,
     task_shape_from_turn_semantics,
 )
-from sylliptor_agent_cli.agent.turn_contract import TurnOutcome, TurnSemantics, TurnTaskShape
-from sylliptor_agent_cli.agent.verification import (
+from alysis_code.agent.turn_contract import TurnOutcome, TurnSemantics, TurnTaskShape
+from alysis_code.agent.verification import (
     TurnExecutionState,
     _completion_gate_nudge_message,
     _completion_gate_problems,
     _completion_gate_repair_stage,
     _record_tool_effect,
 )
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
 
 # ---------------------------------------------------------------------------
 # Synthetic buggy repo + tool-effect driver
@@ -648,9 +648,9 @@ def test_kill_switch_env_wins_over_config(monkeypatch: pytest.MonkeyPatch) -> No
     cfg.reproduction_first_enabled = False
     assert _reproduction_first_enabled(cfg) is False
 
-    monkeypatch.setenv("SYLLIPTOR_REPRODUCTION_FIRST", "on")
+    monkeypatch.setenv("ALYSIS_REPRODUCTION_FIRST", "on")
     assert _reproduction_first_enabled(cfg) is True
-    monkeypatch.setenv("SYLLIPTOR_REPRODUCTION_FIRST", "off")
+    monkeypatch.setenv("ALYSIS_REPRODUCTION_FIRST", "off")
     cfg.reproduction_first_enabled = True
     assert _reproduction_first_enabled(cfg) is False
 

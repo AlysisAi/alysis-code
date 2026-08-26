@@ -6,23 +6,23 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import sylliptor_agent_cli.compaction.conversation_compactor as compactor_mod
-from sylliptor_agent_cli.agent.turn_contract import (
+import alysis_code.compaction.conversation_compactor as compactor_mod
+from alysis_code.agent.turn_contract import (
     TurnEffect,
     TurnOutcome,
     TurnRelation,
     TurnSemantics,
 )
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     AgentSession,
     create_session,
     refresh_session_task_brief_message,
 )
-from sylliptor_agent_cli.compaction.conversation_compactor import MEMORY_MARKER, PINS_MARKER
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.llm.types import InputTokenCount, UsageConfidence, UsageSource
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.compaction.conversation_compactor import MEMORY_MARKER, PINS_MARKER
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.llm.types import InputTokenCount, UsageConfidence, UsageSource
+from alysis_code.session_store import read_session_events
 
 
 def _summary(*, decisions: list[str]) -> dict[str, Any]:
@@ -138,7 +138,7 @@ class _FailingCompactorClient:
         self.calls += 1
         payload = json.dumps(messages, ensure_ascii=False)
         if len(payload) > self.max_chars:
-            from sylliptor_agent_cli.llm.openai_compat import LLMError
+            from alysis_code.llm.openai_compat import LLMError
 
             raise LLMError("context length exceeded")
         return LLMResponse(

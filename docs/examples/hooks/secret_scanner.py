@@ -6,7 +6,7 @@ Detects API keys, cloud access keys, GitHub/GitLab tokens, Slack tokens,
 and private key block headers.
 Allow intentional fixtures by adding "pragma: allowlist secret" on the
 matched line or the line immediately before it.
-Example .sylliptor/hooks.json:
+Example .alysis/hooks.json:
     {"hooks": {"PreToolUse": [{"matcher": "fs_write|fs_patch|fs_edit",
       "hooks": [{"type": "command", "id": "security.secret-scanner",
       "command": "python docs/examples/hooks/secret_scanner.py",

@@ -6,10 +6,10 @@ from pathlib import Path
 import httpx
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, render_plan_markdown
-from sylliptor_agent_cli.plan_assistant import apply_plan_update, run_planner_turn
+from alysis_code.assets import AssetSurface
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, render_plan_markdown
+from alysis_code.plan_assistant import apply_plan_update, run_planner_turn
 
 
 def _transport_for_payloads(*payloads: dict[str, object]) -> tuple[httpx.MockTransport, list[dict]]:
@@ -51,7 +51,7 @@ def _surface(tmp_path: Path) -> AssetSurface:
 
 
 def test_planner_receives_assets_and_preserves_asset_briefing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     surface = _surface(tmp_path)
     asset = surface.add_asset(
         write_text_asset_source(tmp_path, "spec.txt", "Auth API spec\n"),
@@ -107,7 +107,7 @@ def test_planner_receives_assets_and_preserves_asset_briefing(tmp_path: Path, mo
 
 
 def test_planner_rejects_unknown_asset_reference(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     surface = _surface(tmp_path)
     surface.add_asset(write_text_asset_source(tmp_path), title="Known", comprehend="sync")
     planner_payload = {
@@ -153,7 +153,7 @@ def test_planner_rejects_unknown_asset_reference(tmp_path: Path, monkeypatch) ->
 
 
 def test_deleted_asset_references_surface_as_drift(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     surface = _surface(tmp_path)
     asset = surface.add_asset(
         write_text_asset_source(tmp_path), title="Known", comprehend="sync"
@@ -202,8 +202,8 @@ def test_deleted_asset_references_surface_as_drift(tmp_path: Path, monkeypatch) 
 
 
 def test_vision_capable_planner_receives_inline_image(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
-    monkeypatch.setenv("SYLLIPTOR_SUPPORTS_VISION", "true")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_SUPPORTS_VISION", "true")
     from PIL import Image
 
     image_path = tmp_path / "shot.png"

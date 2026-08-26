@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
+from alysis_code import cli as cli_mod
 
 
 def _init_git_repo(root: Path) -> None:

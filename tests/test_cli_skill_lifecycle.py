@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.workspace_context import WorkspaceContext
+from alysis_code import cli as cli_mod
+from alysis_code.workspace_context import WorkspaceContext
 
 
 @pytest.fixture(autouse=True)
@@ -51,11 +51,11 @@ def _write_skill_bundle(
 
 def _patch_user_config_dir(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.paths.canonical_user_config_dir",
+        "alysis_code.skills.paths.canonical_user_config_dir",
         lambda: path,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.discovery.canonical_user_config_dir",
+        "alysis_code.skills.discovery.canonical_user_config_dir",
         lambda: path,
     )
 
@@ -76,7 +76,7 @@ def test_cli_skill_init_and_create_support_project_native_and_portable_roots(
 
     assert native.exit_code == 0
     assert portable.exit_code == 0
-    assert (tmp_path / ".sylliptor_skills" / "pytest-debug" / "SKILL.md").exists()
+    assert (tmp_path / ".alysis_skills" / "pytest-debug" / "SKILL.md").exists()
     assert (tmp_path / ".agents" / "skills" / "docs-consistency" / "SKILL.md").exists()
     assert "Created skill scaffold:" in native.output
 
@@ -84,11 +84,11 @@ def test_cli_skill_init_and_create_support_project_native_and_portable_roots(
 def test_cli_skill_validate_supports_bundle_path_and_all(tmp_path: Path) -> None:
     runner = CliRunner()
     valid = _write_skill_bundle(
-        tmp_path / ".sylliptor_skills" / "verification-playbook",
+        tmp_path / ".alysis_skills" / "verification-playbook",
         name="verification-playbook",
         description="Choose good verify commands.",
     )
-    broken = tmp_path / ".sylliptor_skills" / "broken"
+    broken = tmp_path / ".alysis_skills" / "broken"
     broken.mkdir(parents=True)
     (broken / "SKILL.md").write_bytes(b"---\nname: broken\ndescription: broken\n---\n\n\xff")
 
@@ -171,11 +171,11 @@ def test_cli_skill_install_rejects_zip_traversal(
 def test_cli_skill_list_warns_on_invalid_project_state(tmp_path: Path) -> None:
     runner = CliRunner()
     _write_skill_bundle(
-        tmp_path / ".sylliptor_skills" / "docs-consistency",
+        tmp_path / ".alysis_skills" / "docs-consistency",
         name="docs-consistency",
         description="Keep docs aligned.",
     )
-    state_path = tmp_path / ".sylliptor" / "skills.json"
+    state_path = tmp_path / ".alysis" / "skills.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{bad json", encoding="utf-8")
 

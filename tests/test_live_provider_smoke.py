@@ -4,12 +4,12 @@ import os
 
 import pytest
 
-from sylliptor_agent_cli.llm.anthropic_messages import AnthropicMessagesClient
-from sylliptor_agent_cli.llm.gemini_generate_content import GeminiGenerateContentClient
-from sylliptor_agent_cli.llm.metadata import attach_provider_metadata_to_assistant_message
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.protocols import get_provider_protocol_capabilities
-from sylliptor_agent_cli.llm.types import LLMResponse
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
+from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.metadata import attach_provider_metadata_to_assistant_message
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.protocols import get_provider_protocol_capabilities
+from alysis_code.llm.types import LLMResponse
 
 
 def _required_env(name: str) -> str:
@@ -20,20 +20,20 @@ def _required_env(name: str) -> str:
 
 
 def _require_live_provider_smoke() -> None:
-    if os.environ.get("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE") != "1":
-        pytest.skip("set SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE=1 to run live provider smoke tests")
+    if os.environ.get("ALYSIS_RUN_LIVE_PROVIDER_SMOKE") != "1":
+        pytest.skip("set ALYSIS_RUN_LIVE_PROVIDER_SMOKE=1 to run live provider smoke tests")
 
 
 def _require_live_provider_web_search_smoke() -> None:
     _require_live_provider_smoke()
-    if os.environ.get("SYLLIPTOR_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE") != "1":
-        pytest.skip("set SYLLIPTOR_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE=1 to run web search smoke")
+    if os.environ.get("ALYSIS_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE") != "1":
+        pytest.skip("set ALYSIS_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE=1 to run web search smoke")
 
 
 def _require_live_provider_streaming_smoke(*, provider_key: str, protocol: str) -> None:
     _require_live_provider_smoke()
-    if os.environ.get("SYLLIPTOR_RUN_LIVE_PROVIDER_STREAMING_SMOKE") != "1":
-        pytest.skip("set SYLLIPTOR_RUN_LIVE_PROVIDER_STREAMING_SMOKE=1 to run streaming smoke")
+    if os.environ.get("ALYSIS_RUN_LIVE_PROVIDER_STREAMING_SMOKE") != "1":
+        pytest.skip("set ALYSIS_RUN_LIVE_PROVIDER_STREAMING_SMOKE=1 to run streaming smoke")
     capabilities = get_provider_protocol_capabilities(
         provider_key=provider_key,
         protocol=protocol,
@@ -131,9 +131,9 @@ def _gemini_function_call_parts(metadata: dict[str, object]) -> list[dict[str, o
 
 
 def test_live_provider_smoke_tests_are_gated_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_STREAMING_SMOKE", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_SMOKE", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_STREAMING_SMOKE", raising=False)
 
     with pytest.raises(pytest.skip.Exception):
         _require_live_provider_smoke()
@@ -149,14 +149,14 @@ def test_live_provider_smoke_tests_are_gated_by_default(monkeypatch: pytest.Monk
 def test_live_native_web_search_smoke_requires_both_gates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", "1")
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_SMOKE", raising=False)
+    monkeypatch.setenv("ALYSIS_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", "1")
 
     with pytest.raises(pytest.skip.Exception):
         _require_live_provider_web_search_smoke()
 
-    monkeypatch.setenv("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE", "1")
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", raising=False)
+    monkeypatch.setenv("ALYSIS_RUN_LIVE_PROVIDER_SMOKE", "1")
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_WEB_SEARCH_SMOKE", raising=False)
     with pytest.raises(pytest.skip.Exception):
         _require_live_provider_web_search_smoke()
 
@@ -164,8 +164,8 @@ def test_live_native_web_search_smoke_requires_both_gates(
 def test_live_native_streaming_smoke_requires_both_gates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_RUN_LIVE_PROVIDER_STREAMING_SMOKE", "1")
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_SMOKE", raising=False)
+    monkeypatch.setenv("ALYSIS_RUN_LIVE_PROVIDER_STREAMING_SMOKE", "1")
 
     with pytest.raises(pytest.skip.Exception):
         _require_live_provider_streaming_smoke(
@@ -173,8 +173,8 @@ def test_live_native_streaming_smoke_requires_both_gates(
             protocol="gemini_generate_content",
         )
 
-    monkeypatch.setenv("SYLLIPTOR_RUN_LIVE_PROVIDER_SMOKE", "1")
-    monkeypatch.delenv("SYLLIPTOR_RUN_LIVE_PROVIDER_STREAMING_SMOKE", raising=False)
+    monkeypatch.setenv("ALYSIS_RUN_LIVE_PROVIDER_SMOKE", "1")
+    monkeypatch.delenv("ALYSIS_RUN_LIVE_PROVIDER_STREAMING_SMOKE", raising=False)
     with pytest.raises(pytest.skip.Exception):
         _require_live_provider_streaming_smoke(
             provider_key="gemini",
@@ -246,7 +246,7 @@ def test_live_openai_responses_tool_call_smoke() -> None:
     )
 
     response = client.chat(
-        messages=[{"role": "user", "content": "Use the tool for product Sylliptor."}],
+        messages=[{"role": "user", "content": "Use the tool for product Alysis Code."}],
         tools=[_tool()],
         tool_choice=_forced_tool_choice(),
     )
@@ -281,7 +281,7 @@ def test_live_anthropic_messages_tool_call_smoke() -> None:
     )
 
     response = client.chat(
-        messages=[{"role": "user", "content": "Use the tool for product Sylliptor."}],
+        messages=[{"role": "user", "content": "Use the tool for product Alysis Code."}],
         tools=[_tool()],
         tool_choice=_forced_tool_choice(),
     )
@@ -320,7 +320,7 @@ def test_live_gemini_generate_content_tool_call_id_smoke() -> None:
     )
 
     response = client.chat(
-        messages=[{"role": "user", "content": "Use the tool for product Sylliptor."}],
+        messages=[{"role": "user", "content": "Use the tool for product Alysis Code."}],
         tools=[_tool()],
         tool_choice=_forced_tool_choice(),
     )
@@ -467,7 +467,7 @@ def test_live_anthropic_messages_tool_use_streaming_smoke() -> None:
     )
 
     response = client.chat(
-        messages=[{"role": "user", "content": "Use the tool for product Sylliptor."}],
+        messages=[{"role": "user", "content": "Use the tool for product Alysis Code."}],
         tools=[_tool()],
         tool_choice=_forced_tool_choice(),
         stream=True,
@@ -521,7 +521,7 @@ def test_live_gemini_generate_content_function_call_streaming_smoke() -> None:
     )
 
     response = client.chat(
-        messages=[{"role": "user", "content": "Use the tool for product Sylliptor."}],
+        messages=[{"role": "user", "content": "Use the tool for product Alysis Code."}],
         tools=[_tool()],
         tool_choice=_forced_tool_choice(),
         stream=True,

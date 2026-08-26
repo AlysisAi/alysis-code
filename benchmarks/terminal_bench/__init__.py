@@ -1,17 +1,17 @@
-"""Terminal-Bench integration for Sylliptor."""
+"""Terminal-Bench integration for Alysis Code."""
 
 from typing import Any
 
-__all__ = ["SylliptorAgent", "SylliptorSimpleAgent"]
+__all__ = ["AlysisHarborAgent", "AlysisSimpleAgent"]
 
 
 def __getattr__(name: str) -> Any:
-    if name == "SylliptorAgent":
-        from .harbor_agent import SylliptorAgent
+    if name == "AlysisSimpleAgent":
+        from .alysis_agent import AlysisSimpleAgent
 
-        return SylliptorAgent
-    if name == "SylliptorSimpleAgent":
-        from .sylliptor_agent import SylliptorSimpleAgent
+        return AlysisSimpleAgent
+    if name == "AlysisHarborAgent":
+        from .harbor_agent import AlysisHarborAgent
 
-        return SylliptorSimpleAgent
+        return AlysisHarborAgent
     raise AttributeError(name)

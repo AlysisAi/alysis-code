@@ -8,12 +8,12 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, create_session
-from sylliptor_agent_cli.background_runner import BackgroundProcessSpawn
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.surface import ApprovalDecision, ApprovalRequest, NoopSurface
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent_loop import AgentRuntimeError, create_session
+from alysis_code.background_runner import BackgroundProcessSpawn
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.surface import ApprovalDecision, ApprovalRequest, NoopSurface
 
 
 class FakeBackgroundPopen:

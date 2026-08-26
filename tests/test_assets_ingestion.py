@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from sylliptor_agent_cli.assets import AssetAlreadyExistsError, AssetError, AssetIndex, ingest_asset
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.assets import AssetAlreadyExistsError, AssetError, AssetIndex, ingest_asset
+from alysis_code.forge import create_plan_run
 
 
 def test_text_file_ingestion_sets_extracted_path_to_stored_path(tmp_path: Path) -> None:

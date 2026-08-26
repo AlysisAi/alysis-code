@@ -6,19 +6,19 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.legacy_migration import migrate_legacy_assets
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, load_plan, save_plan
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.legacy_migration import migrate_legacy_assets
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, load_plan, save_plan
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -50,7 +50,7 @@ def test_prune_legacy_refuses_v1_plan(tmp_path: Path) -> None:
     _write_v1(paths, [_legacy_asset(paths, "legacy.txt", "legacy\n")])
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "prune-legacy", "--path", os.fspath(repo), "--yes"],
         env=_env(tmp_path),
     )
@@ -73,7 +73,7 @@ def test_prune_legacy_deletes_verified_files(tmp_path: Path) -> None:
     migrate_legacy_assets(cfg=cfg, run_paths=paths, surface=surface, comprehend_mode="skip")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -106,7 +106,7 @@ def test_prune_legacy_refuses_unverified_file(tmp_path: Path) -> None:
     save_plan(paths, plan)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",

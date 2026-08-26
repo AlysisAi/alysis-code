@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-import sylliptor_agent_cli.execution_shared as shared
+import alysis_code.execution_shared as shared
 
 
 def _git_env() -> dict[str, str]:
@@ -96,7 +96,7 @@ def test_build_execution_reporting_diff_sorts_filters_and_dedupes_paths(
         lambda _root: [
             "docs/new.md",
             "docs/new.md",
-            ".sylliptor/runs/current.json",
+            ".alysis/runs/current.json",
         ],
     )
     monkeypatch.setattr(
@@ -115,7 +115,7 @@ def test_build_execution_reporting_diff_sorts_filters_and_dedupes_paths(
         "src/old_name.py",
     )
     assert result.patch_text.count("diff --git a/docs/new.md b/docs/new.md") == 1
-    assert ".sylliptor/runs/current.json" not in result.patch_text
+    assert ".alysis/runs/current.json" not in result.patch_text
 
 
 def test_build_execution_reporting_diff_filters_untracked_egg_info_side_effects(

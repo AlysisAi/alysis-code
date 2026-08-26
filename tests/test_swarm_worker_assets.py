@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.budget_allocator import AssetInclusionDecision, TaskAssetAllocation
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.mcp.manager import McpHostToolBinding
-from sylliptor_agent_cli.swarm_worker import run_task_worker
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.budget_allocator import AssetInclusionDecision, TaskAssetAllocation
+from alysis_code.config import AppConfig
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.mcp.manager import McpHostToolBinding
+from alysis_code.swarm_worker import run_task_worker
 
 
 def test_run_task_worker_mirrors_allocates_and_passes_asset_tools(
@@ -88,21 +88,21 @@ def test_run_task_worker_mirrors_allocates_and_passes_asset_tools(
         (kwargs["root"] / "src" / "in_scope.py").write_text("ok\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.allocate_task_assets", fake_allocate)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.allocate_task_assets", fake_allocate)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.create_mcp_manager",
+        "alysis_code.swarm_worker.create_mcp_manager",
         lambda **_kwargs: _base_mcp_manager(),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_args, **_kwargs: SimpleNamespace(
             changed_files=("src/in_scope.py",),
             patch_text="diff --git a/src/in_scope.py b/src/in_scope.py\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
 
@@ -123,7 +123,7 @@ def test_run_task_worker_mirrors_allocates_and_passes_asset_tools(
     assert result.task_id == task["id"]
     assert "## Relevant Assets" in captured["instruction"]
     assert captured["tool_aliases"] == ["echo", "asset_read", "asset_load"]
-    assert (worktree / ".sylliptor" / "task_assets" / "manifest.json").exists()
+    assert (worktree / ".alysis" / "task_assets" / "manifest.json").exists()
     allocation_payload = json.loads(
         (paths.execution_asset_briefings_dir / f"{task['id']}.json").read_text("utf-8")
     )
@@ -210,7 +210,7 @@ def test_run_task_worker_persists_asset_artifacts_when_agent_raises(
     worktree.mkdir()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.allocate_task_assets",
+        "alysis_code.swarm_worker.allocate_task_assets",
         lambda **kwargs: TaskAssetAllocation(
             task_id=str(task["id"]),
             decisions=[
@@ -229,15 +229,15 @@ def test_run_task_worker_persists_asset_artifacts_when_agent_raises(
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_agent",
+        "alysis_code.swarm_worker.run_agent",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("worker failed")),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_args, **_kwargs: SimpleNamespace(changed_files=(), patch_text=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 

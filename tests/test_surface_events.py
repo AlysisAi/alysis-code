@@ -6,7 +6,7 @@ from typing import get_args
 
 from rich.console import Console
 
-from sylliptor_agent_cli.surface.events import (
+from alysis_code.surface.events import (
     EVENT_REGISTRY,
     MAX_ARGUMENTS_PREVIEW_CHARS,
     ConfigFormRequest,
@@ -28,9 +28,9 @@ from sylliptor_agent_cli.surface.events import (
     WarningEmitted,
     event_from_dict,
 )
-from sylliptor_agent_cli.surface.hidden_surface import HiddenApprovalSurface
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.surface.rich_surface import RichSurface
+from alysis_code.surface.hidden_surface import HiddenApprovalSurface
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.surface.rich_surface import RichSurface
 
 
 def _sample_events() -> list[Event]:

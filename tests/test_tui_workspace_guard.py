@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sylliptor_agent_cli.cli_impl.tui.workspace_guard import (
+from alysis_code.cli_impl.tui.workspace_guard import (
     select_guarded_workspace_action,
     select_workspace_candidate,
     workspace_guard_prompt_text,
@@ -169,7 +169,7 @@ def test_prompt_cancel_raises_keyboard_interrupt():
 
 def _capture_resolver(monkeypatch):
     """Patch the binding impl to capture which selector callbacks it receives."""
-    from sylliptor_agent_cli.cli_impl.commands import chat_terminal as ct
+    from alysis_code.cli_impl.commands import chat_terminal as ct
 
     captured: dict = {}
 
@@ -182,9 +182,9 @@ def _capture_resolver(monkeypatch):
 
 
 def test_startup_resolver_uses_tui_selectors_when_enabled(monkeypatch):
-    from sylliptor_agent_cli.cli_impl.tui import workspace_guard as wg
+    from alysis_code.cli_impl.tui import workspace_guard as wg
 
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     ct, captured = _capture_resolver(monkeypatch)
     result = ct._resolve_startup_workspace_binding(
         requested_path=Path("/home/user"), console=None, interactive=True
@@ -196,9 +196,9 @@ def test_startup_resolver_uses_tui_selectors_when_enabled(monkeypatch):
 
 
 def test_startup_resolver_uses_classic_selectors_when_disabled(monkeypatch):
-    from sylliptor_agent_cli.cli_impl.tui import workspace_guard as wg
+    from alysis_code.cli_impl.tui import workspace_guard as wg
 
-    monkeypatch.setenv("SYLLIPTOR_TUI", "0")
+    monkeypatch.setenv("ALYSIS_TUI", "0")
     ct, captured = _capture_resolver(monkeypatch)
     ct._resolve_startup_workspace_binding(
         requested_path=Path("/home/user"), console=None, interactive=True
@@ -209,9 +209,9 @@ def test_startup_resolver_uses_classic_selectors_when_disabled(monkeypatch):
 
 def test_startup_resolver_keeps_classic_when_noninteractive(monkeypatch):
     # Non-interactive runs must never spin a TUI even with the flag on.
-    from sylliptor_agent_cli.cli_impl.tui import workspace_guard as wg
+    from alysis_code.cli_impl.tui import workspace_guard as wg
 
-    monkeypatch.setenv("SYLLIPTOR_TUI", "1")
+    monkeypatch.setenv("ALYSIS_TUI", "1")
     ct, captured = _capture_resolver(monkeypatch)
     ct._resolve_startup_workspace_binding(
         requested_path=Path("/home/user"), console=None, interactive=False

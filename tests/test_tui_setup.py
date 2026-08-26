@@ -15,28 +15,28 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.account_login as account_login
-import sylliptor_agent_cli.sandbox_doctor as sandbox_doctor
-from sylliptor_agent_cli.cli_impl.tui import setup_flow as flow_mod
-from sylliptor_agent_cli.cli_impl.tui.setup_app import run_setup_tui
-from sylliptor_agent_cli.cli_impl.tui.setup_flow import SetupFlow
-from sylliptor_agent_cli.config import (
+import alysis_code.account_login as account_login
+import alysis_code.sandbox_doctor as sandbox_doctor
+from alysis_code.cli_impl.tui import setup_flow as flow_mod
+from alysis_code.cli_impl.tui.setup_app import run_setup_tui
+from alysis_code.cli_impl.tui.setup_flow import SetupFlow
+from alysis_code.config import (
     AppConfig,
     ConfigError,
     load_config,
     load_persisted_profile_keys,
     save_config,
 )
-from sylliptor_agent_cli.provider_auth import ProviderAccountStatus, ProviderModel
+from alysis_code.provider_auth import ProviderAccountStatus, ProviderModel
 
 # --------------------------------------------------------------------------- helpers
 
 
 def _config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
     for var in (
-        "SYLLIPTOR_API_KEY",
+        "ALYSIS_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
@@ -139,7 +139,7 @@ def _patch_subscription_adapter(
     adapter: FakeSubscriptionAdapter,
 ) -> None:
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: adapter,
     )
 
@@ -328,7 +328,7 @@ def test_flow_subscription_skips_api_key_provider_steps(monkeypatch, tmp_path):
     assert "Sign-in     not connected" in summary
     assert "(delegated)" not in summary
     assert "delegated run" not in summary.lower()
-    assert "sylliptor auth login openai-codex" in summary
+    assert "alysis auth login openai-codex" in summary
 
 
 def test_flow_subscription_reuses_existing_provider_auth(monkeypatch, tmp_path):
@@ -406,32 +406,35 @@ def test_flow_subscription_login_failure_is_non_fatal(monkeypatch, tmp_path):
     assert flow.stage == "complete"
     assert flow.runtime_auth_connected is False
     assert "browser login closed" in flow.runtime_auth_summary
-    assert "sylliptor auth login openai-codex" in " ".join(
+    assert "alysis auth login openai-codex" in " ".join(
         text for text, _tone in flow._summary_lines()
     )
     assert flow.success is None
 
 
 def test_provider_screen_surfaces_hosted_providers_with_advanced_branch():
-    # The merged picker puts the Sylliptor account first, followed by other
-    # subscription sign-ins and API-key providers. Local, compatibility,
-    # custom, legacy, and account-gated presets stay behind "Advanced".
+    # The merged "Connect a Provider" picker surfaces subscription sign-ins
+    # (including the Alysis Code account itself) and every hosted provider
+    # (DeepSeek, OpenRouter, …) side by side, so users aren't limited to the
+    # big-three brands. Only local, compatibility, custom, and legacy presets
+    # stay behind the "Advanced" branch.
     # Asserts the *displayed rows*, not just handler behaviour.
     flow = SetupFlow()
     _start_native(flow)
 
     rows = flow.screen().rows
     values = [r.value for r in rows]
-    assert values[0] == "sylliptor"
+    # The Alysis Code account is always row 1, then subscription runtimes, then
+    # the hosted API-key providers.
+    assert values[0] == "alysis"
     assert values[1].startswith(flow_mod._wiz._RUNTIME_EXECUTION_PREFIX)
-    assert values.index("sylliptor") < values.index("openai-responses")
+    assert values.index("alysis") < values.index("openai-responses")
     labels = [r.label for r in rows]
-    # No row over-promises a trial or a recommendation.
+    # No row over-promises: nothing claims a trial or a recommendation.
     assert not any("free trial" in label for label in labels)
     assert sum("recommended" in label.lower() for label in labels) == 0
     assert values[-1] == flow_mod._wiz._ADVANCED_PROVIDER_PRESETS_VALUE
-    assert any("sylliptor" in label.casefold() for label in labels)
-    assert "xiaomi-mimo" not in values
+    assert "xiaomi-mimo" in values  # BYOK Xiaomi MiMo is a regular hosted row
     assert "deepseek" in values  # hosted providers sit on the primary screen…
     assert "openrouter" in values
     assert "ollama" not in values  # …local endpoints stay behind the advanced branch
@@ -439,14 +442,14 @@ def test_provider_screen_surfaces_hosted_providers_with_advanced_branch():
     # The description column carries the auth method per row.
     by_value = {r.value: r for r in rows}
     assert by_value["openai-responses"].description == "API key"
-    assert "no API key" in by_value["sylliptor"].description
+    assert by_value["xiaomi-mimo"].description == "API key"
 
     # The advanced branch holds the local / compatibility / custom / legacy
-    # presets plus the account-gated profile entry.
+    # presets plus the account-gated hosted MiMo entry.
     flow.choose(flow_mod._wiz._ADVANCED_PROVIDER_PRESETS_VALUE)
     assert flow.stage == "provider_advanced"
     advanced_values = [r.value for r in flow.screen().rows]
-    assert "sylliptor" in advanced_values
+    assert "alysis" in advanced_values
     assert "deepseek" not in advanced_values  # promoted to the primary screen
     assert "ollama" in advanced_values
     assert "custom" in advanced_values
@@ -740,7 +743,7 @@ def test_flow_hosted_mimo_offers_login(monkeypatch, tmp_path):
 
     flow = SetupFlow()
     _start_native(flow)
-    flow.choose("sylliptor")  # account login skips API-key and model steps
+    flow.choose("alysis")  # hosted account: skips API key AND model steps
     assert flow.stage == "workspace"
     assert flow.api_key_result is not None
     assert flow.api_key_result.validation_status == "skipped"
@@ -816,8 +819,9 @@ def test_headless_full_path_saves(tmp_path, monkeypatch):
         sandbox_doctor, "diagnose_sandbox", lambda _cfg, **_k: _fake_diag(ready=True)
     )
 
-    # welcome -> picker(row 2 openai-responses; row 0 is Sylliptor and row 1
-    # is the subscription runtime) -> key -> model -> workspace -> done.
+    # welcome -> picker(row 2 openai-responses — row 0 is the Alysis Code
+    # account, row 1 the ChatGPT runtime; key required) -> type key ->
+    # model(idx0) -> workspace(default home, Enter) -> complete -> done.
     keys = "\r" + "\x1b[B" * 2 + "\r" + "sk-xyz" + "\r" + "\r" + "\r" + "\r"
     assert _headless(keys) is True
     cfg = load_config()
@@ -895,7 +899,7 @@ def test_flow_hosted_mimo_login_failure_is_non_fatal(monkeypatch, tmp_path):
 
     flow = SetupFlow()
     _start_native(flow)
-    flow.choose("sylliptor")
+    flow.choose("alysis")  # skips API key + model, lands on workspace
     assert flow.stage == "workspace"
     flow.submit_input(os.fspath(tmp_path))
     _drive_busy(flow)  # -> login_confirm
@@ -1033,9 +1037,9 @@ def test_flow_empty_required_key_does_not_consume_retry_budget(monkeypatch, tmp_
 
 def test_wiring_invokes_setup_tui_when_enabled_and_interactive(monkeypatch):
     """Regression for the import bug that left the setup TUI dead on arrival."""
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import startup
-    from sylliptor_agent_cli.cli_impl.tui import setup_app as setup_app_mod
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import startup
+    from alysis_code.cli_impl.tui import setup_app as setup_app_mod
 
     calls = {"n": 0}
 
@@ -1052,9 +1056,9 @@ def test_wiring_invokes_setup_tui_when_enabled_and_interactive(monkeypatch):
 
 
 def test_wiring_skips_setup_tui_when_non_interactive(monkeypatch):
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import startup
-    from sylliptor_agent_cli.cli_impl.tui import setup_app as setup_app_mod
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import startup
+    from alysis_code.cli_impl.tui import setup_app as setup_app_mod
 
     def _should_not_run(**_k: Any) -> bool:
         raise AssertionError("run_setup_tui must not run on a non-interactive terminal")
@@ -1067,10 +1071,10 @@ def test_wiring_skips_setup_tui_when_non_interactive(monkeypatch):
 
 
 def test_wiring_setup_command_runs_tui_without_flag(monkeypatch):
-    """`sylliptor setup` shows the interactive screens even when SYLLIPTOR_TUI is off."""
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import startup
-    from sylliptor_agent_cli.cli_impl.tui import setup_app as setup_app_mod
+    """`alysis setup` shows the interactive screens even when ALYSIS_TUI is off."""
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import startup
+    from alysis_code.cli_impl.tui import setup_app as setup_app_mod
 
     calls = {"n": 0}
 
@@ -1091,8 +1095,8 @@ def test_wiring_setup_command_runs_tui_without_flag(monkeypatch):
 
 
 def test_wiring_announces_fallback_reason(monkeypatch, capsys):
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import startup
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import startup
 
     monkeypatch.setattr(tui_pkg, "is_tui_enabled", lambda: True)
     monkeypatch.setattr(startup, "_is_non_interactive_terminal", lambda: True)

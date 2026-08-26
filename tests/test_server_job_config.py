@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.server.job_config import resolve_effective_model_base_url
-from sylliptor_agent_cli.server.settings import ServerSettings
+from alysis_code.server.job_config import resolve_effective_model_base_url
+from alysis_code.server.settings import ServerSettings
 
 
 def _settings(
@@ -18,7 +18,7 @@ def _settings(
     return ServerSettings(
         host="127.0.0.1",
         port=7070,
-        data_dir=Path("/tmp/sylliptor-server-test"),
+        data_dir=Path("/tmp/alysis-server-test"),
         token=None,
         max_upload_bytes=1024,
         max_concurrent_jobs=1,

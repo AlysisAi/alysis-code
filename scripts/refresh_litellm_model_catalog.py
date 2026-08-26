@@ -68,7 +68,7 @@ def _repo_root() -> Path:
 
 
 def _snapshot_paths() -> tuple[Path, Path]:
-    catalog_dir = _repo_root() / "src" / "sylliptor_agent_cli" / "model_catalog"
+    catalog_dir = _repo_root() / "src" / "alysis_code" / "model_catalog"
     return (
         catalog_dir / "litellm_model_prices_snapshot.json",
         catalog_dir / "litellm_model_prices_snapshot.meta.json",

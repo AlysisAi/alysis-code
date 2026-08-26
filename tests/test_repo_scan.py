@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
-import sylliptor_agent_cli.repo_scan as repo_scan_mod
-from sylliptor_agent_cli.repo_scan import (
+import alysis_code.repo_scan as repo_scan_mod
+from alysis_code.repo_scan import (
     render_repo_scan_markdown,
     render_repo_scan_summary_lines,
     scan_workspace,
 )
-from sylliptor_agent_cli.workspace_context import resolve_workspace_context
+from alysis_code.workspace_context import resolve_workspace_context
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -241,6 +242,102 @@ def test_repo_scan_likely_test_commands_are_conservative_and_deterministic(tmp_p
     assert scan.likely_test_commands == ["make test", "go test ./..."]
     summary_lines = render_repo_scan_summary_lines(scan)
     assert any("Likely verify: make test, go test ./..." in line for line in summary_lines)
+
+
+def test_repo_scan_authorizes_safe_package_verification_scripts(tmp_path: Path) -> None:
+    (tmp_path / "typecheck.js").write_text("export const value = 1;\n", encoding="utf-8")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "test": "node --test",
+                    "check": "node --test",
+                    "lint": "node --test",
+                    "typecheck": "node --check typecheck.js",
+                    "test:unit": "node --test",
+                    "test:unsafe": "rm -rf build",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    scan = scan_workspace(context=resolve_workspace_context(tmp_path))
+
+    assert scan.likely_test_commands == [
+        "npm test",
+        "npm run check",
+        "npm run lint",
+        "npm run typecheck",
+        "npm run test:unit",
+    ]
+
+
+def test_repo_scan_authorizes_python_native_declared_checks(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\n\n[tool.ruff]\n\n[tool.mypy]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_demo.py").write_text(
+        "def test_demo():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    scan = scan_workspace(context=resolve_workspace_context(tmp_path))
+
+    assert scan.likely_test_commands == ["pytest -q", "ruff check .", "mypy ."]
+
+
+def test_repo_scan_prefers_declared_unittest_suite(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\nversion = '0.1.0'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_demo.py").write_text(
+        "import unittest\n\nclass DemoTest(unittest.TestCase):\n    pass\n",
+        encoding="utf-8",
+    )
+
+    scan = scan_workspace(context=resolve_workspace_context(tmp_path))
+
+    assert scan.likely_test_commands == ["python -m unittest discover"]
+
+
+def test_repo_scan_authorizes_setup_cfg_python_checks(tmp_path: Path) -> None:
+    (tmp_path / "setup.cfg").write_text(
+        "[tool:pytest]\n\n[ruff]\n\n[mypy]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_demo.py").write_text(
+        "def test_demo():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    scan = scan_workspace(context=resolve_workspace_context(tmp_path))
+
+    assert scan.likely_test_commands == ["pytest -q", "ruff check .", "mypy ."]
+
+
+def test_repo_scan_excludes_python_check_rejected_by_safety_analysis(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.ruff]\n", encoding="utf-8")
+    analyze = repo_scan_mod.analyze_verification_command
+
+    def reject_ruff(command: str, **kwargs):  # type: ignore[no-untyped-def]
+        candidate = "rm -rf build" if command == "ruff check ." else command
+        return analyze(candidate, **kwargs)
+
+    monkeypatch.setattr(repo_scan_mod, "analyze_verification_command", reject_ruff)
+
+    scan = scan_workspace(context=resolve_workspace_context(tmp_path))
+
+    assert scan.likely_test_commands == []
 
 
 def test_repo_scan_discovers_nested_package_and_maven_manifests_for_monorepos(

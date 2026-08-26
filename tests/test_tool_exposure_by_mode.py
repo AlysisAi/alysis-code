@@ -9,15 +9,15 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import _tool_event_metadata, build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.custom_tools.discovery import discover_custom_tools
-from sylliptor_agent_cli.custom_tools.trust import trust_project_tool
-from sylliptor_agent_cli.mcp.manager import McpHostToolBinding, McpToolBinding
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.surface import ApprovalDecision, ApprovalRequest, NoopSurface
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent_loop import _tool_event_metadata, build_tools
+from alysis_code.config import AppConfig
+from alysis_code.custom_tools.discovery import discover_custom_tools
+from alysis_code.custom_tools.trust import trust_project_tool
+from alysis_code.mcp.manager import McpHostToolBinding, McpToolBinding
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import SessionStore
+from alysis_code.surface import ApprovalDecision, ApprovalRequest, NoopSurface
 
 
 def _store(root: Path, *, enabled: bool = True) -> SessionStore:
@@ -111,7 +111,7 @@ def _write_project_custom_tool(
     extra_manifest_lines: list[str] | None = None,
 ) -> None:
     extra_manifest_lines = list(extra_manifest_lines or [])
-    tool_path = root / ".sylliptor" / "tools" / f"{name}.py"
+    tool_path = root / ".alysis" / "tools" / f"{name}.py"
     tool_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_lines = [
         "TOOL = {",
@@ -218,6 +218,7 @@ def test_build_tools_readonly_keeps_expected_read_safe_inspection_tools(tmp_path
         "symbol_search",
         "repo_map",
         "history_search",
+        "session_artifact_read",
         "web_fetch",
         "web_search",
         "git_status",
@@ -318,7 +319,7 @@ def test_build_tools_readonly_excludes_trusted_custom_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -345,7 +346,7 @@ def test_build_tools_top_level_write_runtimes_expose_trusted_custom_tools(
     runtime_kind: RuntimeKind,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -363,7 +364,7 @@ def test_build_tools_exposes_custom_tool_capability_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(
         tmp_path,
         extra_manifest_lines=[
@@ -401,7 +402,7 @@ def test_model_facing_custom_and_mcp_tool_schemas_strip_descriptive_bloat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(
         tmp_path,
         extra_manifest_lines=[
@@ -491,7 +492,7 @@ def test_model_facing_descriptions_honor_declared_family_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
     binding, _client = _make_mcp_binding()
@@ -533,7 +534,7 @@ def test_build_tools_scope_restricted_session_excludes_custom_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -552,7 +553,7 @@ def test_build_tools_duplicate_default_protected_prefix_does_not_hide_custom_too
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -560,7 +561,7 @@ def test_build_tools_duplicate_default_protected_prefix_does_not_hide_custom_too
         tmp_path,
         mode="auto",
         runtime_kind=RuntimeKind.FORGE_EXEC,
-        deny_write_prefixes=[".sylliptor"],
+        deny_write_prefixes=[".alysis"],
     )
 
     assert "project_echo" in tools
@@ -571,7 +572,7 @@ def test_build_tools_extra_denied_prefixes_exclude_custom_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -599,7 +600,7 @@ def test_build_tools_non_top_level_runtimes_exclude_custom_tools(
     runtime_kind: RuntimeKind,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 
@@ -617,7 +618,7 @@ def test_review_mode_custom_tool_execution_requires_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
     surface = _RecordingSurface()
@@ -648,7 +649,7 @@ def test_trusted_custom_tools_do_not_require_per_call_approval_outside_review(
     mode: str,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
     surface = _RecordingSurface()
@@ -672,7 +673,7 @@ def test_build_tools_custom_tools_disabled_by_config_excludes_custom_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(cfg_dir))
     _write_project_custom_tool(tmp_path)
     _trust_project_custom_tool(tmp_path)
 

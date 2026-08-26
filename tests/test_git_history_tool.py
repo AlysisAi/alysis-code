@@ -7,14 +7,15 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.tools.git import (
+from alysis_code.agent_loop import build_tools
+from alysis_code.config import AppConfig
+from alysis_code.session_store import SessionStore
+from alysis_code.tools.git import (
     _GIT_HISTORY_SHOW_BODY_MAX_CHARS,
     _GIT_HISTORY_SHOW_PATCH_MAX_CHARS,
     GitError,
     git_history,
+    git_status,
 )
 
 
@@ -125,6 +126,35 @@ def test_git_history_log_mode_returns_structured_commits(tmp_path: Path) -> None
     assert commits[0]["body_truncated"] is False
 
 
+def test_git_history_worktree_head_keeps_subject_only_commit(tmp_path: Path) -> None:
+    main_repo = tmp_path / "main"
+    worktree = tmp_path / "feature-worktree"
+    main_repo.mkdir()
+    _init_history_repo(main_repo)
+    main_head = _git(main_repo, "rev-parse", "HEAD").stdout.strip()
+    _git(main_repo, "worktree", "add", "-b", "feature", str(worktree))
+
+    feature_file = worktree / "feature.txt"
+    feature_file.write_text("worktree-only\n", encoding="utf-8")
+    _git(worktree, "add", "feature.txt")
+    worktree_head = _commit(worktree, "subject only worktree commit")
+
+    status = git_status(root=worktree)["status"]
+    history = git_history(root=worktree, mode="log", ref="HEAD", limit=1)
+
+    assert status.splitlines()[0].startswith("## feature")
+    assert worktree_head != main_head
+    assert len(history["commits"]) == 1
+    commit = history["commits"][0]
+    assert commit["commit"] == worktree_head
+    assert worktree_head.startswith(commit["short_commit"])
+    assert commit["author_name"] == "Test User"
+    assert commit["author_email"] == "test@example.com"
+    assert commit["subject"] == "subject only worktree commit"
+    assert commit["body_excerpt"] == ""
+    assert commit["body_truncated"] is False
+
+
 def test_git_history_show_mode_returns_commit_and_patch_excerpt(tmp_path: Path) -> None:
     _commit1, commit2, _commit3 = _init_history_repo(tmp_path)
 
@@ -139,6 +169,17 @@ def test_git_history_show_mode_returns_commit_and_patch_excerpt(tmp_path: Path) 
     assert commit_meta["body_truncated"] is False
     assert "beta-updated" in result["patch_excerpt"]
     assert result["patch_truncated"] is False
+
+
+def test_git_history_show_accepts_ref_alias_through_tool(tmp_path: Path) -> None:
+    _commit1, _commit2, commit3 = _init_history_repo(tmp_path)
+    tools = _build_tools(tmp_path)
+
+    result = tools["git_history"].run({"mode": "show", "ref": "HEAD"})
+
+    assert result["mode"] == "show"
+    assert result["commit"]["commit"] == commit3
+    assert result["commit"]["subject"] == "touch notes"
 
 
 def test_git_history_blame_mode_returns_line_mapping(tmp_path: Path) -> None:
@@ -194,7 +235,7 @@ def test_git_history_reports_git_unavailable(
     def _boom(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise OSError("missing git")
 
-    monkeypatch.setattr("sylliptor_agent_cli.tools.git.subprocess.run", _boom)
+    monkeypatch.setattr("alysis_code.tools.git.subprocess.run", _boom)
 
     with pytest.raises(GitError, match="git not available"):
         git_history(root=tmp_path, mode="log")

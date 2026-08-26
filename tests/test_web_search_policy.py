@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-import sylliptor_agent_cli.web_search_policy as web_search_policy
-from sylliptor_agent_cli.web_search_policy import normalize_web_search_policy
+import alysis_code.web_search_policy as web_search_policy
+from alysis_code.web_search_policy import normalize_web_search_policy
 
 
 def test_web_search_policy_is_an_access_switch_only() -> None:

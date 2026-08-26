@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.assets import (
+from alysis_code.assets import (
     AssetAlreadyExistsError,
     AssetError,
     AssetRecord,
@@ -21,8 +21,8 @@ def _asset_payload() -> dict:
         "original_filename": "brief.txt",
         "size_bytes": 12,
         "sha256": "a" * 64,
-        "stored_path": ".sylliptor/runs/r/assets/raw/ast_1234abcd/brief.txt",
-        "extracted_text_path": ".sylliptor/runs/r/assets/raw/ast_1234abcd/brief.txt",
+        "stored_path": ".alysis/runs/r/assets/raw/ast_1234abcd/brief.txt",
+        "extracted_text_path": ".alysis/runs/r/assets/raw/ast_1234abcd/brief.txt",
         "thumbnail_path": None,
         "pinned": False,
         "added_at": "2026-05-03T00:00:00+00:00",

@@ -1,12 +1,12 @@
 # Plugins
 
-A Sylliptor plugin is a declarative bundle that contributes one or more skills, custom tools, MCP servers, and hooks through a single `sylliptor-plugin.toml` file at the plugin root.
+An Alysis Code plugin is a declarative bundle that contributes one or more skills, custom tools, MCP servers, and hooks through a single `alysis-plugin.toml` file at the plugin root.
 
 Plugins are intentionally explicit. They are installed from pinned sources, validated before use, and enabled only after trust is recorded for the relevant user or workspace. Cloning a repository or copying a directory onto disk does not activate a plugin by itself.
 
 ## Quickstart
 
-Create a plugin root directory, place a `sylliptor-plugin.toml` file at the top level, and add the component files or directories referenced by the manifest.
+Create a plugin root directory, place a `alysis-plugin.toml` file at the top level, and add the component files or directories referenced by the manifest.
 
 ```toml
 schema_version = 1
@@ -15,35 +15,35 @@ schema_version = 1
 id = "acme.demo"
 name = "Demo Plugin"
 version = "1.0.0"
-description = "Example Sylliptor plugin"
+description = "Example Alysis Code plugin"
 author = "Acme Inc"
 license = "Apache-2.0"
 
 [compatibility]
-sylliptor = ">=0.1"
+alysis = ">=0.1"
 ```
 
-This manifest is valid, but it declares no components. Sylliptor accepts metadata-only plugins and emits a warning until you add at least one skill, tool, MCP server, or hook.
+This manifest is valid, but it declares no components. Alysis Code accepts metadata-only plugins and emits a warning until you add at least one skill, tool, MCP server, or hook.
 
 ## Installing Plugins
 
 Install sources must be pinned. You can install from a curated registry id, from a direct `git+https://...git@<40-char-commit>` source, or from a bare HTTPS git URL with a `#<40-char-commit>` fragment.
 
 ```bash
-sylliptor ext install acme.demo
-sylliptor ext install git+https://github.com/acme/demo-plugin.git@0123456789abcdef0123456789abcdef01234567
-sylliptor ext install https://github.com/acme/demo-plugin.git#0123456789abcdef0123456789abcdef01234567
+alysis ext install acme.demo
+alysis ext install git+https://github.com/acme/demo-plugin.git@0123456789abcdef0123456789abcdef01234567
+alysis ext install https://github.com/acme/demo-plugin.git#0123456789abcdef0123456789abcdef01234567
 ```
 
-Plugins install globally by default. Use `--project` to install into the current repository's `.sylliptor/` directory instead:
+Plugins install globally by default. Use `--project` to install into the current repository's `.alysis/` directory instead:
 
 ```bash
-sylliptor ext install acme.demo --project
+alysis ext install acme.demo --project
 ```
 
-Before writing anything, Sylliptor clones the pinned commit into a temporary staging directory, checks out exactly that commit, validates `sylliptor-plugin.toml`, computes the manifest SHA-256, and shows a trust prompt. The prompt includes the plugin id, name, version, source URL, commit, manifest hash, component counts, requested environment variables, MCP scopes, hook events, network access, filesystem write access, and security contact when present.
+Before writing anything, Alysis Code clones the pinned commit into a temporary staging directory, checks out exactly that commit, validates `alysis-plugin.toml`, computes the manifest SHA-256, and shows a trust prompt. The prompt includes the plugin id, name, version, source URL, commit, manifest hash, component counts, requested environment variables, MCP scopes, hook events, network access, filesystem write access, and security contact when present.
 
-The default prompt answer is no. Pass `--yes` to accept the displayed trust prompt without an interactive confirmation. Pass `--ci`, or set `SYLLIPTOR_CI=1`, only in automation; this accepts trust silently and is never the default. Reinstalling the same plugin id at the same commit with the same manifest hash is a no-op. Reinstalling the same plugin id at a different commit prompts for trust again.
+The default prompt answer is no. Pass `--yes` to accept the displayed trust prompt without an interactive confirmation. Pass `--ci`, or set `ALYSIS_CI=1`, only in automation; this accepts trust silently and is never the default. Reinstalling the same plugin id at the same commit with the same manifest hash is a no-op. Reinstalling the same plugin id at a different commit prompts for trust again.
 
 After a successful install and trust acceptance, the installed plugin is enabled by default in the install scope. Disable it explicitly if you want to keep it installed but inert.
 
@@ -52,42 +52,42 @@ After a successful install and trust acceptance, the installed plugin is enabled
 Use `ext uninstall` with the same scope used during install:
 
 ```bash
-sylliptor ext uninstall acme.demo
-sylliptor ext uninstall acme.demo --project
+alysis ext uninstall acme.demo
+alysis ext uninstall acme.demo --project
 ```
 
-Uninstall prompts before removing anything unless `--yes` is supplied. Sylliptor removes tracked components in reverse install order: hooks, MCP servers, custom tools, then skills. It then removes the installed plugin root and deletes the installed record from extension state.
+Uninstall prompts before removing anything unless `--yes` is supplied. Alysis Code removes tracked components in reverse install order: hooks, MCP servers, custom tools, then skills. It then removes the installed plugin root and deletes the installed record from extension state.
 
-Uninstall is best effort for component cleanup. If one component cannot be removed, Sylliptor continues removing the rest and then reports a partial failure with the individual cleanup errors. The installed state entry is still removed after cleanup attempts complete.
+Uninstall is best effort for component cleanup. If one component cannot be removed, Alysis Code continues removing the rest and then reports a partial failure with the individual cleanup errors. The installed state entry is still removed after cleanup attempts complete.
 
 ## Enabling and Disabling Plugins
 
 Use `ext enable` and `ext disable` to change activation state without reinstalling:
 
 ```bash
-sylliptor ext enable acme.demo
-sylliptor ext disable acme.demo
-sylliptor ext enable acme.demo --project
-sylliptor ext disable acme.demo --project
+alysis ext enable acme.demo
+alysis ext disable acme.demo
+alysis ext enable acme.demo --project
+alysis ext disable acme.demo --project
 ```
 
-User-scope enablement is global. Project-scope enablement writes `.sylliptor/extensions.json` in the workspace and affects only sessions started in that workspace. A plugin must be installed in at least one scope before it can be enabled or disabled.
+User-scope enablement is global. Project-scope enablement writes `.alysis/extensions.json` in the workspace and affects only sessions started in that workspace. A plugin must be installed in at least one scope before it can be enabled or disabled.
 
-The effective-enabled set is computed at session start. Sylliptor starts with globally enabled plugins, applies project `disabled[]` removals, then applies project `enabled[]` additions. Because project enables are applied last, a plugin listed in both project arrays ends up enabled. A project disable can turn off a globally enabled plugin for that workspace only.
+The effective-enabled set is computed at session start. Alysis Code starts with globally enabled plugins, applies project `disabled[]` removals, then applies project `enabled[]` additions. Because project enables are applied last, a plugin listed in both project arrays ends up enabled. A project disable can turn off a globally enabled plugin for that workspace only.
 
 ## Workspace Trust
 
-Project overrides are workspace-trusted. If `.sylliptor/extensions.json` contains `enabled[]` or `disabled[]` entries and the workspace has not been trusted, Sylliptor prompts before applying those overrides. The prompt shows the workspace root, the SHA-256 of the overrides file, the plugins the project wants to enable, and the plugins it wants to disable.
+Project overrides are workspace-trusted. If `.alysis/extensions.json` contains `enabled[]` or `disabled[]` entries and the workspace has not been trusted, Alysis Code prompts before applying those overrides. The prompt shows the workspace root, the SHA-256 of the overrides file, the plugins the project wants to enable, and the plugins it wants to disable.
 
-Trust is stored per user at the workspace trust state path under the extensions data directory. Entries are keyed by the SHA-256 of the canonical absolute workspace path and include the hash of the overrides file at the time trust was granted. If the overrides file changes later, Sylliptor prompts again because the project gained or changed plugin power.
+Trust is stored per user at the workspace trust state path under the extensions data directory. Entries are keyed by the SHA-256 of the canonical absolute workspace path and include the hash of the overrides file at the time trust was granted. If the overrides file changes later, Alysis Code prompts again because the project gained or changed plugin power.
 
-In non-interactive sessions, untrusted project overrides are ignored and Sylliptor logs a one-line warning. Revoke workspace trust by manually editing the workspace trust JSON file.
+In non-interactive sessions, untrusted project overrides are ignored and Alysis Code logs a one-line warning. Revoke workspace trust by manually editing the workspace trust JSON file.
 
 ## Default Activation Behavior
 
-Install plus trust means enabled. This avoids a second consent step after the user has already reviewed the manifest hash, components, permissions, and source commit. Use `sylliptor ext disable <plugin_id>` if you want to keep a plugin installed but inactive.
+Install plus trust means enabled. This avoids a second consent step after the user has already reviewed the manifest hash, components, permissions, and source commit. Use `alysis ext disable <plugin_id>` if you want to keep a plugin installed but inactive.
 
-At session bootstrap, Sylliptor discovers skills, custom tools, MCP servers, and hooks normally, resolves the effective-enabled plugin set once, then filters plugin-scoped components whose plugin id is not active. Built-in components and user-authored components without a plugin marker are always retained.
+At session bootstrap, Alysis Code discovers skills, custom tools, MCP servers, and hooks normally, resolves the effective-enabled plugin set once, then filters plugin-scoped components whose plugin id is not active. Built-in components and user-authored components without a plugin marker are always retained.
 
 ## Manifest Reference
 
@@ -97,7 +97,7 @@ At session bootstrap, Sylliptor discovers skills, custom tools, MCP servers, and
 | --- | --- | --- | --- |
 | `schema_version` | `1` | Yes | Manifest schema version. v1 manifests must set this to the integer `1`. |
 | `plugin` | table | Yes | Plugin metadata block. |
-| `compatibility` | table | Yes | Sylliptor version and platform compatibility block. |
+| `compatibility` | table | Yes | Alysis Code version and platform compatibility block. |
 | `components` | table | No | Component container. Defaults to empty lists for every component type. |
 | `security` | table | No | Security contact and disclosure metadata. |
 
@@ -119,7 +119,7 @@ At session bootstrap, Sylliptor discovers skills, custom tools, MCP servers, and
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `sylliptor` | `str` | Yes | Sylliptor version constraint. Must parse as a valid PEP 440 specifier set such as `>=0.1,<0.2`. |
+| `alysis` | `str` | Yes | Alysis Code version constraint. Must parse as a valid PEP 440 specifier set such as `>=0.1,<0.2`. |
 | `platforms` | `list["linux" \| "darwin" \| "windows"]` | No | Supported operating systems. Defaults to `["linux", "darwin", "windows"]`. |
 
 ### `[components]`
@@ -184,7 +184,7 @@ At session bootstrap, Sylliptor discovers skills, custom tools, MCP servers, and
 
 ## Validation Rules
 
-Sylliptor rejects a plugin manifest when any of the following conditions are true:
+Alysis Code rejects a plugin manifest when any of the following conditions are true:
 
 1. The manifest file is larger than 64 KB before parsing.
 2. The TOML document is syntactically invalid.
@@ -199,6 +199,6 @@ A metadata-only plugin with zero components does not fail validation, but it emi
 
 ## Forward Compatibility
 
-`schema_version` is a hard compatibility boundary. Sylliptor only accepts manifests whose schema version it explicitly understands. A future breaking manifest format will increment `schema_version`, and older Sylliptor builds will reject that manifest instead of guessing how to interpret it.
+`schema_version` is a hard compatibility boundary. Alysis Code only accepts manifests whose schema version it explicitly understands. A future breaking manifest format will increment `schema_version`, and older Alysis Code builds will reject that manifest instead of guessing how to interpret it.
 
-This means plugin authors should treat schema upgrades as explicit migrations, not silent extensions. If you need to support multiple Sylliptor generations, publish separate manifests or release lines that target the correct schema version rather than trying to write one manifest that relies on undefined fallback behavior.
+This means plugin authors should treat schema upgrades as explicit migrations, not silent extensions. If you need to support multiple Alysis Code generations, publish separate manifests or release lines that target the correct schema version rather than trying to write one manifest that relies on undefined fallback behavior.

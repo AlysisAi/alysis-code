@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import ConfigError
-from sylliptor_agent_cli.hooks import (
+from alysis_code.config import ConfigError
+from alysis_code.hooks import (
     load_hook_config_file,
     load_resolved_hooks_config,
     project_hooks_config_path,
@@ -29,7 +29,7 @@ def test_load_resolved_hooks_config_merges_user_project_and_local(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         user_hooks_config_path(),
@@ -101,7 +101,7 @@ def test_load_resolved_hooks_config_rejects_invalid_hook_file(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         project_hooks_config_path(workspace),
@@ -131,7 +131,7 @@ def test_load_resolved_hooks_config_skips_untrusted_project_hooks(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         project_hooks_config_path(workspace),
@@ -162,7 +162,7 @@ def test_load_resolved_hooks_config_accepts_v11_hook_metadata(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         user_hooks_config_path(),
@@ -208,7 +208,7 @@ def test_load_resolved_hooks_config_overrides_same_hook_id_with_more_specific_la
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         user_hooks_config_path(),
@@ -265,7 +265,7 @@ def test_load_resolved_hooks_config_rejects_invalid_hook_id(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         user_hooks_config_path(),
@@ -305,7 +305,7 @@ def test_load_resolved_hooks_config_rejects_duplicate_hook_ids_within_group(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
 
     _write_json(
         user_hooks_config_path(),

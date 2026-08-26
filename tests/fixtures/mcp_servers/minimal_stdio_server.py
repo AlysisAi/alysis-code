@@ -9,7 +9,7 @@ from typing import Any
 
 
 def _load_config() -> dict[str, Any]:
-    config_path = os.environ.get("SYLLIPTOR_TEST_MCP_CONFIG")
+    config_path = os.environ.get("ALYSIS_TEST_MCP_CONFIG")
     if not config_path:
         return {}
     return json.loads(Path(config_path).read_text(encoding="utf-8"))

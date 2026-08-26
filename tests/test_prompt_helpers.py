@@ -7,9 +7,9 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli_impl.chat_slash_completer import max_completions_for_mode
-from sylliptor_agent_cli.cli_impl.commands import prompt_helpers as prompt_helpers_mod
+from alysis_code import cli as cli_mod
+from alysis_code.cli_impl.chat_slash_completer import max_completions_for_mode
+from alysis_code.cli_impl.commands import prompt_helpers as prompt_helpers_mod
 
 
 def test_chat_prompt_completion_menu_height_uses_dynamic_completion_count(
@@ -65,7 +65,7 @@ def test_chat_prompt_session_passes_dynamic_reserve_space_for_menu(
         "get_terminal_size",
         lambda _fallback: os.terminal_size((80, 10)),
     )
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     assert cli_mod._maybe_make_chat_prompt_session is not None
     session = prompt_helpers_mod._maybe_make_chat_prompt_session(

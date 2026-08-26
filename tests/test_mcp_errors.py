@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.config import ConfigError as AppConfigError
-from sylliptor_agent_cli.mcp.client import (
+from alysis_code.config import ConfigError as AppConfigError
+from alysis_code.mcp.client import (
     McpClientError,
     McpClientProtocolError,
     McpClientRemoteError,
 )
-from sylliptor_agent_cli.mcp.errors import (
+from alysis_code.mcp.errors import (
     McpAuthError,
     McpCancellationError,
     McpConfigError,
@@ -25,8 +25,8 @@ from sylliptor_agent_cli.mcp.errors import (
     McpTransportError,
     is_retryable_mcp_error,
 )
-from sylliptor_agent_cli.mcp.jsonrpc import JsonRpcProtocolError
-from sylliptor_agent_cli.mcp.oauth import (
+from alysis_code.mcp.jsonrpc import JsonRpcProtocolError
+from alysis_code.mcp.oauth import (
     McpOAuthAuthRequiredError,
     McpOAuthCallbackError,
     McpOAuthConfigError,
@@ -36,17 +36,17 @@ from sylliptor_agent_cli.mcp.oauth import (
     McpOAuthReLoginRequired,
     McpOAuthTokenExchangeError,
 )
-from sylliptor_agent_cli.mcp.oauth_store import (
+from alysis_code.mcp.oauth_store import (
     McpOAuthTokenStoreError as FacadeMcpOAuthTokenStoreError,
 )
-from sylliptor_agent_cli.mcp.prompts import McpPromptNormalizationError
-from sylliptor_agent_cli.mcp.resources import McpResourceNormalizationError
-from sylliptor_agent_cli.mcp.server_requests import (
+from alysis_code.mcp.prompts import McpPromptNormalizationError
+from alysis_code.mcp.resources import McpResourceNormalizationError
+from alysis_code.mcp.server_requests import (
     McpInvalidServerRequestParamsError,
     McpServerRequestHandlerError,
     McpUnsupportedServerRequestError,
 )
-from sylliptor_agent_cli.mcp.transport_http import (
+from alysis_code.mcp.transport_http import (
     McpHttpTransportAuthRequiredError,
     McpHttpTransportError,
     McpHttpTransportProtocolError,
@@ -54,7 +54,7 @@ from sylliptor_agent_cli.mcp.transport_http import (
     McpHttpTransportSessionExpiredError,
     McpHttpTransportTimeoutError,
 )
-from sylliptor_agent_cli.mcp.transport_stdio import (
+from alysis_code.mcp.transport_stdio import (
     McpStdioTransportError,
     McpStdioTransportProtocolError,
     McpStdioTransportTimeoutError,

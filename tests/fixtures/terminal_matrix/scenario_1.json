@@ -9,7 +9,7 @@
     "TERM_PROGRAM": "Apple_Terminal",
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
-    "SYLLIPTOR_ENABLE_OSC11": "1"
+    "ALYSIS_ENABLE_OSC11": "1"
   },
   "is_wsl": false,
   "osc11_result": "dark",

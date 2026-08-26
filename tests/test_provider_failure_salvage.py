@@ -16,11 +16,11 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.types import LLMError
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.types import LLMError
+from alysis_code.session_store import read_session_events
 
 _PROVIDER_DOWN_MESSAGE = (
     "LLM request failed for endpoint test-endpoint: The read operation timed out"

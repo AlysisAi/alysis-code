@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.process_reaping import (
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.process_reaping import (
     SIGNAL_KILL,
     SIGNAL_NONE,
     SIGNAL_TERM,
@@ -28,7 +28,7 @@ from sylliptor_agent_cli.process_reaping import (
     run_in_tracked_process_group,
     survivor_payloads,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.runtime_kind import RuntimeKind
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX process-group behavior")
 
@@ -354,9 +354,7 @@ def test_reaping_an_already_dead_group_signals_nothing() -> None:
 def test_windows_host_tracks_nothing_and_signals_nothing(monkeypatch) -> None:
     # Simulate a Windows host: process groups are unsupported, so registration
     # is refused outright and reaping is a no-op rather than a wrong kill.
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.process_reaping.process_groups_supported", lambda: False
-    )
+    monkeypatch.setattr("alysis_code.process_reaping.process_groups_supported", lambda: False)
     registry = ProcessGroupRegistry()
     assert registry.register(pgid=999_999, command="pytest", origin="test") is None
     assert registry.tracked() == ()
@@ -416,12 +414,12 @@ def test_survivor_payload_shape() -> None:
 
 
 def test_kill_switch_env_and_config(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PROCESS_REAPING", raising=False)
+    monkeypatch.delenv("ALYSIS_PROCESS_REAPING", raising=False)
     assert _process_reaping_enabled(AppConfig(model="x", process_reaping_enabled=True)) is True
     assert _process_reaping_enabled(AppConfig(model="x", process_reaping_enabled=False)) is False
-    monkeypatch.setenv("SYLLIPTOR_PROCESS_REAPING", "off")
+    monkeypatch.setenv("ALYSIS_PROCESS_REAPING", "off")
     assert _process_reaping_enabled(AppConfig(model="x", process_reaping_enabled=True)) is False
-    monkeypatch.setenv("SYLLIPTOR_PROCESS_REAPING", "on")
+    monkeypatch.setenv("ALYSIS_PROCESS_REAPING", "on")
     assert _process_reaping_enabled(AppConfig(model="x", process_reaping_enabled=False)) is True
 
 

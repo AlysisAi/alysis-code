@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.llm.cache_capabilities import (
+from alysis_code.llm.cache_capabilities import (
     CACHE_CONTROL_FIELD,
     CACHE_STRATEGY_ANTHROPIC_CACHE_CONTROL,
     CACHE_STRATEGY_IMPLICIT_PROVIDER,
@@ -17,13 +17,13 @@ from sylliptor_agent_cli.llm.cache_capabilities import (
     CacheCapabilitySpec,
     resolve_effective_cache_capability,
 )
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     OPENAI_COMPAT_PROTOCOL,
     OPENAI_RESPONSES_PROTOCOL,
     get_provider_protocol_capabilities,
 )
-from sylliptor_agent_cli.profile_presets import get_preset
+from alysis_code.profile_presets import get_preset
 
 
 def test_unknown_openai_compatible_provider_is_safe_by_default() -> None:

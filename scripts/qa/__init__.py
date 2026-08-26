@@ -1,1 +1,1 @@
-"""QA smoke battery for Sylliptor user-facing UX."""
+"""QA smoke battery for Alysis Code user-facing UX."""

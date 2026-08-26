@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.custom_tools.trust as trust_mod
-from sylliptor_agent_cli.custom_tools.discovery import discover_custom_tools
-from sylliptor_agent_cli.custom_tools.session import build_custom_tool_session_state
-from sylliptor_agent_cli.custom_tools.trust import (
+import alysis_code.custom_tools.trust as trust_mod
+from alysis_code.custom_tools.discovery import discover_custom_tools
+from alysis_code.custom_tools.session import build_custom_tool_session_state
+from alysis_code.custom_tools.trust import (
     ProjectToolTrustKey,
     ProjectToolTrustState,
     is_project_tool_trusted,
@@ -22,8 +22,8 @@ from sylliptor_agent_cli.custom_tools.trust import (
     save_trust_state,
     trust_project_tool,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.tools.registry import iter_builtin_tool_metadata
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.tools.registry import iter_builtin_tool_metadata
 
 
 def _built_in_tool_names() -> set[str]:
@@ -54,7 +54,7 @@ def _write_tool(root: Path, rel_path: str, *, name: str) -> Path:
 
 def test_global_tools_are_implicitly_trusted(tmp_path: Path, monkeypatch) -> None:
     cfg_dir = tmp_path / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_tool(cfg_dir, "tools/global_echo.py", name="global_echo")
 
     state = build_custom_tool_session_state(
@@ -73,8 +73,8 @@ def test_global_tools_are_implicitly_trusted(tmp_path: Path, monkeypatch) -> Non
 def test_project_tools_are_untrusted_by_default(tmp_path: Path, monkeypatch) -> None:
     cfg_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
 
     state = build_custom_tool_session_state(
         workspace_root=workspace,
@@ -95,8 +95,8 @@ def test_persistent_trust_is_keyed_by_workspace_relative_path_and_hash(
 ) -> None:
     cfg_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
 
     discovered = discover_custom_tools(
         workspace_root=workspace,
@@ -108,7 +108,7 @@ def test_persistent_trust_is_keyed_by_workspace_relative_path_and_hash(
 
     assert is_project_tool_trusted(spec, state=trust_state) is True
     assert any(
-        key.relative_tool_path == ".sylliptor/tools/project_echo.py"
+        key.relative_tool_path == ".alysis/tools/project_echo.py"
         and key.workspace_root == os.fspath(workspace.resolve())
         and key.file_hash == spec.file_hash
         for key in trust_state.trusted_tools
@@ -118,8 +118,8 @@ def test_persistent_trust_is_keyed_by_workspace_relative_path_and_hash(
 def test_hash_changes_invalidate_persistent_trust(tmp_path: Path, monkeypatch) -> None:
     cfg_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    path = _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    path = _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
 
     discovered = discover_custom_tools(
         workspace_root=workspace,
@@ -148,7 +148,7 @@ def test_save_trust_state_uses_atomic_json_writer(tmp_path: Path, monkeypatch) -
         captured["kwargs"] = kwargs
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.custom_tools.trust.atomic_write_json",
+        "alysis_code.custom_tools.trust.atomic_write_json",
         fake_atomic_write_json,
     )
 
@@ -156,7 +156,7 @@ def test_save_trust_state_uses_atomic_json_writer(tmp_path: Path, monkeypatch) -
         trusted_tools=(
             ProjectToolTrustKey(
                 workspace_root="/workspace",
-                relative_tool_path=".sylliptor/tools/project_echo.py",
+                relative_tool_path=".alysis/tools/project_echo.py",
                 file_hash="abc123",
             ),
         )
@@ -170,7 +170,7 @@ def test_save_trust_state_uses_atomic_json_writer(tmp_path: Path, monkeypatch) -
         "trusted_tools": [
             {
                 "workspace_root": "/workspace",
-                "relative_tool_path": ".sylliptor/tools/project_echo.py",
+                "relative_tool_path": ".alysis/tools/project_echo.py",
                 "file_hash": "abc123",
             }
         ],
@@ -183,9 +183,9 @@ def test_concurrent_same_process_trust_updates_do_not_lose_entries(
 ) -> None:
     cfg_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    _write_tool(workspace, ".sylliptor/tools/alpha.py", name="alpha")
-    _write_tool(workspace, ".sylliptor/tools/bravo.py", name="bravo")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    _write_tool(workspace, ".alysis/tools/alpha.py", name="alpha")
+    _write_tool(workspace, ".alysis/tools/bravo.py", name="bravo")
     discovered = discover_custom_tools(
         workspace_root=workspace,
         built_in_tool_names=_built_in_tool_names(),
@@ -239,10 +239,10 @@ def test_concurrent_cross_process_trust_updates_do_not_lose_entries(
     cfg_dir = tmp_path / "config"
     workspace = tmp_path / "workspace"
     coord_dir = tmp_path / "coord"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     coord_dir.mkdir(parents=True, exist_ok=True)
-    _write_tool(workspace, ".sylliptor/tools/alpha.py", name="alpha")
-    _write_tool(workspace, ".sylliptor/tools/bravo.py", name="bravo")
+    _write_tool(workspace, ".alysis/tools/alpha.py", name="alpha")
+    _write_tool(workspace, ".alysis/tools/bravo.py", name="bravo")
     discovered = discover_custom_tools(
         workspace_root=workspace,
         built_in_tool_names=_built_in_tool_names(),
@@ -261,9 +261,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.environ["PYTHONPATH"])
 
-import sylliptor_agent_cli.custom_tools.trust as trust_mod
-from sylliptor_agent_cli.custom_tools.discovery import discover_custom_tools
-from sylliptor_agent_cli.tools.registry import iter_builtin_tool_metadata
+import alysis_code.custom_tools.trust as trust_mod
+from alysis_code.custom_tools.discovery import discover_custom_tools
+from alysis_code.tools.registry import iter_builtin_tool_metadata
 
 workspace = Path(sys.argv[1])
 tool_name = sys.argv[2]
@@ -296,7 +296,7 @@ trust_mod.trust_project_tool(spec)
     base_env = {
         **os.environ,
         "PYTHONPATH": os.fspath(repo_root / "src"),
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir),
+        "ALYSIS_CONFIG_DIR": os.fspath(cfg_dir),
         "TRUST_TEST_COORD_DIR": os.fspath(coord_dir),
     }
 

@@ -17,29 +17,29 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import agent_loop as agent_loop_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent.turn_contract import (
+from alysis_code import agent_loop as agent_loop_mod
+from alysis_code import cli as cli_mod
+from alysis_code.agent.turn_contract import (
     TurnEffect,
     TurnOutcome,
     TurnRelation,
     TurnSemantics,
 )
-from sylliptor_agent_cli.agent_loop import SYSTEM_PROMPT, create_session
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.interactive_input_guard import interactive_prompt_guard
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.request_estimation import estimate_request_token_breakdown
-from sylliptor_agent_cli.run_outcome import (
+from alysis_code.agent_loop import SYSTEM_PROMPT, create_session
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.interactive_input_guard import interactive_prompt_guard
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.model_registry import ModelMeta
+from alysis_code.request_estimation import estimate_request_token_breakdown
+from alysis_code.run_outcome import (
     AGENT_FAILURE_EXIT_CODE,
     INFRASTRUCTURE_FAILURE_EXIT_CODE,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.token_budget import compute_input_budget
-from sylliptor_agent_cli.verify_gate import VerifyError
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import read_session_events
+from alysis_code.token_budget import compute_input_budget
+from alysis_code.verify_gate import VerifyError
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -82,7 +82,7 @@ def _workspace_turn_semantics(
 
 
 def test_create_session_uses_api_key_override(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -117,7 +117,7 @@ def test_create_session_prefers_repo_inferred_verify_commands_for_normal_chat_js
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -149,7 +149,7 @@ def test_create_session_keeps_generic_verify_fallback_when_repo_scan_has_no_infe
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -188,7 +188,7 @@ def test_create_session_keeps_higher_priority_verify_commands_than_repo_inferenc
     authoritative_commands: list[str] | None,
     expected: list[str],
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -222,7 +222,7 @@ def test_create_session_skips_repo_scan_when_normal_chat_does_not_need_it(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
         agent_loop_mod,
@@ -252,7 +252,7 @@ def test_create_session_uses_resolved_llm_timeout_for_main_and_compactor(
 ) -> None:
     # Router-free path: only the main and compactor clients are provisioned.
     captured: list[dict[str, Any]] = []
-    monkeypatch.setenv("SYLLIPTOR_LLM_TIMEOUT_S", "44.0")
+    monkeypatch.setenv("ALYSIS_LLM_TIMEOUT_S", "44.0")
 
     class FakeClient:
         def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -338,7 +338,7 @@ def test_generate_session_summary_uses_resolved_llm_timeout(monkeypatch) -> None
         def chat(self, **_kwargs):  # type: ignore[no-untyped-def]
             return SimpleNamespace(content="Parser retry planning summary")
 
-    monkeypatch.setattr("sylliptor_agent_cli.llm.openai_compat.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.llm.openai_compat.OpenAICompatClient", FakeClient)
     session = SimpleNamespace(
         cfg=AppConfig(model="test-model", llm_timeout_s=13.0),
         client=SimpleNamespace(api_key="k", model="test-model"),
@@ -364,7 +364,7 @@ def test_generate_session_summary_strict_model_metadata_policy_skips_llm_call(
         def __init__(self, **_kwargs) -> None:  # type: ignore[no-untyped-def]
             raise AssertionError("OpenAICompatClient should not be constructed in strict mode")
 
-    monkeypatch.setattr("sylliptor_agent_cli.llm.openai_compat.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.llm.openai_compat.OpenAICompatClient", FakeClient)
     session = SimpleNamespace(
         cfg=AppConfig(model="unknown-model-xyz", model_metadata_policy="strict"),
         client=SimpleNamespace(api_key="k", model="unknown-model-xyz"),
@@ -724,7 +724,7 @@ def test_create_session_collects_startup_git_status_when_surface_shows_status_li
 
 
 def test_create_session_applies_trusted_system_prompt_override(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -746,7 +746,7 @@ def test_create_session_applies_trusted_system_prompt_override(tmp_path: Path, m
 
 
 def test_create_session_appends_trusted_system_prompt_guidance(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -772,7 +772,7 @@ def test_create_session_appends_trusted_system_prompt_guidance(tmp_path: Path, m
 def test_create_session_adds_untrusted_prompt_prelude_without_replacing_system_prompt(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -806,7 +806,7 @@ def test_create_session_adds_untrusted_prompt_prelude_without_replacing_system_p
 
 
 def test_refresh_session_task_brief_adds_pinned_repo_context(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -873,7 +873,7 @@ def test_refresh_session_task_brief_refreshes_in_place_with_new_constraints(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -947,7 +947,7 @@ def test_refresh_session_task_brief_keeps_existing_content_for_generic_follow_up
     monkeypatch,
     follow_up: str,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1010,7 +1010,7 @@ def test_refresh_session_task_brief_keeps_placeholder_for_generic_follow_up_with
     monkeypatch,
     follow_up: str,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1060,7 +1060,7 @@ def test_refresh_session_task_brief_keeps_anchored_focus_over_unanchored_constra
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1115,7 +1115,7 @@ def test_refresh_session_task_brief_keeps_short_meaningful_constraint(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1167,7 +1167,7 @@ def test_refresh_session_task_brief_keeps_concise_real_constraint(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1219,7 +1219,7 @@ def test_refresh_session_task_brief_promotes_strong_unanchored_task_shift(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1280,7 +1280,7 @@ def test_refresh_session_task_brief_keeps_existing_focus_for_anchored_explanator
     monkeypatch,
     follow_up: str,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1348,7 +1348,7 @@ def test_refresh_session_task_brief_initializes_from_first_explanatory_repo_requ
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1390,7 +1390,7 @@ def test_refresh_session_task_brief_promotes_real_anchored_execution_follow_up(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1443,7 +1443,7 @@ def test_refresh_session_task_brief_adds_pinned_plain_dir_context(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -1504,7 +1504,7 @@ def test_refresh_session_task_brief_keeps_placeholder_for_plain_dir_anchored_adv
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -1547,7 +1547,7 @@ def test_refresh_session_task_brief_keeps_placeholder_for_plain_dir_anchored_adv
 
 
 def test_create_session_loads_repo_conventions_context(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     (tmp_path / "CONVENTIONS.md").write_text(
@@ -1588,7 +1588,7 @@ def test_create_session_loads_repo_conventions_context(tmp_path: Path, monkeypat
 
 
 def test_create_session_injects_environment_context_message(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -1637,7 +1637,7 @@ def test_create_session_injects_environment_context_message(tmp_path: Path, monk
 def test_create_session_one_shot_uses_repo_scan_bootstrap_and_repo_aware_verify_commands(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     repo = tmp_path / "repo"
@@ -1684,7 +1684,7 @@ def test_create_session_one_shot_uses_repo_scan_bootstrap_and_repo_aware_verify_
 def test_create_session_one_shot_falls_back_to_config_verify_commands_when_scan_has_no_inference(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model", verify_commands=["pytest -q", "ruff check ."])
@@ -1716,7 +1716,7 @@ def test_create_session_one_shot_falls_back_to_config_verify_commands_when_scan_
 def test_create_session_omits_verify_tool_and_verify_hints_when_disabled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model")
@@ -1751,7 +1751,7 @@ def test_create_session_omits_verify_tool_and_verify_hints_when_disabled(
 def test_create_session_marks_authoritative_verify_commands_in_managed_sessions(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(model="test-model", verify_commands=["pytest -q"])
@@ -1791,7 +1791,7 @@ def test_create_session_marks_authoritative_verify_commands_in_managed_sessions(
 def test_create_session_rejects_vacuous_explicit_verify_command_before_startup(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(VerifyError, match="vacuous_verifier"):
@@ -1810,7 +1810,7 @@ def test_create_session_rejects_vacuous_explicit_verify_command_before_startup(
 def test_create_session_logs_prompt_hash_and_environment_payload(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -1906,11 +1906,11 @@ def test_sessions_score_outputs_json_metrics(tmp_path: Path) -> None:
     )
 
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "config"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "config"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["sessions", "score", "sample", "--json"],
         env=env,
     )
@@ -1925,12 +1925,12 @@ def test_sessions_score_outputs_json_metrics(tmp_path: Path) -> None:
 def test_run_rejects_multiple_api_key_sources(tmp_path: Path) -> None:
     runner = CliRunner()
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key", "k", "--api-key-env", "X", "hi"],
         env=env,
     )
@@ -1949,12 +1949,12 @@ def test_run_passes_non_interactive_flag_to_run_agent(tmp_path: Path, monkeypatc
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: False)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key", "k", "hi"],
         env=env,
     )
@@ -1971,12 +1971,12 @@ def test_run_uses_infrastructure_exit_code_after_transient_llm_retries_exhaust(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2004,12 +2004,12 @@ def test_run_keeps_permanent_provider_rejections_as_real_failures(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2044,12 +2044,12 @@ def test_run_passes_one_shot_execution_flag_to_run_agent(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key", "k", "hi"],
         env=env,
     )
@@ -2068,12 +2068,12 @@ def test_run_passes_runtime_kind_to_run_agent(tmp_path: Path, monkeypatch) -> No
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key", "k", "hi"],
         env=env,
     )
@@ -2099,12 +2099,12 @@ def test_run_passes_simple_agent_turn_budget_flags_to_run_agent(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key", "k", "--max-steps", "7", "hi"],
         env=env,
     )
@@ -2123,12 +2123,12 @@ def test_run_benchmark_profile_applies_raw_agent_defaults(tmp_path: Path, monkey
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2198,8 +2198,8 @@ def test_benchmark_flag_keeps_one_shot_system_prompt_identical(
     monkeypatch.setattr(cli_mod, "load_config", fake_load_config)
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
     common_args = [
         "run",
@@ -2218,9 +2218,9 @@ def test_benchmark_flag_keeps_one_shot_system_prompt_identical(
         "k",
     ]
 
-    normal = CliRunner().invoke(sylliptor_app, [*common_args, "hi"], env=env)
+    normal = CliRunner().invoke(alysis_app, [*common_args, "hi"], env=env)
     profiled = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [*common_args, "--benchmark", "hi"],
         env=env,
     )
@@ -2241,12 +2241,12 @@ def test_run_benchmark_profile_respects_explicit_overrides(tmp_path: Path, monke
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2286,13 +2286,13 @@ def test_run_profile_env_enables_raw_benchmark_profile(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_RUN_PROFILE": "raw-benchmark",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_RUN_PROFILE": "raw-benchmark",
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2323,13 +2323,13 @@ def test_run_passes_api_key_env_to_run_agent(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
         "MY_KEY": "env-key",
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key-env", "MY_KEY", "hi"],
         env=env,
     )
@@ -2347,12 +2347,12 @@ def test_run_passes_api_key_stdin_to_run_agent(tmp_path: Path, monkeypatch) -> N
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--api-key-stdin", "hi"],
         input="stdin-key\n",
         env=env,
@@ -2371,12 +2371,12 @@ def test_run_passes_temperature_to_run_agent(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--temperature", "0.2", "--api-key", "k", "hi"],
         env=env,
     )
@@ -2394,12 +2394,12 @@ def test_run_passes_stream_to_run_agent(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--model", "test-model", "--stream", "--api-key", "k", "hi"],
         env=env,
     )
@@ -2422,12 +2422,12 @@ def test_run_passes_image_paths_to_run_agent(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--model",
@@ -2461,12 +2461,12 @@ def test_run_passes_bound_workspace_root_and_focus_metadata(tmp_path: Path, monk
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "--path", os.fspath(subdir), "--model", "test-model", "--api-key", "k", "hi"],
         env=env,
     )
@@ -2491,12 +2491,12 @@ def test_run_create_path_bootstraps_missing_directory(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -2538,12 +2538,12 @@ def test_chat_passes_temperature_to_create_session(tmp_path: Path, monkeypatch) 
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--temperature", "0.2", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
@@ -2571,12 +2571,12 @@ def test_chat_passes_runtime_kind_to_create_session(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
@@ -2604,12 +2604,12 @@ def test_chat_passes_stream_to_create_session(tmp_path: Path, monkeypatch) -> No
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--stream", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
@@ -2637,12 +2637,12 @@ def test_chat_defaults_stream_on_when_flag_omitted(tmp_path: Path, monkeypatch) 
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
@@ -2677,12 +2677,12 @@ def test_chat_passes_bound_workspace_root_to_create_session(tmp_path: Path, monk
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--path",
@@ -2728,12 +2728,12 @@ def test_chat_create_path_bootstraps_missing_directory(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--path",
@@ -2779,13 +2779,13 @@ def test_chat_image_command_queues_for_next_turn(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
     image_path = tmp_path / "sample.png"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/image {image_path}\nhello\nexit\n",
         env=env,
@@ -2825,12 +2825,12 @@ def test_chat_image_command_without_path_pastes_clipboard(tmp_path: Path, monkey
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     monkeypatch.setattr(cli_mod, "paste_clipboard_image", fake_paste_clipboard_image)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/image\nhello\nexit\n",
         env=env,
@@ -2870,12 +2870,12 @@ def test_chat_paste_image_command_queues_for_next_turn(tmp_path: Path, monkeypat
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     monkeypatch.setattr(cli_mod, "paste_clipboard_image", fake_paste_clipboard_image)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/paste-image\nhello\nexit\n",
         env=env,
@@ -2923,12 +2923,12 @@ def test_chat_trace_command_updates_reasoning_level_for_following_turn(
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/trace full\nhello\nexit\n",
         env=env,
@@ -2955,12 +2955,12 @@ def test_chat_trace_command_rejects_invalid_level(tmp_path: Path, monkeypatch) -
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/trace detailed\nexit\n",
         env=env,
@@ -3006,12 +3006,12 @@ def test_chat_trace_command_without_arg_uses_picker_selection(tmp_path: Path, mo
         lambda **_kwargs: ("full", True),
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/trace\nhello\nexit\n",
         env=env,
@@ -3022,7 +3022,7 @@ def test_chat_trace_command_without_arg_uses_picker_selection(tmp_path: Path, mo
 
 
 def test_chat_model_command_updates_model_for_following_turn(tmp_path: Path, monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
 
     runner = CliRunner()
     captured: dict[str, str] = {}
@@ -3058,12 +3058,12 @@ def test_chat_model_command_updates_model_for_following_turn(tmp_path: Path, mon
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     monkeypatch.setattr(chat_loop_mod, "_apply_config_menu_changes_to_session", fake_apply_config)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/model gpt-4.1-mini\nhello\nexit\n",
         env=env,
@@ -3111,12 +3111,12 @@ def test_chat_mode_command_updates_mode_for_following_turn(tmp_path: Path, monke
         fake_rebuild_session_tools_for_mode,
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode auto\nhello\nexit\n",
         env=env,
@@ -3159,7 +3159,7 @@ def test_chat_mode_command_refreshes_environment_context_message(
         )
         verification_contract_type = "generic_fallback"
         verification_authoritative = False
-        deny_write_prefixes = [".sylliptor"]
+        deny_write_prefixes = [".alysis"]
         allow_write_globs = None
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -3169,7 +3169,7 @@ def test_chat_mode_command_refreshes_environment_context_message(
                     mode="review",
                     yes=False,
                     non_interactive=False,
-                    deny_write_prefixes=[".sylliptor"],
+                    deny_write_prefixes=[".alysis"],
                     allow_write_globs=None,
                     verification_enabled=True,
                     recommended_verification_commands=["pytest -q"],
@@ -3210,12 +3210,12 @@ def test_chat_mode_command_refreshes_environment_context_message(
     monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", lambda **_kwargs: None)
     monkeypatch.setattr(cli_mod, "refresh_session_environment_context_message", spy_refresh)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode auto\nhello\nexit\n",
         env=env,
@@ -3260,7 +3260,7 @@ def test_plan_mode_commands_refresh_environment_context_message(
         )
         verification_contract_type = "generic_fallback"
         verification_authoritative = False
-        deny_write_prefixes = [".sylliptor"]
+        deny_write_prefixes = [".alysis"]
         allow_write_globs = None
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -3270,7 +3270,7 @@ def test_plan_mode_commands_refresh_environment_context_message(
                     mode="review",
                     yes=False,
                     non_interactive=False,
-                    deny_write_prefixes=[".sylliptor"],
+                    deny_write_prefixes=[".alysis"],
                     allow_write_globs=None,
                     verification_enabled=True,
                     recommended_verification_commands=["pytest -q"],
@@ -3308,12 +3308,12 @@ def test_plan_mode_commands_refresh_environment_context_message(
     monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", lambda **_kwargs: None)
     monkeypatch.setattr(cli_mod, "refresh_session_environment_context_message", spy_refresh)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\n/plan off\nexit\n",
         env=env,
@@ -3363,12 +3363,12 @@ def test_chat_mode_command_accepts_friendly_alias(tmp_path: Path, monkeypatch) -
         fake_rebuild_session_tools_for_mode,
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode fast\nhello\nexit\n",
         env=env,
@@ -3422,12 +3422,12 @@ def test_chat_mode_command_without_arg_uses_picker_selection(tmp_path: Path, mon
         lambda **_kwargs: ("auto", True),
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode\nhello\nexit\n",
         env=env,
@@ -3481,12 +3481,12 @@ def test_chat_mode_command_without_arg_falls_back_to_panel(tmp_path: Path, monke
         lambda **_kwargs: (None, False),
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode\nhello\nexit\n",
         env=env,
@@ -3521,12 +3521,12 @@ def test_removed_onboarding_commands_are_unknown(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/examples\n/keys\n/tour start\nhello\nexit\n",
         env=env,
@@ -3571,6 +3571,16 @@ def test_chat_usage_and_context_commands_are_handled(tmp_path: Path, monkeypatch
                 "unknown_cost_calls": 0,
                 "api_usage_calls": 1,
                 "estimate_usage_calls": 0,
+                "cache_efficiency": {
+                    "reported_calls": 2,
+                    "cached_prompt_tokens": 65,
+                    "uncached_prompt_tokens": 35,
+                    "hit_ratio": 0.65,
+                    "largest_uncached_call": {
+                        "call_position": 2,
+                        "uncached_prompt_tokens": 30,
+                    },
+                },
             }
 
     class _DummyContext:
@@ -3602,18 +3612,20 @@ def test_chat_usage_and_context_commands_are_handled(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/usage\n/context\n/ctx\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
     assert "Usage" in result.output
+    assert "Cache efficiency: 65.00% hit" in result.output
+    assert "largest uncached 30 at call 2" in result.output
     assert result.output.count("Context Window Left") == 2
     assert "context_window_left_percent" in result.output
     assert "Effective Input Budget" in result.output
@@ -3795,12 +3807,12 @@ def test_chat_compact_command_forces_compaction(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/compact focus text\nexit\n",
         env=env,
@@ -3870,11 +3882,11 @@ def test_chat_compact_unavailable_when_compaction_disabled(tmp_path: Path, monke
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/compact\nexit\n",
         env=env,
@@ -3962,7 +3974,7 @@ def test_chat_compact_blocked_in_forge_mode(tmp_path: Path, monkeypatch) -> None
         *, root: Path, console: Console, forge_state: Any, **_kwargs: Any
     ) -> bool:
         _ = root, console
-        plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+        plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
         notes_dir = plan_dir / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
         forge_state.ui_mode = "forge"
@@ -3985,11 +3997,11 @@ def test_chat_compact_blocked_in_forge_mode(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/compact\n/back\nexit\n",
         env=env,
@@ -4074,11 +4086,11 @@ def test_chat_compact_nothing_to_compact_prints_message(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/compact\nexit\n",
         env=env,
@@ -4152,12 +4164,12 @@ def test_chat_usage_hud_off_keeps_usage_tracking(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/usage hud off\nhello\n/usage\nexit\n",
         env=env,
@@ -4201,12 +4213,12 @@ def test_chat_usage_hud_subcommand_without_arg_uses_picker_selection(
         lambda **_kwargs: ("off", True),
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/usage hud\nhello\nexit\n",
         env=env,
@@ -4239,12 +4251,12 @@ def test_chat_removed_usage_hud_command_suggests_usage(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/usage-hud\nexit\n",
         env=env,
@@ -4281,12 +4293,12 @@ def test_chat_toolbar_command_shows_updates_and_resets_session_items(
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/toolbar\n/toolbar add tokens\n/toolbar remove ctx\n/toolbar reset\nhello\nexit\n",
         env=env,
@@ -4322,12 +4334,12 @@ def test_chat_toolbar_command_save_persists_and_rejects_invalid_item(
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/toolbar add trace\n/toolbar save\n/toolbar add nope\nexit\n",
         env=env,
@@ -4543,12 +4555,12 @@ def test_chat_status_and_model_info_show_bundled_catalog_registry_diagnostics(
         lambda: _DummyProvenance(),
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/status\n/model-info\nexit\n",
         env=env,
@@ -4596,12 +4608,12 @@ def test_chat_config_lists_tracked_models(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/config\nexit\n",
         env=env,
@@ -4641,12 +4653,12 @@ def test_chat_config_set_saves_model_metadata_overrides(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/config set 1 200000 8000 false 0.000001 0.000002\nexit\n",
         env=env,
@@ -4680,18 +4692,18 @@ def test_chat_shows_welcome_panel_without_status_table(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
     )
     assert result.exit_code == 0
-    assert "Sylliptor" in result.output
+    assert "Alysis Code" in result.output
     assert "Chat Status" not in result.output
 
 
@@ -4712,12 +4724,12 @@ def test_chat_unknown_command_suggests_closest_match(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mod\nexit\n",
         env=env,
@@ -4750,12 +4762,12 @@ def test_chat_removed_help_aliases_and_colon_picker_fall_through(
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/h\n/?\n:\nhello\nexit\n",
         env=env,
@@ -4806,12 +4818,12 @@ def test_chat_mode_command_accepts_numeric_shortcut(tmp_path: Path, monkeypatch)
         fake_rebuild_session_tools_for_mode,
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode 2\nhello\nexit\n",
         env=env,
@@ -4861,12 +4873,12 @@ def test_chat_mode_command_accepts_fullaccess_numeric_alias(tmp_path: Path, monk
         fake_rebuild_session_tools_for_mode,
     )
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/mode 4\nhello\nexit\n",
         env=env,
@@ -4901,12 +4913,12 @@ def test_chat_turn_keyboard_interrupt_is_handled(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="hello\nexit\n",
         env=env,
@@ -4957,12 +4969,12 @@ def test_chat_turn_keyboard_interrupt_finishes_surface_activity(
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="hello\nexit\n",
         env=env,
@@ -5004,12 +5016,12 @@ def test_chat_llm_error_is_recoverable_without_traceback(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="hello\nexit\n",
         env=env,
@@ -5066,12 +5078,12 @@ def test_chat_llm_error_reports_tool_transcript_problems_without_network_hint(
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="hello\nexit\n",
         env=env,
@@ -5350,12 +5362,12 @@ def test_chat_prompt_session_does_not_pass_erase_when_done_kwarg(
     )
 
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="",
         env=env,
@@ -5385,7 +5397,7 @@ def test_maybe_make_chat_prompt_session_sets_constructor_erase_when_done(
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _PromptSessionStub)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     session = cli_mod._maybe_make_chat_prompt_session(
         console=Console(),
@@ -5397,7 +5409,7 @@ def test_maybe_make_chat_prompt_session_sets_constructor_erase_when_done(
     assert session is not None
     assert len(captured) == 1
     assert captured[0].get("erase_when_done") is True
-    assert session._sylliptor_erase_when_done is True  # type: ignore[attr-defined]
+    assert session._alysis_erase_when_done is True  # type: ignore[attr-defined]
     assert session.app.ttimeoutlen == cli_mod._CHAT_PROMPT_ESCAPE_SEQUENCE_TIMEOUT_S
 
 
@@ -5419,7 +5431,7 @@ def test_maybe_make_chat_prompt_session_uses_session_registries_for_completions(
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _PromptSessionStub)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     prompt_session = cli_mod._maybe_make_chat_prompt_session(
         console=Console(),
@@ -5434,14 +5446,14 @@ def test_maybe_make_chat_prompt_session_uses_session_registries_for_completions(
 
     assert prompt_session is not None
     completer = captured[0]["completer"]
-    subagent_completions = [
+    removed_subagent_completions = [
         completion.text
         for completion in completer.get_completions(Document(text="/subagent "), None)
     ]
     skill_completions = [
         completion.text for completion in completer.get_completions(Document(text="/skill "), None)
     ]
-    assert "/subagent explorer" in subagent_completions
+    assert removed_subagent_completions == []
     assert "/skill python" in skill_completions
 
 
@@ -5466,7 +5478,7 @@ def test_maybe_make_chat_prompt_session_falls_back_when_constructor_unsupported(
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _PromptSessionStub)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     session = cli_mod._maybe_make_chat_prompt_session(
         console=Console(),
@@ -5478,7 +5490,7 @@ def test_maybe_make_chat_prompt_session_falls_back_when_constructor_unsupported(
     assert session is not None
     assert len(captured) == 1
     assert "erase_when_done" not in captured[0]
-    assert session._sylliptor_erase_when_done is False  # type: ignore[attr-defined]
+    assert session._alysis_erase_when_done is False  # type: ignore[attr-defined]
     assert session.app.ttimeoutlen == cli_mod._CHAT_PROMPT_ESCAPE_SEQUENCE_TIMEOUT_S
 
 
@@ -5496,7 +5508,7 @@ def test_maybe_make_chat_prompt_session_preserves_larger_escape_sequence_timeout
 
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _PromptSessionStub)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     session = cli_mod._maybe_make_chat_prompt_session(
         console=Console(),
@@ -5550,12 +5562,12 @@ def test_chat_prompt_session_never_passes_erase_when_done_kwarg(
     )
 
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="",
         env=env,
@@ -5756,20 +5768,20 @@ def test_chat_shows_escape_hint_in_welcome_banner_when_interactive(
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
 
     env = {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="",
         env=env,
     )
     assert result.exit_code == 0
-    assert "Sylliptor" in result.output
+    assert "Alysis Code" in result.output
     assert "/forge" in result.output
     assert "/status" in result.output
     assert "/help" in result.output
     assert "Esc to stop  /help for commands" not in result.output
-    assert "Tip: enable subagents with /subagent on." in result.output
+    assert "alysis config set subagents_enabled true" in result.output

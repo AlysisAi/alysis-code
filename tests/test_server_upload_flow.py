@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.server.app import _create_run_from_upload
-from sylliptor_agent_cli.server.settings import ServerSettings
-from sylliptor_agent_cli.server.store import ServerStore, ServerStoreError
+from alysis_code.server.app import _create_run_from_upload
+from alysis_code.server.settings import ServerSettings
+from alysis_code.server.store import ServerStore, ServerStoreError
 
 
 class _BytesUpload:

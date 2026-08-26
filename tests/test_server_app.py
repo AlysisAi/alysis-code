@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sylliptor_agent_cli.server.app import (
+from alysis_code.server.app import (
     ForgeExecRequest,
     ForgeSwarmRequest,
     RunJobRequest,
@@ -20,15 +20,15 @@ from sylliptor_agent_cli.server.app import (
     _validate_forge_exec_task_id,
     create_app,
 )
-from sylliptor_agent_cli.server.settings import ServerSettings
-from sylliptor_agent_cli.server.store import ServerStoreError
+from alysis_code.server.settings import ServerSettings
+from alysis_code.server.store import ServerStoreError
 
 
 def _settings(*, worker_backend: str, worker_machine_events: bool = True) -> ServerSettings:
     return ServerSettings(
         host="127.0.0.1",
         port=7070,
-        data_dir=Path("/tmp/sylliptor-server-test"),
+        data_dir=Path("/tmp/alysis-server-test"),
         token=None,
         max_upload_bytes=1024,
         max_concurrent_jobs=1,
@@ -101,7 +101,7 @@ async def _post_empty_run_with_client(
 
 
 def test_append_common_agent_args_includes_requested_options() -> None:
-    command = ["python", "-m", "sylliptor_agent_cli", "run"]
+    command = ["python", "-m", "alysis_code", "run"]
     _append_common_agent_args(
         command,
         mode="auto",
@@ -119,7 +119,7 @@ def test_append_common_agent_args_includes_requested_options() -> None:
 
 
 def test_append_common_agent_args_skips_optional_when_missing() -> None:
-    command = ["python", "-m", "sylliptor_agent_cli", "run"]
+    command = ["python", "-m", "alysis_code", "run"]
     _append_common_agent_args(
         command,
         mode="review",
@@ -360,7 +360,7 @@ def test_create_app_fullaccess_job_routes_preserve_mode_and_swarm_rejects_non_au
         return f"job_test_{len(captured_commands)}"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.server.worker_runner.JobRunner.start_job",
+        "alysis_code.server.worker_runner.JobRunner.start_job",
         _fake_start_job,
     )
 

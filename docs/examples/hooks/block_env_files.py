@@ -4,8 +4,8 @@
 Applies to fs_read, fs_write, fs_patch, and fs_edit.
 Blocks .env files, credentials, private keys, key archives, and secrets/.
 Allows .env.example, .env.sample, .env.template, and .env.dist.
-Allow repo-relative paths with SYLLIPTOR_HOOK_ALLOW_PATHS.
-Example .sylliptor/hooks.json:
+Allow repo-relative paths with ALYSIS_HOOK_ALLOW_PATHS.
+Example .alysis/hooks.json:
     {"hooks": {"PreToolUse": [{"matcher": "fs_read|fs_write|fs_patch|fs_edit",
       "hooks": [{"type": "command", "id": "security.block-env-files",
       "command": "python docs/examples/hooks/block_env_files.py",
@@ -65,7 +65,7 @@ def _repo_rel(path: Path, cwd: Path) -> str:
 
 
 def _allow_paths() -> set[str]:
-    raw = os.environ.get("SYLLIPTOR_HOOK_ALLOW_PATHS", "")
+    raw = os.environ.get("ALYSIS_HOOK_ALLOW_PATHS", "")
     return {_normalize(value).lower() for value in raw.split(os.pathsep) if value.strip()}
 
 

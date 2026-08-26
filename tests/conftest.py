@@ -18,9 +18,9 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 import pytest
 
-from sylliptor_agent_cli.error_text import redact_sensitive_error_text
-from sylliptor_agent_cli.mcp.oauth import build_pkce_challenge
-from sylliptor_agent_cli.mcp.transport_stdio import live_stdio_transport_diagnostics
+from alysis_code.error_text import redact_sensitive_error_text
+from alysis_code.mcp.oauth import build_pkce_challenge
+from alysis_code.mcp.transport_stdio import live_stdio_transport_diagnostics
 
 _FORGE_EXECUTION_TEST_FILES = {
     "test_forge_exec.py",
@@ -40,7 +40,7 @@ _FORGE_WATCHDOG_GIT_PROBE_TIMEOUT_S = 0.2
 @pytest.fixture(scope="session", autouse=True)
 def isolate_terminal_ownership_records(tmp_path_factory: pytest.TempPathFactory):
     """Never let background-process crash markers from tests reach the real user profile."""
-    key = "SYLLIPTOR_TERMINAL_OWNERSHIP_DIR"
+    key = "ALYSIS_TERMINAL_OWNERSHIP_DIR"
     previous = os.environ.get(key)
     os.environ[key] = os.fspath(tmp_path_factory.mktemp("terminal-ownership"))
     try:
@@ -176,7 +176,7 @@ class OAuthFixtureServer:
 
 
 def _forge_test_timeout_seconds() -> float:
-    raw_value = os.environ.get("SYLLIPTOR_FORGE_TEST_TIMEOUT_S")
+    raw_value = os.environ.get("ALYSIS_FORGE_TEST_TIMEOUT_S")
     if raw_value is None:
         return _DEFAULT_FORGE_TEST_TIMEOUT_S
     try:
@@ -379,7 +379,7 @@ def _write_forge_watchdog_diagnostics(
         "run_locks": _forge_run_lock_diagnostics(request),
         "worktrees": _forge_worktree_diagnostics(request),
     }
-    stream.write("\n=== Sylliptor Forge test watchdog timeout ===\n")
+    stream.write("\n=== Alysis Code Forge test watchdog timeout ===\n")
     stream.write(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
     stream.write("=== Python stack traces ===\n")
     stream.flush()
@@ -418,12 +418,12 @@ def block_live_ddgs_network(monkeypatch: pytest.MonkeyPatch):
     def _blocked(query: str, *, max_results: int, timeout_s: float):
         raise RuntimeError(
             "live ddgs network call attempted in tests: stub "
-            "sylliptor_agent_cli.tools.web_search.ddgs_search, pass text_search_fn, "
-            "or set SYLLIPTOR_WEB_SEARCH_KEYLESS=0"
+            "alysis_code.tools.web_search.ddgs_search, pass text_search_fn, "
+            "or set ALYSIS_WEB_SEARCH_KEYLESS=0"
         )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.tools.web_search_ddgs._default_text_search",
+        "alysis_code.tools.web_search_ddgs._default_text_search",
         _blocked,
     )
     yield
@@ -436,7 +436,7 @@ def reset_keyring_observations():
     That state is process-global, so without a reset the first test to observe a
     fallback would silence the assertions of every later one.
     """
-    from sylliptor_agent_cli.mcp.token_store import reset_keyring_observations as _reset
+    from alysis_code.mcp.token_store import reset_keyring_observations as _reset
 
     _reset()
     yield
@@ -706,13 +706,13 @@ def oauth_fixture_server(monkeypatch: pytest.MonkeyPatch) -> Any:
                 content=content,
             )
         if len(response.content) > max_bytes:
-            from sylliptor_agent_cli.safety import SafeHttpError
+            from alysis_code.safety import SafeHttpError
 
             raise SafeHttpError(f"Response body exceeded max_bytes={max_bytes}.")
         return response
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.mcp.oauth.safe_http_request",
+        "alysis_code.mcp.oauth.safe_http_request",
         fixture_safe_http_request,
     )
     try:

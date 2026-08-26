@@ -9,18 +9,18 @@ from typing import Any
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.protocols import (
     OPENAI_RESPONSES_PROTOCOL,
     resolve_reasoning_trace_capability,
 )
-from sylliptor_agent_cli.mcp import token_store as token_store_mod
-from sylliptor_agent_cli.provider_auth.base import ProviderAuthError, ProviderLoginRequiredError
-from sylliptor_agent_cli.provider_auth.openai_codex import (
+from alysis_code.mcp import token_store as token_store_mod
+from alysis_code.provider_auth.base import ProviderAuthError, ProviderLoginRequiredError
+from alysis_code.provider_auth.openai_codex import (
     SESSION_EXPIRED_DETAIL,
     OpenAICodexSubscriptionAuth,
 )
-from sylliptor_agent_cli.provider_auth.store import (
+from alysis_code.provider_auth.store import (
     ProviderTokenRecord,
     load_provider_token,
     provider_token_store_path,
@@ -31,7 +31,7 @@ from sylliptor_agent_cli.provider_auth.store import (
 def test_subscription_store_uses_random_filesystem_key_without_tui_stderr_noise(
     tmp_path, monkeypatch, capsys, caplog
 ) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
 
     def _keyring_unavailable(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("keyring unavailable")
@@ -170,7 +170,7 @@ def test_codex_subscription_preserves_explicit_summary_request_and_effort() -> N
 
 
 def test_codex_subscription_headers_are_destination_allowlisted(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.delenv("SYLLIPTOR_OPENAI_CODEX_COMPAT_VERSION", raising=False)
+    monkeypatch.delenv("ALYSIS_OPENAI_CODEX_COMPAT_VERSION", raising=False)
     record = ProviderTokenRecord(
         access_token="access-secret",
         refresh_token="refresh-secret",
@@ -179,7 +179,7 @@ def test_codex_subscription_headers_are_destination_allowlisted(monkeypatch) -> 
         account_label="developer@example.test",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: record,
     )
     adapter = OpenAICodexSubscriptionAuth()
@@ -211,11 +211,11 @@ def test_codex_subscription_refresh_rotates_tokens(monkeypatch) -> None:  # type
     )
     saved: list[ProviderTokenRecord] = []
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: saved[-1] if saved else stored,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.save_provider_token",
+        "alysis_code.provider_auth.openai_codex.save_provider_token",
         lambda _provider_id, record: saved.append(record),
     )
 
@@ -251,7 +251,7 @@ def test_codex_refresh_transient_failure_uses_still_valid_token(
         account_id="account-1",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: stored,
     )
     adapter = OpenAICodexSubscriptionAuth(
@@ -272,7 +272,7 @@ def test_codex_refresh_transient_failure_does_not_reuse_expired_token(monkeypatc
         expires_at=time.time() - 1,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: stored,
     )
     adapter = OpenAICodexSubscriptionAuth(
@@ -290,7 +290,7 @@ def test_codex_refresh_invalid_grant_requires_login(monkeypatch) -> None:  # typ
         expires_at=time.time() - 1,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: stored,
     )
     adapter = OpenAICodexSubscriptionAuth(
@@ -313,7 +313,7 @@ def test_codex_account_status_reports_an_expired_session_as_data(monkeypatch) ->
         account_label="dev@example.test",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: stored,
     )
     adapter = OpenAICodexSubscriptionAuth(
@@ -337,7 +337,7 @@ def test_codex_account_status_survives_an_unreadable_credential_store(monkeypatc
         raise ProviderAuthError("Could not read the encrypted provider credential store.")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         _unreadable,
     )
 
@@ -353,7 +353,7 @@ def test_codex_account_status_survives_an_unexpected_store_failure(monkeypatch) 
         raise MemoryError("simulated")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         _explode,
     )
 
@@ -367,7 +367,7 @@ def test_codex_account_status_survives_an_unexpected_store_failure(monkeypatch) 
 def test_codex_model_catalog_uses_codex_compat_version_and_live_metadata(
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.delenv("SYLLIPTOR_OPENAI_CODEX_COMPAT_VERSION", raising=False)
+    monkeypatch.delenv("ALYSIS_OPENAI_CODEX_COMPAT_VERSION", raising=False)
     record = ProviderTokenRecord(
         access_token="access-secret",
         refresh_token="refresh-secret",
@@ -375,7 +375,7 @@ def test_codex_model_catalog_uses_codex_compat_version_and_live_metadata(
         account_id="account-123",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: record,
     )
 
@@ -454,7 +454,7 @@ class _FakeCodexAuth:
         return {
             "Authorization": f"Bearer {'new' if force_refresh else 'old'}",
             "ChatGPT-Account-Id": "account-1",
-            "originator": "sylliptor",
+            "originator": "alysis",
         }
 
     def adapt_responses_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:

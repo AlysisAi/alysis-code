@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.background_runner as background_runner_mod
-from sylliptor_agent_cli.background_runner import (
+import alysis_code.background_runner as background_runner_mod
+from alysis_code.background_runner import (
     BackgroundProcessSpawn,
     BackgroundShellRunner,
     DisabledBackgroundRunner,
@@ -87,21 +87,21 @@ def test_host_runner_filters_sensitive_env(
 ) -> None:
     captured: dict[str, object] = {}
     _patch_popen(monkeypatch, captured)
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "secret")
+    monkeypatch.setenv("ALYSIS_API_KEY", "secret")
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
 
     HostBackgroundRunner().start(
         root=tmp_path,
         cwd=tmp_path,
         cmd="echo hi",
-        env_overrides={"SYLLIPTOR_API_KEY": "override", "SAFE_VALUE": "ok"},
+        env_overrides={"ALYSIS_API_KEY": "override", "SAFE_VALUE": "ok"},
     )
 
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     env = kwargs["env"]
     assert isinstance(env, dict)
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert env["SAFE_VALUE"] == "ok"
 

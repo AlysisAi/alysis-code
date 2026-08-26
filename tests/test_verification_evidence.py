@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     EvidenceOrigin,
     build_acceptance_contract,
     classify_evidence_origin,
 )
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     TurnExecutionState,
     VerificationEvidenceCategory,
     _fresh_executed_evidence_for_claim,

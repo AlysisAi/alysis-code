@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.sandbox_doctor import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.sandbox_doctor import (
     SandboxCheck,
     SandboxDiagnostic,
     SandboxImagePullResult,
@@ -18,9 +18,9 @@ from sylliptor_agent_cli.sandbox_doctor import (
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
     }
 
@@ -48,7 +48,7 @@ def _diagnostic(
         ),
         next_steps=next_steps
         or (
-            "Docker is installed, but it is not running. Open Docker Desktop or start the Docker service, then run `sylliptor doctor sandbox`.",
+            "Docker is installed, but it is not running. Open Docker Desktop or start the Docker service, then run `alysis doctor sandbox`.",
         ),
         can_pull=can_pull,
     )
@@ -66,15 +66,15 @@ def test_doctor_sandbox_reports_beginner_guidance(
     monkeypatch.setattr(cli_mod, "diagnose_sandbox", fake_diagnose_sandbox)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["doctor", "sandbox", "--env"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 1
-    assert "Sylliptor needs a safe runner" in result.output
+    assert "Alysis Code needs a safe runner" in result.output
     assert "Docker is installed, but it is not running" in result.output
-    assert "SYLLIPTOR_SHELL_SANDBOX_MODE" in result.output
+    assert "ALYSIS_SHELL_SANDBOX_MODE" in result.output
 
 
 def test_sandbox_pull_downloads_images_then_runs_smoke_doctor(
@@ -109,7 +109,7 @@ def test_sandbox_pull_downloads_images_then_runs_smoke_doctor(
     monkeypatch.setattr(cli_mod, "diagnose_sandbox", fake_diagnose_sandbox)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["sandbox", "pull", "--image", "image:dev", "--no-server", "--timeout", "7"],
         env=_env(tmp_path),
     )
@@ -122,7 +122,7 @@ def test_sandbox_pull_downloads_images_then_runs_smoke_doctor(
         "include_server_image": True,
     }
     assert "pulled image:dev" in result.output
-    assert "Sylliptor sandbox is ready" in result.output
+    assert "Alysis Code sandbox is ready" in result.output
 
 
 def test_sandbox_pull_uses_configured_image_when_no_image_is_passed(
@@ -157,10 +157,10 @@ def test_sandbox_pull_uses_configured_image_when_no_image_is_passed(
     monkeypatch.setattr(cli_mod, "pull_sandbox_images", fake_pull_sandbox_images)
     monkeypatch.setattr(cli_mod, "diagnose_sandbox", fake_diagnose_sandbox)
     env = _env(tmp_path)
-    env["SYLLIPTOR_SHELL_SANDBOX_DOCKER_IMAGE"] = "custom:dev"
+    env["ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE"] = "custom:dev"
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["sandbox", "pull", "--no-server"],
         env=env,
     )
@@ -186,7 +186,7 @@ def test_setup_sandbox_pulls_when_docker_is_ready(
                 SandboxCheck("Docker daemon", "ok", "running"),
                 SandboxCheck("sandbox image", "missing", "image:dev is not downloaded locally."),
             ),
-            next_steps=("Run `sylliptor sandbox pull` to download Sylliptor's safe runner image.",),
+            next_steps=("Run `alysis sandbox pull` to download Alysis Code's safe runner image.",),
         )
 
     def fake_run_sandbox_pull_command(*, include_server: bool):
@@ -196,14 +196,14 @@ def test_setup_sandbox_pulls_when_docker_is_ready(
     monkeypatch.setattr(cli_mod, "_run_sandbox_pull_command", fake_run_sandbox_pull_command)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["setup", "sandbox"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 0
     assert calls == {"diagnose": (False, True), "pull": True}
-    assert "Downloading Sylliptor sandbox images" in result.output
+    assert "Downloading Alysis Code sandbox images" in result.output
 
 
 def test_sandbox_setup_no_pull_keeps_actionable_guidance(
@@ -220,17 +220,17 @@ def test_sandbox_setup_no_pull_keeps_actionable_guidance(
                 SandboxCheck("Docker daemon", "ok", "running"),
                 SandboxCheck("sandbox image", "missing", "image:dev is not downloaded locally."),
             ),
-            next_steps=("Run `sylliptor sandbox pull` to download Sylliptor's safe runner image.",),
+            next_steps=("Run `alysis sandbox pull` to download Alysis Code's safe runner image.",),
         )
 
     monkeypatch.setattr(cli_mod, "diagnose_sandbox", fake_diagnose_sandbox)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["sandbox", "setup", "--no-pull"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 1
-    assert "Sylliptor needs a safe runner" in result.output
-    assert "sylliptor sandbox pull" in result.output
+    assert "Alysis Code needs a safe runner" in result.output
+    assert "alysis sandbox pull" in result.output

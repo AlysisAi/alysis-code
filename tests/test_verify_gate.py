@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.sandbox_runner as sandbox_runner_mod
-import sylliptor_agent_cli.verify_gate as verify_gate_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.repo_scan import scan_workspace
-from sylliptor_agent_cli.verification_command_analysis import VerificationCommandStatus
-from sylliptor_agent_cli.verification_contract import (
+import alysis_code.sandbox_runner as sandbox_runner_mod
+import alysis_code.verify_gate as verify_gate_mod
+from alysis_code.config import AppConfig
+from alysis_code.failure_category import FailureCategory
+from alysis_code.repo_scan import scan_workspace
+from alysis_code.verification_command_analysis import VerificationCommandStatus
+from alysis_code.verification_contract import (
     VerificationCommandExecutionMode,
     VerificationCommandValidationStatus,
     build_verification_command_specs,
 )
-from sylliptor_agent_cli.verify_gate import (
+from alysis_code.verify_gate import (
     ResolvedVerifyCommands,
     VerifyCommandResult,
     VerifyError,
@@ -41,7 +41,7 @@ from sylliptor_agent_cli.verify_gate import (
     verification_selection_payload,
     verify_run_result_to_payload,
 )
-from sylliptor_agent_cli.workspace_context import resolve_workspace_context
+from alysis_code.workspace_context import resolve_workspace_context
 
 
 def _cp(
@@ -3324,7 +3324,7 @@ def test_verification_selection_payload_marks_task_inferred_selection_as_non_aut
 def test_verify_sandbox_mode_env_overrides_config(monkeypatch) -> None:
     cfg = AppConfig(model="test-model")
     cfg.extra_fields = {"verify_sandbox": {"mode": "warn"}}
-    monkeypatch.setenv("SYLLIPTOR_VERIFY_SANDBOX_MODE", "strict")
+    monkeypatch.setenv("ALYSIS_VERIFY_SANDBOX_MODE", "strict")
     assert resolve_verify_sandbox_mode(cfg) == "strict"
 
 
@@ -3359,10 +3359,10 @@ def test_verify_sandbox_mode_off_allows_explicit_host_execution(
 def test_verify_gate_can_use_docker_runner_when_enabled(tmp_path: Path, monkeypatch) -> None:
     calls: list[object] = []
 
-    monkeypatch.setenv("SYLLIPTOR_VERIFY_SANDBOX_MODE", "warn")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKEND", "docker")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_NETWORK", "off")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_IMAGE", "test/sylliptor-sandbox:dev")
+    monkeypatch.setenv("ALYSIS_VERIFY_SANDBOX_MODE", "warn")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "docker")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_NETWORK", "off")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE", "test/alysis-sandbox:dev")
     monkeypatch.setattr(
         sandbox_runner_mod.shutil,
         "which",
@@ -3417,7 +3417,7 @@ def test_verify_gate_default_strict_without_backend_records_failure(
         calls.append(str(cmd))
         raise AssertionError("host subprocess should not run when verify sandbox is unavailable")
 
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKEND", "docker")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "docker")
     monkeypatch.setattr(sandbox_runner_mod.shutil, "which", lambda _name: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -3446,7 +3446,7 @@ def test_verify_gate_warn_without_backend_fails_closed_without_host_subprocess(
             "host subprocess should not run in warn mode when backend is unavailable"
         )
 
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKEND", "docker")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "docker")
     monkeypatch.setattr(sandbox_runner_mod.shutil, "which", lambda _name: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 

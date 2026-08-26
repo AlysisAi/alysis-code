@@ -26,7 +26,7 @@ import pytest
 from scripts.qa.mock_llm import MockLLMServer
 
 QA_MODEL = "qa-mock-model"
-CLI = (sys.executable, "-m", "sylliptor_agent_cli.cli")
+CLI = (sys.executable, "-m", "alysis_code.cli")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "Subagent Benchmark",
@@ -51,10 +51,10 @@ class BenchmarkCase:
 BENCHMARK_CASES = (
     BenchmarkCase(
         case_id="M01",
-        prompt="/subagent explorer Read existing README.md and report its contents.",
+        prompt="Use explorer to read existing README.md and report its contents.",
         node_ids=(
             "tests/test_mock_provider_smoke.py::"
-            "test_smoke_classic_chat_subagent_reads_readme_end_to_end",
+            "test_smoke_chat_delegates_readme_review_end_to_end",
         ),
         provider_request_count="2 child requests",
         child_roles=("explorer",),
@@ -87,9 +87,9 @@ BENCHMARK_CASES = (
             "tests/test_subagent_benchmark.py::"
             "test_subagent_benchmark_m03_multi_file_implementation",
         ),
-        provider_request_count="3 child requests",
+        provider_request_count="7 parent/child requests",
         child_roles=("implementer",),
-        tool_names=("fs_write", "verify_run"),
+        tool_names=("subagent_run", "fs_write", "verify_run"),
         terminal_status="success",
         changed_paths=("src/a.py", "tests/test_a.py"),
     ),
@@ -240,7 +240,7 @@ def _write_config(config_dir: Path, *, base_url: str, repo: Path) -> None:
                 "name": "mock",
                 "protocol": "openai_compat",
                 "base_url": base_url,
-                "api_key_env": "SYLLIPTOR_API_KEY",
+                "api_key_env": "ALYSIS_API_KEY",
                 "default_model": QA_MODEL,
                 "extra_headers": {},
                 "notes": "subagent benchmark mock",
@@ -262,20 +262,20 @@ def _env(work_dir: Path) -> dict[str, str]:
     env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
     env.update(
         {
-            "SYLLIPTOR_CONFIG_DIR": os.fspath((work_dir / "config").resolve()),
-            "SYLLIPTOR_DATA_DIR": os.fspath((work_dir / "data").resolve()),
-            "SYLLIPTOR_API_KEY": "mock-key",
+            "ALYSIS_CONFIG_DIR": os.fspath((work_dir / "config").resolve()),
+            "ALYSIS_DATA_DIR": os.fspath((work_dir / "data").resolve()),
+            "ALYSIS_API_KEY": "mock-key",
             "OPENAI_API_KEY": "mock-key",
             "NO_COLOR": "1",
             "TERM": "xterm-256color",
-            "SYLLIPTOR_ROUTING_MODE": "code_only",
-            "SYLLIPTOR_TUI": "0",
-            "SYLLIPTOR_UPDATE_CHECK_ENABLED": "0",
-            "SYLLIPTOR_SHELL_SANDBOX_MODE": "off",
-            "SYLLIPTOR_VERIFY_SANDBOX_MODE": "off",
-            "SYLLIPTOR_SKILLS_ENABLED": "0",
-            "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-            "SYLLIPTOR_MAX_OUTPUT_TOKENS": "4096",
+            "ALYSIS_ROUTING_MODE": "code_only",
+            "ALYSIS_TUI": "0",
+            "ALYSIS_UPDATE_CHECK_ENABLED": "0",
+            "ALYSIS_SHELL_SANDBOX_MODE": "off",
+            "ALYSIS_VERIFY_SANDBOX_MODE": "off",
+            "ALYSIS_SKILLS_ENABLED": "0",
+            "ALYSIS_CONTEXT_WINDOW": "200000",
+            "ALYSIS_MAX_OUTPUT_TOKENS": "4096",
         }
     )
     return env
@@ -430,15 +430,15 @@ def test_subagent_benchmark_m03_multi_file_implementation(tmp_path: Path) -> Non
             work_dir=tmp_path,
             base_url=server.base_url,
             mode="fullaccess",
-            input_text=f"/subagent implementer {task}\n/exit\n",
+            input_text=f"Use the implementer subagent to complete this task: {task}\n/exit\n",
         )
         requests = list(server.requests)
 
     _assert_clean_cli_result(result)
-    # The router-free explicit child makes one request for both writes, one for
-    # verification, and one final report request.
-    assert len(requests) == 3
-    assert _called_tool_names(requests) == {"fs_write", "verify_run"}
+    # The parent delegates, then the child writes, verifies, checks its diff,
+    # and reports before the parent synthesizes the result.
+    assert len(requests) == 7
+    assert _called_tool_names(requests) == {"subagent_run", "fs_write", "verify_run"}
     assert _changed_paths(repo) == ("src/a.py", "tests/test_a.py")
     events = _session_events(tmp_path)
     catalogs = _payloads(events, "subagent_tool_catalog")
@@ -474,12 +474,12 @@ def test_subagent_benchmark_m04_parallel_readonly_decomposition(tmp_path: Path) 
 
     _assert_clean_cli_result(result)
     # One parent planning request launches both children. Each child then makes
-    # one planning request and one fs_read request, followed by one parent
+    # one planning request and one fs_read_lines request, followed by one parent
     # synthesis request. Keep this phase count aligned with the router-free
     # runtime; a read-only delegation adds no mutation-gate retry.
     assert len(requests) == 6, json.dumps(_request_summary(requests), indent=2)
     assert rendezvous == {"alpha": True, "beta": True}
-    assert _called_tool_names(requests) == {"subagent_run", "fs_read"}
+    assert _called_tool_names(requests) == {"subagent_run", "fs_read_lines"}
     assert _changed_paths(repo) == ()
     events = _session_events(tmp_path)
     catalogs = _payloads(events, "subagent_tool_catalog")
@@ -487,7 +487,7 @@ def test_subagent_benchmark_m04_parallel_readonly_decomposition(tmp_path: Path) 
     observed_roles = {str(item.get("name") or "") for item in catalogs}
     assert observed_roles == {"explorer", "code-reviewer"}
     for catalog in catalogs:
-        assert "fs_read" in catalog["tool_names"]
+        assert "fs_read_lines" in catalog["tool_names"]
         assert set(catalog["tool_names"]).isdisjoint({"fs_write", "fs_edit", "shell_run"})
     assert sorted(str(item.get("name")) for item in ends if item.get("status") == "success") == [
         "code-reviewer",

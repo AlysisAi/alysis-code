@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.code_review import (
+from alysis_code.code_review import (
     ChatReviewerClient,
     CodeReviewEngine,
     GitReviewError,
@@ -18,13 +18,7 @@ from sylliptor_agent_cli.code_review import (
     ReviewRequest,
     ReviewResponseError,
 )
-from sylliptor_agent_cli.llm.types import LLMError, LLMResponse, UsageContract
-
-_TEST_API_SECRET = "-".join(("sk", "abcdefghijklmnopqrstuvwxyz"))
-_TEST_AWS_ID = "".join(("AK", "IA", "ABCDEFGHIJKLMNOP"))
-_TEST_PRIVATE_KEY = (
-    "-----" + "BEGIN " + "PRIVATE KEY" + "-----abc-----" + "END " + "PRIVATE KEY" + "-----"
-)
+from alysis_code.llm.types import LLMError, LLMResponse, UsageContract
 
 
 class FakeReviewer:
@@ -86,9 +80,9 @@ def test_working_tree_reviews_staged_unstaged_and_untracked_with_secret_exclusio
     _git(repo, "add", "app.py")
     (repo / "lib.py").write_text("ENABLED = True\n", encoding="utf-8")
     (repo / "new.py").write_text(
-        f"API_KEY={_TEST_API_SECRET}\n"
-        f"AWS_ID={_TEST_AWS_ID}\n"
-        f"KEY='{_TEST_PRIVATE_KEY}'\n"
+        "API_KEY=sk-abcdefghijklmnopqrstuvwxyz\n"
+        "AWS_ID=AKIAABCDEFGHIJKLMNOP\n"
+        "KEY='-----BEGIN PRIVATE KEY-----abc-----END PRIVATE KEY-----'\n"
         "print('new')\n",
         encoding="utf-8",
     )
@@ -112,9 +106,9 @@ def test_working_tree_reviews_staged_unstaged_and_untracked_with_secret_exclusio
         for item in result.diff.omitted_files
     )
     assert "do-not-send-this" not in result.diff.patch
-    assert _TEST_API_SECRET not in result.diff.patch
-    assert _TEST_AWS_ID not in result.diff.patch
-    assert "BEGIN " + "PRIVATE KEY" not in result.diff.patch
+    assert "sk-abcdefghijklmnopqrstuvwxyz" not in result.diff.patch
+    assert "AKIAABCDEFGHIJKLMNOP" not in result.diff.patch
+    assert "BEGIN PRIVATE KEY" not in result.diff.patch
     assert "<redacted>" in result.diff.patch
     assert "### staged: app.py" in result.diff.patch
     assert "### unstaged: lib.py" in result.diff.patch
@@ -267,7 +261,7 @@ def test_rename_from_sensitive_path_excludes_the_whole_rename(tmp_path: Path) ->
 
 def test_secret_shaped_filename_is_redacted_and_never_reviewed(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    secret_path = f"api_token={_TEST_API_SECRET}"
+    secret_path = "api_token=sk-abcdefghijklmnopqrstuvwxyz"
     (repo / secret_path).write_text("not relevant\n", encoding="utf-8")
     reviewer = FakeReviewer()
 
@@ -321,7 +315,7 @@ def test_invalid_model_response_retries_then_fails_closed(tmp_path: Path) -> Non
 def test_model_output_is_redacted_before_result_is_returned(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
-    secret = _TEST_API_SECRET
+    secret = "sk-abcdefghijklmnopqrstuvwxyz"
     reviewer = FakeReviewer(
         [
             {

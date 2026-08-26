@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.tools.availability import (
+from alysis_code.tools.availability import (
     WEB_UNAVAILABLE_OBSERVATION,
     is_tool_unavailable_result,
     web_unavailable_result,

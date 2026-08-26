@@ -9,14 +9,14 @@ import pytest
 from click import Abort
 from rich.console import Console
 
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.cli_impl.config_menu import ROLE_ORDER, thinking_label_from_cfg
-from sylliptor_agent_cli.config import (
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.cli_impl.config_menu import ROLE_ORDER, thinking_label_from_cfg
+from alysis_code.config import (
     AppConfig,
     load_config,
     save_config,
 )
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
 
 
 class PromptScript:
@@ -65,7 +65,7 @@ def _patch_console(monkeypatch) -> io.StringIO:
 
 
 def _seed_config(tmp_path: Path, monkeypatch, *, model: str = "old") -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     cfg.model = model
     save_config(cfg)
@@ -291,7 +291,7 @@ def test_cancel_with_dirty_prompts_confirm(monkeypatch, tmp_path: Path) -> None:
     result = config_menu_mod.run_config_menu()
 
     assert result.saved is True
-    assert output.getvalue().count("Sylliptor Configuration") >= 2
+    assert output.getvalue().count("Alysis Code Configuration") >= 2
     assert load_config().model == "gpt-5"
 
 
@@ -332,16 +332,16 @@ def test_config_menu_preset_rows_explain_compatibility_and_native_modes() -> Non
 
     # The /config "add preset" picker mirrors setup: native first-party
     # providers lead and every other hosted provider follows in registration
-    # order; the account-gated Sylliptor preset stays behind the advanced
-    # picker.
+    # order; the account-gated hosted MiMo preset stays behind the advanced
+    # picker while no hosted campaign is active.
     assert keys[:3] == ["openai-responses", "anthropic", "gemini"]
-    assert "sylliptor" not in keys
-    assert "xiaomi-mimo" not in keys
+    assert "alysis" not in keys
+    assert "xiaomi-mimo" in keys
     assert "deepseek" in keys
     assert "anthropic-compat" not in keys
     assert "gemini-compat" not in keys
     assert "ollama" not in keys
-    assert "sylliptor" in advanced_keys
+    assert "alysis" in advanced_keys
     assert "deepseek" not in advanced_keys
     assert "anthropic-compat" in advanced_keys
     assert "gemini-compat" in advanced_keys

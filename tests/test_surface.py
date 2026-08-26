@@ -9,18 +9,18 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import AgentSession, ToolDef
-from sylliptor_agent_cli.approval_scope import exact_file_set_scope
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.interactive_input_guard import is_interactive_prompt_active
-from sylliptor_agent_cli.knowledge_capture import RecordingSurface
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.surface import rich_surface as rich_surface_mod
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.surface.rich_surface import RichSurface
-from sylliptor_agent_cli.surface.types import (
+from alysis_code.agent_loop import AgentSession, ToolDef
+from alysis_code.approval_scope import exact_file_set_scope
+from alysis_code.config import AppConfig
+from alysis_code.interactive_input_guard import is_interactive_prompt_active
+from alysis_code.knowledge_capture import RecordingSurface
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.model_registry import ModelMeta
+from alysis_code.session_store import SessionStore
+from alysis_code.surface import rich_surface as rich_surface_mod
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.surface.rich_surface import RichSurface
+from alysis_code.surface.types import (
     ApprovalDecision,
     ApprovalRequest,
     PatchEvent,
@@ -31,7 +31,7 @@ from sylliptor_agent_cli.surface.types import (
     ToolOutputEvent,
     ToolStartEvent,
 )
-from sylliptor_agent_cli.usage_tracker import UsageSummary
+from alysis_code.usage_tracker import UsageSummary
 
 
 class _RecordingSurface:
@@ -181,7 +181,7 @@ def test_agent_session_routes_tool_events_to_surface(tmp_path: Path) -> None:
 def test_rich_surface_approval_supports_view_and_allow_for_session(monkeypatch) -> None:
     answers = iter(["4", "2"])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.Prompt.ask",
+        "alysis_code.surface.rich_surface.Prompt.ask",
         lambda *_args, **_kwargs: next(answers),
     )
     surface = RichSurface(console=Console(file=io.StringIO(), force_terminal=False))
@@ -204,7 +204,7 @@ def test_rich_surface_approval_supports_view_and_allow_for_session(monkeypatch) 
 
 def test_rich_surface_approval_accepts_legacy_alias_choice(monkeypatch) -> None:
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.Prompt.ask",
+        "alysis_code.surface.rich_surface.Prompt.ask",
         lambda *_args, **_kwargs: "y",
     )
     surface = RichSurface(console=Console(file=io.StringIO(), force_terminal=False))
@@ -229,7 +229,7 @@ def test_rich_surface_approval_marks_interactive_prompt_active(monkeypatch) -> N
         return "y"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.Prompt.ask",
+        "alysis_code.surface.rich_surface.Prompt.ask",
         _fake_prompt,
     )
     surface = RichSurface(console=Console(file=io.StringIO(), force_terminal=False))
@@ -251,7 +251,7 @@ def test_rich_surface_approval_marks_interactive_prompt_active(monkeypatch) -> N
 def test_rich_surface_approval_panel_hides_alias_line(monkeypatch) -> None:
     buffer = io.StringIO()
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.Prompt.ask",
+        "alysis_code.surface.rich_surface.Prompt.ask",
         lambda *_args, **_kwargs: "3",
     )
     surface = RichSurface(console=Console(file=buffer, force_terminal=False))
@@ -368,7 +368,7 @@ def test_rich_surface_can_hide_status_line() -> None:
         StatusEvent(
             mode="review",
             model="gpt-4.1-mini",
-            workspace="/tmp/sylliptor",
+            workspace="/tmp/alysis",
             session_id="sid",
             branch="main",
             dirty=True,
@@ -644,7 +644,7 @@ def test_rich_surface_shows_verify_run_trace_and_summary() -> None:
                         "output_truncated": False,
                         "fallback_used": False,
                     },
-                    "artifact_path": ".sylliptor/sessions/s1/verify/step001_verify_run.txt",
+                    "artifact_path": ".alysis/sessions/s1/verify/step001_verify_run.txt",
                 },
                 ensure_ascii=True,
             ),
@@ -890,7 +890,7 @@ def test_rich_surface_shows_symbol_search_trace_and_summary() -> None:
                     "exact": True,
                     "matches": [
                         {
-                            "path": "src/sylliptor_agent_cli/agent_loop.py",
+                            "path": "src/alysis_code/agent_loop.py",
                             "line": 944,
                             "kind": "function",
                             "name": "build_tools",
@@ -946,7 +946,7 @@ def test_rich_surface_shows_history_search_trace_and_summary() -> None:
                     "matches": [
                         {
                             "kind": "history",
-                            "path": ".sylliptor/sessions/s1/history/chunk_0001.jsonl",
+                            "path": ".alysis/sessions/s1/history/chunk_0001.jsonl",
                             "line": 10,
                             "text": "verify_run called",
                         }
@@ -1339,7 +1339,7 @@ def test_format_turn_elapsed_compacts_seconds_and_minutes() -> None:
 def test_rich_surface_shows_elapsed_time_in_answer_separator(monkeypatch) -> None:
     monotonic_values = iter([100.0, 104.8])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.time.monotonic",
+        "alysis_code.surface.rich_surface.time.monotonic",
         lambda: next(monotonic_values),
     )
     buffer = io.StringIO()
@@ -1452,7 +1452,7 @@ def test_rich_surface_shows_working_banner_after_tool_start_in_active_turn() -> 
 def test_rich_surface_shows_elapsed_time_on_first_working_banner_only(monkeypatch) -> None:
     monotonic_values = iter([200.0, 203.4])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.time.monotonic",
+        "alysis_code.surface.rich_surface.time.monotonic",
         lambda: next(monotonic_values),
     )
     buffer = io.StringIO()
@@ -1479,7 +1479,7 @@ def test_rich_surface_shows_elapsed_time_on_first_working_banner_only(monkeypatc
 def test_rich_surface_omits_subsecond_elapsed_labels(monkeypatch) -> None:
     monotonic_values = iter([300.0, 300.4])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.time.monotonic",
+        "alysis_code.surface.rich_surface.time.monotonic",
         lambda: next(monotonic_values),
     )
     buffer = io.StringIO()

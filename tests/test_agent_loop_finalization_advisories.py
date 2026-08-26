@@ -4,13 +4,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from sylliptor_agent_cli.agent.tools_assembly import ToolDef
-from sylliptor_agent_cli.agent.turn.core import _spec_faithfulness_advisory_message
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.types import AssistantResponsePhase
-from sylliptor_agent_cli.session_store import read_session_events
+import pytest
+
+from alysis_code.agent.tools_assembly import ToolDef
+from alysis_code.agent.turn.core import _spec_faithfulness_advisory_message
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.types import AssistantResponsePhase, LLMError
+from alysis_code.session_store import read_session_events
 
 _LIVE_BG_LINE_1 = (
     "- You have 1 background process(es) started with shell_background; they are terminated "
@@ -43,6 +45,35 @@ class _RecordingClient:
         response = self._responses[self.calls]
         self.calls += 1
         return response
+
+
+class _FailingRecordingClient(_RecordingClient):
+    def __init__(self, responses: list[LLMResponse], error_message: str) -> None:
+        super().__init__(responses)
+        self._error_message = error_message
+
+    def chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        stream: bool = False,
+        on_text_delta=None,  # type: ignore[no-untyped-def]
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        if self.calls < len(self._responses):
+            return super().chat(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                stream=stream,
+                on_text_delta=on_text_delta,
+                temperature=temperature,
+            )
+        self.call_records.append({"messages": list(messages)})
+        self.calls += 1
+        raise LLMError(self._error_message)
 
 
 class _FakeTerminalManager:
@@ -120,10 +151,10 @@ def test_spec_faithfulness_advisory_live_background_warning_is_one_shot_only() -
     assert _LIVE_BG_LINE_1 not in no_live_process_message.splitlines()
 
 
-def test_clean_one_shot_final_gets_one_spec_advisory_then_accepts(tmp_path: Path) -> None:
+def test_clean_one_shot_final_does_not_get_generic_spec_advisory(tmp_path: Path) -> None:
     sessions_dir, session = _create_one_shot_session(
         tmp_path,
-        session_id="clean-one-shot-spec-advisory",
+        session_id="clean-one-shot-no-generic-spec-advisory",
     )
     client = _RecordingClient(
         [
@@ -143,11 +174,6 @@ def test_clean_one_shot_final_gets_one_spec_advisory_then_accepts(tmp_path: Path
                 tool_calls=[],
                 raw={},
             ),
-            LLMResponse(
-                content="Completed work: answer.txt matches the requested output.",
-                tool_calls=[],
-                raw={},
-            ),
         ]
     )
     session.client = client  # type: ignore[assignment]
@@ -157,14 +183,14 @@ def test_clean_one_shot_final_gets_one_spec_advisory_then_accepts(tmp_path: Path
     finally:
         session.close()
 
-    log_path = sessions_dir / "clean-one-shot-spec-advisory.jsonl"
+    log_path = sessions_dir / "clean-one-shot-no-generic-spec-advisory.jsonl"
     assert exit_code == 0
-    assert client.calls == 3
-    assert _controller_details(log_path).count("spec_faithfulness_advisory") == 1
-    nudge_events = _event_payloads(log_path, "completion_gate_nudge")
-    assert [event["stage"] for event in nudge_events] == ["spec_faithfulness_advisory"]
-    assert "Final check before you finish:" in nudge_events[0]["message"]
+    assert client.calls == 2
+    assert "spec_faithfulness_advisory" not in _controller_details(log_path)
+    assert _event_payloads(log_path, "completion_gate_nudge") == []
     assert _event_payloads(log_path, "completion_gate_accepted_with_open_problems") == []
+    final_events = _event_payloads(log_path, "final")
+    assert final_events[-1]["content"] == "Completed work: wrote answer.txt."
 
 
 def test_ready_durable_outcome_finishes_without_redundant_spec_advisory(
@@ -276,6 +302,116 @@ def test_one_shot_finalization_advisory_mentions_live_background_process(
         message.get("role") == "system" and _LIVE_BG_LINE_1 in str(message.get("content") or "")
         for message in final_call_messages
     )
+    progress_messages = [
+        str(event.get("message") or "") for event in _event_payloads(log_path, "progress")
+    ]
+    assert "Requirements satisfied; running an optional final review." in progress_messages
+    assert not any("missing execution evidence" in message for message in progress_messages)
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        'LLM error 502: {"error":{"message":"Upstream model error"}}',
+        "provider rejected the request: invalid parameter shape",
+    ],
+    ids=["transient-provider-failure", "non-transient-model-failure"],
+)
+def test_optional_review_failure_preserves_gate_clear_answer(
+    tmp_path: Path,
+    error_message: str,
+) -> None:
+    session_id = "optional-review-fallback"
+    sessions_dir, session = _create_one_shot_session(
+        tmp_path,
+        session_id=session_id,
+    )
+    session.terminal_manager = _FakeTerminalManager(("running",))  # type: ignore[assignment]
+    accepted_text = "Completed work: wrote answer.txt."
+    client = _FailingRecordingClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc1",
+                        name="fs_write",
+                        arguments={"path": "answer.txt", "content": "42\n"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(content=accepted_text, tool_calls=[], raw={}),
+        ],
+        error_message,
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn("Create answer.txt containing 42.")
+    finally:
+        session.close()
+
+    log_path = sessions_dir / f"{session_id}.jsonl"
+    fallbacks = _event_payloads(log_path, "optional_finalization_failure_fallback")
+    final_events = _event_payloads(log_path, "final")
+
+    assert exit_code == 0
+    assert client.calls == 3
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["preserved_gate_clear_answer"] is True
+    assert _event_payloads(log_path, "error") == []
+    assert _event_payloads(log_path, "terminal_error") == []
+    assert final_events[-1]["content"] == accepted_text
+    assert final_events[-1]["degraded_reason"] == "optional_finalization_model_failure"
+    assert final_events[-1]["preserved_gate_clear_answer"] is True
+
+
+def test_interactive_file_work_finishes_without_optional_model_review(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_id = "interactive-no-optional-review"
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=8,
+        no_log=False,
+        api_key_override="override-key",
+        verification_enabled=False,
+        session_log_dir_override=sessions_dir,
+        session_id_override=session_id,
+    )
+    accepted_text = "Completed work: wrote answer.txt."
+    client = _RecordingClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc1",
+                        name="fs_write",
+                        arguments={"path": "answer.txt", "content": "42\n"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(content=accepted_text, tool_calls=[], raw={}),
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn("Create answer.txt containing 42.")
+    finally:
+        session.close()
+
+    log_path = sessions_dir / f"{session_id}.jsonl"
+    assert exit_code == 0
+    assert client.calls == 2
+    assert _event_payloads(log_path, "completion_gate_nudge") == []
+    assert _event_payloads(log_path, "optional_finalization_failure_fallback") == []
+    assert _event_payloads(log_path, "final")[-1]["content"] == accepted_text
 
 
 def test_assistant_prose_does_not_change_completion_gate_decisions(tmp_path: Path) -> None:
@@ -353,12 +489,12 @@ def test_assistant_prose_does_not_change_completion_gate_decisions(tmp_path: Pat
     assert all(signature == baseline for signature in signatures.values())
 
 
-def test_continuation_nudge_does_not_starve_clean_final_spec_advisory(
+def test_continuation_nudge_does_not_force_generic_final_spec_advisory(
     tmp_path: Path,
 ) -> None:
     sessions_dir, session = _create_one_shot_session(
         tmp_path,
-        session_id="continuation-then-spec-advisory",
+        session_id="continuation-without-generic-spec-advisory",
     )
     client = _RecordingClient(
         [
@@ -384,11 +520,6 @@ def test_continuation_nudge_does_not_starve_clean_final_spec_advisory(
                 tool_calls=[],
                 raw={},
             ),
-            LLMResponse(
-                content="Completed work: answer.txt matches the requested output.",
-                tool_calls=[],
-                raw={},
-            ),
         ]
     )
     session.client = client  # type: ignore[assignment]
@@ -398,11 +529,12 @@ def test_continuation_nudge_does_not_starve_clean_final_spec_advisory(
     finally:
         session.close()
 
-    log_path = sessions_dir / "continuation-then-spec-advisory.jsonl"
+    log_path = sessions_dir / "continuation-without-generic-spec-advisory.jsonl"
     details = _controller_details(log_path)
     assert exit_code == 0
+    assert client.calls == 3
     assert details.count("non_final_progress_continuation_nudge") == 1
-    assert details.count("spec_faithfulness_advisory") == 1
+    assert "spec_faithfulness_advisory" not in details
 
 
 def test_read_only_chat_final_does_not_get_spec_advisory(

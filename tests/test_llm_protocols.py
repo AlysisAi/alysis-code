@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.config import ConfigError
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.config import ConfigError
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     GEMINI_INTERACTIONS_PROTOCOL,
@@ -15,7 +15,7 @@ from sylliptor_agent_cli.llm.protocols import (
     get_provider_protocol_capabilities,
     resolve_reasoning_trace_capability,
 )
-from sylliptor_agent_cli.llm.types import BillingMode, ReasoningOutputKind
+from alysis_code.llm.types import BillingMode, ReasoningOutputKind
 
 
 def test_supported_llm_protocols_include_native_foundation_values() -> None:

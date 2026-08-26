@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_shared import resolve_managed_task_step_budget
-from sylliptor_agent_cli.step_budget import (
+from alysis_code.config import AppConfig
+from alysis_code.execution_shared import resolve_managed_task_step_budget
+from alysis_code.step_budget import (
     StepBudgetRequest,
     normalize_step_budget_policy,
     resolve_step_budget,
@@ -139,7 +139,7 @@ def test_limited_subagent_respects_parent_limit() -> None:
     assert resolution.profile == "explorer"
 
 
-def test_autonomous_payload_serializes_unlimited_as_null() -> None:
+def test_retired_subagent_name_uses_default_step_profile() -> None:
     payload = resolve_step_budget(
         StepBudgetRequest(
             kind="subagent",
@@ -153,7 +153,7 @@ def test_autonomous_payload_serializes_unlimited_as_null() -> None:
     assert payload["hard_cap"] is None
     assert payload["resolved_max_steps"] is None
     assert payload["unlimited"] is True
-    assert payload["profile"] == "test-strategist"
+    assert payload["profile"] == "default"
 
 
 def test_managed_task_autonomous_policy_retains_task_shape_telemetry() -> None:

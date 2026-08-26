@@ -5,23 +5,23 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.integration_gate import IntegrationGateResult
-from sylliptor_agent_cli.knowledge_base import (
+from alysis_code.config import AppConfig
+from alysis_code.failure_category import FailureCategory
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.integration_gate import IntegrationGateResult
+from alysis_code.knowledge_base import (
     write_issue_entry_for_task_id,
     write_task_attempt_entry,
 )
-from sylliptor_agent_cli.plan_assistant import PlannerTurnResult
-from sylliptor_agent_cli.plan_validation import PlannerFailedError
-from sylliptor_agent_cli.replanning import (
+from alysis_code.plan_assistant import PlannerTurnResult
+from alysis_code.plan_validation import PlannerFailedError
+from alysis_code.replanning import (
     build_replanning_trigger,
     resolve_replanning_mode,
     run_replanning_attempt,
     validate_replanning_plan_update,
 )
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 def _integration_result(

@@ -10,18 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.mcp import transport_stdio as transport_mod
-from sylliptor_agent_cli.mcp.client import McpClientError, McpStdioClient
-from sylliptor_agent_cli.mcp.config import load_resolved_mcp_config, user_mcp_config_path
-from sylliptor_agent_cli.mcp.errors import McpProcessError
-from sylliptor_agent_cli.mcp.jsonrpc import JsonRpcResponse
-from sylliptor_agent_cli.mcp.transport_stdio import (
+from alysis_code.mcp import transport_stdio as transport_mod
+from alysis_code.mcp.client import McpClientError, McpStdioClient
+from alysis_code.mcp.config import load_resolved_mcp_config, user_mcp_config_path
+from alysis_code.mcp.errors import McpProcessError
+from alysis_code.mcp.jsonrpc import JsonRpcResponse
+from alysis_code.mcp.transport_stdio import (
     McpStdioTransportError,
     McpStdioTransportProtocolError,
     McpStdioTransportTimeoutError,
     build_stdio_subprocess_env,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.runtime_kind import RuntimeKind
 
 _FIXTURE_SERVER = (
     Path(__file__).resolve().parent / "fixtures" / "mcp_servers" / "minimal_stdio_server.py"
@@ -47,7 +47,7 @@ def _resolved_stdio_server(
     **server_overrides: object,
 ):
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     fixture_config_path = tmp_path / "fixture-server.json"
     _write_json(fixture_config_path, fixture_payload)
 
@@ -60,7 +60,7 @@ def _resolved_stdio_server(
         # Python startup noise, control startup-timeout regressions.
         "args": ["-S", os.fspath(_FIXTURE_SERVER)],
         "env": {
-            "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_config_path),
+            "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_config_path),
         },
     }
     server_payload.update(server_overrides)
@@ -77,7 +77,7 @@ def _resolved_stdio_script_server(
     **server_overrides: object,
 ):
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     script_path = tmp_path / "stdio-script-server.py"
     script_path.write_text(textwrap.dedent(script), encoding="utf-8")
 
@@ -1327,7 +1327,7 @@ def test_stdio_client_supports_paginated_prompts_list_and_get(
 
         prompt_result = client.get_prompt(
             name="review_pr",
-            arguments={"repo": "owner/sylliptor"},
+            arguments={"repo": "owner/alysis"},
         )
         assert prompt_result.description == "Review helper"
         assert prompt_result.messages[0].role == "user"

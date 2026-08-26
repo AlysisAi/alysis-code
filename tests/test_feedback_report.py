@@ -13,26 +13,26 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.feedback_report import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.failure_category import FailureCategory
+from alysis_code.feedback_report import (
     FeedbackBundleResult,
     FeedbackGithubIssueResult,
     FeedbackReportError,
     create_feedback_bundle,
     create_feedback_github_issue_draft,
 )
-from sylliptor_agent_cli.forge import attach_asset, create_plan_run
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.web_research import build_web_research_artifact_from_events
+from alysis_code.forge import attach_asset, create_plan_run
+from alysis_code.session_store import SessionStore
+from alysis_code.web_research import build_web_research_artifact_from_events
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -195,7 +195,7 @@ def test_create_feedback_bundle_collects_retained_session_and_current_run(tmp_pa
         feedback_text="weird output in beta",
     )
 
-    assert result.output_root == workspace / "sylliptor-feedback"
+    assert result.output_root == workspace / "alysis-feedback"
     assert result.bundle_dir.exists()
     assert result.zip_path.exists()
     assert result.session_id == "sess_demo"
@@ -262,7 +262,7 @@ def test_create_feedback_bundle_collects_retained_session_and_current_run(tmp_pa
         manifest["run"]["run_dir"]
         == paths.run_dir.resolve().relative_to(workspace.resolve()).as_posix()
     )
-    assert manifest["run"]["current_run_pointer_path"] == ".sylliptor/current_run.json"
+    assert manifest["run"]["current_run_pointer_path"] == ".alysis/current_run.json"
     assert copied_pointer["workspace_root"] == "<workspace-root>"
     assert copied_pointer["focus_path"] == "."
 
@@ -284,7 +284,7 @@ def test_create_feedback_bundle_collects_retained_session_and_current_run(tmp_pa
     exported_run_log = (
         result.bundle_dir / "forge" / "run" / "execution" / "logs" / "run.log"
     ).read_text(encoding="utf-8")
-    assert "- Output Root: `sylliptor-feedback`" in summary_md
+    assert "- Output Root: `alysis-feedback`" in summary_md
     assert "- Included Session Log: `session/log.jsonl`" in summary_md
     assert "- Included Current Run Pointer: `forge/current_run.json`" in summary_md
     assert "- Verification Selection Source: `config.verify_commands_fallback`" in summary_md
@@ -861,7 +861,7 @@ def test_feedback_bundle_strips_reasoning_and_continuation_from_json_exports(
                         "reasoning_content": raw_reasoning,
                         "reasoning": raw_reasoning,
                         "reasoning_details": [{"type": "reasoning.text", "text": reasoning_detail}],
-                        "_sylliptor_provider_metadata": {
+                        "_alysis_provider_metadata": {
                             "openai_responses": {
                                 "response_id": "resp_private",
                                 "output_items": [
@@ -1375,7 +1375,7 @@ def test_create_feedback_bundle_sanitizes_exported_asset_original_paths(tmp_path
     asset = exported_plan["assets"][0]
 
     assert asset["original_path"] == "brief.txt"
-    assert asset["stored_path"].startswith(".sylliptor/runs/")
+    assert asset["stored_path"].startswith(".alysis/runs/")
     assert os.fspath(tmp_path) not in json.dumps(exported_plan, sort_keys=True)
 
 
@@ -1530,7 +1530,7 @@ def test_create_feedback_github_issue_draft_builds_sanitized_prefill(
         workspace_root=workspace,
         cfg=AppConfig(
             session_log_dir=os.fspath(sessions_dir),
-            feedback_github_repo="https://github.com/acme/sylliptor.git",
+            feedback_github_repo="https://github.com/acme/alysis.git",
         ),
         feedback_text=feedback_text,
         latest=True,
@@ -1540,11 +1540,11 @@ def test_create_feedback_github_issue_draft_builds_sanitized_prefill(
     result = create_feedback_github_issue_draft(
         bundle_result=bundle,
         feedback_text=feedback_text,
-        cfg=AppConfig(feedback_github_repo="https://github.com/acme/sylliptor.git"),
+        cfg=AppConfig(feedback_github_repo="https://github.com/acme/alysis.git"),
         browser_open=lambda url, **_kwargs: opened_urls.append(str(url)) is None or True,
     )
 
-    assert result.repo == "acme/sylliptor"
+    assert result.repo == "acme/alysis"
     assert result.opened is True
     assert opened_urls == [result.issue_url]
     parsed = urlsplit(str(result.issue_url))
@@ -1553,8 +1553,8 @@ def test_create_feedback_github_issue_draft_builds_sanitized_prefill(
 
     assert parsed.scheme == "https"
     assert parsed.netloc == "github.com"
-    assert parsed.path == "/acme/sylliptor/issues/new"
-    assert query["title"][0].startswith("Sylliptor feedback: failure at src/app.py")
+    assert parsed.path == "/acme/alysis/issues/new"
+    assert query["title"][0].startswith("Alysis Code feedback: failure at src/app.py")
     assert "src/app.py" in body
     assert os.fspath(workspace) not in body
     assert "secret-token-12345678" not in body
@@ -1569,9 +1569,9 @@ def test_create_feedback_github_issue_draft_can_be_disabled_or_not_opened(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     bundle = FeedbackBundleResult(
-        bundle_dir=workspace / "sylliptor-feedback" / "bundle",
-        zip_path=workspace / "sylliptor-feedback" / "bundle.zip",
-        output_root=workspace / "sylliptor-feedback",
+        bundle_dir=workspace / "alysis-feedback" / "bundle",
+        zip_path=workspace / "alysis-feedback" / "bundle.zip",
+        output_root=workspace / "alysis-feedback",
         workspace_root=workspace,
         session_id="sid",
         run_id=None,
@@ -1585,7 +1585,7 @@ def test_create_feedback_github_issue_draft_can_be_disabled_or_not_opened(
     )
     no_open = create_feedback_github_issue_draft(
         bundle_result=bundle,
-        cfg=AppConfig(feedback_github_repo="acme/sylliptor"),
+        cfg=AppConfig(feedback_github_repo="acme/alysis"),
         open_browser=False,
         browser_open=lambda url, **_kwargs: opened_urls.append(str(url)) is None or True,
     )
@@ -1615,7 +1615,7 @@ def test_create_feedback_github_issue_draft_caps_large_prefill_urls(tmp_path: Pa
     result = create_feedback_github_issue_draft(
         bundle_result=bundle,
         feedback_text=long_feedback,
-        cfg=AppConfig(feedback_github_repo="acme/sylliptor"),
+        cfg=AppConfig(feedback_github_repo="acme/alysis"),
         open_browser=False,
     )
 
@@ -1633,9 +1633,9 @@ def test_chat_report_command_creates_bundle_host_side(monkeypatch, tmp_path: Pat
     def fake_create_feedback_bundle(**kwargs: Any) -> FeedbackBundleResult:
         calls.append(dict(kwargs))
         return FeedbackBundleResult(
-            bundle_dir=tmp_path / "sylliptor-feedback" / "bundle",
-            zip_path=tmp_path / "sylliptor-feedback" / "bundle.zip",
-            output_root=tmp_path / "sylliptor-feedback",
+            bundle_dir=tmp_path / "alysis-feedback" / "bundle",
+            zip_path=tmp_path / "alysis-feedback" / "bundle.zip",
+            output_root=tmp_path / "alysis-feedback",
             workspace_root=tmp_path,
             session_id="sid",
             run_id=None,
@@ -1644,8 +1644,8 @@ def test_chat_report_command_creates_bundle_host_side(monkeypatch, tmp_path: Pat
     def fake_create_feedback_github_issue_draft(**kwargs: Any) -> FeedbackGithubIssueResult:
         issue_calls.append(dict(kwargs))
         return FeedbackGithubIssueResult(
-            repo="AlysisAi/Sylliptor",
-            issue_url="https://github.com/AlysisAi/Sylliptor/issues/new?title=x",
+            repo="AlysisAi/alysis-code",
+            issue_url="https://github.com/AlysisAi/alysis-code/issues/new?title=x",
             opened=False,
             open_attempted=False,
         )
@@ -1683,9 +1683,9 @@ def test_chat_report_command_creates_bundle_host_side(monkeypatch, tmp_path: Pat
     assert calls[0]["active_run_paths"] is None
     assert calls[0]["pending_images"] == ["queued.png"]
     assert issue_calls[0]["bundle_result"] == FeedbackBundleResult(
-        bundle_dir=tmp_path / "sylliptor-feedback" / "bundle",
-        zip_path=tmp_path / "sylliptor-feedback" / "bundle.zip",
-        output_root=tmp_path / "sylliptor-feedback",
+        bundle_dir=tmp_path / "alysis-feedback" / "bundle",
+        zip_path=tmp_path / "alysis-feedback" / "bundle.zip",
+        output_root=tmp_path / "alysis-feedback",
         workspace_root=tmp_path,
         session_id="sid",
         run_id=None,
@@ -1703,9 +1703,9 @@ def test_chat_report_still_reports_bundle_when_github_draft_fails(
 ) -> None:
     def fake_create_feedback_bundle(**_kwargs: Any) -> FeedbackBundleResult:
         return FeedbackBundleResult(
-            bundle_dir=tmp_path / "sylliptor-feedback" / "bundle",
-            zip_path=tmp_path / "sylliptor-feedback" / "bundle.zip",
-            output_root=tmp_path / "sylliptor-feedback",
+            bundle_dir=tmp_path / "alysis-feedback" / "bundle",
+            zip_path=tmp_path / "alysis-feedback" / "bundle.zip",
+            output_root=tmp_path / "alysis-feedback",
             workspace_root=tmp_path,
             session_id="sid",
             run_id=None,
@@ -1755,9 +1755,9 @@ def test_chat_report_command_in_forge_includes_active_run_paths(
     def fake_create_feedback_bundle(**kwargs: Any) -> FeedbackBundleResult:
         calls.append(dict(kwargs))
         return FeedbackBundleResult(
-            bundle_dir=tmp_path / "sylliptor-feedback" / "bundle",
-            zip_path=tmp_path / "sylliptor-feedback" / "bundle.zip",
-            output_root=tmp_path / "sylliptor-feedback",
+            bundle_dir=tmp_path / "alysis-feedback" / "bundle",
+            zip_path=tmp_path / "alysis-feedback" / "bundle.zip",
+            output_root=tmp_path / "alysis-feedback",
             workspace_root=tmp_path,
             session_id="sid",
             run_id="run_01",
@@ -1766,8 +1766,8 @@ def test_chat_report_command_in_forge_includes_active_run_paths(
     def fake_create_feedback_github_issue_draft(**kwargs: Any) -> FeedbackGithubIssueResult:
         issue_calls.append(dict(kwargs))
         return FeedbackGithubIssueResult(
-            repo="AlysisAi/Sylliptor",
-            issue_url="https://github.com/AlysisAi/Sylliptor/issues/new?title=x",
+            repo="AlysisAi/alysis-code",
+            issue_url="https://github.com/AlysisAi/alysis-code/issues/new?title=x",
             opened=True,
             open_attempted=True,
         )
@@ -1812,9 +1812,9 @@ def test_chat_feedback_alias_uses_report_flow(monkeypatch, tmp_path: Path) -> No
     def fake_create_feedback_bundle(**kwargs: Any) -> FeedbackBundleResult:
         calls.append(dict(kwargs))
         return FeedbackBundleResult(
-            bundle_dir=tmp_path / "sylliptor-feedback" / "bundle",
-            zip_path=tmp_path / "sylliptor-feedback" / "bundle.zip",
-            output_root=tmp_path / "sylliptor-feedback",
+            bundle_dir=tmp_path / "alysis-feedback" / "bundle",
+            zip_path=tmp_path / "alysis-feedback" / "bundle.zip",
+            output_root=tmp_path / "alysis-feedback",
             workspace_root=tmp_path,
             session_id="sid",
             run_id=None,
@@ -1822,7 +1822,7 @@ def test_chat_feedback_alias_uses_report_flow(monkeypatch, tmp_path: Path) -> No
 
     def fake_create_feedback_github_issue_draft(**_kwargs: Any) -> FeedbackGithubIssueResult:
         return FeedbackGithubIssueResult(
-            repo="AlysisAi/Sylliptor",
+            repo="AlysisAi/alysis-code",
             issue_url=None,
             opened=False,
             open_attempted=False,
@@ -1865,7 +1865,7 @@ def test_report_create_command_exports_latest_retained_bundle(tmp_path: Path) ->
     _write_retained_session(sessions_dir=sessions_dir, session_id="sess_cli")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["report", "create", "beta note", "--path", os.fspath(workspace), "--latest"],
         env=env,
     )
@@ -1874,7 +1874,7 @@ def test_report_create_command_exports_latest_retained_bundle(tmp_path: Path) ->
     assert "Feedback bundle directory:" in result.output
     assert "Feedback bundle archive:" in result.output
     assert "GitHub issue draft URL:" in result.output
-    assert (workspace / "sylliptor-feedback").exists()
+    assert (workspace / "alysis-feedback").exists()
 
 
 def test_report_create_command_defaults_to_url_only_and_open_flag_opts_in(
@@ -1892,8 +1892,8 @@ def test_report_create_command_defaults_to_url_only_and_open_flag_opts_in(
     def fake_create_feedback_github_issue_draft(**kwargs: Any) -> FeedbackGithubIssueResult:
         open_values.append(kwargs.get("open_browser"))
         return FeedbackGithubIssueResult(
-            repo="AlysisAi/Sylliptor",
-            issue_url="https://github.com/AlysisAi/Sylliptor/issues/new?title=x",
+            repo="AlysisAi/alysis-code",
+            issue_url="https://github.com/AlysisAi/alysis-code/issues/new?title=x",
             opened=bool(kwargs.get("open_browser")),
             open_attempted=bool(kwargs.get("open_browser")),
         )
@@ -1905,12 +1905,12 @@ def test_report_create_command_defaults_to_url_only_and_open_flag_opts_in(
     )
 
     first = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["report", "create", "beta note", "--path", os.fspath(workspace), "--latest"],
         env=env,
     )
     second = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["report", "create", "beta note", "--path", os.fspath(workspace), "--latest", "--open"],
         env=env,
     )
@@ -1943,7 +1943,7 @@ def test_report_create_command_reports_bundle_when_github_draft_fails(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["report", "create", "beta note", "--path", os.fspath(workspace), "--latest"],
         env=env,
     )
@@ -1964,7 +1964,7 @@ def test_report_create_command_local_only_skips_github_issue(tmp_path: Path) -> 
     _write_retained_session(sessions_dir=sessions_dir, session_id="sess_cli")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "report",
             "create",
@@ -1986,7 +1986,7 @@ def test_report_create_rejects_conflicting_github_flags(tmp_path: Path) -> None:
     runner = CliRunner()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "report",
             "create",
@@ -2007,8 +2007,8 @@ def test_resolve_session_source_latest_skips_foreign_owner_sessions(tmp_path: Pa
     import time
     import uuid
 
-    from sylliptor_agent_cli.feedback_report import _resolve_session_source
-    from sylliptor_agent_cli.session_store import local_session_owner
+    from alysis_code.feedback_report import _resolve_session_source
+    from alysis_code.session_store import local_session_owner
 
     sessions_dir = tmp_path / "sessions"
 

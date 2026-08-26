@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.session_store import read_session_events
 
 
 class _FakeClock:

@@ -4,7 +4,7 @@ import json
 from importlib import resources
 from pathlib import Path
 
-from sylliptor_agent_cli.litellm_static_provider import get_bundled_model_catalog_provenance
+from alysis_code.litellm_static_provider import get_bundled_model_catalog_provenance
 
 
 def test_pyproject_does_not_depend_on_litellm() -> None:
@@ -16,7 +16,7 @@ def test_pyproject_does_not_depend_on_litellm() -> None:
 
 
 def test_bundled_model_catalog_resource_is_readable() -> None:
-    catalog_pkg = "sylliptor_agent_cli.model_catalog"
+    catalog_pkg = "alysis_code.model_catalog"
     catalog_text = (
         resources.files(catalog_pkg)
         .joinpath("litellm_model_prices_snapshot.json")
@@ -44,7 +44,7 @@ def test_bundled_model_catalog_resource_is_readable() -> None:
 
 def test_chatgpt_subscription_catalog_resource_is_readable_and_not_entitlement() -> None:
     catalog_text = (
-        resources.files("sylliptor_agent_cli.model_catalog")
+        resources.files("alysis_code.model_catalog")
         .joinpath("chatgpt_codex_subscription_snapshot.json")
         .read_text(encoding="utf-8")
     )

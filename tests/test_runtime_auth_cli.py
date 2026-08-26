@@ -2,30 +2,30 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent_runtimes.base import RuntimeAccountStatus
-from sylliptor_agent_cli.cli import app
-from sylliptor_agent_cli.cli_impl.commands import auth as auth_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.profiles import (
+from alysis_code import cli as cli_mod
+from alysis_code.agent_runtimes.base import RuntimeAccountStatus
+from alysis_code.cli import app
+from alysis_code.cli_impl.commands import auth as auth_mod
+from alysis_code.config import AppConfig
+from alysis_code.profiles import (
     ProfileSpec,
     add_profile,
     get_active_profile,
     set_active_profile,
 )
-from sylliptor_agent_cli.provider_auth import (
+from alysis_code.provider_auth import (
     ProviderAccountStatus,
     ProviderModel,
     ProviderReasoningEffort,
 )
 
 
-def test_unified_login_rows_offer_sylliptor_and_chatgpt_codex() -> None:
+def test_unified_login_rows_offer_alysis_and_chatgpt_codex() -> None:
     rows = auth_mod.login_connection_rows()
 
-    assert [row[0] for row in rows] == ["sylliptor", "openai-codex"]
+    assert [row[0] for row in rows] == ["alysis", "openai-codex"]
     assert [row[1] for row in rows] == [
-        "Sylliptor account",
+        "Alysis Code account",
         "ChatGPT Codex subscription",
     ]
 
@@ -220,7 +220,7 @@ def test_auth_status_reports_native_subscription_account(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "ChatGPT Codex subscription" in result.output
-    assert "native Sylliptor client (openai_responses)" in result.output
+    assert "native Alysis Code client (openai_responses)" in result.output
     assert "Authenticated: yes" in result.output
     assert "developer@example.test" in result.output
 

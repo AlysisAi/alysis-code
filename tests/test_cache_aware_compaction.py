@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.compaction.conversation_compactor import (
+from alysis_code.compaction.conversation_compactor import (
     _cache_aware_compaction_decision,
     _cache_prefix_compaction_shape,
 )
-from sylliptor_agent_cli.compaction.settings import CompactionSettings
-from sylliptor_agent_cli.request_estimation import (
+from alysis_code.compaction.settings import CompactionSettings
+from alysis_code.request_estimation import (
     RequestTokenBreakdown,
     estimate_message_tokens,
     estimate_tool_schema_tokens,

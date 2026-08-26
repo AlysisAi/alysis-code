@@ -9,7 +9,7 @@ from types import ModuleType, SimpleNamespace
 
 def _load_root_conftest() -> ModuleType:
     module_path = Path(__file__).with_name("conftest.py")
-    spec = importlib.util.spec_from_file_location("_sylliptor_root_test_conftest", module_path)
+    spec = importlib.util.spec_from_file_location("_alysis_root_test_conftest", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load root test conftest from {module_path}")
     module = importlib.util.module_from_spec(spec)
@@ -31,7 +31,7 @@ def _request_for_tmp_path(tmp_path: Path) -> SimpleNamespace:
 
 
 def test_forge_watchdog_worktree_diagnostics_find_run_worktrees(tmp_path: Path) -> None:
-    run_dir = tmp_path / "repo" / ".sylliptor" / "runs" / "run-1"
+    run_dir = tmp_path / "repo" / ".alysis" / "runs" / "run-1"
     worktree_repo = run_dir / "worktrees" / "T01" / "repo"
     worktree_repo.mkdir(parents=True)
     failed_cleanup_marker = worktree_repo.parent / "failed_cleanup.json"
@@ -60,7 +60,7 @@ def test_forge_watchdog_payload_includes_cleanup_surfaces(
         lambda *, file, all_threads: file.write("stack traces\n"),
     )
 
-    run_dir = tmp_path / "repo" / ".sylliptor" / "runs" / "run-1"
+    run_dir = tmp_path / "repo" / ".alysis" / "runs" / "run-1"
     run_dir.mkdir(parents=True)
     (run_dir / "active_execution.lock.json").write_text(
         json.dumps(
@@ -83,7 +83,7 @@ def test_forge_watchdog_payload_includes_cleanup_surfaces(
     )
 
     output = stream.getvalue()
-    assert "Sylliptor Forge test watchdog timeout" in output
+    assert "Alysis Code Forge test watchdog timeout" in output
     assert '"nodeid": "tests/test_forge_exec.py::test_hangs"' in output
     assert '"active_threads"' in output
     assert '"child_processes"' in output

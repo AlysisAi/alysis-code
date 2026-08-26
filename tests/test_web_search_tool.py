@@ -5,16 +5,16 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_responses import (
+from alysis_code.alysis_cloud import DEFAULT_PROXY_BASE_URL
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_responses import (
     WebSearchCitation,
     WebSearchResponse,
     WebSearchSource,
 )
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
-from sylliptor_agent_cli.sylliptor_cloud import DEFAULT_PROXY_BASE_URL
-from sylliptor_agent_cli.tools import web_search as web_search_module
-from sylliptor_agent_cli.tools.web_search import (
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.tools import web_search as web_search_module
+from alysis_code.tools.web_search import (
     _OPENROUTER_WEB_MIN_TIMEOUT_S,
     WebSearchError,
     _is_openrouter_base_url,
@@ -22,12 +22,12 @@ from sylliptor_agent_cli.tools.web_search import (
     resolve_web_search_runtime_status,
     web_search,
 )
-from sylliptor_agent_cli.tools.web_search_ddgs import DdgsSearchError
+from alysis_code.tools.web_search_ddgs import DdgsSearchError
 
 
 @pytest.fixture(autouse=True)
 def _clear_generic_web_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
 
 
 def _public_resolver(_host: str, _port: int) -> list[str]:
@@ -188,7 +188,7 @@ def test_subscription_auth_makes_native_responses_web_search_ready() -> None:
 def test_web_search_auto_status_prefers_openai_when_conservatively_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     status = resolve_web_search_runtime_status(cfg=_configured_cfg(), api_key="main-key")
@@ -204,7 +204,7 @@ def test_web_search_auto_status_prefers_openai_when_conservatively_ready(
 def test_web_search_auto_status_falls_back_to_tavily_when_openai_not_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = _configured_cfg(base_url="https://example-proxy.invalid/v1")
@@ -222,7 +222,7 @@ def test_web_search_auto_status_falls_back_to_tavily_when_openai_not_ready(
 def test_web_search_auto_status_prefers_native_when_external_is_also_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     status = resolve_web_search_runtime_status(cfg=_configured_cfg(), api_key="main-key")
@@ -237,7 +237,7 @@ def test_web_search_auto_status_prefers_native_when_external_is_also_ready(
 def test_web_search_native_status_never_selects_tavily_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = _configured_cfg(mode="native", base_url="https://example-proxy.invalid/v1")
@@ -260,7 +260,7 @@ def test_web_search_native_status_never_selects_tavily_fallback(
 def test_web_search_external_status_selects_tavily_and_ignores_ready_native(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = _configured_cfg(mode="external")
@@ -277,7 +277,7 @@ def test_web_search_external_status_selects_tavily_and_ignores_ready_native(
 def test_web_search_auto_status_uses_dashscope_chat_for_qwen_coding_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -299,7 +299,7 @@ def test_web_search_auto_status_uses_dashscope_chat_for_qwen_coding_endpoint(
 def test_web_search_auto_status_uses_dashscope_chat_for_qwen_us_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -321,7 +321,7 @@ def test_web_search_auto_status_uses_dashscope_chat_for_qwen_us_endpoint(
 def test_web_search_auto_status_supports_qwen37_responses_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -359,7 +359,7 @@ def test_web_search_auto_status_uses_native_chinese_provider_adapters(
     model: str,
     expected_provider: str,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(model=model, base_url=base_url, web_search_mode="auto")
@@ -375,7 +375,7 @@ def test_web_search_auto_status_uses_native_chinese_provider_adapters(
 def test_web_search_auto_status_uses_cohere_hosted_connector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -392,8 +392,8 @@ def test_web_search_auto_status_uses_cohere_hosted_connector(
     assert runtime.provider == "cohere_web_search"
 
 
-def test_is_openrouter_base_url_no_longer_matches_sylliptor_proxy() -> None:
-    # The Sylliptor hosted proxy forwarded to OpenRouter only during the retired
+def test_is_openrouter_base_url_no_longer_matches_alysis_proxy() -> None:
+    # The Alysis Code hosted proxy forwarded to OpenRouter only during the retired
     # MiMo (Xiaomi) trial; it now forwards to DeepSeek, which has no native web
     # search — so the proxy must NOT classify as an OpenRouter base_url anymore.
     assert (
@@ -408,15 +408,15 @@ def test_is_openrouter_base_url_no_longer_matches_sylliptor_proxy() -> None:
     assert _is_openrouter_base_url(None) is False
 
 
-def test_web_search_no_longer_treats_sylliptor_proxy_as_openrouter(
+def test_web_search_no_longer_treats_alysis_proxy_as_openrouter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The hosted proxy now forwards to DeepSeek (no native web search), so the
     # MiMo-era OpenRouter routing must not activate for the proxy base_url.
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_BASE_URL", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_ADAPTER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_BASE_URL", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -435,9 +435,9 @@ def test_web_search_openrouter_floors_short_timeout(
     # A short web_search_timeout_s (e.g. 20s) starves the OpenRouter web round-trip,
     # so the openrouter_web adapter floors its per-attempt budget. An explicitly
     # higher timeout is preserved untouched.
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_ADAPTER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_TIMEOUT_S", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     floored = resolve_web_search_runtime(
@@ -470,14 +470,14 @@ def test_web_search_openrouter_floors_short_timeout(
     assert generous.timeout_s == 120.0
 
 
-def test_web_search_auto_status_never_selects_openrouter_for_sylliptor_proxy(
+def test_web_search_auto_status_never_selects_openrouter_for_alysis_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Auto mode used to pick the OpenRouter backend for the proxy during the
     # MiMo trial. The proxy now forwards to DeepSeek, so no OpenRouter routing.
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_ADAPTER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = AppConfig(
@@ -493,7 +493,7 @@ def test_web_search_auto_status_never_selects_openrouter_for_sylliptor_proxy(
 def test_web_search_explicit_openai_override_uses_only_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "openai_responses")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "openai_responses")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     status = resolve_web_search_runtime_status(cfg=_configured_cfg(), api_key="main-key")
@@ -506,7 +506,7 @@ def test_web_search_explicit_openai_override_uses_only_openai(
 def test_web_search_explicit_tavily_override_uses_only_tavily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "tavily")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     status = resolve_web_search_runtime_status(cfg=_configured_cfg(), api_key="main-key")
@@ -519,7 +519,7 @@ def test_web_search_explicit_tavily_override_uses_only_tavily(
 def test_web_search_native_mode_rejects_explicit_external_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = AppConfig(
@@ -546,7 +546,7 @@ def test_web_search_native_mode_rejects_explicit_external_adapter(
 def test_web_search_external_mode_rejects_explicit_native_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = AppConfig(
@@ -573,7 +573,7 @@ def test_web_search_external_mode_rejects_explicit_native_adapter(
 def test_web_search_explicit_dashscope_override_uses_only_dashscope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "dashscope_chat")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "dashscope_chat")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     cfg = AppConfig(
@@ -591,7 +591,7 @@ def test_web_search_explicit_dashscope_override_uses_only_dashscope(
 def test_web_search_explicit_tavily_override_without_key_is_not_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "tavily")
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     cfg = _configured_cfg(base_url="https://example-proxy.invalid/v1")
@@ -611,7 +611,7 @@ def test_tavily_accepts_generic_web_search_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_API_KEY", "external-search-key")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_API_KEY", "external-search-key")
     cfg = _configured_cfg(
         mode="external",
         base_url="https://api.deepseek.com/v1",
@@ -630,7 +630,7 @@ def test_tavily_accepts_generic_web_search_api_key(
 def test_web_search_auto_can_fall_back_from_openai_to_tavily_in_same_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -683,7 +683,7 @@ def test_web_search_auto_can_fall_back_from_openai_to_tavily_in_same_call(
 def test_web_search_native_mode_does_not_fallback_to_tavily_in_same_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     seen_hosts: list[str] = []
 
@@ -708,7 +708,7 @@ def test_web_search_native_mode_does_not_fallback_to_tavily_in_same_call(
 def test_web_search_external_mode_calls_only_tavily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     seen_hosts: list[str] = []
 
@@ -747,9 +747,9 @@ def test_web_search_external_mode_calls_only_tavily(
 def test_web_search_auto_reports_combined_error_when_all_backends_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "api.openai.com":
@@ -774,8 +774,8 @@ def test_web_search_auto_reports_combined_error_when_all_backends_fail(
 def test_web_search_auto_falls_back_to_keyless_ddgs_when_native_and_tavily_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -835,8 +835,8 @@ def test_web_search_auto_falls_back_to_keyless_ddgs_when_native_and_tavily_fail(
 def test_web_search_auto_combined_error_includes_keyless_ddgs_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -874,8 +874,8 @@ def test_web_search_keyless_ddgs_serves_provider_without_native_search_and_no_ke
 ) -> None:
     """The DeepSeek scenario: chat key only, unknown base_url, no external key."""
 
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def _fake_ddgs_search(**kwargs: object) -> dict[str, object]:
@@ -920,7 +920,7 @@ def test_web_search_keyless_ddgs_serves_provider_without_native_search_and_no_ke
 def test_web_search_tavily_output_contract_stays_stable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "tavily")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -993,7 +993,7 @@ def test_web_search_tavily_output_contract_stays_stable(
 def test_web_search_rejects_external_web_access_false_for_tavily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_PROVIDER", "tavily")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     with pytest.raises(
@@ -1085,7 +1085,7 @@ def test_web_search_plumbs_allowed_domains_and_external_access_to_openai_request
 def test_web_search_dispatches_to_dashscope_chat_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1137,7 +1137,7 @@ def test_web_search_dispatches_to_dashscope_chat_backend(
 def test_web_search_dispatches_to_xai_responses_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1183,7 +1183,7 @@ def test_web_search_dispatches_to_xai_responses_backend(
 def test_web_search_dispatches_to_anthropic_messages_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1248,7 +1248,7 @@ def test_web_search_dispatches_to_anthropic_messages_backend(
 def test_web_search_dispatches_to_gemini_grounding_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1312,7 +1312,7 @@ def test_web_search_dispatches_to_gemini_grounding_backend(
 def test_web_search_dispatches_to_openrouter_web_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1380,7 +1380,7 @@ def test_web_search_dispatches_to_openrouter_web_backend(
 def test_web_search_dispatches_to_moonshot_kimi_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     calls: list[dict[str, object]] = []
 
@@ -1474,7 +1474,7 @@ def test_web_search_dispatches_to_moonshot_kimi_backend(
 def test_web_search_dispatches_to_zhipu_web_search_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1533,7 +1533,7 @@ def test_web_search_dispatches_to_zhipu_web_search_backend(
 def test_web_search_dispatches_to_volcengine_web_search_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1601,7 +1601,7 @@ def test_web_search_dispatches_to_volcengine_web_search_backend(
 def test_web_search_openrouter_answer_without_sources_falls_back_to_tavily_in_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1651,7 +1651,7 @@ def test_web_search_openrouter_answer_without_sources_falls_back_to_tavily_in_au
 def test_web_search_openrouter_answer_without_sources_errors_when_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1683,7 +1683,7 @@ def test_web_search_openrouter_answer_without_sources_errors_when_explicit(
 def test_web_search_dispatches_to_perplexity_sonar_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1728,7 +1728,7 @@ def test_web_search_dispatches_to_perplexity_sonar_backend(
 def test_web_search_dispatches_to_groq_compound_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1785,7 +1785,7 @@ def test_web_search_dispatches_to_groq_compound_backend(
 def test_web_search_dispatches_to_mistral_conversations_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1836,7 +1836,7 @@ def test_web_search_dispatches_to_mistral_conversations_backend(
 def test_web_search_dispatches_to_minimax_token_plan_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1886,7 +1886,7 @@ def test_web_search_dispatches_to_minimax_token_plan_backend(
 def test_web_search_dispatches_to_cohere_hosted_connector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1942,7 +1942,7 @@ def test_web_search_dispatches_to_cohere_hosted_connector(
 def test_web_search_rejects_external_web_access_false_for_dashscope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     with pytest.raises(
@@ -1964,7 +1964,7 @@ def test_web_search_rejects_external_web_access_false_for_dashscope(
 def test_web_search_does_not_fall_back_to_tavily_when_external_web_access_is_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2002,9 +2002,9 @@ def test_resolve_web_search_runtime_status_reports_off_mode_as_disabled() -> Non
 def test_resolve_web_search_runtime_status_reports_auto_unavailable_notes_are_informative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     cfg = AppConfig(
         base_url="https://example-proxy.invalid/v1",
         web_search_mode="auto",
@@ -2034,9 +2034,9 @@ def test_resolve_web_search_runtime_status_reports_auto_unavailable_notes_are_in
 def test_resolve_web_search_runtime_status_reports_keyless_ddgs_ready_without_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     cfg = AppConfig(
         model="deepseek-chat",
         base_url="https://api.deepseek.com/v1",
@@ -2055,7 +2055,7 @@ def test_resolve_web_search_runtime_status_reports_keyless_ddgs_ready_without_ke
 def test_resolve_web_search_runtime_status_reports_ready_setup_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     status = resolve_web_search_runtime_status(
@@ -2072,7 +2072,7 @@ def test_resolve_web_search_runtime_status_reports_ready_setup_hint(
 def test_resolve_web_search_runtime_status_legacy_on_maps_to_auto_ready_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     status = resolve_web_search_runtime_status(
@@ -2143,7 +2143,7 @@ def test_resolve_web_search_runtime_status_legacy_on_maps_to_auto_ready_state(
                 web_search_timeout_s=20.0,
             ),
             "main-key",
-            {"SYLLIPTOR_WEB_SEARCH_PROVIDER": "tavily"},
+            {"ALYSIS_WEB_SEARCH_PROVIDER": "tavily"},
             "adapter tavily is not ready",
         ),
     ],
@@ -2155,9 +2155,9 @@ def test_resolve_web_search_runtime_strict_mode_rejects_missing_requirements(
     env: dict[str, str],
     message: str,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -2188,8 +2188,8 @@ def test_web_search_auto_prefers_working_fallback_for_rest_of_session(
     go straight to the external backend that served the result instead of paying
     a doomed native round-trip on every call."""
 
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     web_search_module._reset_web_search_session_state_for_tests()
 
@@ -2223,7 +2223,7 @@ def test_web_search_auto_prefers_working_fallback_for_rest_of_session(
     native_calls_after_first = len(native_calls)
     assert native_calls_after_first >= 1
 
-    from sylliptor_agent_cli.provider_telemetry import last_web_search_summary
+    from alysis_code.provider_telemetry import last_web_search_summary
 
     summary = last_web_search_summary()
     assert summary is not None
@@ -2251,8 +2251,8 @@ def test_web_search_auto_prefers_working_fallback_for_rest_of_session(
 def test_web_search_auto_fallback_preference_is_scoped_to_the_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     web_search_module._reset_web_search_session_state_for_tests()
 
@@ -2295,8 +2295,8 @@ def test_web_search_auto_fallback_preference_is_scoped_to_the_session(
 def test_web_search_auto_retries_native_after_preferred_fallback_stops_working(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     web_search_module._reset_web_search_session_state_for_tests()
 
@@ -2373,8 +2373,8 @@ def test_web_search_auto_fallback_preference_is_dropped_when_config_changes(
     """Fixing the web-search configuration mid-session must take effect: the
     remembered fallback shadows only the exact native runtime that failed."""
 
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     web_search_module._reset_web_search_session_state_for_tests()
 
@@ -2453,7 +2453,7 @@ def test_web_search_auto_fallback_preference_is_dropped_when_config_changes(
 def test_web_search_native_mode_failure_names_the_config_remedy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     seen_hosts: list[str] = []
 

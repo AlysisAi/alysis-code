@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.merge_conflict_reviewer import (
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.forge import create_plan_run
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.merge_conflict_reviewer import (
     ConflictReviewOutcome,
     capture_merge_conflict_context,
     review_merge_conflict,
@@ -145,7 +145,7 @@ def test_review_merge_conflict_skips_when_api_key_missing(tmp_path: Path, monkey
     paths = create_plan_run(repo)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.get_api_key",
+        "alysis_code.merge_conflict_reviewer.get_api_key",
         lambda: (_ for _ in ()).throw(ConfigError("missing key")),
     )
 
@@ -221,7 +221,7 @@ def test_review_merge_conflict_uses_role_model_override(tmp_path: Path, monkeypa
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -275,7 +275,7 @@ def test_review_merge_conflict_warns_for_fallback_model_metadata(
 
     monkeypatch.setattr("warnings.warn", _warn)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -306,7 +306,7 @@ def test_review_merge_conflict_strict_model_metadata_policy_fails_before_client(
             raise AssertionError("OpenAICompatClient should not be constructed in strict mode")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -349,7 +349,7 @@ def test_review_merge_conflict_retries_transient_request_failure_once(
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -384,7 +384,7 @@ def test_review_merge_conflict_retry_exhaustion_stays_skipped(tmp_path: Path, mo
             raise LLMError("LLM request failed: ReadTimeout")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -425,7 +425,7 @@ def test_review_merge_conflict_does_not_retry_nontransient_request_error(
             raise LLMError("LLM error 401: invalid_api_key")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -459,7 +459,7 @@ def test_review_merge_conflict_invalid_json_is_not_retried(tmp_path: Path, monke
             return type("Resp", (), {"content": "not-json"})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -504,7 +504,7 @@ def test_review_merge_conflict_normalization_error_is_not_retried(
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -542,7 +542,7 @@ def test_review_merge_conflict_retry_then_invalid_json_is_truthful(
             return type("Resp", (), {"content": "not-json"})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 
@@ -584,7 +584,7 @@ def test_review_merge_conflict_retry_then_nontransient_request_error_is_truthful
             raise LLMError("LLM error 401: invalid_api_key")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
 

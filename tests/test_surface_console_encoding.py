@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 from rich.text import Text
 
-from sylliptor_agent_cli.surface.console import (
+from alysis_code.surface.console import (
     make_console,
     safe_plain_error,
     stream_needs_ascii_fallback,
 )
-from sylliptor_agent_cli.surface.rich_surface import RichSurface
-from sylliptor_agent_cli.surface.types import (
+from alysis_code.surface.rich_surface import RichSurface
+from alysis_code.surface.types import (
     ApprovalRequest,
     PatchEvent,
     StatusEvent,
@@ -134,14 +134,14 @@ def test_rich_surface_tool_and_forge_renderables_ascii_safe_on_cp1252_stream(
     stream = _EncodedTextStream(encoding="cp1252", tty=True)
     surface = RichSurface(console=make_console(file=stream, force_terminal=True, width=120))
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.Prompt.ask",
+        "alysis_code.surface.rich_surface.Prompt.ask",
         lambda *_args, **_kwargs: "n",
     )
     # Force the line-based fallback path this test stubs: on hosts with a real
     # /dev/tty (e.g. a tmux-run suite) the inline selector would otherwise open
     # the terminal and block forever waiting for a human keypress.
     monkeypatch.setattr(
-        "sylliptor_agent_cli.surface.rich_surface.RichSurface._uses_inline_approval_selector",
+        "alysis_code.surface.rich_surface.RichSurface._uses_inline_approval_selector",
         lambda self: False,
     )
 
@@ -182,7 +182,7 @@ def test_exception_fallback_does_not_double_crash_when_console_print_fails() -> 
 
     rendered = stream.getvalue()
     _assert_ascii_safe(rendered)
-    assert "Sylliptor UnicodeEncodeError: boom |" in rendered
+    assert "Alysis Code UnicodeEncodeError: boom |" in rendered
     assert "Tip: enable UTF-8 mode" in rendered
     assert "sk-testsecret" not in rendered
 
@@ -206,7 +206,7 @@ def test_safe_plain_error_stdout_and_stderr_paths_are_ascii_and_redacted() -> No
 
 def test_source_console_construction_uses_safe_factory() -> None:
     offenders: list[str] = []
-    source_root = Path("src/sylliptor_agent_cli")
+    source_root = Path("src/alysis_code")
     for path in source_root.rglob("*.py"):
         if path.as_posix().endswith("surface/console.py"):
             continue

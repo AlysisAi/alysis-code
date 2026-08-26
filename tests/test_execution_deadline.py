@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from sylliptor_agent_cli.execution_deadline import (
+from alysis_code.execution_deadline import (
     DeadlineExhausted,
     DeadlineOperation,
     DeadlinePhase,
@@ -100,6 +100,46 @@ def test_deadline_finalization_phase_uses_observed_latency_and_source() -> None:
     assert snapshot["phase"] == "finalization_window"
     assert snapshot["finalization_reason"] == "reserve_reached"
     assert snapshot["duration_observations"]["main_llm"]["count"] == 1
+
+
+def test_deadline_admission_uses_recent_median_instead_of_one_latency_outlier() -> None:
+    clock = _FakeClock(0.0)
+    deadline = ExecutionDeadline.from_duration(1_000.0, clock=clock)
+    for duration in (72.0, 81.0, 201.0, 64.0, 88.0):
+        deadline.observe_duration(DeadlineOperation.MAIN_LLM, duration)
+    clock.advance(684.0)
+
+    decision = deadline.start_decision(
+        DeadlineOperation.MAIN_LLM,
+        minimum_remaining_seconds=0.25,
+    )
+
+    assert deadline.remaining_seconds() == 316.0
+    assert deadline.normal_work_remaining_seconds() == 196.0
+    assert decision.allowed is True
+    assert decision.estimated_duration_seconds == 81.0
+    observation = deadline.telemetry_snapshot()["duration_observations"]["main_llm"]
+    assert observation["estimate_strategy"] == "median_recent"
+    assert observation["estimate_window_seconds"] == [72.0, 81.0, 201.0, 64.0, 88.0]
+    assert observation["estimated_seconds"] == 81.0
+
+    clock.advance(210.0)
+    assert deadline.phase() == DeadlinePhase.FINALIZATION_WINDOW
+
+
+def test_deadline_refuses_when_recent_median_exceeds_total_remaining() -> None:
+    clock = _FakeClock(0.0)
+    deadline = ExecutionDeadline.from_duration(1_000.0, clock=clock)
+    for duration in (210.0, 220.0, 230.0):
+        deadline.observe_duration(DeadlineOperation.MAIN_LLM, duration)
+    clock.advance(800.0)
+
+    decision = deadline.start_decision(DeadlineOperation.MAIN_LLM)
+
+    assert deadline.remaining_seconds() == 200.0
+    assert decision.allowed is False
+    assert decision.reason == "insufficient_hard_remaining"
+    assert decision.estimated_duration_seconds == 220.0
 
 
 def test_deadline_clamps_timeouts_with_cleanup_reserve() -> None:
@@ -226,6 +266,24 @@ def test_temporarily_clamp_client_timeout_restores_original_value() -> None:
         assert math.isclose(client.timeout_s, 3.0)
 
     assert client.timeout_s == 60.0
+
+
+def test_stream_deadline_checker_honors_grace_and_is_restored() -> None:
+    clock = _FakeClock()
+    deadline = ExecutionDeadline.from_duration(5.0, clock=clock)
+    client = type(
+        "Client",
+        (),
+        {"timeout_s": 60.0, "inflight_deadline_grace_s": 2.0},
+    )()
+
+    with temporarily_clamp_client_timeout(client, deadline, reserve_seconds=1.0):
+        clock.advance(6.9)
+        assert client._stream_deadline_exhausted() is False
+        clock.advance(0.1)
+        assert client._stream_deadline_exhausted() is True
+
+    assert not hasattr(client, "_stream_deadline_exhausted")
 
 
 def test_finalization_provider_retries_continue_while_hard_deadline_allows() -> None:

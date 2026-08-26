@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.mcp.models import ResolvedMcpServer
-from sylliptor_agent_cli.mcp.roots import (
+from alysis_code.mcp.models import ResolvedMcpServer
+from alysis_code.mcp.roots import (
     McpRootsRequestHandler,
     build_workspace_root_descriptor,
 )
-from sylliptor_agent_cli.mcp.server_requests import (
+from alysis_code.mcp.server_requests import (
     McpServerRequestContext,
     McpUnsupportedServerRequestError,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.runtime_kind import RuntimeKind
 
 
 def _server(*, roots_mode: str = "disabled") -> ResolvedMcpServer:

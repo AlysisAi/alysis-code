@@ -65,7 +65,7 @@
             "type": "command",
             "id": "notify.windows-turn-complete",
             "description": "Play a Windows-native sound when a turn completes.",
-            "command": "python -m sylliptor_agent_cli.builtin_hooks.notify_done_windows"
+            "command": "python -m alysis_code.builtin_hooks.notify_done_windows"
           }
         ]
       }
@@ -77,7 +77,7 @@
             "type": "command",
             "id": "notify.windows-notification",
             "description": "Play a Windows-native sound for notification events.",
-            "command": "python -m sylliptor_agent_cli.builtin_hooks.notify_done_windows"
+            "command": "python -m alysis_code.builtin_hooks.notify_done_windows"
           }
         ]
       }

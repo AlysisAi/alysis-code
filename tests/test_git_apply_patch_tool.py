@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.tools import git as git_module
-from sylliptor_agent_cli.tools.git import GitError, git_apply_patch
+from alysis_code.tools import git as git_module
+from alysis_code.tools.git import GitError, git_apply_patch
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:

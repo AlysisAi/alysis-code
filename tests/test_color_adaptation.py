@@ -7,10 +7,10 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from sylliptor_agent_cli.cli_impl.commands import chat_terminal as chat_terminal_mod
-from sylliptor_agent_cli.surface import theme as theme_mod
-from sylliptor_agent_cli.surface.console import make_console
-from sylliptor_agent_cli.surface.theme import (
+from alysis_code.cli_impl.commands import chat_terminal as chat_terminal_mod
+from alysis_code.surface import theme as theme_mod
+from alysis_code.surface.console import make_console
+from alysis_code.surface.theme import (
     detect_terminal_theme,
     detect_terminal_theme_if_available,
 )
@@ -82,8 +82,8 @@ def test_wt_session_enables_truecolor(monkeypatch) -> None:
     assert console.color_system == "truecolor"
 
 
-def test_detect_terminal_theme_respects_sylliptor_theme_override(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_THEME", "light")
+def test_detect_terminal_theme_respects_alysis_theme_override(monkeypatch) -> None:
+    monkeypatch.setenv("ALYSIS_THEME", "light")
     monkeypatch.setenv("OWL_THEME", "dark")
 
     assert detect_terminal_theme(stream=_Pipe()) == "light"
@@ -91,13 +91,13 @@ def test_detect_terminal_theme_respects_sylliptor_theme_override(monkeypatch) ->
 
 def test_detect_terminal_theme_fallback_is_neutral(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -110,13 +110,13 @@ def test_detect_terminal_theme_fallback_is_neutral(monkeypatch) -> None:
 
 def test_detect_terminal_theme_if_available_does_not_guess(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -149,15 +149,15 @@ def test_osc11_skipped_on_wsl_to_prevent_stdin_leak(monkeypatch) -> None:
 
 def test_osc11_disabled_by_default(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
-        "SYLLIPTOR_ENABLE_OSC11",
+        "ALYSIS_ENABLE_OSC11",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setattr(
@@ -177,13 +177,13 @@ def test_detect_terminal_theme_uses_wsl_settings_without_wt_session(tmp_path, mo
         {
           "profiles": {
             "defaults": {
-              "colorScheme": "Sylliptor Light"
+              "colorScheme": "Alysis Code Light"
             },
             "list": []
           },
           "schemes": [
             {
-              "name": "Sylliptor Light",
+              "name": "Alysis Code Light",
               "background": "#ffffff"
             }
           ]
@@ -192,13 +192,13 @@ def test_detect_terminal_theme_uses_wsl_settings_without_wt_session(tmp_path, mo
         encoding="utf-8",
     )
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -252,13 +252,13 @@ def test_windows_terminal_settings_paths_include_wsl_host_mount(monkeypatch) -> 
 
 def test_detect_terminal_theme_does_not_lock_dark_under_wsl_only(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -270,13 +270,13 @@ def test_detect_terminal_theme_does_not_lock_dark_under_wsl_only(monkeypatch) ->
 
 def test_detect_terminal_theme_ignores_wsl_settings_scan_errors(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
@@ -292,11 +292,11 @@ def test_detect_terminal_theme_ignores_wsl_settings_scan_errors(monkeypatch) -> 
 
 def test_apple_terminal_does_not_infer_profile_from_system_appearance(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "WT_SESSION",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
@@ -309,29 +309,29 @@ def test_apple_terminal_does_not_infer_profile_from_system_appearance(monkeypatc
 
 def test_theme_debug_emits_detection_steps(monkeypatch, capsys) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "WT_SESSION",
         "TERM_PROGRAM",
-        "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
-        "SYLLIPTOR_FALLBACK_THEME",
+        "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
+        "ALYSIS_FALLBACK_THEME",
         "OWL_FALLBACK_THEME",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("COLORFGBG", "0;15")
-    monkeypatch.setenv("SYLLIPTOR_THEME_DEBUG", "1")
+    monkeypatch.setenv("ALYSIS_THEME_DEBUG", "1")
 
     assert detect_terminal_theme(stream=_Pipe()) == "light"
 
     err = capsys.readouterr().err
-    assert "[sylliptor-theme] env=SYLLIPTOR_THEME -> none" in err
-    assert "[sylliptor-theme] COLORFGBG=0;15 -> light" in err
-    assert "[sylliptor-theme] result=light" in err
+    assert "[alysis-theme] env=ALYSIS_THEME -> none" in err
+    assert "[alysis-theme] COLORFGBG=0;15 -> light" in err
+    assert "[alysis-theme] result=light" in err
 
 
 def test_no_color_theme_detection_skips_terminal_query(monkeypatch) -> None:
     for env_name in (
-        "SYLLIPTOR_THEME",
+        "ALYSIS_THEME",
         "OWL_THEME",
         "COLORFGBG",
         "TERM_PROGRAM",
@@ -339,7 +339,7 @@ def test_no_color_theme_detection_skips_terminal_query(monkeypatch) -> None:
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("NO_COLOR", "1")
-    monkeypatch.setenv("SYLLIPTOR_FALLBACK_THEME", "light")
+    monkeypatch.setenv("ALYSIS_FALLBACK_THEME", "light")
     monkeypatch.setattr(
         theme_mod,
         "_theme_from_osc11",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.sandbox_settings import resolve_shell_sandbox_settings
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.sandbox_settings import resolve_shell_sandbox_settings
 
 
 def _plain_cfg() -> AppConfig:
@@ -50,10 +50,10 @@ def test_background_settings_env_overrides_config(monkeypatch: pytest.MonkeyPatc
             "background_kill_timeout_s": 5.0,
         }
     }
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT", "9")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES", "99")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES", "999")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S", "1.25")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKGROUND_MAX_CONCURRENT", "9")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_LINES", "99")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKGROUND_OUTPUT_MAX_BYTES", "999")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKGROUND_KILL_TIMEOUT_S", "1.25")
 
     settings = resolve_shell_sandbox_settings(cfg)
 

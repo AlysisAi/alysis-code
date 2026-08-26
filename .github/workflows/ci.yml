@@ -102,8 +102,8 @@ jobs:
 
       - name: Smoke test CLI
         run: |
-          uv run --frozen --no-sync sylliptor --help
-          uv run --frozen --no-sync sylliptor --version
+          uv run --frozen --no-sync alysis --help
+          uv run --frozen --no-sync alysis --version
 
   uv-project-workflow:
     name: uv project workflow
@@ -157,8 +157,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-          export SOURCE_DATE_EPOCH
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           uv build --clear --no-create-gitignore --no-build-isolation --no-sources --out-dir dist/python
 
       - name: Validate archive identity, inventory, and clean installation

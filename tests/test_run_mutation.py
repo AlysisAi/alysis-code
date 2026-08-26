@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.atomic_io as atomic_io_mod
-import sylliptor_agent_cli.run_lock as run_lock_mod
-from sylliptor_agent_cli.atomic_io import atomic_write_json, atomic_write_text
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.run_lock import (
+import alysis_code.atomic_io as atomic_io_mod
+import alysis_code.run_lock as run_lock_mod
+from alysis_code.atomic_io import atomic_write_json, atomic_write_text
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
+from alysis_code.run_lock import (
     RunMutationConflictError,
     acquire_run_mutation_guard,
     inspect_run_mutation_lock,
@@ -24,7 +24,7 @@ from sylliptor_agent_cli.run_lock import (
     workspace_mutation_run_id,
     write_run_mutation_lock_metadata,
 )
-from sylliptor_agent_cli.swarm_orchestrator import (
+from alysis_code.swarm_orchestrator import (
     MergeOutcome,
     _append_remote_report_update,
     _persist_worker_result,
@@ -33,12 +33,12 @@ from sylliptor_agent_cli.swarm_orchestrator import (
     acquire_swarm_mutation_guard,
     run_swarm,
 )
-from sylliptor_agent_cli.swarm_worker import TaskWorkerResult
+from alysis_code.swarm_worker import TaskWorkerResult
 
 
 def test_atomic_io_imports_cleanly_from_fresh_checkout() -> None:
-    atomic_io_mod = importlib.import_module("sylliptor_agent_cli.atomic_io")
-    run_lock_import = importlib.import_module("sylliptor_agent_cli.run_lock")
+    atomic_io_mod = importlib.import_module("alysis_code.atomic_io")
+    run_lock_import = importlib.import_module("alysis_code.run_lock")
 
     assert hasattr(atomic_io_mod, "atomic_write_text")
     assert hasattr(atomic_io_mod, "atomic_write_json")
@@ -86,7 +86,7 @@ def test_atomic_write_text_cleans_temp_file_on_replace_failure(
     def fail_replace(_src: Path, _dst: Path) -> None:
         raise OSError("replace failed")
 
-    monkeypatch.setattr("sylliptor_agent_cli.atomic_io.os.replace", fail_replace)
+    monkeypatch.setattr("alysis_code.atomic_io.os.replace", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         atomic_write_text(target, "after\n")
@@ -104,7 +104,7 @@ def test_atomic_write_text_preserves_newlines_exactly(tmp_path: Path, monkeypatc
         captured["newline"] = kwargs.get("newline")
         return original_fdopen(*args, **kwargs)
 
-    monkeypatch.setattr("sylliptor_agent_cli.atomic_io.os.fdopen", recording_fdopen)
+    monkeypatch.setattr("alysis_code.atomic_io.os.fdopen", recording_fdopen)
 
     atomic_write_text(target, "line1\r\nline2\n")
 
@@ -133,9 +133,9 @@ def test_atomic_write_text_raises_on_real_directory_fsync_error(
             raise OSError(5, "directory fsync failed")
         real_fsync(fd)
 
-    monkeypatch.setattr("sylliptor_agent_cli.atomic_io.os.open", open_wrapper)
-    monkeypatch.setattr("sylliptor_agent_cli.atomic_io.os.fsync", fsync_wrapper)
-    monkeypatch.setattr("sylliptor_agent_cli.atomic_io.os.close", lambda _fd: None)
+    monkeypatch.setattr("alysis_code.atomic_io.os.open", open_wrapper)
+    monkeypatch.setattr("alysis_code.atomic_io.os.fsync", fsync_wrapper)
+    monkeypatch.setattr("alysis_code.atomic_io.os.close", lambda _fd: None)
 
     with pytest.raises(OSError, match="directory fsync failed"):
         atomic_write_text(target, "after\n")
@@ -160,15 +160,15 @@ def test_swarm_artifact_writes_publish_atomically(tmp_path: Path) -> None:
         summary="ok",
         commit_hash="abc123",
         error=None,
-        report_path=".sylliptor/runs/x/execution/reports/T01.md",
-        patch_path=".sylliptor/runs/x/execution/patches/T01.diff",
-        log_path=".sylliptor/runs/x/execution/logs/T01.jsonl",
-        log_pointer_path=".sylliptor/runs/x/execution/logs/T01.log.json",
+        report_path=".alysis/runs/x/execution/reports/T01.md",
+        patch_path=".alysis/runs/x/execution/patches/T01.diff",
+        log_path=".alysis/runs/x/execution/logs/T01.jsonl",
+        log_pointer_path=".alysis/runs/x/execution/logs/T01.log.json",
         warnings=[],
         changed_files=["src/example.py"],
         verify_failed=False,
         verify_summary="verification passed (1/1)",
-        verify_artifact_path=".sylliptor/runs/x/execution/verify/T01.txt",
+        verify_artifact_path=".alysis/runs/x/execution/verify/T01.txt",
     )
     worker_result_path = _persist_worker_result(paths, worker_result)
     assert json.loads(worker_result_path.read_text(encoding="utf-8"))["task_id"] == "T01"
@@ -235,7 +235,7 @@ def test_run_swarm_setup_failure_preserves_caller_owned_lock(tmp_path: Path, mon
     paths = create_plan_run(repo)
     guard = acquire_swarm_mutation_guard(paths, mode="forge_swarm:test")
 
-    import sylliptor_agent_cli.swarm_orchestrator as swarm_orchestrator_mod
+    import alysis_code.swarm_orchestrator as swarm_orchestrator_mod
 
     monkeypatch.setattr(
         swarm_orchestrator_mod,

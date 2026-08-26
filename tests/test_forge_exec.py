@@ -11,32 +11,32 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import forge as forge_mod
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.conflict_auto_resolver import (
+from alysis_code import cli as cli_mod
+from alysis_code import forge as forge_mod
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig
+from alysis_code.conflict_auto_resolver import (
     AutoResolveOutcome,
     ConflictAutoResolveSettings,
 )
-from sylliptor_agent_cli.execution_shared import execution_private_sessions_dir
-from sylliptor_agent_cli.forge import (
+from alysis_code.execution_shared import execution_private_sessions_dir
+from alysis_code.forge import (
     add_task,
     create_plan_run,
     load_current_run_paths,
     load_plan,
     save_plan,
 )
-from sylliptor_agent_cli.git_ops import GitOpsError
-from sylliptor_agent_cli.mcp.transport_stdio import live_stdio_transport_diagnostics
-from sylliptor_agent_cli.mcp.untrusted_content import build_untrusted_mcp_text_block
-from sylliptor_agent_cli.merge_conflict_reviewer import ConflictReviewOutcome
-from sylliptor_agent_cli.review_gate import ReviewOutcome
-from sylliptor_agent_cli.run_lock import write_run_mutation_lock_metadata
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
-from sylliptor_agent_cli.workspace_context import WORKSPACE_KIND_GIT_REPO, WorkspaceContext
+from alysis_code.git_ops import GitOpsError
+from alysis_code.mcp.transport_stdio import live_stdio_transport_diagnostics
+from alysis_code.mcp.untrusted_content import build_untrusted_mcp_text_block
+from alysis_code.merge_conflict_reviewer import ConflictReviewOutcome
+from alysis_code.review_gate import ReviewOutcome
+from alysis_code.run_lock import write_run_mutation_lock_metadata
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.workspace_context import WORKSPACE_KIND_GIT_REPO, WorkspaceContext
 
 _MCP_FIXTURE_SERVER = (
     Path(__file__).resolve().parent / "fixtures" / "mcp_servers" / "minimal_stdio_server.py"
@@ -45,10 +45,10 @@ _MCP_FIXTURE_SERVER = (
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -129,9 +129,9 @@ def test_exec_reports_structured_timeout_when_same_run_stays_locked(
     monkeypatch.setattr(cli_mod, "resolve_model_for_role", lambda **_kwargs: "test-model")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "exec", "T01", "--path", os.fspath(repo)],
-        env={**_env(tmp_path), "SYLLIPTOR_FORGE_LOCK_WAIT_TIMEOUT_S": "0"},
+        env={**_env(tmp_path), "ALYSIS_FORGE_LOCK_WAIT_TIMEOUT_S": "0"},
     )
 
     assert result.exit_code == 2
@@ -166,7 +166,7 @@ def test_exec_releases_run_lock_when_setup_raises(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "exec", "T01", "--path", os.fspath(repo)],
         env=_env(tmp_path),
         catch_exceptions=True,
@@ -352,7 +352,7 @@ def _workspace_context_git_cp(
         rels = [
             path.resolve().relative_to(repo.resolve()).as_posix()
             for path in sorted(repo.rglob("*"))
-            if path.is_file() and ".git" not in path.parts and ".sylliptor" not in path.parts
+            if path.is_file() and ".git" not in path.parts and ".alysis" not in path.parts
         ]
         payload = b"".join(rel.encode("utf-8") + b"\0" for rel in rels)
         return subprocess.CompletedProcess(
@@ -497,7 +497,7 @@ def _write_mcp_stdio_config(
         "command": sys.executable,
         "args": [os.fspath(_MCP_FIXTURE_SERVER)],
         "env": {
-            "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+            "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
         },
     }
     if server_overrides:
@@ -540,7 +540,7 @@ def _run_mcp_scoped_exec_case(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -563,7 +563,7 @@ def test_execution_private_sessions_dir_stays_outside_workspace_when_session_log
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    cfg = AppConfig(session_log_dir=os.fspath(repo / ".sylliptor" / "sessions"))
+    cfg = AppConfig(session_log_dir=os.fspath(repo / ".alysis" / "sessions"))
 
     runtime_dir = execution_private_sessions_dir(
         cfg=cfg,
@@ -573,7 +573,7 @@ def test_execution_private_sessions_dir_stays_outside_workspace_when_session_log
     ).resolve()
 
     assert repo.resolve() not in runtime_dir.parents
-    assert (repo / ".sylliptor").resolve() not in runtime_dir.parents
+    assert (repo / ".alysis").resolve() not in runtime_dir.parents
 
 
 def test_exec_loads_current_run_from_git_subdir(tmp_path: Path, monkeypatch) -> None:
@@ -585,7 +585,7 @@ def test_exec_loads_current_run_from_git_subdir(tmp_path: Path, monkeypatch) -> 
     plan_path, _plan = _prepare_run_with_tasks(CliRunner(), subdir, tmp_path, pointer_root=repo)
 
     paths = load_current_run_paths(subdir)
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     assert paths.root == repo.resolve()
     assert paths.focus_path == subdir.resolve()
     assert paths.focus_relpath == "pkg/feature"
@@ -624,7 +624,7 @@ def test_exec_runs_for_bootstrapped_workspace(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     exec_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -690,7 +690,7 @@ def test_exec_sets_in_progress_then_done_and_writes_outputs(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -722,7 +722,7 @@ def test_exec_sets_in_progress_then_done_and_writes_outputs(tmp_path: Path, monk
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "done"
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_path = run_dir / "execution" / "reports" / f"{task_id}.md"
     patch_path = run_dir / "execution" / "patches" / f"{task_id}.diff"
@@ -812,7 +812,7 @@ def test_exec_reports_untracked_only_changes_in_patch_report_attempt_and_issue(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -868,7 +868,7 @@ def test_exec_reports_tracked_and_untracked_changes_together(tmp_path: Path, mon
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -919,7 +919,7 @@ def test_exec_non_pr_nonzero_with_material_changes_still_fails(tmp_path: Path, m
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -990,7 +990,7 @@ def test_exec_uses_task_local_delta_when_repo_starts_dirty(tmp_path: Path, monke
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1085,7 +1085,7 @@ def test_exec_uses_task_local_delta_for_second_sequential_dirty_task(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result_one = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1103,7 +1103,7 @@ def test_exec_uses_task_local_delta_for_second_sequential_dirty_task(
     assert result_one.exit_code == 1
 
     result_two = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1152,7 +1152,7 @@ def test_exec_uses_safe_external_runtime_sessions_dir_even_when_session_log_dir_
 
     def fake_load_config() -> AppConfig:
         cfg = original_load_config()
-        cfg.session_log_dir = os.fspath(repo / ".sylliptor" / "sessions")
+        cfg.session_log_dir = os.fspath(repo / ".alysis" / "sessions")
         return cfg
 
     def fake_run_agent(*, root: Path, **kwargs) -> int:
@@ -1166,7 +1166,7 @@ def test_exec_uses_safe_external_runtime_sessions_dir_even_when_session_log_dir_
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1186,7 +1186,7 @@ def test_exec_uses_safe_external_runtime_sessions_dir_even_when_session_log_dir_
     assert captured_runtime_dir["value"] is not None
     runtime_dir = captured_runtime_dir["value"].resolve()  # type: ignore[union-attr]
     assert repo.resolve() not in runtime_dir.parents
-    assert (repo / ".sylliptor").resolve() not in runtime_dir.parents
+    assert (repo / ".alysis").resolve() not in runtime_dir.parents
 
 
 def test_exec_verify_off_disables_verify_tool_exposure(tmp_path: Path, monkeypatch) -> None:
@@ -1206,7 +1206,7 @@ def test_exec_verify_off_disables_verify_tool_exposure(tmp_path: Path, monkeypat
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1225,7 +1225,7 @@ def test_exec_verify_off_disables_verify_tool_exposure(tmp_path: Path, monkeypat
     )
     assert result.exit_code == 0
     assert captured["verification_enabled"] is False
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     budget_path = repo / pointer["run_path"] / "execution" / "budgets" / f"{task_id}.json"
     budget_payload = _load_json(budget_path)
     assert budget_payload["step_budget"]["signals_used"]["verification_enabled"] is False
@@ -1248,7 +1248,7 @@ def test_exec_passes_runtime_kind_to_run_agent(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1303,7 +1303,7 @@ def test_exec_uses_autonomous_unbounded_managed_task_policy(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1324,7 +1324,7 @@ def test_exec_uses_autonomous_unbounded_managed_task_policy(tmp_path: Path, monk
     assert captured["enable_chat_turn_step_budget"] is False
     assert captured["subagents_enabled"] is False
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     budget_path = repo / pointer["run_path"] / "execution" / "budgets" / f"{task_id}.json"
     budget_payload = _load_json(budget_path)
     assert budget_payload["step_budget"]["hard_cap"] is None
@@ -1362,7 +1362,7 @@ def test_exec_max_steps_cli_acts_as_explicit_execution_limit(tmp_path: Path, mon
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1385,7 +1385,7 @@ def test_exec_max_steps_cli_acts_as_explicit_execution_limit(tmp_path: Path, mon
     assert captured["enable_chat_turn_step_budget"] is False
     assert captured["subagents_enabled"] is False
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     budget_path = repo / pointer["run_path"] / "execution" / "budgets" / f"{task_id}.json"
     budget_payload = _load_json(budget_path)
     assert budget_payload["step_budget"]["resolved_max_steps"] == 7
@@ -1417,7 +1417,7 @@ def test_exec_propagates_authoritative_verify_commands_into_managed_session(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1479,7 +1479,7 @@ def test_exec_prefers_repo_inferred_verify_commands_over_generic_default(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1533,7 +1533,7 @@ def test_exec_refines_generic_fallback_to_node_test_for_js_task(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1575,9 +1575,9 @@ def test_exec_uses_coding_role_model_from_env(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     env = _env(tmp_path)
-    env["SYLLIPTOR_MODEL_CODING"] = "env-coding-model"
+    env["ALYSIS_MODEL_CODING"] = "env-coding-model"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1609,7 +1609,7 @@ def test_exec_fails_for_missing_task_id(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1634,14 +1634,14 @@ def test_exec_enforces_dependencies(tmp_path: Path, monkeypatch) -> None:
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Dependency check\n/task Task one src/one.py\n/task Task two src/two.py\n/done\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     plan_path = run_dir / "plan" / "plan.json"
     plan = _load_json(plan_path)
@@ -1656,7 +1656,7 @@ def test_exec_enforces_dependencies(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     exec_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1688,7 +1688,7 @@ def test_exec_blocks_inferred_ordered_dependency_even_if_plan_lacks_metadata(
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=(
             "/goal Dependency check\n"
@@ -1700,7 +1700,7 @@ def test_exec_blocks_inferred_ordered_dependency_even_if_plan_lacks_metadata(
     )
     assert result.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_path = repo / pointer["run_path"] / "plan" / "plan.json"
     plan = _load_json(plan_path)
     first_id = plan["tasks"][0]["id"]
@@ -1714,7 +1714,7 @@ def test_exec_blocks_inferred_ordered_dependency_even_if_plan_lacks_metadata(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     exec_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1747,7 +1747,7 @@ def test_exec_marks_failed_when_agent_returns_nonzero(tmp_path: Path, monkeypatc
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1799,7 +1799,7 @@ def test_exec_writes_execution_log_artifacts(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1815,7 +1815,7 @@ def test_exec_writes_execution_log_artifacts(tmp_path: Path, monkeypatch) -> Non
     )
     assert result.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     log_copy = run_dir / "execution" / "logs" / f"{task_id}.jsonl"
     log_pointer = run_dir / "execution" / "logs" / f"{task_id}.log.json"
@@ -1882,7 +1882,7 @@ def test_exec_no_log_cleans_up_private_runtime_sessions_dir(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1902,7 +1902,7 @@ def test_exec_no_log_cleans_up_private_runtime_sessions_dir(tmp_path: Path, monk
     assert not captured_runtime_dir["value"].exists()  # type: ignore[union-attr]
     assert not (tmp_path / "data" / "sessions").exists()
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     assert not (run_dir / "execution" / "logs" / f"{task_id}.jsonl").exists()
     assert not (run_dir / "execution" / "sessions" / task_id).exists()
@@ -1932,7 +1932,7 @@ def test_exec_instruction_includes_attached_assets(tmp_path: Path, monkeypatch) 
     source = repo / "brief.txt"
     source.write_text("Asset text content\n", encoding="utf-8")
     attach = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -1947,7 +1947,7 @@ def test_exec_instruction_includes_attached_assets(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -1992,7 +1992,7 @@ def test_exec_passes_task_images_when_opted_in_and_model_supports_vision(
     image_asset = repo / "diagram.png"
     image_asset.write_bytes(b"not-a-real-png-but-ok-for-tests")
     attach = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(image_asset), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -2006,11 +2006,11 @@ def test_exec_passes_task_images_when_opted_in_and_model_supports_vision(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = _env(tmp_path)
-    env["SYLLIPTOR_TASK_IMAGES"] = "1"
-    env["SYLLIPTOR_SUPPORTS_VISION"] = "1"
+    env["ALYSIS_TASK_IMAGES"] = "1"
+    env["ALYSIS_SUPPORTS_VISION"] = "1"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2030,7 +2030,7 @@ def test_exec_passes_task_images_when_opted_in_and_model_supports_vision(
     assert len(image_paths) == 1
     assert str(image_paths[0]).endswith("diagram.png")
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     budget_path = repo / pointer["run_path"] / "execution" / "budgets" / f"{task_id}.json"
     budget_payload = _load_json(budget_path)
     assert budget_payload["subagents_enabled"] is False
@@ -2049,7 +2049,7 @@ def test_exec_does_not_pass_task_images_without_vision_support(tmp_path: Path, m
     image_asset = repo / "diagram.png"
     image_asset.write_bytes(b"not-a-real-png-but-ok-for-tests")
     attach = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(image_asset), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -2063,11 +2063,11 @@ def test_exec_does_not_pass_task_images_without_vision_support(tmp_path: Path, m
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     env = _env(tmp_path)
-    env["SYLLIPTOR_TASK_IMAGES"] = "1"
-    env["SYLLIPTOR_SUPPORTS_VISION"] = "0"
+    env["ALYSIS_TASK_IMAGES"] = "1"
+    env["ALYSIS_SUPPORTS_VISION"] = "0"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2114,7 +2114,7 @@ def test_exec_defaults_scope_to_strict_and_passes_allow_write_globs_to_agent(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2149,7 +2149,7 @@ def test_exec_rejects_successful_agent_run_without_material_changes_for_write_sc
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2170,7 +2170,7 @@ def test_exec_rejects_successful_agent_run_without_material_changes_for_write_sc
     assert result.exit_code == 1
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "failed"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     assert "no material file changes were detected" in report_text
@@ -2197,7 +2197,7 @@ def test_exec_accepts_analysis_only_task_without_material_changes(
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2218,7 +2218,7 @@ def test_exec_accepts_analysis_only_task_without_material_changes(
     assert result.exit_code == 0
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "done"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     assert "- Result: success" in report_text
@@ -2254,7 +2254,7 @@ def test_exec_pr_accepts_analysis_only_task_without_material_changes(
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2290,7 +2290,7 @@ def test_exec_pr_accepts_analysis_only_task_without_material_changes(
         text=True,
     ).stdout.strip()
     assert deleted_branch == ""
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     assert "- Result: success" in report_text
@@ -2326,7 +2326,7 @@ def test_exec_strict_scope_surfaces_task_local_reporting_inspection_failures(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2345,7 +2345,7 @@ def test_exec_strict_scope_surfaces_task_local_reporting_inspection_failures(
     assert result.exit_code == 1
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "failed"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     assert "scope inspection failed: boom" in report_text
@@ -2372,7 +2372,7 @@ def test_exec_scope_warn_override_disables_allow_write_globs(tmp_path: Path, mon
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2415,7 +2415,7 @@ def test_exec_scope_off_override_disables_allow_write_globs(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2487,7 +2487,7 @@ def test_exec_without_task_mcp_scope_blocks_live_tools_and_resources(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2565,7 +2565,7 @@ def test_exec_without_task_mcp_scope_does_not_touch_broken_mcp_servers(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2648,7 +2648,7 @@ def test_exec_without_task_mcp_scope_ignores_malformed_mcp_config(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2713,7 +2713,7 @@ def test_exec_rejects_superseded_task_mcp_scope_before_live_mcp_bootstrap(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2804,7 +2804,7 @@ def test_exec_task_mcp_scope_allow_resources_exposes_only_generic_resource_tools
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2918,7 +2918,7 @@ def test_exec_task_mcp_scope_allowed_tools_exposes_only_exact_live_tools(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -2987,7 +2987,7 @@ def test_exec_task_mcp_scope_unknown_tool_fails_clearly(tmp_path: Path, monkeypa
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3157,7 +3157,7 @@ def test_exec_strict_scope_fails_on_out_of_scope_changes_in_plain_dir(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3176,7 +3176,7 @@ def test_exec_strict_scope_fails_on_out_of_scope_changes_in_plain_dir(
     assert result.exit_code == 1
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "failed"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     patch_text = (run_dir / "execution" / "patches" / f"{task_id}.diff").read_text(encoding="utf-8")
@@ -3235,7 +3235,7 @@ def test_exec_uses_workspace_snapshot_diff_for_git_repo_without_head(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3254,7 +3254,7 @@ def test_exec_uses_workspace_snapshot_diff_for_git_repo_without_head(
     assert result.exit_code == 0
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "done"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_text = (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
     assert "`src/in_scope.py`" in report_text
@@ -3277,7 +3277,7 @@ def test_exec_pr_success_autofills_branch_and_writes_pr_artifacts(
         return 0
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
 
     patch_text = (
         "From deadbeef Mon Sep 17 00:00:00 2001\n"
@@ -3351,7 +3351,7 @@ def test_exec_pr_success_autofills_branch_and_writes_pr_artifacts(
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3374,7 +3374,7 @@ def test_exec_pr_success_autofills_branch_and_writes_pr_artifacts(
     assert final_task["status"] == "done"
     assert final_task["branch"] == "feat/t01-implement-feature-slice"
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     patch_path = run_dir / "execution" / "patches" / f"{task_id}.diff"
     report_path = run_dir / "execution" / "reports" / f"{task_id}.md"
@@ -3454,7 +3454,7 @@ def test_exec_pr_filters_untracked_packaging_metadata_by_exact_file_path(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3474,8 +3474,8 @@ def test_exec_pr_filters_untracked_packaging_metadata_by_exact_file_path(
     )
 
     assert result.exit_code == 0
-    assert captured["prefixes"] == [".sylliptor", ".sylliptor_images", "sylliptor-feedback"]
-    assert captured["ensure_prefixes"] == [".sylliptor", ".sylliptor_images", "sylliptor-feedback"]
+    assert captured["prefixes"] == [".alysis", ".alysis_images", "alysis-feedback"]
+    assert captured["ensure_prefixes"] == [".alysis", ".alysis_images", "alysis-feedback"]
     assert captured["paths"] == ["src/calcbox.egg-info/SOURCES.txt"]
     assert captured["ensure_paths"] == ["src/calcbox.egg-info/SOURCES.txt"]
 
@@ -3486,14 +3486,14 @@ def test_exec_pr_dependency_enforcement_blocks_before_git(tmp_path: Path, monkey
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Dependency check\n/task Task one src/one.py\n/task Task two src/two.py\n/done\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     plan_path = run_dir / "plan" / "plan.json"
     plan = _load_json(plan_path)
@@ -3509,11 +3509,11 @@ def test_exec_pr_dependency_enforcement_blocks_before_git(tmp_path: Path, monkey
         raise AssertionError("git should not run when dependencies are blocked")
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     exec_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3639,11 +3639,11 @@ def test_exec_pr_rejects_nonzero_agent_exit_with_untracked_material_change(
         raise AssertionError(f"unexpected git args: {args}")
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda cmd: "/usr/bin/git")
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3665,7 +3665,7 @@ def test_exec_pr_rejects_nonzero_agent_exit_with_untracked_material_change(
 
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "failed"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     patch_path = run_dir / "execution" / "patches" / f"{task_id}.diff"
     report_path = run_dir / "execution" / "reports" / f"{task_id}.md"
@@ -3700,7 +3700,7 @@ def test_exec_pr_nonzero_without_material_changes_skips_pr_flow(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3734,8 +3734,8 @@ def test_exec_pr_nonzero_runtime_artifact_mutation_skips_pr_flow(
     task_id = plan["tasks"][0]["id"]
 
     def fake_run_agent(*, root: Path, **_kwargs) -> int:
-        (root / ".sylliptor").mkdir(parents=True, exist_ok=True)
-        (root / ".sylliptor" / "tamper.txt").write_text("bad\n", encoding="utf-8")
+        (root / ".alysis").mkdir(parents=True, exist_ok=True)
+        (root / ".alysis" / "tamper.txt").write_text("bad\n", encoding="utf-8")
         (root / "new_file.py").write_text("print('ok')\n", encoding="utf-8")
         return 1
 
@@ -3749,7 +3749,7 @@ def test_exec_pr_nonzero_runtime_artifact_mutation_skips_pr_flow(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3773,7 +3773,7 @@ def test_exec_pr_nonzero_runtime_artifact_mutation_skips_pr_flow(
     assert final_plan["tasks"][0]["status"] == "failed"
     paths = load_current_run_paths(repo)
     report_text = (paths.execution_reports_dir / f"{task_id}.md").read_text(encoding="utf-8")
-    assert "modified files under .sylliptor/" in report_text
+    assert "modified files under .alysis/" in report_text
 
 
 def test_exec_external_custom_tool_artifacts_do_not_fail_runtime_snapshot(
@@ -3805,7 +3805,7 @@ def test_exec_external_custom_tool_artifacts_do_not_fail_runtime_snapshot(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3829,7 +3829,7 @@ def test_exec_external_custom_tool_artifacts_do_not_fail_runtime_snapshot(
     paths = load_current_run_paths(repo)
     report_text = (paths.execution_reports_dir / f"{task_id}.md").read_text(encoding="utf-8")
     assert "Task execution completed successfully." in report_text
-    assert "modified files under .sylliptor/" not in report_text
+    assert "modified files under .alysis/" not in report_text
 
 
 def test_exec_authorized_custom_tool_dir_side_effect_does_not_fail_runtime_snapshot(
@@ -3849,7 +3849,7 @@ def test_exec_authorized_custom_tool_dir_side_effect_does_not_fail_runtime_snaps
         session_id_override: str,
         **_kwargs,
     ) -> int:
-        side_effect = root / ".sylliptor" / "tools" / "tool_state.txt"
+        side_effect = root / ".alysis" / "tools" / "tool_state.txt"
         side_effect.parent.mkdir(parents=True, exist_ok=True)
         side_effect.write_text("tool-dir-ok\n", encoding="utf-8")
         _write_tool_result_session_event(
@@ -3861,7 +3861,7 @@ def test_exec_authorized_custom_tool_dir_side_effect_does_not_fail_runtime_snaps
                 "result": {"state_file": os.fspath(side_effect)},
                 "side_effects": {
                     "workspace_writes": [
-                        {"path": ".sylliptor/tools/tool_state.txt", "scope": "tool_dir"}
+                        {"path": ".alysis/tools/tool_state.txt", "scope": "tool_dir"}
                     ]
                 },
             },
@@ -3871,7 +3871,7 @@ def test_exec_authorized_custom_tool_dir_side_effect_does_not_fail_runtime_snaps
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3894,10 +3894,10 @@ def test_exec_authorized_custom_tool_dir_side_effect_does_not_fail_runtime_snaps
     paths = load_current_run_paths(repo)
     report_text = (paths.execution_reports_dir / f"{task_id}.md").read_text(encoding="utf-8")
     assert "Task execution completed successfully." in report_text
-    assert "modified files under .sylliptor/" not in report_text
+    assert "modified files under .alysis/" not in report_text
 
 
-def test_exec_workspace_scoped_custom_tool_sylliptor_side_effect_still_fails(
+def test_exec_workspace_scoped_custom_tool_alysis_side_effect_still_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3914,7 +3914,7 @@ def test_exec_workspace_scoped_custom_tool_sylliptor_side_effect_still_fails(
         session_id_override: str,
         **_kwargs,
     ) -> int:
-        side_effect = root / ".sylliptor" / "workspace_scope_state.txt"
+        side_effect = root / ".alysis" / "workspace_scope_state.txt"
         side_effect.parent.mkdir(parents=True, exist_ok=True)
         side_effect.write_text("not-authorized-for-forge\n", encoding="utf-8")
         _write_tool_result_session_event(
@@ -3927,7 +3927,7 @@ def test_exec_workspace_scoped_custom_tool_sylliptor_side_effect_still_fails(
                 "side_effects": {
                     "workspace_writes": [
                         {
-                            "path": ".sylliptor/workspace_scope_state.txt",
+                            "path": ".alysis/workspace_scope_state.txt",
                             "scope": "workspace",
                         }
                     ]
@@ -3939,7 +3939,7 @@ def test_exec_workspace_scoped_custom_tool_sylliptor_side_effect_still_fails(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -3961,7 +3961,7 @@ def test_exec_workspace_scoped_custom_tool_sylliptor_side_effect_still_fails(
     assert final_plan["tasks"][0]["status"] == "failed"
     paths = load_current_run_paths(repo)
     report_text = (paths.execution_reports_dir / f"{task_id}.md").read_text(encoding="utf-8")
-    assert "modified files under .sylliptor/" in report_text
+    assert "modified files under .alysis/" in report_text
 
 
 def test_exec_pr_nonzero_strict_scope_violation_skips_pr_flow(tmp_path: Path, monkeypatch) -> None:
@@ -3989,7 +3989,7 @@ def test_exec_pr_nonzero_strict_scope_violation_skips_pr_flow(tmp_path: Path, mo
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4094,7 +4094,7 @@ def test_exec_pr_merge_conflict_writes_conflict_artifacts_and_sets_status(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4118,7 +4118,7 @@ def test_exec_pr_merge_conflict_writes_conflict_artifacts_and_sets_status(
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "merge_conflict"
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     conflict_dir = run_dir / "execution" / "conflicts" / task_id
     assert (conflict_dir / "conflict_context.json").exists()
@@ -4221,7 +4221,7 @@ def test_exec_pr_merge_conflict_does_not_auto_resolve_without_opt_in(
     monkeypatch.setattr(cli_mod, "attempt_auto_resolve_conflict", _explode)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4248,7 +4248,7 @@ def test_exec_pr_merge_conflict_does_not_auto_resolve_without_opt_in(
     # attempt counter must stay untouched.
     assert int(task_record.get("conflict_attempts", 0)) == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     report_text = (
         repo / pointer["run_path"] / "execution" / "reports" / f"{task_id}.md"
     ).read_text(encoding="utf-8")
@@ -4360,7 +4360,7 @@ def test_exec_pr_merge_conflict_auto_resolve_success_sets_done(tmp_path: Path, m
     monkeypatch.setattr(cli_mod, "attempt_auto_resolve_conflict", fake_auto_resolve)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4491,7 +4491,7 @@ def test_exec_pr_merge_conflict_auto_resolve_failure_keeps_merge_conflict_status
     monkeypatch.setattr(cli_mod, "attempt_auto_resolve_conflict", fake_auto_resolve)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4526,7 +4526,7 @@ def test_exec_pr_merge_success_branch_delete_failure_is_warning(
     task_id = plan["tasks"][0]["id"]
 
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
@@ -4584,7 +4584,7 @@ def test_exec_pr_merge_success_branch_delete_failure_is_warning(
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4605,7 +4605,7 @@ def test_exec_pr_merge_success_branch_delete_failure_is_warning(
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "done"
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     report_path = run_dir / "execution" / "reports" / f"{task_id}.md"
     report = report_path.read_text(encoding="utf-8")
@@ -4633,7 +4633,7 @@ def test_exec_pr_remote_sync_off_by_default_does_not_push(tmp_path: Path, monkey
         "push_base",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("push_base should not run")),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
@@ -4691,7 +4691,7 @@ def test_exec_pr_remote_sync_off_by_default_does_not_push(tmp_path: Path, monkey
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4721,7 +4721,7 @@ def test_exec_pr_remote_warn_push_failure_does_not_block_merge(tmp_path: Path, m
     monkeypatch.setattr(cli_mod, "get_remote_url", lambda *_a, **_k: "git@github.com:org/repo.git")
     monkeypatch.setattr(cli_mod, "push_branch", lambda *_a, **_k: (False, "push failed"))
     monkeypatch.setattr(cli_mod, "push_base", lambda *_a, **_k: (False, "base push failed"))
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
@@ -4778,10 +4778,10 @@ def test_exec_pr_remote_warn_push_failure_does_not_block_merge(tmp_path: Path, m
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
     env = _env(tmp_path)
-    env["SYLLIPTOR_REMOTE_SYNC"] = "warn"
+    env["ALYSIS_REMOTE_SYNC"] = "warn"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4801,7 +4801,7 @@ def test_exec_pr_remote_warn_push_failure_does_not_block_merge(tmp_path: Path, m
 
     final_plan = _load_json(plan_path)
     assert final_plan["tasks"][0]["status"] == "done"
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     remote_path = run_dir / "execution" / "remote" / f"{task_id}.json"
     assert remote_path.exists()
@@ -4820,7 +4820,7 @@ def test_exec_pr_remote_strict_push_failure_blocks_merge(tmp_path: Path, monkeyp
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(cli_mod, "get_remote_url", lambda *_a, **_k: "git@github.com:org/repo.git")
     monkeypatch.setattr(cli_mod, "push_branch", lambda *_a, **_k: (False, "push failed"))
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
     calls: list[list[str]] = []
 
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -4871,10 +4871,10 @@ def test_exec_pr_remote_strict_push_failure_blocks_merge(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
     env = _env(tmp_path)
-    env["SYLLIPTOR_REMOTE_SYNC"] = "strict"
+    env["ALYSIS_REMOTE_SYNC"] = "strict"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -4920,7 +4920,7 @@ def test_exec_pr_remote_strict_existing_pr_does_not_block_merge(
             "existing",
         ),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         args = _git_args(cmd)
@@ -4977,11 +4977,11 @@ def test_exec_pr_remote_strict_existing_pr_does_not_block_merge(
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
     env = _env(tmp_path)
-    env["SYLLIPTOR_REMOTE_SYNC"] = "strict"
-    env["SYLLIPTOR_REMOTE_CREATE_PR"] = "1"
+    env["ALYSIS_REMOTE_SYNC"] = "strict"
+    env["ALYSIS_REMOTE_CREATE_PR"] = "1"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5013,11 +5013,11 @@ def test_exec_pr_review_rejection_blocks_merge_and_sets_changes_requested(
     repo.mkdir()
     plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
     task_id = plan["tasks"][0]["id"]
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
 
     monkeypatch.setattr(cli_mod, "run_agent", _run_agent_with_material_change())
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_review_task(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         json_path = run_dir / "execution" / "reviews" / f"{task_id}.json"
@@ -5110,7 +5110,7 @@ def test_exec_pr_review_rejection_blocks_merge_and_sets_changes_requested(
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5144,11 +5144,11 @@ def test_exec_pr_review_receives_current_verification_payload_before_report_exis
     repo.mkdir()
     plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
     task_id = plan["tasks"][0]["id"]
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
 
     monkeypatch.setattr(cli_mod, "run_agent", _run_agent_with_material_change())
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_run_task_verification(*, artifact_path: Path, **_kwargs):  # type: ignore[no-untyped-def]
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5263,7 +5263,7 @@ def test_exec_pr_review_receives_current_verification_payload_before_report_exis
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5300,12 +5300,12 @@ def test_exec_pr_verify_strict_blocks_merge_and_sets_verify_failed(
     repo.mkdir()
     plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
     task_id = plan["tasks"][0]["id"]
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     verify_path = run_dir / "execution" / "verify" / f"{task_id}.txt"
 
     monkeypatch.setattr(cli_mod, "run_agent", _run_agent_with_material_change())
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_verify(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         verify_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5371,7 +5371,7 @@ def test_exec_pr_verify_strict_blocks_merge_and_sets_verify_failed(
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5406,7 +5406,7 @@ def test_exec_pr_nonzero_salvage_strict_verify_failure_sets_verify_failed(
     repo.mkdir()
     plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
     task_id = plan["tasks"][0]["id"]
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     verify_path = run_dir / "execution" / "verify" / f"{task_id}.txt"
 
@@ -5482,11 +5482,11 @@ def test_exec_pr_nonzero_salvage_strict_verify_failure_sets_verify_failed(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     monkeypatch.setattr(cli_mod, "run_task_verification", fake_verify)
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5535,7 +5535,7 @@ def test_exec_pr_strict_scope_blocks_verification_time_out_of_scope_mutations(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
 
     def fake_run_agent(*, root: Path, **_kwargs) -> int:
@@ -5565,7 +5565,7 @@ def test_exec_pr_strict_scope_blocks_verification_time_out_of_scope_mutations(
     monkeypatch.setattr(cli_mod, "run_task_verification", fake_verify)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5612,12 +5612,12 @@ def test_exec_pr_verify_warn_failure_records_warning_and_merges(
     repo.mkdir()
     plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
     task_id = plan["tasks"][0]["id"]
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     run_dir = repo / pointer["run_path"]
     verify_path = run_dir / "execution" / "verify" / f"{task_id}.txt"
 
     monkeypatch.setattr(cli_mod, "run_agent", _run_agent_with_material_change())
-    monkeypatch.setattr("sylliptor_agent_cli.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
+    monkeypatch.setattr("alysis_code.git_ops.shutil.which", lambda _cmd: "/usr/bin/git")
 
     def fake_verify(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         verify_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5689,7 +5689,7 @@ def test_exec_pr_verify_warn_failure_records_warning_and_merges(
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5741,7 +5741,7 @@ def test_exec_writes_knowledge_and_injects_relevant_knowledge_context(
     monkeypatch.setattr(cli_mod, "run_agent", fake_first_run_agent)
 
     first_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5777,7 +5777,7 @@ def test_exec_writes_knowledge_and_injects_relevant_knowledge_context(
     monkeypatch.setattr(cli_mod, "run_agent", fake_second_run_agent)
 
     second_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5825,7 +5825,7 @@ def test_exec_writes_structured_knowledge_capture_artifacts_and_promotes_on_succ
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5877,7 +5877,7 @@ def test_exec_invalid_structured_capture_is_non_fatal(tmp_path: Path, monkeypatc
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",
@@ -5928,7 +5928,7 @@ def test_exec_failure_writes_capture_artifacts_without_canonical_promotion(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "exec",

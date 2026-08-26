@@ -6,9 +6,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.extensions.install import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.extensions.install import (
     ComponentInstallSummary,
     PermissionsSummary,
     PluginInstallError,
@@ -16,15 +16,15 @@ from sylliptor_agent_cli.extensions.install import (
     PluginUninstallResult,
     TrustPromptRequest,
 )
-from sylliptor_agent_cli.extensions.registry import RegistryFile
+from alysis_code.extensions.registry import RegistryFile
 
 COMMIT = "a" * 40
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "config"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "config"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -80,7 +80,7 @@ def test_cli_ext_install_prompts_and_accepts(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(cli_mod, "install_plugin", fake_install_plugin)
 
     result = runner.invoke(
-        sylliptor_app, ["ext", "install", "acme.demo"], input="y\n", env=_env(tmp_path)
+        alysis_app, ["ext", "install", "acme.demo"], input="y\n", env=_env(tmp_path)
     )
 
     assert result.exit_code == 0
@@ -101,7 +101,7 @@ def test_cli_ext_install_prompt_rejected_exits_1(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(cli_mod, "install_plugin", fake_install_plugin)
 
     result = runner.invoke(
-        sylliptor_app, ["ext", "install", "acme.demo"], input="n\n", env=_env(tmp_path)
+        alysis_app, ["ext", "install", "acme.demo"], input="n\n", env=_env(tmp_path)
     )
 
     assert result.exit_code == 1
@@ -122,9 +122,7 @@ def test_cli_ext_install_yes_does_not_prompt(tmp_path: Path, monkeypatch) -> Non
 
     monkeypatch.setattr(cli_mod, "install_plugin", fake_install_plugin)
 
-    result = runner.invoke(
-        sylliptor_app, ["ext", "install", "acme.demo", "--yes"], env=_env(tmp_path)
-    )
+    result = runner.invoke(alysis_app, ["ext", "install", "acme.demo", "--yes"], env=_env(tmp_path))
 
     assert result.exit_code == 0
     assert "Plugin install trust request" in result.output
@@ -144,9 +142,9 @@ def test_cli_ext_install_ci_env_accepts_silently(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(cli_mod, "install_plugin", fake_install_plugin)
     env = _env(tmp_path)
-    env["SYLLIPTOR_CI"] = "1"
+    env["ALYSIS_CI"] = "1"
 
-    result = runner.invoke(sylliptor_app, ["ext", "install", "acme.demo"], env=env)
+    result = runner.invoke(alysis_app, ["ext", "install", "acme.demo"], env=env)
 
     assert result.exit_code == 0
     assert "Plugin install trust request" not in result.output
@@ -170,7 +168,7 @@ def test_cli_ext_uninstall_prompts_before_destructive_action(
     monkeypatch.setattr(cli_mod, "uninstall_plugin", fake_uninstall_plugin)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "uninstall", "acme.demo"],
         input="y\n",
         env=_env(tmp_path),
@@ -190,7 +188,7 @@ def test_cli_ext_uninstall_not_installed_exits_1(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(cli_mod, "uninstall_plugin", fake_uninstall_plugin)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["ext", "uninstall", "acme.demo", "--project", "--yes"],
         env=_env(tmp_path),
     )
@@ -226,7 +224,7 @@ def test_cli_ext_info_shows_install_record_fields(tmp_path: Path, monkeypatch) -
     )
     monkeypatch.setattr(cli_mod, "load_registry", lambda: RegistryFile(extensions=[]))
 
-    result = runner.invoke(sylliptor_app, ["ext", "info", "acme.demo"], env=env)
+    result = runner.invoke(alysis_app, ["ext", "info", "acme.demo"], env=env)
 
     assert result.exit_code == 0
     assert "manifest_sha256" in result.output

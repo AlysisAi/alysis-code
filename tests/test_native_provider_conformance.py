@@ -7,19 +7,19 @@ from typing import Any
 import httpx
 import pytest
 
-from sylliptor_agent_cli.cli_impl.commands.chat_resume_helpers import _load_chat_resume_messages
-from sylliptor_agent_cli.compaction.conversation_compactor import ConversationCompactor
-from sylliptor_agent_cli.llm.anthropic_messages import AnthropicMessagesClient
-from sylliptor_agent_cli.llm.gemini_generate_content import GeminiGenerateContentClient
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.cli_impl.commands.chat_resume_helpers import _load_chat_resume_messages
+from alysis_code.compaction.conversation_compactor import ConversationCompactor
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
+from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     assistant_message_from_response,
     strip_provider_metadata_from_message,
 )
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.types import LLMError, LLMResponse
-from sylliptor_agent_cli.request_estimation import sanitize_messages_for_estimation
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.types import LLMError, LLMResponse
+from alysis_code.request_estimation import sanitize_messages_for_estimation
+from alysis_code.session_store import SessionStore, read_session_events
 
 
 def _fs_read_tool() -> dict[str, Any]:
@@ -49,7 +49,7 @@ def _web_search_tool() -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         },
     }
@@ -506,7 +506,7 @@ def test_text_only_anthropic_search_metadata_survives_compaction_and_resume(
                 "type": "server_tool_use",
                 "id": "srvtoolu_text",
                 "name": "web_search",
-                "input": {"query": "Sylliptor provider metadata"},
+                "input": {"query": "Alysis Code provider metadata"},
             },
             {
                 "type": "text",

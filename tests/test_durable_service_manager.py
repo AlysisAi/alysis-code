@@ -15,14 +15,14 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from sylliptor_agent_cli.durable_service_manager import (
+from alysis_code.durable_service_manager import (
     SERVICE_METADATA,
     SERVICE_PREVIEW_TOKEN,
     DurableServiceManager,
     _pid_exists,
     _terminate_windows_process_tree,
 )
-from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings
+from alysis_code.sandbox_settings import ShellSandboxSettings
 
 
 def _settings() -> ShellSandboxSettings:
@@ -306,9 +306,9 @@ def test_lan_preview_is_dynamically_addressed_and_temporarily_authenticated(
         assert payload["preview_access"] == "lan"
         assert payload["authentication_required"] is True
         assert payload["preview_port"] > 0
-        assert "sylliptor_token=" not in payload["preview_url"]
-        assert "sylliptor_token=" in payload["access_url"]
-        token = parse_qs(urlsplit(payload["access_url"]).query)["sylliptor_token"][0]
+        assert "alysis_token=" not in payload["preview_url"]
+        assert "alysis_token=" in payload["access_url"]
+        token = parse_qs(urlsplit(payload["access_url"]).query)["alysis_token"][0]
         metadata_text = (state_dir / service_id / SERVICE_METADATA).read_text(encoding="utf-8")
         assert token not in metadata_text
 
@@ -322,7 +322,7 @@ def test_lan_preview_is_dynamically_addressed_and_temporarily_authenticated(
         with opener.open(payload["access_url"], timeout=2) as response:
             assert response.status == 200
             assert response.read() == b"lan-preview-ok\n"
-            assert "sylliptor_token=" not in response.geturl()
+            assert "alysis_token=" not in response.geturl()
         service_dir = state_dir / service_id
         assert token not in (service_dir / "stdout.log").read_text(encoding="utf-8")
         assert token not in (service_dir / "stderr.log").read_text(encoding="utf-8")
@@ -346,7 +346,7 @@ def test_unix_socket_readiness(tmp_path: Path) -> None:
     root.mkdir()
     # Darwin limits AF_UNIX paths to roughly 104 bytes; pytest's temp root can
     # exceed that before the socket filename is appended.
-    socket_path = Path("/tmp") / f"sylliptor-{os.getpid()}-{tmp_path.name[-12:]}.sock"
+    socket_path = Path("/tmp") / f"alysis-{os.getpid()}-{tmp_path.name[-12:]}.sock"
     manager = _manager(root, state_dir)
     service_id = ""
 

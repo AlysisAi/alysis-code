@@ -1,0 +1,22 @@
+name: legacy-publish-disabled
+
+# Publication is owned exclusively by release.yml, which validates the tag
+# against pyproject.toml before uploading. This legacy entry remains as a
+# manual, read-only notice so old repository documentation and Trusted
+# Publisher configuration fail visibly instead of racing a second PyPI upload.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disabled:
+    name: Legacy publisher is disabled
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain authoritative release path
+        run: |
+          echo "This legacy workflow cannot publish packages or releases."
+          echo "Use the validated tag-triggered .github/workflows/release.yml workflow."

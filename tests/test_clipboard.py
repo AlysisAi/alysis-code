@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.clipboard import (
+from alysis_code.clipboard import (
     ClipboardError,
     copy_text_to_clipboard,
     paste_clipboard_image,
@@ -31,7 +31,7 @@ def test_copy_text_to_clipboard_uses_available_platform_writer(
     calls: list[tuple[list[str], bytes]] = []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.clipboard.shutil.which",
+        "alysis_code.clipboard.shutil.which",
         lambda command: command if command == available else None,
     )
 
@@ -39,7 +39,7 @@ def test_copy_text_to_clipboard_uses_available_platform_writer(
         calls.append((command, kwargs["input"]))
         return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.clipboard.subprocess.run", fake_run)
 
     copy_text_to_clipboard("hello κόσμε")
 
@@ -51,7 +51,7 @@ def test_copy_text_to_clipboard_uses_unicode_safe_powershell(
 ) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setattr(
-        "sylliptor_agent_cli.clipboard.shutil.which",
+        "alysis_code.clipboard.shutil.which",
         lambda command: command if command == "powershell.exe" else None,
     )
 
@@ -60,7 +60,7 @@ def test_copy_text_to_clipboard_uses_unicode_safe_powershell(
         captured["input"] = kwargs["input"]
         return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.clipboard.subprocess.run", fake_run)
 
     copy_text_to_clipboard("κόσμε")
 
@@ -71,7 +71,7 @@ def test_copy_text_to_clipboard_uses_unicode_safe_powershell(
 def test_copy_text_to_clipboard_errors_when_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.shutil.which", lambda _command: None)
+    monkeypatch.setattr("alysis_code.clipboard.shutil.which", lambda _command: None)
 
     with pytest.raises(ClipboardError, match="no supported clipboard command found"):
         copy_text_to_clipboard("hello")
@@ -97,8 +97,8 @@ def test_paste_clipboard_image_via_powershell(
             stderr=b"",
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.shutil.which", fake_which)
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.clipboard.shutil.which", fake_which)
+    monkeypatch.setattr("alysis_code.clipboard.subprocess.run", fake_run)
 
     path = paste_clipboard_image(root=tmp_path)
     assert path.exists()
@@ -109,7 +109,7 @@ def test_paste_clipboard_image_errors_when_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.clipboard.shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("alysis_code.clipboard.shutil.which", lambda _cmd: None)
 
     with pytest.raises(ClipboardError, match="Could not read an image from clipboard"):
         paste_clipboard_image(root=tmp_path)

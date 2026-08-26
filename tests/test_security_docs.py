@@ -15,7 +15,7 @@ def test_readme_does_not_claim_host_verification_by_default() -> None:
     assert "host shell by default" not in lowered
     assert "default to strict sandboxing" in readme
     assert 'verify_sandbox.mode="off"' in readme
-    assert "SYLLIPTOR_VERIFY_SANDBOX_MODE=off" in readme
+    assert "ALYSIS_VERIFY_SANDBOX_MODE=off" in readme
 
 
 def test_sandbox_doc_keeps_strict_fail_closed_verification_language() -> None:

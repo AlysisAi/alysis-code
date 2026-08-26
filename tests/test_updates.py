@@ -10,17 +10,18 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import updates as updates_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import (
+from alysis_code import cli as cli_mod
+from alysis_code import updates as updates_mod
+from alysis_code.branding import LEGACY_PYTHON_PACKAGE_NAME, PYTHON_PACKAGE_NAME
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import (
     AppConfig,
     ConfigError,
     load_config,
     save_config,
     set_config_value,
 )
-from sylliptor_agent_cli.updates import (
+from alysis_code.updates import (
     InstallerPlan,
     UpdateCacheRecord,
     cache_is_fresh,
@@ -35,9 +36,9 @@ from sylliptor_agent_cli.updates import (
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
     }
 
@@ -58,16 +59,16 @@ class _UnexpectedThread:
 
 
 def test_update_check_fetches_pypi_version_and_writes_cache(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://pypi.org/pypi/sylliptor-agent-cli/json"
+        assert str(request.url) == "https://pypi.org/pypi/alysis-code/json"
         return httpx.Response(
             200,
             json={
                 "info": {
                     "version": "0.1.5",
-                    "package_url": "https://pypi.org/project/sylliptor-agent-cli/",
+                    "package_url": "https://pypi.org/project/alysis-code/",
                 }
             },
         )
@@ -88,7 +89,7 @@ def test_update_check_fetches_pypi_version_and_writes_cache(tmp_path: Path, monk
 
 
 def test_update_check_reports_missing_pypi_release(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
 
     status = check_for_updates(
         current_version="0.1.4",
@@ -97,7 +98,7 @@ def test_update_check_reports_missing_pypi_release(tmp_path: Path, monkeypatch) 
         transport=httpx.MockTransport(lambda _request: httpx.Response(404)),
     )
 
-    assert status.error == "No PyPI release found for sylliptor-agent-cli."
+    assert status.error == "No PyPI release found for alysis-code."
     assert status.update_available is False
     cached = read_update_cache()
     assert cached is not None
@@ -105,13 +106,13 @@ def test_update_check_reports_missing_pypi_release(tmp_path: Path, monkeypatch) 
 
 
 def test_update_check_uses_fresh_cache_without_network(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
     record = UpdateCacheRecord(
         checked_at=datetime.now(UTC),
-        package="sylliptor-agent-cli",
+        package="alysis-code",
         source="pypi",
         latest_version="0.1.5",
-        url="https://pypi.org/project/sylliptor-agent-cli/",
+        url="https://pypi.org/project/alysis-code/",
     )
     write_update_cache(record)
 
@@ -137,7 +138,7 @@ def test_read_update_cache_ignores_invalid_schema(tmp_path: Path) -> None:
             {
                 "schema_version": "not-an-int",
                 "checked_at": datetime.now(UTC).isoformat(),
-                "package": "sylliptor-agent-cli",
+                "package": "alysis-code",
                 "source": "pypi",
                 "latest_version": "0.1.5",
             }
@@ -161,7 +162,7 @@ def test_update_cache_freshness_honors_configured_interval() -> None:
     now = datetime(2026, 5, 7, 10, 0, tzinfo=UTC)
     record = UpdateCacheRecord(
         checked_at=now - timedelta(hours=2),
-        package="sylliptor-agent-cli",
+        package="alysis-code",
         source="pypi",
         latest_version="0.1.4",
     )
@@ -171,18 +172,18 @@ def test_update_cache_freshness_honors_configured_interval() -> None:
 
 
 def test_passive_update_notice_uses_cache_only(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path))
     write_update_cache(
         UpdateCacheRecord(
             checked_at=datetime.now(UTC),
-            package="sylliptor-agent-cli",
+            package="alysis-code",
             source="pypi",
             latest_version="0.1.5",
         )
     )
 
     assert passive_update_notice(current_version="0.1.4", cfg=AppConfig()) == (
-        "Sylliptor 0.1.5 is available; you have 0.1.4. Run `sylliptor update`."
+        "Alysis Code 0.1.5 is available; you have 0.1.4. Run `alysis update`."
     )
     assert (
         passive_update_notice(
@@ -203,7 +204,7 @@ def test_background_refresh_updates_cache_when_stale(tmp_path: Path, monkeypatch
         write_update_cache(
             UpdateCacheRecord(
                 checked_at=datetime.now(UTC),
-                package="sylliptor-agent-cli",
+                package="alysis-code",
                 source="pypi",
                 latest_version="0.1.5",
             ),
@@ -239,7 +240,7 @@ def test_background_refresh_skips_when_disabled_or_cache_fresh(
     write_update_cache(
         UpdateCacheRecord(
             checked_at=datetime.now(UTC),
-            package="sylliptor-agent-cli",
+            package="alysis-code",
             source="pypi",
             latest_version="0.1.4",
         ),
@@ -266,6 +267,19 @@ def test_background_refresh_skips_when_disabled_or_cache_fresh(
     )
 
 
+@pytest.fixture(autouse=True)
+def _assume_current_distribution(monkeypatch):
+    """Pin the installed-distribution lookup for the installer-plan tests.
+
+    detect_installer_plan() branches on which distribution is actually
+    registered, and the dev checkout may still carry the pre-rebrand one.
+    These tests cover the normal path; the rename path has its own tests.
+    """
+    monkeypatch.setattr(
+        updates_mod, "installed_distribution_name", lambda preferred=None: PYTHON_PACKAGE_NAME
+    )
+
+
 def test_detect_installer_plan_recognizes_pipx(monkeypatch) -> None:
     monkeypatch.setattr(updates_mod, "_editable_install_reason", lambda _package_name: None)
     monkeypatch.setattr(updates_mod, "_distribution_installer", lambda _package_name: "pip")
@@ -276,15 +290,15 @@ def test_detect_installer_plan_recognizes_pipx(monkeypatch) -> None:
     )
 
     plan = detect_installer_plan(
-        executable="/home/me/.local/share/pipx/venvs/sylliptor-agent-cli/bin/python",
-        prefix="/home/me/.local/share/pipx/venvs/sylliptor-agent-cli",
+        executable="/home/me/.local/share/pipx/venvs/alysis-code/bin/python",
+        prefix="/home/me/.local/share/pipx/venvs/alysis-code",
         base_prefix="/usr",
         env={},
     )
 
     assert plan.supported is True
     assert plan.method == "pipx"
-    assert plan.command == ("pipx", "upgrade", "sylliptor-agent-cli")
+    assert plan.command == ("pipx", "upgrade", "alysis-code")
 
 
 def test_detect_installer_plan_recognizes_virtualenv(monkeypatch) -> None:
@@ -307,7 +321,7 @@ def test_detect_installer_plan_recognizes_virtualenv(monkeypatch) -> None:
         "pip",
         "install",
         "--upgrade",
-        "sylliptor-agent-cli",
+        "alysis-code",
     )
 
 
@@ -321,15 +335,15 @@ def test_detect_installer_plan_recognizes_uv_tool_install(monkeypatch) -> None:
     )
 
     plan = detect_installer_plan(
-        executable="/home/me/.local/share/uv/tools/sylliptor-agent-cli/bin/python",
-        prefix="/home/me/.local/share/uv/tools/sylliptor-agent-cli",
+        executable="/home/me/.local/share/uv/tools/alysis-code/bin/python",
+        prefix="/home/me/.local/share/uv/tools/alysis-code",
         base_prefix="/usr",
         env={},
     )
 
     assert plan.supported is True
     assert plan.method == "uv-tool"
-    assert plan.command == ("uv", "tool", "upgrade", "sylliptor-agent-cli")
+    assert plan.command == ("uv", "tool", "upgrade", "alysis-code")
 
 
 def test_detect_installer_plan_recognizes_uv_python_environment(monkeypatch) -> None:
@@ -357,7 +371,7 @@ def test_detect_installer_plan_recognizes_uv_python_environment(monkeypatch) -> 
         "--python",
         "/tmp/project/.venv/bin/python",
         "--upgrade",
-        "sylliptor-agent-cli",
+        "alysis-code",
     )
 
 
@@ -379,7 +393,7 @@ def test_detect_installer_plan_reports_uv_missing(monkeypatch) -> None:
 
 
 def test_update_check_config_keys_round_trip(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig()
     cfg = set_config_value(cfg, "update_check_enabled", "false")
     cfg = set_config_value(cfg, "update_check_interval_hours", "12")
@@ -398,12 +412,12 @@ def test_update_check_command_emits_json(monkeypatch, tmp_path: Path) -> None:
         latest_version="0.1.5",
         checked_at=datetime(2026, 5, 7, tzinfo=UTC),
         source="pypi",
-        url="https://pypi.org/project/sylliptor-agent-cli/",
+        url="https://pypi.org/project/alysis-code/",
     )
     monkeypatch.setattr(cli_mod, "check_for_updates", lambda **_kwargs: status)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["update", "check", "--json"],
         env=_env(tmp_path),
     )
@@ -428,20 +442,20 @@ def test_update_dry_run_shows_detected_command(monkeypatch, tmp_path: Path) -> N
         lambda: InstallerPlan(
             method="pipx",
             supported=True,
-            command=("pipx", "upgrade", "sylliptor-agent-cli"),
+            command=("pipx", "upgrade", "alysis-code"),
             reason="test",
         ),
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["update", "--dry-run"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 0
-    assert "Sylliptor 0.1.5 is available" in result.output
-    assert "pipx upgrade sylliptor-agent-cli" in result.output
+    assert "Alysis Code 0.1.5 is available" in result.output
+    assert "pipx upgrade alysis-code" in result.output
     assert "Dry run only" in result.output
 
 
@@ -460,7 +474,7 @@ def test_update_yes_runs_detected_command(monkeypatch, tmp_path: Path) -> None:
         lambda: InstallerPlan(
             method="pipx",
             supported=True,
-            command=("pipx", "upgrade", "sylliptor-agent-cli"),
+            command=("pipx", "upgrade", "alysis-code"),
             reason="test",
         ),
     )
@@ -472,17 +486,70 @@ def test_update_yes_runs_detected_command(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli_mod, "run_installer_plan", fake_run)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["update", "--yes"],
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 0
-    assert calls == [["pipx", "upgrade", "sylliptor-agent-cli"]]
+    assert calls == [["pipx", "upgrade", "alysis-code"]]
     assert "Update command completed" in result.output
 
 
 def test_update_cache_path_respects_data_dir(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
 
     assert update_cache_path() == tmp_path / "data" / "update_check.json"
+
+
+def test_installer_plan_directs_pipx_users_to_reinstall_under_the_new_name(monkeypatch) -> None:
+    """`pipx upgrade` cannot rename an app, so the plan must say so explicitly."""
+    monkeypatch.setattr(
+        updates_mod,
+        "installed_distribution_name",
+        lambda preferred=None: LEGACY_PYTHON_PACKAGE_NAME,
+    )
+    monkeypatch.setattr(updates_mod, "_editable_install_reason", lambda _package_name: None)
+    monkeypatch.setattr(
+        updates_mod.shutil, "which", lambda name: "/usr/bin/pipx" if name == "pipx" else None
+    )
+
+    plan = detect_installer_plan(
+        executable=f"/home/me/.local/share/pipx/venvs/{LEGACY_PYTHON_PACKAGE_NAME}/bin/python",
+        prefix=f"/home/me/.local/share/pipx/venvs/{LEGACY_PYTHON_PACKAGE_NAME}",
+        base_prefix="/usr",
+        env={},
+    )
+
+    assert plan.supported is False
+    assert LEGACY_PYTHON_PACKAGE_NAME in plan.reason
+    assert PYTHON_PACKAGE_NAME in plan.reason
+    assert plan.command == ("pipx", "uninstall", LEGACY_PYTHON_PACKAGE_NAME)
+
+
+def test_installer_plan_upgrades_pip_users_to_the_new_package(monkeypatch) -> None:
+    monkeypatch.setattr(
+        updates_mod,
+        "installed_distribution_name",
+        lambda preferred=None: LEGACY_PYTHON_PACKAGE_NAME,
+    )
+    monkeypatch.setattr(updates_mod, "_editable_install_reason", lambda _package_name: None)
+    monkeypatch.setattr(updates_mod.shutil, "which", lambda _name: None)
+
+    plan = detect_installer_plan(
+        executable="/tmp/project/.venv/bin/python",
+        prefix="/tmp/project/.venv",
+        base_prefix="/usr",
+        env={},
+    )
+
+    # The upgrade must target the new package, never the retired one.
+    assert PYTHON_PACKAGE_NAME in plan.command
+    assert LEGACY_PYTHON_PACKAGE_NAME not in plan.command
+    assert f"pip uninstall {LEGACY_PYTHON_PACKAGE_NAME}" in plan.reason
+
+
+def test_update_check_polls_the_current_package(monkeypatch) -> None:
+    """A stale endpoint would report 'up to date' forever."""
+    assert updates_mod.PYPI_JSON_URL.endswith(f"/{PYTHON_PACKAGE_NAME}/json")
+    assert LEGACY_PYTHON_PACKAGE_NAME not in updates_mod.PYPI_JSON_URL

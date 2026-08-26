@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.extensions.models import RegistryEntry, RegistryFile
-from sylliptor_agent_cli.extensions.registry import find_by_id, load_registry, search
+from alysis_code.extensions.models import RegistryEntry, RegistryFile
+from alysis_code.extensions.registry import find_by_id, load_registry, search
 
 
 def test_load_registry_returns_registry_file() -> None:

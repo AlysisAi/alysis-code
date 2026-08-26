@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sylliptor_agent_cli.execution_shared import (
+from alysis_code.execution_shared import (
     copy_workspace_snapshot,
     snapshot_runtime_tree,
     sync_snapshot_changed_files,
@@ -15,7 +15,7 @@ def test_snapshot_large_file_uses_metadata_fingerprint_without_reading_bytes(
 ) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    big = root / ".sylliptor" / "large.bin"
+    big = root / ".alysis" / "large.bin"
     big.parent.mkdir(parents=True, exist_ok=True)
     big.write_bytes(b"x" * (2 * 1024 * 1024))
     target = big.resolve()
@@ -37,7 +37,7 @@ def test_snapshot_large_file_uses_metadata_fingerprint_without_reading_bytes(
 def test_snapshot_large_file_fingerprint_changes_when_file_changes(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    big = root / ".sylliptor" / "large.bin"
+    big = root / ".alysis" / "large.bin"
     big.parent.mkdir(parents=True, exist_ok=True)
     big.write_bytes(b"a" * (2 * 1024 * 1024))
 
@@ -55,7 +55,7 @@ def test_snapshot_twelve_megabyte_binary_uses_bounded_metadata_fingerprint(
 ) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    big = root / ".sylliptor" / "twelve-megabyte.bin"
+    big = root / ".alysis" / "twelve-megabyte.bin"
     big.parent.mkdir(parents=True, exist_ok=True)
     big.write_bytes(b"\x00\xff" * (6 * 1024 * 1024))
     target = big.resolve()
@@ -79,7 +79,7 @@ def test_snapshot_twelve_megabyte_binary_uses_bounded_metadata_fingerprint(
 def test_snapshot_preserves_unicode_emoji_and_rtl_filenames(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    runtime = root / ".sylliptor" / "unicode"
+    runtime = root / ".alysis" / "unicode"
     runtime.mkdir(parents=True)
     names = ["café-🚀.txt", "مرحبا-שלום.txt", "資料-δοκιμή.txt"]
     for index, name in enumerate(names):
@@ -96,11 +96,11 @@ def test_snapshot_preserves_unicode_emoji_and_rtl_filenames(tmp_path: Path) -> N
 def test_snapshot_plan_assets_use_metadata_even_when_small(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    asset = root / ".sylliptor" / "runs" / "r1" / "plan" / "assets" / "small.bin"
+    asset = root / ".alysis" / "runs" / "r1" / "plan" / "assets" / "small.bin"
     asset.parent.mkdir(parents=True, exist_ok=True)
     asset.write_bytes(b"tiny")
 
-    plan_json = root / ".sylliptor" / "runs" / "r1" / "plan" / "plan.json"
+    plan_json = root / ".alysis" / "runs" / "r1" / "plan" / "plan.json"
     plan_json.write_text('{"ok": true}\n', encoding="utf-8")
     target = asset.resolve()
 
@@ -140,21 +140,21 @@ def test_copy_workspace_snapshot_excludes_internal_dirs(tmp_path: Path) -> None:
     (root / ".pytest_cache" / "state").write_text("x\n", encoding="utf-8")
     (root / ".git").mkdir()
     (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (root / ".sylliptor").mkdir()
-    (root / ".sylliptor" / "tmp.txt").write_text("x\n", encoding="utf-8")
-    (root / ".sylliptor_images").mkdir()
-    (root / ".sylliptor_images" / "img.png").write_bytes(b"png")
-    (root / "sylliptor-feedback").mkdir()
-    (root / "sylliptor-feedback" / "bundle.zip").write_bytes(b"zip")
+    (root / ".alysis").mkdir()
+    (root / ".alysis" / "tmp.txt").write_text("x\n", encoding="utf-8")
+    (root / ".alysis_images").mkdir()
+    (root / ".alysis_images" / "img.png").write_bytes(b"png")
+    (root / "alysis-feedback").mkdir()
+    (root / "alysis-feedback" / "bundle.zip").write_bytes(b"zip")
 
     snapshot_root = tmp_path / "snapshot"
     copy_workspace_snapshot(src_root=root, dest_root=snapshot_root)
 
     assert (snapshot_root / "src" / "app.py").read_text(encoding="utf-8") == "print('ok')\n"
     assert not (snapshot_root / ".git").exists()
-    assert not (snapshot_root / ".sylliptor").exists()
-    assert not (snapshot_root / ".sylliptor_images").exists()
-    assert not (snapshot_root / "sylliptor-feedback").exists()
+    assert not (snapshot_root / ".alysis").exists()
+    assert not (snapshot_root / ".alysis_images").exists()
+    assert not (snapshot_root / "alysis-feedback").exists()
     assert not (snapshot_root / "target").exists()
     assert not (snapshot_root / "cli.pyc").exists()
     assert not (snapshot_root / "legacy.pyo").exists()
@@ -213,7 +213,7 @@ def test_sync_snapshot_changed_files_copies_and_deletes_back(tmp_path: Path) -> 
         changed_files=[
             "src/keep.py",
             "src/delete.py",
-            ".sylliptor/ignored.txt",
+            ".alysis/ignored.txt",
             "cli.pyc",
             "pkg/__pycache__/mod.cpython-310.pyc",
             "target/debug/demo",

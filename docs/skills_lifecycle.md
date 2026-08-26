@@ -1,6 +1,6 @@
 # Skills Lifecycle
 
-This document covers the local authoring and lifecycle layer that sits on top of sylliptor's raw
+This document covers the local authoring and lifecycle layer that sits on top of alysis's raw
 skill discovery.
 
 It is intentionally local-first and conservative:
@@ -18,18 +18,18 @@ automatic skill execution.
 
 Managed native roots:
 
-- project-local: `./.sylliptor_skills/`
-- user-global: `~/.config/sylliptor/skills/`
+- project-local: `./.alysis_skills/`
+- user-global: `~/.config/alysis/skills/`
 
 Managed lifecycle state:
 
-- project overrides/state: `./.sylliptor/skills.json`
-- global lifecycle state: `~/.config/sylliptor/skills.json`
+- project overrides/state: `./.alysis/skills.json`
+- global lifecycle state: `~/.config/alysis/skills.json`
 
 Runtime and inspection flows treat malformed lifecycle state as non-fatal:
 
 - invalid JSON / UTF-8 or malformed managed records fall back to empty/default state
-- session startup, `sylliptor skill list`, and `sylliptor skill info` continue to work
+- session startup, `alysis skill list`, and `alysis skill info` continue to work
 - the CLI surfaces a concise `Lifecycle state warning` instead of a stack trace
 
 Mutation commands stay conservative. They still require a usable lifecycle state rather than
@@ -59,25 +59,25 @@ deletes managed native installs.
 Native project-local scaffold:
 
 ```bash
-sylliptor skill init verification-playbook --description "Recommend verification commands safely"
+alysis skill init verification-playbook --description "Recommend verification commands safely"
 ```
 
 Portable project-local scaffold:
 
 ```bash
-sylliptor skill create docs-consistency --portable
+alysis skill create docs-consistency --portable
 ```
 
 User-global scaffold:
 
 ```bash
-sylliptor skill init architecture-review --user --description "Review architectural changes"
+alysis skill init architecture-review --user --description "Review architectural changes"
 ```
 
 Project-family selection:
 
 ```bash
-sylliptor skill init react-ui --family claude
+alysis skill init react-ui --family claude
 ```
 
 Scaffolding creates:
@@ -98,19 +98,19 @@ unmanaged by design.
 Validate a bundle path:
 
 ```bash
-sylliptor skill validate ./.sylliptor_skills/verification-playbook
+alysis skill validate ./.alysis_skills/verification-playbook
 ```
 
 Validate a discovered skill by name:
 
 ```bash
-sylliptor skill validate --name verification-playbook --path .
+alysis skill validate --name verification-playbook --path .
 ```
 
 Validate all discovered bundles for a workspace:
 
 ```bash
-sylliptor skill validate --all --path .
+alysis skill validate --all --path .
 ```
 
 Validation checks:
@@ -131,25 +131,25 @@ crashing discovery or session startup.
 From a local bundle directory:
 
 ```bash
-sylliptor skill install ./vendor/verification-playbook
+alysis skill install ./vendor/verification-playbook
 ```
 
 From a local zip archive:
 
 ```bash
-sylliptor skill install ./downloads/verification-playbook.zip
+alysis skill install ./downloads/verification-playbook.zip
 ```
 
 From git with a nested subdirectory:
 
 ```bash
-sylliptor skill install https://example.com/team/skills.git --subdir bundles/verification-playbook
+alysis skill install https://example.com/team/skills.git --subdir bundles/verification-playbook
 ```
 
 Project-local managed install:
 
 ```bash
-sylliptor skill install ./vendor/verification-playbook --project --path .
+alysis skill install ./vendor/verification-playbook --project --path .
 ```
 
 Install behavior:
@@ -167,15 +167,15 @@ Install behavior:
 Global toggle:
 
 ```bash
-sylliptor skill disable verification-playbook
-sylliptor skill enable verification-playbook
+alysis skill disable verification-playbook
+alysis skill enable verification-playbook
 ```
 
 Project override:
 
 ```bash
-sylliptor skill disable verification-playbook --project --path ./packages/app
-sylliptor skill enable verification-playbook --project --path ./packages/app
+alysis skill disable verification-playbook --project --path ./packages/app
+alysis skill enable verification-playbook --project --path ./packages/app
 ```
 
 Project overrides are name-based and apply only within that workspace. They do not rename or edit
@@ -186,13 +186,13 @@ foreign interop bundle directories.
 Remove a managed user-global install:
 
 ```bash
-sylliptor skill remove verification-playbook
+alysis skill remove verification-playbook
 ```
 
 Remove a managed project-native install:
 
 ```bash
-sylliptor skill uninstall verification-playbook --project --path .
+alysis skill uninstall verification-playbook --project --path .
 ```
 
 This removes the managed native bundle directory plus its managed metadata. Attempting to remove an
@@ -204,12 +204,12 @@ backup deleted.
 
 ## Agent Workflow
 
-When a user asks sylliptor to help create a new skill, the preferred flow is:
+When a user asks alysis to help create a new skill, the preferred flow is:
 
-1. `sylliptor skill init` or `sylliptor skill create`
+1. `alysis skill init` or `alysis skill create`
 2. edit `SKILL.md` and any optional `references/`, `scripts/`, or `assets/`
-3. `sylliptor skill validate`
-4. optionally `sylliptor skill install` / `enable` / `disable` / `remove`
+3. `alysis skill validate`
+4. optionally `alysis skill install` / `enable` / `disable` / `remove`
 
 This lifecycle guidance is available even if the workspace has no discoverable skills yet. The
 separate discovery/`skill_read` guidance only appears once at least one skill bundle is

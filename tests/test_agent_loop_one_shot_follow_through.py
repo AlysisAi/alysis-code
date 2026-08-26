@@ -7,19 +7,19 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.acceptance_contract import (
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.acceptance_contract import (
     AcceptanceCriterionKind,
     AcceptanceCriterionStatus,
     build_acceptance_contract,
     finalize_acceptance_contract,
 )
-from sylliptor_agent_cli.agent.turn.exploration import (
+from alysis_code.agent.turn.exploration import (
     _is_action_progress_tool,
     _is_exploration_only_tool,
 )
-from sylliptor_agent_cli.agent.turn_contract import TurnOutcome, TurnRelation, TurnSemantics
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent.turn_contract import TurnOutcome, TurnRelation, TurnSemantics
+from alysis_code.agent_loop import (
     ToolDef,
     TurnExecutionState,
     VerificationEvidenceCategory,
@@ -34,17 +34,17 @@ from sylliptor_agent_cli.agent_loop import (
     _verification_expected_for_turn,
     create_session,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.types import AssistantResponsePhase
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.text_normalization import normalize_for_matching
-from sylliptor_agent_cli.tools.availability import WEB_UNAVAILABLE_OBSERVATION
-from sylliptor_agent_cli.tools.web import WebFetchError
-from sylliptor_agent_cli.tools.web_search import WebSearchError
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.types import AssistantResponsePhase
+from alysis_code.session_store import read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.text_normalization import normalize_for_matching
+from alysis_code.tools.availability import WEB_UNAVAILABLE_OBSERVATION
+from alysis_code.tools.web import WebFetchError
+from alysis_code.tools.web_search import WebSearchError
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 class _ScriptedClient:
@@ -171,6 +171,45 @@ def test_subagent_progress_uses_observed_child_effects_not_delegation_name() -> 
     }
     assert _is_action_progress_tool("subagent_run", result=write_result)
     assert not _is_exploration_only_tool("subagent_run", result=write_result)
+
+
+def test_background_subagent_progress_uses_workspace_semantics() -> None:
+    assert not _is_action_progress_tool("subagent_status", arguments={"run_id": "all"})
+    assert _is_exploration_only_tool("subagent_status", arguments={"run_id": "all"})
+
+    assert not _is_action_progress_tool(
+        "subagent_spawn",
+        arguments={"name": "explorer", "task": "Map the code."},
+    )
+    assert _is_exploration_only_tool(
+        "subagent_spawn",
+        arguments={"name": "explorer", "task": "Map the code."},
+    )
+    assert _is_action_progress_tool(
+        "subagent_spawn",
+        arguments={
+            "name": "implementer",
+            "task": "Apply the change.",
+            "workspace_view": "isolated",
+        },
+    )
+
+    readonly_wait_result = {
+        "results": {"run-a": {"effects": ["delegate", "read_workspace"]}}
+    }
+    assert not _is_action_progress_tool("subagent_wait", result=readonly_wait_result)
+    assert _is_exploration_only_tool("subagent_wait", result=readonly_wait_result)
+
+    write_wait_result = {
+        "results": {
+            "run-b": {
+                "effects": ["delegate", "write_workspace"],
+                "touched_repo_paths": ["src/app.py"],
+            }
+        }
+    }
+    assert _is_action_progress_tool("subagent_wait", result=write_wait_result)
+    assert not _is_exploration_only_tool("subagent_wait", result=write_wait_result)
 
 
 def test_subagent_write_effect_is_recorded_as_parent_material_progress(tmp_path: Path) -> None:
@@ -11020,7 +11059,7 @@ def test_stagnation_detection_event_emission_spacing(
     nudge_sent: bool,
     expected: bool,
 ) -> None:
-    from sylliptor_agent_cli.agent.turn.exploration import (
+    from alysis_code.agent.turn.exploration import (
         _stagnation_detection_event_should_emit,
     )
 

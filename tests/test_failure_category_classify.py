@@ -2,8 +2,8 @@
 
 These lock the observability-spine contract: an arbitrary exception is mapped onto
 exactly one real :class:`FailureCategory` (never the old ``"llm_error"`` literal), so
-the diagnostic vocabulary joins across the chat/run path, Forge workers, and Power
-candidates. A readable-but-permanent provider status (auth / bad-request / model) is
+the diagnostic vocabulary joins across the chat/run path, Forge workers, and delegated
+agents. A readable-but-permanent provider status (auth / bad-request / model) is
 reported as ``PROVIDER_ERROR`` and kept distinct from transient outages and from
 genuine agent-implementation failures.
 """
@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.failure_category import (
+from alysis_code.failure_category import (
     FailureCategory,
     classify_failure_category,
     exit_code_for_failure,
     extract_status_code,
     is_context_window_exceeded_error,
 )
-from sylliptor_agent_cli.run_outcome import (
+from alysis_code.run_outcome import (
     AGENT_FAILURE_EXIT_CODE,
     INFRASTRUCTURE_FAILURE_EXIT_CODE,
     RunOutcome,

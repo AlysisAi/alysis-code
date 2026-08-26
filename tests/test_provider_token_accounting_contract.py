@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.factory import make_llm_client
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.config import AppConfig
+from alysis_code.llm.factory import make_llm_client
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     OPENAI_COMPAT_PROTOCOL,
     OPENAI_RESPONSES_PROTOCOL,
 )
-from sylliptor_agent_cli.profile_presets import PROFILE_PRESETS, ProfilePreset
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.profile_presets import PROFILE_PRESETS, ProfilePreset
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
 
 EXPECTED_PROVIDER_KEYS = {
-    "sylliptor": "sylliptor",
+    "alysis": "alysis",
     "openai": "openai",
     "openai-responses": "openai",
     "anthropic": "anthropic",
@@ -34,6 +34,7 @@ EXPECTED_PROVIDER_KEYS = {
     "kimi-code": "moonshot",
     "moonshot-cn": "moonshot",
     "minimax": "minimax",
+    "xiaomi-mimo": "xiaomi",
     "bytedance": "bytedance",
     "groq": "groq",
     "cerebras": "cerebras",

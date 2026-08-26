@@ -7,16 +7,16 @@ from pathlib import Path
 
 import httpx
 
-import sylliptor_agent_cli.provider_auth as provider_auth_mod
-from sylliptor_agent_cli.chatgpt_codex_static_provider import (
+import alysis_code.provider_auth as provider_auth_mod
+from alysis_code.chatgpt_codex_static_provider import (
     CHATGPT_CODEX_SUBSCRIPTION_CATALOG_SOURCE,
     load_chatgpt_codex_static_models,
     resolve_chatgpt_codex_static_model,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.litellm_static_provider import resolve_litellm_static_metadata
-from sylliptor_agent_cli.model_registry import ModelRegistry
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.config import AppConfig
+from alysis_code.litellm_static_provider import resolve_litellm_static_metadata
+from alysis_code.model_registry import ModelRegistry
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
 
 
 def _subscription_cfg(model: str) -> AppConfig:
@@ -194,8 +194,8 @@ def test_subscription_refresh_script_writes_sanitized_deterministic_snapshot(
 
 
 def test_live_adapter_fills_missing_fields_from_subscription_snapshot(monkeypatch) -> None:
-    from sylliptor_agent_cli.provider_auth.openai_codex import OpenAICodexSubscriptionAuth
-    from sylliptor_agent_cli.provider_auth.store import ProviderTokenRecord
+    from alysis_code.provider_auth.openai_codex import OpenAICodexSubscriptionAuth
+    from alysis_code.provider_auth.store import ProviderTokenRecord
 
     record = ProviderTokenRecord(
         access_token="access-secret",
@@ -204,7 +204,7 @@ def test_live_adapter_fills_missing_fields_from_subscription_snapshot(monkeypatc
         account_id="account-123",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: record,
     )
 
@@ -237,8 +237,8 @@ def test_live_adapter_fills_missing_fields_from_subscription_snapshot(monkeypatc
 
 
 def test_live_subscription_fields_remain_authoritative_over_snapshot(monkeypatch) -> None:
-    from sylliptor_agent_cli.provider_auth.openai_codex import OpenAICodexSubscriptionAuth
-    from sylliptor_agent_cli.provider_auth.store import ProviderTokenRecord
+    from alysis_code.provider_auth.openai_codex import OpenAICodexSubscriptionAuth
+    from alysis_code.provider_auth.store import ProviderTokenRecord
 
     record = ProviderTokenRecord(
         access_token="access-secret",
@@ -247,7 +247,7 @@ def test_live_subscription_fields_remain_authoritative_over_snapshot(monkeypatch
         account_id="account-123",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.openai_codex.load_provider_token",
+        "alysis_code.provider_auth.openai_codex.load_provider_token",
         lambda _provider_id: record,
     )
 

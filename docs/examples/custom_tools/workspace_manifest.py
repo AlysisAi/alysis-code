@@ -36,7 +36,7 @@ def run(args):
     import os
     from pathlib import Path
 
-    workspace_root = Path(os.environ["SYLLIPTOR_WORKSPACE_ROOT"])
+    workspace_root = Path(os.environ["ALYSIS_WORKSPACE_ROOT"])
     names = args.get("names") or ["pyproject.toml", "package.json", "Cargo.toml"]
     found = []
     for name in names:

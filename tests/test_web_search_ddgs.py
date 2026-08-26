@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.tools.web_search_ddgs import (
+from alysis_code.tools.web_search_ddgs import (
     DdgsSearchError,
     ddgs_package_available,
     ddgs_search,
@@ -174,12 +174,12 @@ def test_ddgs_search_accepts_alternate_row_keys() -> None:
 
 
 def test_keyless_toggle_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     assert keyless_web_search_enabled() is True
     for disabled in ("0", "false", "off", "no", "disabled"):
-        monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", disabled)
+        monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", disabled)
         assert keyless_web_search_enabled() is False
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "1")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "1")
     assert keyless_web_search_enabled() is True
 
 

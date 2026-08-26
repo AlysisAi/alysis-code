@@ -20,9 +20,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.forge import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.forge import (
     add_task,
     create_plan_run,
     current_run_pointer_path,
@@ -31,15 +31,15 @@ from sylliptor_agent_cli.forge import (
     load_plan,
     save_plan,
 )
-from sylliptor_agent_cli.forge_events import parse_event_line
-from sylliptor_agent_cli.run_lock import (
+from alysis_code.forge_events import parse_event_line
+from alysis_code.run_lock import (
     STALENESS_ACTIVE,
     STALENESS_AMBIGUOUS,
     STALENESS_STALE,
     assess_lock_staleness,
     describe_run_mutation_lock,
 )
-from sylliptor_agent_cli.run_state import (
+from alysis_code.run_state import (
     RUN_STATUS_APPROVED,
     RUN_STATUS_COMPLETED,
     RUN_STATUS_DRAFT,
@@ -48,9 +48,9 @@ from sylliptor_agent_cli.run_state import (
     compare_plan_fingerprints,
     plan_fingerprint,
 )
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
-_WORKSPACE_LOCK_SUBDIR = ".sylliptor/workspace_execution"
+_WORKSPACE_LOCK_SUBDIR = ".alysis/workspace_execution"
 
 # The child holds the lock and marks the run running, then parks. It is the stand-in
 # for a real `forge exec` that has reached the middle of a task -- everything before
@@ -59,9 +59,9 @@ _HOLDER_SCRIPT = """
 import os, socket, sys, time
 from pathlib import Path
 
-from sylliptor_agent_cli.forge import load_current_run_paths, load_plan, save_plan, set_current_run_status
-from sylliptor_agent_cli.run_state import RUN_STATUS_RUNNING, build_run_owner
-from sylliptor_agent_cli.swarm_orchestrator import acquire_swarm_mutation_guard
+from alysis_code.forge import load_current_run_paths, load_plan, save_plan, set_current_run_status
+from alysis_code.run_state import RUN_STATUS_RUNNING, build_run_owner
+from alysis_code.swarm_orchestrator import acquire_swarm_mutation_guard
 
 repo = Path(sys.argv[1])
 ready = Path(sys.argv[2])
@@ -89,10 +89,10 @@ while True:
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -214,7 +214,7 @@ def _kill_a_running_exec(repo: Path, tmp_path: Path, task_id: str) -> int:
 
 
 def _wait_for_pid_to_disappear(pid: int) -> None:
-    from sylliptor_agent_cli.run_lock import _process_is_running
+    from alysis_code.run_lock import _process_is_running
 
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -280,7 +280,7 @@ def test_killed_exec_becomes_interrupted_and_resume_finishes_the_run(
     assert current_run_status(repo) == RUN_STATUS_INTERRUPTED
 
     status_result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "--machine", "status", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -295,7 +295,7 @@ def test_killed_exec_becomes_interrupted_and_resume_finishes_the_run(
     agent_calls = _writing_agent(monkeypatch, files, order=expected_order)
 
     resume_result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -339,7 +339,7 @@ def test_forge_unlock_reports_and_clears_the_dead_owners_lock(tmp_path: Path) ->
     _assert_lock_is_recoverable(repo, pid)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "--machine", "unlock", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -385,7 +385,7 @@ def test_forge_unlock_keeps_a_lock_it_cannot_prove_dead_until_forced(tmp_path: P
     )
 
     kept = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "--machine", "unlock", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -399,7 +399,7 @@ def test_forge_unlock_keeps_a_lock_it_cannot_prove_dead_until_forced(tmp_path: P
     assert (lock_dir / "active_execution.lock.json").exists()
 
     forced = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "--machine", "unlock", "--path", os.fspath(repo), "--force"],
         env=_env(tmp_path),
     )
@@ -438,7 +438,7 @@ def test_the_grace_recheck_saves_a_lock_whose_owner_beats_again(tmp_path: Path) 
     """
     import threading
 
-    from sylliptor_agent_cli.run_lock import RunMutationConflictError, acquire_run_mutation_guard
+    from alysis_code.run_lock import RunMutationConflictError, acquire_run_mutation_guard
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
@@ -498,7 +498,7 @@ def test_a_failed_heartbeat_write_does_not_stop_the_heartbeat() -> None:
     beating, its own TTL would expire, and the next acquirer would take the lock
     out from under a process that is still mutating the workspace.
     """
-    from sylliptor_agent_cli.run_lock import _HeartbeatWorker
+    from alysis_code.run_lock import _HeartbeatWorker
 
     attempts: list[int] = []
 
@@ -521,9 +521,9 @@ def test_a_failed_heartbeat_write_does_not_stop_the_heartbeat() -> None:
 
 
 def test_the_guard_keeps_its_own_heartbeat_fresh(tmp_path: Path, monkeypatch) -> None:
-    from sylliptor_agent_cli.run_lock import acquire_run_mutation_guard, inspect_run_mutation_lock
+    from alysis_code.run_lock import acquire_run_mutation_guard, inspect_run_mutation_lock
 
-    monkeypatch.setenv("SYLLIPTOR_RUN_LOCK_HEARTBEAT_INTERVAL_S", "0.1")
+    monkeypatch.setenv("ALYSIS_RUN_LOCK_HEARTBEAT_INTERVAL_S", "0.1")
     run_dir = tmp_path / "run"
 
     with acquire_run_mutation_guard(
@@ -566,7 +566,7 @@ def test_a_lock_without_a_heartbeat_contract_is_never_reaped_by_age() -> None:
 def test_conflict_message_carries_age_owner_host_and_the_recovery_command(
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.run_lock import RunMutationConflictError, acquire_run_mutation_guard
+    from alysis_code.run_lock import RunMutationConflictError, acquire_run_mutation_guard
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
@@ -603,7 +603,7 @@ def test_conflict_message_carries_age_owner_host_and_the_recovery_command(
     assert "host=other-host" in message
     assert "age=" in message
     assert "heartbeat_age=" in message
-    assert "sylliptor forge unlock --path" in message
+    assert "alysis forge unlock --path" in message
 
 
 def test_resume_refuses_a_drifted_plan_until_reapproved(tmp_path: Path, monkeypatch) -> None:
@@ -626,7 +626,7 @@ def test_resume_refuses_a_drifted_plan_until_reapproved(tmp_path: Path, monkeypa
     save_plan(paths, plan)
 
     blocked = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -658,7 +658,7 @@ def test_resume_refuses_a_drifted_plan_until_reapproved(tmp_path: Path, monkeypa
     _writing_agent(monkeypatch, files, order=sorted(files))
 
     accepted = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -704,7 +704,7 @@ def test_resume_dry_run_reports_without_touching_anything(tmp_path: Path) -> Non
     pointer_before = json.loads(current_run_pointer_path(repo).read_text(encoding="utf-8"))
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",
@@ -739,7 +739,7 @@ def test_resume_declines_runs_that_were_never_interrupted(tmp_path: Path) -> Non
     _two_task_plan(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "--machine",

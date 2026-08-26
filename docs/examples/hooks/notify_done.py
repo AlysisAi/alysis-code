@@ -10,7 +10,7 @@ def main() -> int:
     payload = json.load(sys.stdin)
     reason = str(payload.get("reason") or "completed")
     session_id = str(payload.get("session_id") or "unknown")
-    title = "Sylliptor"
+    title = "Alysis Code"
     body = f"Turn finished ({reason}) for {session_id}"
     subprocess.run(
         ["notify-send", title, body],

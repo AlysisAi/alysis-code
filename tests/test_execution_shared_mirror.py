@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.execution_shared import (
+from alysis_code.execution_shared import (
     mirror_plan_into_worktree,
     mirror_selected_knowledge_into_worktree,
     prepare_task_execution_knowledge,
 )
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.knowledge_base import write_task_attempt_entry
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.knowledge_base import write_task_attempt_entry
 
 
 def test_mirror_plan_into_worktree_skips_unchanged_files(tmp_path: Path, monkeypatch) -> None:
@@ -23,7 +23,7 @@ def test_mirror_plan_into_worktree_skips_unchanged_files(tmp_path: Path, monkeyp
 
     mirror_plan_into_worktree(run_paths=paths, worktree_repo_path=worktree_repo)
 
-    import sylliptor_agent_cli.execution_shared as shared
+    import alysis_code.execution_shared as shared
 
     copied: list[tuple[Path, Path]] = []
     original_copy2 = shared.shutil.copy2
@@ -50,7 +50,7 @@ def test_mirror_plan_into_worktree_copies_changed_files(tmp_path: Path, monkeypa
 
     source_asset.write_text("v2 changed\n", encoding="utf-8")
 
-    import sylliptor_agent_cli.execution_shared as shared
+    import alysis_code.execution_shared as shared
 
     copied: list[tuple[Path, Path]] = []
     original_copy2 = shared.shutil.copy2
@@ -64,7 +64,7 @@ def test_mirror_plan_into_worktree_copies_changed_files(tmp_path: Path, monkeypa
 
     assert copied
     mirrored_asset = (
-        worktree_repo / ".sylliptor" / "runs" / paths.run_id / "plan" / "assets" / "brief.txt"
+        worktree_repo / ".alysis" / "runs" / paths.run_id / "plan" / "assets" / "brief.txt"
     )
     assert mirrored_asset.read_text(encoding="utf-8") == "v2 changed\n"
 
@@ -116,7 +116,7 @@ def test_mirror_selected_knowledge_into_worktree_copies_selected_view(tmp_path: 
 
     mirrored_manifest = (
         worktree_repo
-        / ".sylliptor"
+        / ".alysis"
         / "runs"
         / paths.run_id
         / "knowledge"

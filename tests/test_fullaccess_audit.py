@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent.tools_assembly import FULLACCESS_DENYLIST_PATTERNS
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, build_tools
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
+from alysis_code.agent.tools_assembly import FULLACCESS_DENYLIST_PATTERNS
+from alysis_code.agent_loop import AgentRuntimeError, build_tools
+from alysis_code.session_store import SessionStore, read_session_events
 
 
 class _Runner:

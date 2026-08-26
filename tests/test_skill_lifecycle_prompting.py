@@ -3,16 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent.turn_contract import (
+from alysis_code.agent.turn_contract import (
     TurnEffect,
     TurnOutcome,
     TurnSemantics,
     TurnTarget,
     TurnTargetKind,
 )
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
 
 
 class _CaptureClient:
@@ -94,9 +94,9 @@ def test_run_turn_uses_canonical_skill_lifecycle_guidance_for_first_skill_reques
     joined = "\n".join(system_messages)
     assert "Skills lifecycle" in joined
     assert "Skills lifecycle turn" not in joined
-    assert "sylliptor skill init" in joined
-    assert "sylliptor skill create" in joined
-    assert "sylliptor skill validate" in joined
+    assert "alysis skill init" in joined
+    assert "alysis skill create" in joined
+    assert "alysis skill validate" in joined
     assert "Do not hand-build skill bundles with `fs_mkdir` or `fs_write`" in joined
     assert "Use `skill_read` only for existing skills and only if available" in joined
     assert "Avoid broad docs/tests spelunking before lifecycle commands" in joined

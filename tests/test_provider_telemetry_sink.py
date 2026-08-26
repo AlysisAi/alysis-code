@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.provider_telemetry import (
     provider_telemetry_sink_path,
     record_provider_call,
     record_web_search_call,

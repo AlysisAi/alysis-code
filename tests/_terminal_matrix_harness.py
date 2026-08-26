@@ -14,12 +14,12 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli.cli_impl.commands import welcome as welcome_mod
-from sylliptor_agent_cli.surface import theme as theme_mod
+from alysis_code.cli_impl.commands import welcome as welcome_mod
+from alysis_code.surface import theme as theme_mod
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "terminal_matrix"
-MATRIX_ROOT = Path("/tmp/sylliptor-matrix")
-WORKSPACE = Path.home() / "Desktop" / "sylliptor"
+MATRIX_ROOT = Path("/tmp/alysis-matrix")
+WORKSPACE = Path.home() / "Desktop" / "alysis"
 MODEL = "test-model"
 VERSION = "0.1.4"
 
@@ -34,11 +34,11 @@ ENV_KEYS = {
     "OWL_FALLBACK_THEME",
     "OWL_THEME",
     "PYTEST_CURRENT_TEST",
-    "SYLLIPTOR_FALLBACK_THEME",
-    "SYLLIPTOR_ENABLE_OSC11",
-    "SYLLIPTOR_THEME",
-    "SYLLIPTOR_THEME_DEBUG",
-    "SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS",
+    "ALYSIS_FALLBACK_THEME",
+    "ALYSIS_ENABLE_OSC11",
+    "ALYSIS_THEME",
+    "ALYSIS_THEME_DEBUG",
+    "ALYSIS_WINDOWS_TERMINAL_SETTINGS",
     "TERM",
     "TERM_PROGRAM",
     "WT_PROFILE_ID",
@@ -85,7 +85,7 @@ def _write_windows_terminal_settings(scenario: dict[str, Any]) -> Path | None:
     if not isinstance(settings, dict):
         return None
 
-    scheme_name = str(settings.get("scheme_name") or "Sylliptor Matrix")
+    scheme_name = str(settings.get("scheme_name") or "Alysis Code Matrix")
     background = str(settings.get("background") or "#0c0c0c")
     profile_guid = "{11111111-1111-1111-1111-111111111111}"
     payload = {
@@ -95,14 +95,14 @@ def _write_windows_terminal_settings(scenario: dict[str, Any]) -> Path | None:
             "list": [
                 {
                     "guid": profile_guid,
-                    "name": "Sylliptor Matrix",
+                    "name": "Alysis Code Matrix",
                     "colorScheme": scheme_name,
                 }
             ],
         },
         "schemes": [{"name": scheme_name, "background": background}],
     }
-    path = Path(f"/tmp/sylliptor-matrix-settings-{scenario['id']}") / "settings.json"
+    path = Path(f"/tmp/alysis-matrix-settings-{scenario['id']}") / "settings.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -116,12 +116,12 @@ def simulate(scenario: dict[str, Any]) -> Iterator[Simulation]:
     for key in ENV_KEYS:
         os.environ.pop(key, None)
     os.environ.update({str(key): str(value) for key, value in scenario.get("env", {}).items()})
-    os.environ["SYLLIPTOR_THEME_DEBUG"] = "1"
+    os.environ["ALYSIS_THEME_DEBUG"] = "1"
     os.environ["PYTEST_CURRENT_TEST"] = "terminal-matrix"
 
     settings_path = _write_windows_terminal_settings(scenario)
     if settings_path is not None:
-        os.environ["SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS"] = os.fspath(settings_path)
+        os.environ["ALYSIS_WINDOWS_TERMINAL_SETTINGS"] = os.fspath(settings_path)
 
     stream = MatrixStream(isatty=bool(scenario.get("isatty", True)))
     stderr = io.StringIO()
@@ -217,13 +217,13 @@ def assert_consistency(scenario: dict[str, Any], ansi: str) -> str:
         assert not panel_present(ansi)
 
     visible = to_visible(ansi)
-    for anchor in ("Sylliptor", "workspace", "model", "version", "/forge", "/status", "/help"):
+    for anchor in ("Alysis Code", "workspace", "model", "version", "/forge", "/status", "/help"):
         assert anchor in visible
     return actual_theme
 
 
 def matrix_output_dir(scenario_id: int) -> Path:
-    return Path(f"/tmp/sylliptor-matrix-{scenario_id}")
+    return Path(f"/tmp/alysis-matrix-{scenario_id}")
 
 
 def write_outputs(

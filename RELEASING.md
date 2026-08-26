@@ -1,54 +1,18 @@
 # Releasing
 
-This is the maintainer checklist for publishing Sylliptor packages and sandbox images.
+This is the maintainer checklist for publishing Alysis Code packages and sandbox images.
 
-## Prepare The Release
+## Version And Tag
 
-1. Set the same semantic version in `pyproject.toml`,
-   `src/sylliptor_agent_cli/__init__.py`, and the Sylliptor project entry in
-   `uv.lock`.
-2. Move the completed public changes from `[Unreleased]` into a dated section in
-   `CHANGELOG.md`.
-3. Confirm that the lockfile is current and the release metadata agrees:
-
-```bash
-uv lock --check
-uv run pytest -q tests/test_release_smoke.py
-```
-
-4. Run the release-quality checks locally:
-
-```bash
-uv sync --frozen --no-editable --extra dev
-uv run python scripts/release/audit_locked_dependencies.py
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q
-```
-
-5. Build into an empty directory and validate both distributions:
-
-```bash
-uv build --no-create-gitignore --no-build-isolation --no-sources --out-dir dist/python
-uv run python scripts/release/validate_python_distributions.py dist/python
-```
-
-## Commit And Tag
-
-1. Put the complete public release in one reviewable commit named
-   `release: v0.x.y`. If changes arrived through another branch, squash or
-   fast-forward them so the public release does not introduce a merge commit.
-2. Make sure that exact commit is on the default branch before tagging it.
-3. Create and push the matching tag:
+1. Bump the package version in `pyproject.toml` and `src/alysis_code/__init__.py`.
+2. Update `CHANGELOG.md` with user-facing changes and known limitations.
+3. Commit the release changes.
+4. Create and push the release tag:
 
 ```bash
 git tag v0.x.y
 git push origin v0.x.y
 ```
-
-Pushing the tag starts the release workflow. It verifies the tag, version, default
-branch ancestry, tests, distributions, dependency audit, SBOM, and provenance before
-publishing.
 
 ## PyPI
 
@@ -59,49 +23,80 @@ After the workflow finishes:
 
 - Confirm the package page shows the expected version.
 - Install the package in a clean environment.
-- Run `sylliptor --help`.
+- Run `alysis --help`.
 
 ## Sandbox Images
 
 Sandbox images are published under:
 
 ```text
-ghcr.io/alysisai/sylliptor-sandbox
+ghcr.io/alysisai/alysis-sandbox
 ```
 
-Each variant is published as:
+Sandbox releases use an isolated Git tag namespace. Create a tag such as
+`sandbox-v0.9.7`; ordinary Python or extension `v*` tags do not trigger the
+container workflow.
+
+The workflow first publishes source- and run-bound candidates under
+`:candidate-<variant>-<full-sha>-<run-id>-<run-attempt>`. It scans and
+smoke-tests both `linux/amd64` and `linux/arm64`, creates provenance, and signs
+every candidate digest. Only after **all three variants** pass does the
+promotion job create consumer tags:
 
 - `:<variant>` for the moving variant tag, for example `:dev`
 - `:<variant>-<sha12>` for the immutable per-commit tag
-- `:<variant>-<git-tag>` for release tags
+- `:<variant>-<sandbox-git-tag>` for release tags
+- `:<sandbox-git-tag>` for the default variant
 
-The default variant is `dev`.
+The default variant is `dev`. A manual run must target the repository default
+branch and does not update moving tags unless `publish_moving_tags` is selected.
+Candidate tags are not consumer release channels.
+Promotion refuses to replace an existing per-commit or release tag with a
+different digest; only the explicitly selected moving aliases may move.
+
+Repository administrators must configure the `sandbox-release` GitHub
+environment with required maintainer reviewers, self-review prevention, and
+deployment-branch/tag restrictions for the default branch and `sandbox-v*`
+release tags. The write-enabled promotion job is the only job attached to this
+protected environment.
 
 ## Verify A Release Image
 
 Pull the image:
 
 ```bash
-docker pull ghcr.io/alysisai/sylliptor-sandbox:dev
+docker pull ghcr.io/alysisai/alysis-sandbox:dev
 ```
 
 For production use, prefer a digest-pinned image:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/alysisai/sylliptor-sandbox:dev
-export SYLLIPTOR_SHELL_SANDBOX_DOCKER_IMAGE=ghcr.io/alysisai/sylliptor-sandbox@sha256:<digest>
+docker buildx imagetools inspect ghcr.io/alysisai/alysis-sandbox:dev
+export ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE=ghcr.io/alysisai/alysis-sandbox@sha256:<digest>
 ```
 
-Verify signature and provenance when release signing is enabled:
+Verify the signature and exact-source provenance for the immutable release digest. Replace the
+placeholders with the tag and full source commit used by the retained workflow run:
 
 ```bash
-cosign verify ghcr.io/alysisai/sylliptor-sandbox@<digest> \
-  --certificate-identity-regexp 'https://github\.com/AlysisAi/Sylliptor/.*' \
+cosign verify ghcr.io/alysisai/alysis-sandbox@<digest> \
+  --certificate-identity 'https://github.com/AlysisAi/alysis-code/.github/workflows/sandbox-image.yml@refs/tags/<sandbox-tag>' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-gh attestation verify oci://ghcr.io/alysisai/sylliptor-sandbox@<digest> \
-  --owner AlysisAi
+gh attestation verify oci://ghcr.io/alysisai/alysis-sandbox@<digest> \
+  --repo AlysisAi/alysis-code \
+  --signer-workflow AlysisAi/alysis-code/.github/workflows/sandbox-image.yml \
+  --source-ref refs/tags/<sandbox-tag> \
+  --source-digest <full-source-sha> \
+  --deny-self-hosted-runners \
+  --predicate-type https://slsa.dev/provenance/v1
 ```
+
+The protected workflow also resolves the exact `linux/amd64` and `linux/arm64` manifest digests,
+extracts each BuildKit SPDX 2.3 SBOM, checks its recorded SHA-256, and verifies that the exact SBOM
+semantically matches a source-bound `https://spdx.dev/Document/v2.3` attestation for that platform
+manifest. Signature, scan, smoke, provenance, platform inventory, or SBOM predicate failures prevent
+promotion; there is no best-effort release path.
 
 ## Troubleshooting
 

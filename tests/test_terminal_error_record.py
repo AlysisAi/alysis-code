@@ -15,13 +15,13 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent.session import AgentSession
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.crash_diagnostics import build_crash_diagnostic_logger
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent.session import AgentSession
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.crash_diagnostics import build_crash_diagnostic_logger
+from alysis_code.failure_category import FailureCategory
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.session_store import read_session_events
 
 
 class _FakeStore:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.agent.turn.read_cache import (
+from alysis_code.agent.turn.read_cache import (
     _maybe_reuse_same_batch_read_result,
     _remember_same_batch_read_result,
     _SameBatchReadReuseCache,

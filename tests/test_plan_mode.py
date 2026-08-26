@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sylliptor_agent_cli.plan_mode import (
+from alysis_code.plan_mode import (
     PLAN_MODE_SYSTEM_PROMPT,
     TOOL_RESULT_SUMMARY_CHARS,
     build_plan_context_messages,

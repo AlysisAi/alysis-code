@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from sylliptor_agent_cli.profile_presets import PROFILE_PRESETS
-from sylliptor_agent_cli.reasoning_contracts import (
+from alysis_code.profile_presets import PROFILE_PRESETS
+from alysis_code.reasoning_contracts import (
     _CONTRACTS,
     ALWAYS_ON,
     NONE,
@@ -132,6 +132,7 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     qwen = reasoning_contract_for("qwen", "qwen3.8-max")
     qwen37 = reasoning_contract_for("qwen", "qwen3.7-plus")
     deepseek = reasoning_contract_for("deepseek", "deepseek-v4-pro")
+    deepseek_vision = reasoning_contract_for("deepseek", "deepseek-v4-flash-vision-exp")
 
     assert qwen.wire == "reasoning_effort"
     assert qwen.values == ("low", "medium", "xhigh")
@@ -141,10 +142,38 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     assert qwen37.replay_reasoning_content is False
 
     assert deepseek.wire == "reasoning_effort"
-    assert deepseek.values == ("high", "max")
+    assert deepseek.values == ("low", "high", "max")
     assert deepseek.default == "high"
-    assert not deepseek.allows_value("low")
+    assert deepseek.replay_reasoning_content is True
+    assert deepseek.accepts_tool_choice_while_reasoning is False
+    assert deepseek.allows_value("low")
     assert not deepseek.allows_value("medium")
+    assert deepseek_vision is deepseek
+
+
+def test_dated_deepseek_gateway_routes_use_surface_specific_contracts() -> None:
+    together = reasoning_contract_for("together", "deepseek-ai/DeepSeek-V4-Pro-0813")
+    together_flash = reasoning_contract_for(
+        "together",
+        "deepseek-ai/DeepSeek-V4-Flash-0731",
+    )
+    fireworks = reasoning_contract_for(
+        "fireworks",
+        "accounts/fireworks/models/deepseek-v4-flash-0731",
+    )
+
+    assert together.mode == OPTIONAL
+    assert together.values == ("high", "max")
+    assert together.default == "high"
+    assert together.off == OFF_EXPLICIT
+    assert not together.emits_flat_reasoning_effort
+    assert together_flash is UNKNOWN_CONTRACT
+
+    assert fireworks.mode == OPTIONAL
+    assert fireworks.values == ("none", "high", "max")
+    assert fireworks.default == "high"
+    assert fireworks.off == OFF_EXPLICIT
+    assert fireworks.emits_flat_reasoning_effort
 
 
 def test_cerebras_glm_exposes_only_its_documented_disable_value() -> None:
@@ -166,6 +195,9 @@ def test_flat_reasoning_effort_emission_requires_explicit_transport_verification
     assert not reasoning_contract_for("xai", "grok-4.6").emits_flat_reasoning_effort
     assert not reasoning_contract_for(
         "fireworks", "accounts/fireworks/models/minimax-m3"
+    ).emits_flat_reasoning_effort
+    assert reasoning_contract_for(
+        "fireworks", "accounts/fireworks/models/deepseek-v4-pro-0813"
     ).emits_flat_reasoning_effort
 
 
@@ -211,13 +243,19 @@ def test_zai_coding_plan_exposes_its_reasoning_floor_without_inventing_off() -> 
 
 def test_catalog_models_resolve_beyond_unknown_where_researched() -> None:
     # Every suggested model on the core presets should hit a real rule (the
-    # probe-gated providers legitimately stay unknown).
-    probe_gated = {"bytedance", "fireworks", "openrouter", "sylliptor"}
+    # probe-gated providers legitimately stay unknown; direct BYOK MiMo shares
+    # the same unresearched reasoning surface as the hosted proxy).
+    probe_gated = {"bytedance", "fireworks", "openrouter", "alysis", "xiaomi"}
+    probe_gated_models = {
+        ("together", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+    }
     for preset in PROFILE_PRESETS:
         provider = preset.provider_key or preset.key
         if provider in probe_gated or preset.key in {"ollama", "lm-studio", "vllm", "custom"}:
             continue
         for model in preset.suggested_models:
+            if (provider, model) in probe_gated_models:
+                continue
             contract = reasoning_contract_for(provider, model, preset_key=preset.key)
             assert contract is not UNKNOWN_CONTRACT, (preset.key, model)
 

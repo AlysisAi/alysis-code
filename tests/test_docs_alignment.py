@@ -78,7 +78,7 @@ def test_python_runtime_baseline_is_documented_and_ci_aligned() -> None:
     assert pyproject["tool"]["ruff"]["target-version"] == "py311"
     assert '"python-version":"3.11"' in ci
     assert '"python-version":"3.12"' in ci
-    assert "Sylliptor requires Python 3.11 or newer" in readme
+    assert "Alysis Code requires Python 3.11 or newer" in readme
     assert "Use Python 3.11+" in contributing
     assert "Python 3.11 or newer" in server_doc
 
@@ -86,18 +86,23 @@ def test_python_runtime_baseline_is_documented_and_ci_aligned() -> None:
 def test_readme_keeps_public_launch_surface() -> None:
     readme = _read("README.md")
 
-    assert "SYLLIPTOR" in readme
+    assert "ALYSIS" in readme
     assert (
-        "raw.githubusercontent.com/AlysisAi/Sylliptor/main/docs/assets/sylliptor-demo.gif" in readme
+        "raw.githubusercontent.com/AlysisAi/alysis-code/main/docs/assets/alysis-demo.gif" in readme
     )
-    assert "https://sylliptor.alysisai.com/" in readme
-    assert 'href="https://github.com/AlysisAi/Sylliptor/tree/main/docs">Docs</a>' in readme
+    # The product site. Derived from alysis_cloud so a future move updates this
+    # assertion with the constant rather than leaving a stale literal behind.
+    from alysis_code.alysis_cloud import site_url
+
+    assert f"{site_url()}/" in readme
+    assert "sylliptor.alysisai.com" not in readme
+    assert 'href="https://github.com/AlysisAi/alysis-code/tree/main/docs">Docs</a>' in readme
     assert (
-        'href="https://github.com/AlysisAi/Sylliptor/blob/main/CHANGELOG.md">Changelog</a>'
+        'href="https://github.com/AlysisAi/alysis-code/blob/main/CHANGELOG.md">Changelog</a>'
         in readme
     )
     assert 'href="https://github.com/sponsors/AlysisAi"' in readme
-    assert "pipx install sylliptor-agent-cli" in readme
+    assert "pipx install alysis-code" in readme
     assert "Apache License 2.0" in readme
 
 
@@ -114,7 +119,7 @@ def test_governance_and_packaging_metadata_are_public_ready() -> None:
     assert "packaging>=23.0" in dependencies
     assert (repo_root / "LICENSE").read_text(encoding="utf-8").startswith("Apache License")
     assert "Copyright 2026 AlysisAi" in _read("NOTICE")
-    assert "sylliptor-contributor-pack" not in _read("CONTRIBUTING.md")
+    assert "alysis-contributor-pack" not in _read("CONTRIBUTING.md")
     assert "products@alysisai.com" in _read("SECURITY.md")
     assert pyproject["project"]["urls"]["Documentation"].endswith("/tree/main/docs")
 
@@ -153,8 +158,21 @@ def test_public_docs_cover_core_user_and_contributor_topics() -> None:
     assert "workspace_root" in architecture
     assert "active_workdir" in architecture
     assert "Subagents" in subagents
-    assert "explorer" in subagents
-    assert "reviewer" in subagents
+    for name in (
+        "explorer",
+        "implementer",
+        "frontend-engineer",
+        "debugger",
+        "verifier",
+        "code-reviewer",
+        "visual-designer",
+    ):
+        assert name in subagents
+    assert "routing_visibility" in subagents
+    assert "parallel_batch_eligible" in subagents
+    assert "parallel_safe" not in subagents
+    assert "image_generation.enabled" in subagents
+    assert "Visual QA" in subagents
     assert "Streamable HTTP" in mcp
     assert "OAuth" in mcp
     assert "Skills" in skills
@@ -199,10 +217,25 @@ def test_internal_cleanup_artifacts_stay_absent() -> None:
 
 
 def test_source_urls_and_container_docs_point_to_alysisai() -> None:
-    branding = _read("src/sylliptor_agent_cli/branding.py")
+    branding = _read("src/alysis_code/branding.py")
     sandbox = _read("docs/shell_sandbox.md")
 
-    assert 'PROJECT_SOURCE_URL = "https://github.com/AlysisAi/Sylliptor"' in branding
-    assert "ghcr.io/alysisai/sylliptor-sandbox" in sandbox
-    assert "ap" + "fivos/sylliptor" not in branding
+    assert 'PROJECT_SOURCE_URL = "https://github.com/AlysisAi/alysis-code"' in branding
+    assert "ghcr.io/alysisai/alysis-sandbox" in sandbox
+    assert "ap" + "fivos/alysis" not in branding
     assert "ghcr.io/ap" + "fivos" not in sandbox
+
+
+def test_current_copy_uses_the_correct_article_for_alysis() -> None:
+    repo_root = _repo_root()
+    bad_phrase = "a " + "Alysis"
+    bad_command_phrase = "a " + "alysis executable"
+    text_suffixes = {".md", ".py", ".ts", ".json"}
+
+    for raw_path in _checkout_paths(repo_root):
+        candidate = repo_root / raw_path
+        if candidate.suffix not in text_suffixes:
+            continue
+        contents = candidate.read_text(encoding="utf-8")
+        assert bad_phrase not in contents, raw_path
+        assert bad_command_phrase not in contents, raw_path

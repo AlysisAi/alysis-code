@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.forge_events import (
+from alysis_code.forge_events import (
     EVENT_ERROR,
     EVENT_RUN_COMPLETED,
     EVENT_TASK_FAILED,
     SCHEMA_VERSION,
 )
-from sylliptor_agent_cli.server.settings import ServerSettings
-from sylliptor_agent_cli.server.store import ServerStore
-from sylliptor_agent_cli.server.worker_runner import (
+from alysis_code.server.settings import ServerSettings
+from alysis_code.server.store import ServerStore
+from alysis_code.server.worker_runner import (
     STATUS_SOURCE_EXIT_CODE,
     STATUS_SOURCE_TERMINAL_EVENT,
     JobRunner,
@@ -94,7 +94,7 @@ def _run_scripted_job(
         job_id="job_test",
         run_id=run_id,
         status="queued",
-        command=["sylliptor", "forge", "exec", "T01", "--machine"],
+        command=["alysis", "forge", "exec", "T01", "--machine"],
         created_at="2026-01-01T00:00:00+00:00",
         logs_path=os.fspath(job_paths.logs_path),
     )
@@ -171,7 +171,7 @@ def test_exit_code_is_the_fallback_when_no_terminal_event_is_reported(
     state, result = _run_scripted_job(
         tmp_path,
         monkeypatch,
-        lines=["Plan saved: /workspace/.sylliptor/plan/PLAN.md\n", "done\n"],
+        lines=["Plan saved: /workspace/.alysis/plan/PLAN.md\n", "done\n"],
         exit_code=0,
     )
 
@@ -243,7 +243,7 @@ def test_job_logs_still_contain_every_line(
         job_id="job_logs",
         run_id=run_id,
         status="queued",
-        command=["sylliptor", "forge", "exec", "T01", "--machine"],
+        command=["alysis", "forge", "exec", "T01", "--machine"],
         created_at="2026-01-01T00:00:00+00:00",
         logs_path=os.fspath(job_paths.logs_path),
     )

@@ -5,17 +5,17 @@ from pathlib import Path
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 from PIL import Image
 
-from sylliptor_agent_cli.assets import AssetSurface, ComprehensionData, ComprehensionRecord
-from sylliptor_agent_cli.assets.budget_allocator import AssetInclusionDecision, TaskAssetAllocation
-from sylliptor_agent_cli.assets.worker_mirror import mirror_task_assets
-from sylliptor_agent_cli.assets.worker_section import render_relevant_assets_section
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_context import (
+from alysis_code.assets import AssetSurface, ComprehensionData, ComprehensionRecord
+from alysis_code.assets.budget_allocator import AssetInclusionDecision, TaskAssetAllocation
+from alysis_code.assets.worker_mirror import mirror_task_assets
+from alysis_code.assets.worker_section import render_relevant_assets_section
+from alysis_code.config import AppConfig
+from alysis_code.execution_context import (
     _reduce_relevant_assets_section,
     _reduction_candidates,
 )
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.model_registry import ModelRegistry
+from alysis_code.forge import create_plan_run
+from alysis_code.model_registry import ModelRegistry
 
 
 def _section_case(tmp_path: Path, *, text: str = "content"):
@@ -86,7 +86,7 @@ def test_relevant_assets_section_omits_empty_mirror(tmp_path: Path) -> None:
     cfg = AppConfig(model="fake-model")
     paths = create_plan_run(tmp_path, create_if_missing=True)
     surface = AssetSurface(cfg=cfg, run_paths=paths)
-    from sylliptor_agent_cli.assets.worker_mirror import TaskAssetMirror
+    from alysis_code.assets.worker_mirror import TaskAssetMirror
 
     mirror = TaskAssetMirror(
         workspace_path=tmp_path,
@@ -249,7 +249,7 @@ def test_relevant_assets_section_degrades_focused_extract_failure(
         fallback_reason=None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.worker_section.perform_asset_read",
+        "alysis_code.assets.worker_section.perform_asset_read",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("extract failed")),
     )
 

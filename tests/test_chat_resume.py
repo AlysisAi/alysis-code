@@ -9,17 +9,17 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code import cli as cli_mod
+from alysis_code.config import AppConfig
+from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     build_provider_route_identity,
     endpoint_descriptor,
     stamp_provider_metadata_for_route,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import SessionInfo, SessionStore
-from sylliptor_agent_cli.web_research import build_web_research_artifact_from_events
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import SessionInfo, SessionStore
+from alysis_code.web_research import build_web_research_artifact_from_events
 
 
 def test_load_chat_resume_messages_reads_user_and_assistant_events(tmp_path: Path) -> None:
@@ -84,7 +84,7 @@ def test_load_chat_resume_messages_uses_latest_compacted_snapshot(tmp_path: Path
     log_path = tmp_path / "resume-compacted.jsonl"
     memory_message = {
         "role": "user",
-        "content": '<<<SYLLIPTOR_CONVERSATION_MEMORY_JSON>>>\n{"goal":"ship"}',
+        "content": '<<<ALYSIS_CONVERSATION_MEMORY_JSON>>>\n{"goal":"ship"}',
     }
     events = [
         {"type": "user_message", "payload": {"content": "old raw turn"}},
@@ -763,7 +763,7 @@ def test_chat_resume_panel_groups_by_date_and_shows_preview_and_footer(tmp_path:
             {
                 "type": "user_message",
                 "payload": {
-                    "content": "Investigate startup latency and import graph behavior for sylliptor",
+                    "content": "Investigate startup latency and import graph behavior for alysis",
                 },
             }
         )
@@ -2323,7 +2323,7 @@ def test_collect_chat_resume_candidates_end_to_end_hides_foreign_log_on_disk(
     """
     import uuid
 
-    from sylliptor_agent_cli.session_store import SessionStore
+    from alysis_code.session_store import SessionStore
 
     ws = tmp_path / "project"
     ws.mkdir()
@@ -2418,8 +2418,8 @@ def test_classic_resume_explicit_id_survives_fully_filtered_candidates(
     import io
     import uuid
 
-    from sylliptor_agent_cli.cli_impl import chat as chat_impl_mod
-    from sylliptor_agent_cli.cli_impl.chat import commands as chat_commands_mod
+    from alysis_code.cli_impl import chat as chat_impl_mod
+    from alysis_code.cli_impl.chat import commands as chat_commands_mod
 
     ws = tmp_path / "ws"
     ws.mkdir()

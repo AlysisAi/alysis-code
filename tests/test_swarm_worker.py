@@ -9,33 +9,33 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
-from sylliptor_agent_cli.compaction.tool_output_offload import ToolOutputOffloader
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.forge import (
+from alysis_code.compaction.tool_output_offload import ToolOutputOffloader
+from alysis_code.config import AppConfig
+from alysis_code.failure_category import FailureCategory
+from alysis_code.forge import (
     add_task,
     attach_asset,
     create_plan_run,
     load_plan,
     save_plan,
 )
-from sylliptor_agent_cli.git_ops import GitOpsError
-from sylliptor_agent_cli.knowledge_base import load_knowledge_entry, write_task_attempt_entry
-from sylliptor_agent_cli.knowledge_capture import RecordingSurface
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.session_artifacts import SessionArtifactLayout
-from sylliptor_agent_cli.surface.types import ToolEndEvent, ToolOutputEvent, ToolStartEvent
-from sylliptor_agent_cli.swarm_trace import (
+from alysis_code.git_ops import GitOpsError
+from alysis_code.knowledge_base import load_knowledge_entry, write_task_attempt_entry
+from alysis_code.knowledge_capture import RecordingSurface
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.session_artifacts import SessionArtifactLayout
+from alysis_code.surface.types import ToolEndEvent, ToolOutputEvent, ToolStartEvent
+from alysis_code.swarm_trace import (
     SwarmTraceEvent,
     SwarmWorkerTraceSurface,
     format_swarm_trace_message,
 )
-from sylliptor_agent_cli.swarm_worker import (
+from alysis_code.swarm_worker import (
     _baseline_improved_failure_comparison,
     resolve_worker_verify_contract,
     run_task_worker,
 )
-from sylliptor_agent_cli.verify_gate import (
+from alysis_code.verify_gate import (
     ResolvedVerifyCommands,
     VerifyCommandResult,
     VerifyRunResult,
@@ -182,13 +182,13 @@ def _prepare_zero_diff_worker_case(tmp_path: Path) -> tuple[Path, object, dict[s
 
 
 def _configure_zero_diff_worker(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
@@ -255,28 +255,24 @@ def test_run_task_worker_mirrors_plan_assets_into_worktree(tmp_path: Path, monke
         assert "the rest is not readable via fs" in stub["full_output"]
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/impl.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/impl.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/impl.py"],
     )
 
@@ -360,31 +356,27 @@ def test_run_task_worker_moves_known_root_scratch_files_to_artifacts(
         (worktree_repo / "_pytest_out.txt").write_text("debug output\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/in_scope.py", "_pytest_out.txt"),
             patch_text="added: src/in_scope.py\nadded: _pytest_out.txt\n",
         ),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -443,28 +435,24 @@ def test_run_task_worker_no_log_reports_retained_session_artifacts_truthfully(
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/impl.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/impl.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/impl.py"],
     )
 
@@ -510,7 +498,7 @@ def test_run_task_worker_no_log_reports_retained_session_artifacts_truthfully(
     assert "- Session Logging: disabled (--no-log)" in report_text
     assert "- Execution Log: (not retained)" in report_text
     assert (
-        f"- Session Artifacts: `.sylliptor/runs/{paths.run_id}/execution/sessions/{task['id']}`"
+        f"- Session Artifacts: `.alysis/runs/{paths.run_id}/execution/sessions/{task['id']}`"
         in normalized_report_text
     )
 
@@ -563,28 +551,24 @@ def test_run_task_worker_materializes_and_mirrors_relevant_knowledge(
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/parser.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/parser.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/parser.py"],
     )
 
@@ -609,7 +593,7 @@ def test_run_task_worker_materializes_and_mirrors_relevant_knowledge(
     assert "Selected Knowledge Files" in captured["instruction"]
     mirrored_manifest = (
         worktree_repo
-        / ".sylliptor"
+        / ".alysis"
         / "runs"
         / paths.run_id
         / "knowledge"
@@ -652,28 +636,24 @@ def test_run_task_worker_writes_structured_knowledge_capture_artifacts_without_p
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/parser.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/parser.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/parser.py"],
     )
 
@@ -733,28 +713,24 @@ def test_run_task_worker_invalid_structured_capture_is_non_fatal(
         kwargs["surface"].on_assistant_message_done(_structured_capture_text(valid=False))
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/parser.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/parser.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/parser.py"],
     )
 
@@ -812,16 +788,16 @@ def test_run_task_worker_failure_without_material_changes_writes_capture_artifac
         kwargs["surface"].on_assistant_message_done(_structured_capture_text(valid=True))
         return 1
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     called_stage = {"value": False}
 
     def fail_if_called(_root: Path) -> None:
         called_stage["value"] = True
         raise AssertionError("stage_all should not be called when no material changes exist")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
@@ -880,9 +856,9 @@ def test_run_task_worker_rejects_nonzero_exit_with_material_changes_and_verify_o
 
     commit_calls = {"stage": 0, "commit": 0}
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
 
@@ -893,27 +869,23 @@ def test_run_task_worker_rejects_nonzero_exit_with_material_changes_and_verify_o
         commit_calls["commit"] += 1
         return "deadbeef"
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fake_stage_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fake_stage_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", fake_commit_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", fake_commit_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run when verify_mode=off")
         ),
@@ -976,9 +948,9 @@ def test_run_task_worker_rejects_agent_exception_with_material_changes_and_verif
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("provider timeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
 
@@ -989,23 +961,19 @@ def test_run_task_worker_rejects_agent_exception_with_material_changes_and_verif
         commit_calls["commit"] += 1
         return "deadbeef"
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fake_stage_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fake_stage_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", fake_commit_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", fake_commit_all)
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -1070,31 +1038,27 @@ def test_run_task_worker_redacts_and_truncates_agent_exception_summary(
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError(f"provider timeout {secret_token} {secret_bearer} {long_tail}")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.commit_all",
+        "alysis_code.swarm_worker.commit_all",
         lambda *_args, **_kwargs: "deadbeef",
     )
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -1142,7 +1106,7 @@ def test_run_task_worker_accepts_verified_zero_diff_as_noop_success(
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -1209,7 +1173,7 @@ def test_run_task_worker_suppresses_generic_pytest_for_static_zero_diff(
         verify_calls.append(dict(kwargs))
         raise AssertionError("verification must be suppressed for a scope-irrelevant task")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     result = run_task_worker(
         task=task,
@@ -1279,7 +1243,7 @@ def test_run_task_worker_runs_trusted_pytest_and_accepts_no_tests(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     result = run_task_worker(
         task=task,
@@ -1321,7 +1285,7 @@ def test_run_task_worker_accepts_diagnostic_zero_diff_without_verification(
     save_plan(paths, plan)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("diagnostic no-op should not require verification")
         ),
@@ -1371,7 +1335,7 @@ def test_run_task_worker_accepts_read_scope_zero_diff_without_baseline_verificat
     save_plan(paths, plan)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("read-only diagnostic no-op should not require verification")
         ),
@@ -1418,20 +1382,20 @@ def test_run_task_worker_accepts_diagnostic_rust_build_metadata_side_effects(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("Cargo.lock", "target/debug/demo"),
             patch_text="PATCH\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["Cargo.lock", "target/debug/demo"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("diagnostic side-effect no-op should not require verification")
         ),
@@ -1518,17 +1482,17 @@ def test_run_task_worker_rejects_locate_diagnostic_noop_after_nonzero_exit(
         ]
         return 1
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("diagnostic no-op should not require verification")
         ),
@@ -1574,7 +1538,7 @@ def test_run_task_worker_accepts_conditional_zero_diff_without_verification(
     save_plan(paths, plan)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("conditional no-op should not require verification")
         ),
@@ -1646,8 +1610,8 @@ def test_run_task_worker_refines_generic_pytest_fallback_to_node_test_for_js_noo
             outputs=["1 passed\n"],
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     result = run_task_worker(
         task=task,
@@ -1719,8 +1683,8 @@ def test_run_task_worker_refines_generic_pytest_fallback_from_structured_node_te
             outputs=["1 passed\n"],
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     result = run_task_worker(
         task=task,
@@ -1765,9 +1729,9 @@ def test_run_task_worker_rejects_nonzero_exit_as_zero_diff_noop(
 ) -> None:
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run after a non-zero agent exit")
         ),
@@ -1838,39 +1802,35 @@ def test_run_task_worker_suppresses_wrong_pytest_fallback_for_js_bootstrap_commi
         captured["cfg_verify_commands"] = list(kwargs["cfg"].verify_commands)
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["package.json", "src/index.js"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["package.json", "src/index.js"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["package.json", "src/index.js"],
     )
 
     def fail_verify(**_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("authoritative verification should be skipped when no commands exist")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fail_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fail_verify)
 
     result = run_task_worker(
         task=task,
@@ -1936,36 +1896,32 @@ def test_worker_reports_no_authoritative_commands_for_docs_only_task_under_defau
         captured["cfg_verify_commands"] = list(kwargs["cfg"].verify_commands)
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["README.md", "docs/usage.md"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["README.md", "docs/usage.md"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["README.md", "docs/usage.md"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("docs-only generic preset should not run verification")
         ),
@@ -2057,36 +2013,32 @@ def test_run_task_worker_refreshes_verify_commands_after_creating_test_surface(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["calc.py", "test_calc.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["calc.py", "test_calc.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["calc.py", "test_calc.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         fake_run_task_verification,
     )
 
@@ -2147,39 +2099,35 @@ def test_run_task_worker_strict_verify_keeps_commit_unverified_when_no_commands_
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["package.json", "src/index.js"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["package.json", "src/index.js"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["package.json", "src/index.js"],
     )
 
     def fail_verify(**_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("strict mode should fail before verification runs")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fail_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fail_verify)
 
     result = run_task_worker(
         task=task,
@@ -2226,9 +2174,9 @@ def test_run_task_worker_rejects_agent_exception_as_zero_diff_noop(
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("provider timeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run after an agent exception")
         ),
@@ -2275,9 +2223,9 @@ def test_run_task_worker_rejects_verified_zero_diff_after_nonzero_exit(
 ) -> None:
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run after a non-zero agent exit")
         ),
@@ -2314,7 +2262,7 @@ def test_run_task_worker_accepts_zero_diff_when_verification_is_off(
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run when verify_mode=off")
         ),
@@ -2361,9 +2309,9 @@ def test_run_task_worker_rejects_zero_diff_agent_exception_when_verification_is_
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("provider timeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run when verify_mode=off")
         ),
@@ -2402,9 +2350,9 @@ def test_run_task_worker_executor_429_exception_is_provider_throttled(
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise LLMError("LLM error 429: rate limit quota exceeded")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run when verify_mode=off")
         ),
@@ -2441,9 +2389,9 @@ def test_run_task_worker_executor_timeout_exception_is_provider_unavailable(
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise LLMError("LLM request failed: The read operation timed out")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run when verify_mode=off")
         ),
@@ -2477,7 +2425,7 @@ def test_run_task_worker_rejects_zero_diff_when_verification_fails(
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -2522,7 +2470,7 @@ def test_run_task_worker_classifies_zero_diff_infra_verification_failure(
     _repo, paths, task, worktree_repo = _prepare_zero_diff_worker_case(tmp_path)
     _configure_zero_diff_worker(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -2577,9 +2525,9 @@ def test_run_task_worker_warn_accepts_material_change_when_verification_infra_un
         (root / "index.html").write_text("<!doctype html><title>Demo</title>\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -2636,15 +2584,15 @@ def test_run_task_worker_setup_failure_is_not_salvaged(tmp_path: Path, monkeypat
     (worktree_repo / ".git").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_runtime_artifact_excludes",
+        "alysis_code.swarm_worker.ensure_runtime_artifact_excludes",
         lambda _root: (_ for _ in ()).throw(GitOpsError("index dirty")),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_agent",
+        "alysis_code.swarm_worker.run_agent",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("run_agent should not be called")),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
 
@@ -2654,7 +2602,7 @@ def test_run_task_worker_setup_failure_is_not_salvaged(tmp_path: Path, monkeypat
         called_stage["value"] = True
         raise AssertionError("stage_all should not run when setup fails")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -2702,9 +2650,9 @@ def test_run_task_worker_agent_exception_strict_scope_violation_does_not_salvage
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("provider timeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["README.md"],
     )
 
@@ -2714,7 +2662,7 @@ def test_run_task_worker_agent_exception_strict_scope_violation_does_not_salvage
         called_stage["value"] = True
         raise AssertionError("stage_all should not run when strict scope blocks exception salvage")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -2760,13 +2708,13 @@ def test_run_task_worker_nonzero_exit_with_runtime_artifact_changes_does_not_sal
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
     snapshots = [{}, {"execution/sessions/t01": "changed"}]
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.snapshot_runtime_tree",
+        "alysis_code.swarm_worker.snapshot_runtime_tree",
         lambda _root: snapshots.pop(0),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
 
@@ -2776,7 +2724,7 @@ def test_run_task_worker_nonzero_exit_with_runtime_artifact_changes_does_not_sal
         called_stage["value"] = True
         raise AssertionError("stage_all should not run when runtime artifacts changed")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -2800,7 +2748,7 @@ def test_run_task_worker_nonzero_exit_with_runtime_artifact_changes_does_not_sal
     assert result.commit_hash is None
     assert result.agent_exit_code == 1
     assert result.salvaged_nonzero_exit is False
-    assert "attempted protected .sylliptor modifications" in result.summary
+    assert "attempted protected .alysis modifications" in result.summary
 
 
 def test_run_task_worker_nonzero_exit_strict_scope_violation_does_not_salvage(
@@ -2821,9 +2769,9 @@ def test_run_task_worker_nonzero_exit_strict_scope_violation_does_not_salvage(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py", "README.md"],
     )
 
@@ -2833,7 +2781,7 @@ def test_run_task_worker_nonzero_exit_strict_scope_violation_does_not_salvage(
         called_stage["value"] = True
         raise AssertionError("stage_all should not run when strict scope blocks salvage")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -2879,9 +2827,9 @@ def test_run_task_worker_strict_scope_fails_on_out_of_scope_changes(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py", "README.md"],
     )
 
@@ -2891,7 +2839,7 @@ def test_run_task_worker_strict_scope_fails_on_out_of_scope_changes(
         called_stage["value"] = True
         raise AssertionError("stage_all should not be called when strict scope fails")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -2942,9 +2890,9 @@ def test_run_task_worker_defaults_scope_to_strict(tmp_path: Path, monkeypatch) -
         captured["allow_write_globs"] = kwargs["allow_write_globs"]
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py", "README.md"],
     )
 
@@ -2954,7 +2902,7 @@ def test_run_task_worker_defaults_scope_to_strict(tmp_path: Path, monkeypatch) -
         called_stage["value"] = True
         raise AssertionError("stage_all should not be called when default strict scope fails")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -3049,8 +2997,8 @@ def test_run_task_worker_strict_scope_rejects_agent_committed_out_of_scope_chang
         called_stage["value"] = True
         raise AssertionError("stage_all should not be called when strict scope fails")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -3098,36 +3046,32 @@ def test_run_task_worker_warn_scope_ignores_python_support_file_drift(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [
             "tests/test_team_labels.py",
             "tests/__init__.py",
             "tests/conftest.py",
         ],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: [
             "tests/test_team_labels.py",
             "tests/__init__.py",
             "tests/conftest.py",
         ],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: [
             "tests/test_team_labels.py",
             "tests/__init__.py",
@@ -3172,31 +3116,27 @@ def test_run_task_worker_warn_scope_allows_out_of_scope_changes_with_warning(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/in_scope.py", "README.md"),
             patch_text="PATCH\n",
         ),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py", "README.md"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py", "README.md"],
     )
 
@@ -3246,31 +3186,27 @@ def test_run_task_worker_off_scope_disables_write_scope_guardrails(
         captured["allow_write_globs"] = kwargs.get("allow_write_globs")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/in_scope.py", "README.md"),
             patch_text="PATCH\n",
         ),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py", "README.md"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py", "README.md"],
     )
 
@@ -3319,28 +3255,24 @@ def test_run_task_worker_strict_scope_expands_python_support_file_writes(
         captured["allow_write_globs"] = kwargs.get("allow_write_globs")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/pkg/module.py", "src/pkg/__init__.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/pkg/module.py", "src/pkg/__init__.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/pkg/module.py", "src/pkg/__init__.py"],
     )
 
@@ -3391,35 +3323,31 @@ def test_run_task_worker_strict_scope_allows_related_rust_lockfile_and_target_ou
         captured["allow_write_globs"] = kwargs.get("allow_write_globs")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/main.rs", "Cargo.lock", "target/debug/demo"),
             patch_text="PATCH\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/main.rs", "Cargo.lock", "target/debug/demo"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/main.rs", "Cargo.lock"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/main.rs", "Cargo.lock"],
     )
 
@@ -3473,35 +3401,31 @@ def test_run_task_worker_strict_scope_allows_related_rust_lockfile_for_nested_di
         captured["allow_write_globs"] = kwargs.get("allow_write_globs")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/utils/mod.rs", "Cargo.lock", "target/debug/demo"),
             patch_text="PATCH\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/utils/mod.rs", "Cargo.lock", "target/debug/demo"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/utils/mod.rs", "Cargo.lock"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/utils/mod.rs", "Cargo.lock"],
     )
 
@@ -3550,16 +3474,16 @@ def test_run_task_worker_strict_scope_still_flags_unrelated_rust_source_changes(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/main.rs", "Cargo.lock", "target/debug/demo", "examples/other.rs"),
             patch_text="PATCH\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/main.rs", "Cargo.lock", "target/debug/demo", "examples/other.rs"],
     )
 
@@ -3623,7 +3547,7 @@ def test_run_task_worker_strict_scope_allows_bootstrap_python_package_files_and_
         (egg_info / "SOURCES.txt").write_text("src/calcbox/core.py\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
 
     result = run_task_worker(
         task=task,
@@ -3699,7 +3623,7 @@ def test_run_task_worker_keeps_tracked_egg_info_edit_while_filtering_untracked_s
         (egg_info / "SOURCES.txt").write_text("src/calcbox/core.py\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
 
     result = run_task_worker(
         task=task,
@@ -3776,7 +3700,7 @@ def test_run_task_worker_sanitizes_agent_created_commit_with_untracked_egg_info_
         ).stdout.strip()
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
 
     result = run_task_worker(
         task=task,
@@ -3840,7 +3764,7 @@ def test_run_task_worker_strict_scope_allows_bootstrap_test_file_without_directo
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
 
     result = run_task_worker(
         task=task,
@@ -3881,9 +3805,9 @@ def test_run_task_worker_strict_scope_still_blocks_real_out_of_scope_source_file
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/in_scope.py", "src/other.py"),
             patch_text="PATCH\n",
@@ -3896,7 +3820,7 @@ def test_run_task_worker_strict_scope_still_blocks_real_out_of_scope_source_file
         called_stage["value"] = True
         raise AssertionError("stage_all should not be called when strict scope fails")
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", fail_if_called)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", fail_if_called)
 
     result = run_task_worker(
         task=task,
@@ -3939,43 +3863,39 @@ def test_run_task_worker_nonzero_exit_strict_verify_rejects_before_verification(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 1)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 1)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.stage_all",
+        "alysis_code.swarm_worker.stage_all",
         lambda _root: (_ for _ in ()).throw(
             AssertionError("stage_all should not run after a non-zero agent exit")
         ),
     )
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.commit_all",
+        "alysis_code.swarm_worker.commit_all",
         lambda *_a, **_k: (_ for _ in ()).throw(
             AssertionError("commit_all should not run after a non-zero agent exit")
         ),
     )
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run after a non-zero agent exit")
         ),
@@ -4026,47 +3946,43 @@ def test_run_task_worker_strict_scope_blocks_verification_time_out_of_scope_muta
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("src/in_scope.py",),
             patch_text="PATCH\n",
         ),
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
     mutation_snapshots = [{}, {"README.md": "meta:1:2:3"}]
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.snapshot_workspace_tree",
+        "alysis_code.swarm_worker.snapshot_workspace_tree",
         lambda _root: mutation_snapshots.pop(0),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_workspace_snapshot_reporting_diff",
+        "alysis_code.swarm_worker.build_workspace_snapshot_reporting_diff",
         lambda *_a, **_k: SimpleNamespace(
             changed_files=("README.md",),
             patch_text="# Workspace snapshot diff\n\nadded: README.md\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -4124,33 +4040,29 @@ def test_run_task_worker_warn_verify_failure_rejects_material_result(
     worktree_repo = paths.run_dir / "worktrees" / str(task["id"]) / "repo"
     worktree_repo.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", lambda **_kwargs: 0)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["pytest -q"],
@@ -4248,13 +4160,13 @@ def test_run_task_worker_warn_accepts_material_result_when_verification_improves
             outputs=[baseline_output],
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         fake_run_task_verification,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker._run_baseline_verification_snapshot",
+        "alysis_code.swarm_worker._run_baseline_verification_snapshot",
         fake_baseline_verification,
     )
 
@@ -4370,7 +4282,7 @@ def test_baseline_improved_accepts_unchanged_unrelated_residual_failure(
     assert comparison["unchanged_unrelated_failures"]
 
 
-def test_run_task_worker_accepts_agent_created_commit_when_only_sylliptor_untracked_remains(
+def test_run_task_worker_accepts_agent_created_commit_when_only_alysis_untracked_remains(
     tmp_path: Path, monkeypatch
 ) -> None:
     repo = tmp_path / "repo"
@@ -4437,9 +4349,9 @@ def test_run_task_worker_accepts_agent_created_commit_when_only_sylliptor_untrac
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
@@ -4472,7 +4384,7 @@ def test_run_task_worker_accepts_agent_created_commit_when_only_sylliptor_untrac
     assert result.changed_files == ["tests/verify_site.sh"]
 
 
-def test_run_task_worker_ignores_sylliptor_artifacts_for_agent_git_add_all(
+def test_run_task_worker_ignores_alysis_artifacts_for_agent_git_add_all(
     tmp_path: Path, monkeypatch
 ) -> None:
     repo = tmp_path / "repo"
@@ -4548,9 +4460,9 @@ def test_run_task_worker_ignores_sylliptor_artifacts_for_agent_git_add_all(
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["index.html"],
     )
 
@@ -4580,7 +4492,7 @@ def test_run_task_worker_ignores_sylliptor_artifacts_for_agent_git_add_all(
     assert result.success is True
     assert result.commit_hash is not None
     assert "index.html" in committed_files
-    assert not any(path.startswith(".sylliptor/") for path in committed_files)
+    assert not any(path.startswith(".alysis/") for path in committed_files)
 
 
 def test_run_task_worker_passes_worker_trace_surface_to_run_agent(
@@ -4607,28 +4519,24 @@ def test_run_task_worker_passes_worker_trace_surface_to_run_agent(
         captured["one_shot_execution"] = kwargs.get("one_shot_execution")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -4679,28 +4587,24 @@ def test_run_task_worker_verify_off_disables_verify_tool_and_uses_execution_sess
         captured["session_log_dir_override"] = kwargs.get("session_log_dir_override")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -4753,33 +4657,29 @@ def test_run_task_worker_propagates_authoritative_verify_commands(
         captured["cfg_verify_commands"] = list(cfg.verify_commands)
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.run_task_verification",
+        "alysis_code.swarm_worker.run_task_verification",
         lambda **kwargs: _build_verify_run_result(
             artifact_path=kwargs["artifact_path"],
             commands=["PYTHONPATH=src pytest -q", "ruff check ."],
@@ -4858,32 +4758,28 @@ def test_run_task_worker_installs_runtime_artifact_excludes_for_git_worktree(
     def fake_run_agent(**_kwargs) -> int:  # type: ignore[no-untyped-def]
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_runtime_artifact_excludes",
+        "alysis_code.swarm_worker.ensure_runtime_artifact_excludes",
         lambda root: captured.setdefault("exclude_root", root),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -5022,28 +4918,24 @@ def test_run_task_worker_uses_coding_role_model(tmp_path: Path, monkeypatch) -> 
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 
@@ -5101,32 +4993,28 @@ def test_run_task_worker_passes_images_when_opted_in_and_vision_supported(
         captured["image_paths"] = kwargs.get("image_paths")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
-    monkeypatch.setenv("SYLLIPTOR_TASK_IMAGES", "1")
-    monkeypatch.setenv("SYLLIPTOR_SUPPORTS_VISION", "1")
+    monkeypatch.setenv("ALYSIS_TASK_IMAGES", "1")
+    monkeypatch.setenv("ALYSIS_SUPPORTS_VISION", "1")
 
     result = run_task_worker(
         task=next(t for t in plan["tasks"] if t["id"] == task["id"]),
@@ -5189,32 +5077,28 @@ def test_run_task_worker_uses_adaptive_managed_task_budget_without_override(
         captured["image_paths"] = kwargs.get("image_paths")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
-    monkeypatch.setenv("SYLLIPTOR_TASK_IMAGES", "1")
-    monkeypatch.setenv("SYLLIPTOR_SUPPORTS_VISION", "1")
+    monkeypatch.setenv("ALYSIS_TASK_IMAGES", "1")
+    monkeypatch.setenv("ALYSIS_SUPPORTS_VISION", "1")
 
     result = run_task_worker(
         task=task,
@@ -5284,28 +5168,24 @@ def test_run_task_worker_uses_fixed_override_for_explicit_max_steps(
         captured["subagents_enabled"] = kwargs.get("subagents_enabled")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/in_scope.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/in_scope.py"],
     )
 

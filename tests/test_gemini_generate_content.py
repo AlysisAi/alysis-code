@@ -6,16 +6,16 @@ import logging
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.gemini_generate_content import GeminiGenerateContentClient
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     attach_provider_metadata_to_assistant_message,
     stamp_provider_metadata_for_route,
     strip_provider_metadata_from_message,
 )
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.llm.types import LLMError
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.types import LLMError
+from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     provider_call_history_snapshot,
     reset_provider_telemetry_for_tests,
@@ -28,8 +28,6 @@ def _client(transport: httpx.BaseTransport) -> GeminiGenerateContentClient:
         api_key="test-key",
         model="gemini-3-flash-preview",
         transport=transport,
-        provider_retry_settings=ProviderRetrySettings(max_retries=0),
-        provider_sleep_fn=lambda _seconds: None,
     )
 
 
@@ -38,7 +36,7 @@ def _web_search_function_tool() -> dict[str, object]:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         },
     }
@@ -151,7 +149,7 @@ def test_count_input_tokens_uses_gemini_count_tokens_endpoint() -> None:
 
 
 def test_parse_usage_folds_gemini_thoughts_into_completion_and_reasoning() -> None:
-    from sylliptor_agent_cli.llm.gemini_generate_content import _parse_usage
+    from alysis_code.llm.gemini_generate_content import _parse_usage
 
     usage = _parse_usage(
         {
@@ -172,7 +170,7 @@ def test_parse_usage_folds_gemini_thoughts_into_completion_and_reasoning() -> No
 
 
 def test_parse_usage_without_thoughts_is_unchanged() -> None:
-    from sylliptor_agent_cli.llm.gemini_generate_content import _parse_usage
+    from alysis_code.llm.gemini_generate_content import _parse_usage
 
     usage = _parse_usage({"promptTokenCount": 7, "candidatesTokenCount": 5})
     assert usage is not None
@@ -182,7 +180,7 @@ def test_parse_usage_without_thoughts_is_unchanged() -> None:
 
 
 def test_parse_usage_includes_tool_use_prompt_tokens_on_input_side() -> None:
-    from sylliptor_agent_cli.llm.gemini_generate_content import _parse_usage
+    from alysis_code.llm.gemini_generate_content import _parse_usage
 
     raw_usage = {
         "promptTokenCount": 7,
@@ -990,7 +988,7 @@ def test_chat_combined_grounding_and_tool_choice_merges_tool_config() -> None:
     }
 
 
-def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
+def test_chat_external_mode_uses_only_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1017,7 +1015,7 @@ def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
             "functionDeclarations": [
                 {
                     "name": "web_search",
-                    "description": "Standalone Sylliptor web search.",
+                    "description": "Standalone Alysis Code web search.",
                     "parameters": {"type": "object"},
                 }
             ]
@@ -1025,7 +1023,7 @@ def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
     ]
 
 
-def test_chat_auto_mode_with_external_adapter_uses_sylliptor_web_search_function() -> None:
+def test_chat_auto_mode_with_external_adapter_uses_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2656,7 +2654,7 @@ def test_apply_cache_settings_eviction_stops_after_first_delete_failure(
 
     with caplog.at_level(
         logging.DEBUG,
-        logger="sylliptor_agent_cli.llm.gemini_generate_content",
+        logger="alysis_code.llm.gemini_generate_content",
     ):
         client.apply_cache_settings(ttl="120s")
 
@@ -2819,8 +2817,6 @@ def test_chat_rejects_empty_malformed_and_unsupported_options() -> None:
             model="gemini-3-flash-preview",
             prompt_cache_key="cache-key",
             transport=httpx.MockTransport(lambda _request: httpx.Response(500)),
-            provider_retry_settings=ProviderRetrySettings(max_retries=0),
-            provider_sleep_fn=lambda _seconds: None,
         ).chat(messages=[{"role": "user", "content": "hello"}])
 
     with pytest.raises(LLMError, match="does not support response_format type"):
@@ -2829,14 +2825,17 @@ def test_chat_rejects_empty_malformed_and_unsupported_options() -> None:
             response_format={"type": "xml_object"},
         )
 
-    with pytest.raises(LLMError, match="reasoning_effort is not supported"):
+    # Gemini 3 uses its reasoning contract for compatibility values. An unknown
+    # legacy effort falls back to the contract default/omission and reaches the
+    # provider instead of being rejected by the client.
+    with pytest.raises(LLMError, match="LLM error 500"):
         GeminiGenerateContentClient(
             base_url="https://generativelanguage.googleapis.com/v1beta",
             api_key="test-key",
             model="gemini-3-flash-preview",
             reasoning_effort="extreme",
             transport=httpx.MockTransport(lambda _request: httpx.Response(500)),
-            provider_retry_settings=ProviderRetrySettings(max_retries=0),
+            # Keep provider retry timing out of this validation-path test.
             provider_sleep_fn=lambda _seconds: None,
         ).chat(messages=[{"role": "user", "content": "hello"}])
 

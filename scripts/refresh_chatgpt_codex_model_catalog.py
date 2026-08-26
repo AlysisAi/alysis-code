@@ -41,7 +41,7 @@ def _snapshot_path() -> Path:
     return (
         _repo_root()
         / "src"
-        / "sylliptor_agent_cli"
+        / "alysis_code"
         / "model_catalog"
         / "chatgpt_codex_subscription_snapshot.json"
     )

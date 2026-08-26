@@ -7,21 +7,22 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.background_runner as background_runner_mod
-import sylliptor_agent_cli.durable_service_manager as durable_service_manager_mod
-import sylliptor_agent_cli.sandbox_runner as sandbox_runner_mod
-from sylliptor_agent_cli.background_runner import (
+import alysis_code.background_runner as background_runner_mod
+import alysis_code.durable_service_manager as durable_service_manager_mod
+import alysis_code.sandbox_runner as sandbox_runner_mod
+from alysis_code.background_runner import (
     BwrapBackgroundRunner,
     DisabledBackgroundRunner,
     DockerBackgroundRunner,
     HostBackgroundRunner,
     build_background_shell_runner,
 )
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.durable_service_manager import DurableServiceManager
-from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.durable_service_manager import DurableServiceManager
+from alysis_code.sandbox_settings import ShellSandboxSettings
+from alysis_code.service_persistence import apply_non_interactive_defaults
 
-TEST_DOCKER_IMAGE = "test/sylliptor-sandbox:dev"
+TEST_DOCKER_IMAGE = "test/alysis-sandbox:dev"
 
 
 @pytest.fixture(autouse=True)
@@ -121,7 +122,7 @@ def test_bwrap_background_runner_uses_extracted_argv_helper(
     spawn = BwrapBackgroundRunner().start(root=tmp_path, cwd=tmp_path, cmd="echo hi")
 
     assert _argv_from_call(calls[0]) == ["bwrap", "sentinel"]
-    assert _kwargs_from_call(calls[0])["env"] == {"BASE": "1"}
+    assert _kwargs_from_call(calls[0])["env"] == apply_non_interactive_defaults({"BASE": "1"})
     assert spawn.started_argv == ("bwrap", "sentinel")
 
 
@@ -165,12 +166,12 @@ def test_bwrap_background_runner_filters_sensitive_env_overrides(
         root=tmp_path,
         cwd=tmp_path,
         cmd="echo hi",
-        env_overrides={"SYLLIPTOR_API_KEY": "x", "SAFE": "y"},
+        env_overrides={"ALYSIS_API_KEY": "x", "SAFE": "y"},
     )
 
     env = _kwargs_from_call(calls[0])["env"]
     assert isinstance(env, dict)
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert env["SAFE"] == "y"
     assert env["BASE"] == "1"
 
@@ -341,9 +342,9 @@ def test_docker_background_runner_uses_extracted_argv_helper(
     spawn = DockerBackgroundRunner().start(root=tmp_path, cwd=tmp_path, cmd="echo hi")
 
     assert _argv_from_call(calls[0]) == ["docker", "sentinel"]
-    assert _kwargs_from_call(calls[0])["env"] == {"BASE": "1"}
+    assert _kwargs_from_call(calls[0])["env"] == apply_non_interactive_defaults({"BASE": "1"})
     assert spawn.started_argv == ("docker", "sentinel")
-    assert str(helper_calls[0]["container_name"]).startswith("sylliptor-bgsbx-")
+    assert str(helper_calls[0]["container_name"]).startswith("alysis-bgsbx-")
 
 
 def test_docker_background_runner_container_name_uses_bgsbx_prefix(
@@ -359,7 +360,7 @@ def test_docker_background_runner_container_name_uses_bgsbx_prefix(
         cmd="echo hi",
     )
 
-    assert _container_name(_argv_from_call(calls[0])).startswith("sylliptor-bgsbx-")
+    assert _container_name(_argv_from_call(calls[0])).startswith("alysis-bgsbx-")
 
 
 def test_docker_background_runner_unique_container_name_per_call(
@@ -409,12 +410,12 @@ def test_docker_background_runner_filters_sensitive_env_overrides(
         root=tmp_path,
         cwd=tmp_path,
         cmd="echo hi",
-        env_overrides={"SYLLIPTOR_API_KEY": "x", "SAFE": "y"},
+        env_overrides={"ALYSIS_API_KEY": "x", "SAFE": "y"},
     )
 
     env = _kwargs_from_call(calls[0])["env"]
     assert isinstance(env, dict)
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert env["SAFE"] == "y"
 
 
@@ -461,7 +462,7 @@ def test_docker_cleanup_container_emits_warning_when_not_quiet(
     monkeypatch.setattr(sandbox_runner_mod.subprocess, "run", fake_run)
 
     sandbox_runner_mod._docker_cleanup_container(
-        "sylliptor-sbx-test",
+        "alysis-sbx-test",
         cwd=str(tmp_path),
         env={},
         warning_callback=warnings.append,
@@ -471,8 +472,8 @@ def test_docker_cleanup_container_emits_warning_when_not_quiet(
     assert len(warnings) == 1
     assert "killing container" in warnings[0]
     assert cleanup_calls == [
-        ["docker", "kill", "--signal=KILL", "sylliptor-sbx-test"],
-        ["docker", "rm", "-f", "sylliptor-sbx-test"],
+        ["docker", "kill", "--signal=KILL", "alysis-sbx-test"],
+        ["docker", "rm", "-f", "alysis-sbx-test"],
     ]
 
 
@@ -490,7 +491,7 @@ def test_docker_cleanup_container_silent_when_quiet(
     monkeypatch.setattr(sandbox_runner_mod.subprocess, "run", fake_run)
 
     sandbox_runner_mod._docker_cleanup_container(
-        "sylliptor-bgsbx-test",
+        "alysis-bgsbx-test",
         cwd=str(tmp_path),
         env={},
         warning_callback=warnings.append,
@@ -500,8 +501,8 @@ def test_docker_cleanup_container_silent_when_quiet(
 
     assert warnings == []
     assert cleanup_calls == [
-        ["docker", "kill", "--signal=KILL", "sylliptor-bgsbx-test"],
-        ["docker", "rm", "-f", "sylliptor-bgsbx-test"],
+        ["docker", "kill", "--signal=KILL", "alysis-bgsbx-test"],
+        ["docker", "rm", "-f", "alysis-bgsbx-test"],
     ]
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     AcceptanceCriterionConfidence,
     AcceptanceCriterionEnforcement,
     AcceptanceCriterionKind,
@@ -15,7 +15,7 @@ from sylliptor_agent_cli.agent.acceptance_contract import (
     finalize_acceptance_contract,
     record_acceptance_tool_effect,
 )
-from sylliptor_agent_cli.repo_scan import RepoScanResult
+from alysis_code.repo_scan import RepoScanResult
 
 
 def _repo_scan(

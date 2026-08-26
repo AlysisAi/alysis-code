@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.terminal_ownership as ownership_mod
-from sylliptor_agent_cli.terminal_ownership import TerminalOwnershipLedger
+import alysis_code.terminal_ownership as ownership_mod
+from alysis_code.terminal_ownership import TerminalOwnershipLedger
 
 
 def _tracked_record(
@@ -242,10 +242,10 @@ def test_next_process_scavenges_background_tree_after_hard_owner_exit(tmp_path: 
         (
             "import os, sys",
             "from pathlib import Path",
-            "from sylliptor_agent_cli.background_runner import HostBackgroundRunner",
-            "from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings",
-            "from sylliptor_agent_cli.terminal_manager import TerminalManager",
-            "from sylliptor_agent_cli.terminal_ownership import TerminalOwnershipLedger",
+            "from alysis_code.background_runner import HostBackgroundRunner",
+            "from alysis_code.sandbox_settings import ShellSandboxSettings",
+            "from alysis_code.terminal_manager import TerminalManager",
+            "from alysis_code.terminal_ownership import TerminalOwnershipLedger",
             "ledger = TerminalOwnershipLedger(Path(sys.argv[1]))",
             "manager = TerminalManager(runner=HostBackgroundRunner(), settings=ShellSandboxSettings(), ownership_ledger=ledger)",
             "manager.start(cmd=sys.argv[2], cwd=Path.cwd(), root=Path.cwd())",
@@ -285,8 +285,8 @@ def test_next_process_scavenges_background_tree_after_hard_owner_exit(tmp_path: 
 def test_default_ownership_dir_follows_isolated_data_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_TERMINAL_OWNERSHIP_DIR", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.delenv("ALYSIS_TERMINAL_OWNERSHIP_DIR", raising=False)
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
 
     ledger = TerminalOwnershipLedger()
 

@@ -7,12 +7,12 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl.commands import root as root_mod
-from sylliptor_agent_cli.config import AppConfig, save_config
-from sylliptor_agent_cli.llm.types import LLMResponse, LLMUsage
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
-from sylliptor_agent_cli.provider_diagnostics import (
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl.commands import root as root_mod
+from alysis_code.config import AppConfig, save_config
+from alysis_code.llm.types import LLMResponse, LLMUsage
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.provider_diagnostics import (
     ProviderLiveValidation,
     ReasoningSuppressionReport,
     WebSearchLiveValidation,
@@ -25,13 +25,13 @@ from sylliptor_agent_cli.provider_diagnostics import (
 
 @pytest.fixture(autouse=True)
 def _clear_generic_web_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
         "GEMINI_API_KEY": "",
@@ -61,7 +61,7 @@ def test_provider_diagnostics_redacts_api_key_and_shows_native_vs_compat(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret-value")
     cfg = _cfg_with_profile(
         ProfileSpec(
@@ -92,7 +92,7 @@ def test_provider_diagnostics_shows_compatibility_protocol_and_external_search(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-value")
     cfg = _cfg_with_profile(
@@ -241,7 +241,7 @@ def test_provider_diagnostics_allows_gemini_native_streaming() -> None:
 def test_provider_diagnostics_marks_gemini_interactions_experimental(
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_EXPERIMENTAL_GEMINI_INTERACTIONS", raising=False)
+    monkeypatch.delenv("ALYSIS_EXPERIMENTAL_GEMINI_INTERACTIONS", raising=False)
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="gemini-interactions",
@@ -267,7 +267,7 @@ def test_provider_diagnostics_marks_gemini_interactions_experimental(
 def test_provider_diagnostics_allows_enabled_gemini_interactions_experiment(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_EXPERIMENTAL_GEMINI_INTERACTIONS", "1")
+    monkeypatch.setenv("ALYSIS_EXPERIMENTAL_GEMINI_INTERACTIONS", "1")
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="gemini-interactions",
@@ -288,7 +288,7 @@ def test_provider_diagnostics_reports_external_search_missing_credentials(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     cfg = _cfg_with_profile(
         ProfileSpec(
@@ -308,7 +308,7 @@ def test_provider_diagnostics_reports_external_search_missing_credentials(
     assert diagnostics.web_search_backend_kind == "external"
     assert diagnostics.web_search_registration_ready is False
     assert any("TAVILY_API_KEY" in issue for issue in diagnostics.issues)
-    assert any("sylliptor config set web_search_mode auto" in issue for issue in diagnostics.issues)
+    assert any("alysis config set web_search_mode auto" in issue for issue in diagnostics.issues)
 
 
 def test_provider_diagnostics_reports_policy_disabled_registration(monkeypatch) -> None:
@@ -336,8 +336,8 @@ def test_provider_diagnostics_reports_missing_active_profile_api_key(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     cfg = _cfg_with_profile(
@@ -358,7 +358,7 @@ def test_provider_diagnostics_reports_missing_active_profile_api_key(
     assert any(
         "API key is missing" in issue
         and "ANTHROPIC_API_KEY" in issue
-        and "sylliptor config set-api-key" in issue
+        and "alysis config set-api-key" in issue
         for issue in diagnostics.issues
     )
 
@@ -367,8 +367,8 @@ def test_provider_diagnostics_reports_custom_compat_native_search_mismatch(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     cfg = _cfg_with_profile(
         ProfileSpec(
@@ -417,9 +417,9 @@ def test_provider_diagnostics_reports_web_search_mode_adapter_mismatch_suggestio
     external_issues = build_provider_diagnostics(external_mode_cfg).issues
 
     assert any("web_search_mode=native" in issue for issue in native_issues)
-    assert any("sylliptor config set web_search_mode external" in issue for issue in native_issues)
+    assert any("alysis config set web_search_mode external" in issue for issue in native_issues)
     assert any("web_search_mode=external" in issue for issue in external_issues)
-    assert any("sylliptor config set web_search_mode native" in issue for issue in external_issues)
+    assert any("alysis config set web_search_mode native" in issue for issue in external_issues)
 
 
 def test_provider_diagnostics_reports_native_named_profile_using_compat_protocol() -> None:
@@ -438,7 +438,7 @@ def test_provider_diagnostics_reports_native_named_profile_using_compat_protocol
 
     assert any(
         "named like a native profile" in issue
-        and "sylliptor profile convert anthropic-native --to native" in issue
+        and "alysis profile convert anthropic-native --to native" in issue
         for issue in diagnostics.issues
     )
 
@@ -460,7 +460,7 @@ def test_provider_diagnostics_reports_anthropic_first_party_host_using_compat_pr
     assert any("legacy compatibility semantics" in issue for issue in diagnostics.issues)
     assert any(
         "Anthropic first-party API using compatibility mode" in issue
-        and "sylliptor profile convert anthropic --to native" in issue
+        and "alysis profile convert anthropic --to native" in issue
         for issue in diagnostics.issues
     )
 
@@ -502,7 +502,7 @@ def test_provider_diagnostics_reports_legacy_gemini_profile_using_compat_protoco
 
     assert any(
         "legacy compatibility semantics" in issue
-        and "sylliptor profile convert gemini --to native" in issue
+        and "alysis profile convert gemini --to native" in issue
         for issue in diagnostics.issues
     )
 
@@ -523,7 +523,7 @@ def test_provider_diagnostics_reports_gemini_native_with_openai_compatible_base_
 
     assert any(
         "Gemini OpenAI-compatible endpoint" in issue
-        and "sylliptor profile convert gemini --to compatibility" in issue
+        and "alysis profile convert gemini --to compatibility" in issue
         for issue in diagnostics.issues
     )
 
@@ -544,7 +544,7 @@ def test_provider_diagnostics_reports_openai_responses_with_incompatible_base_ur
 
     assert any(
         "protocol=openai_responses" in issue
-        and "sylliptor profile convert openai-responses --to compatibility" in issue
+        and "alysis profile convert openai-responses --to compatibility" in issue
         for issue in diagnostics.issues
     )
 
@@ -650,7 +650,7 @@ def test_live_provider_validation_uses_mocked_client_without_printing_secret(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _cfg_with_profile(
         ProfileSpec(
@@ -684,13 +684,13 @@ def test_live_provider_validation_fails_when_tool_probe_is_rejected(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "secret-value")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "secret-value")
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="tool-probe",
             base_url="https://gateway.example.test/v1",
-            api_key_env="SYLLIPTOR_API_KEY",
+            api_key_env="ALYSIS_API_KEY",
             default_model="test-model",
             web_search_adapter="auto",
         )
@@ -722,7 +722,7 @@ def test_live_provider_validation_classifies_model_availability_errors(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret-key")
     cfg = _cfg_with_profile(
         ProfileSpec(
@@ -749,7 +749,7 @@ def test_doctor_providers_cli_uses_redacted_diagnostics(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="gemini",
@@ -765,13 +765,13 @@ def test_doctor_providers_cli_uses_redacted_diagnostics(
     save_config(cfg)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["doctor", "providers"],
         env={**_env(tmp_path), "GEMINI_API_KEY": "gemini-secret-key"},
     )
 
     assert result.exit_code == 0
-    assert "sylliptor doctor providers" in result.output
+    assert "alysis doctor providers" in result.output
     assert "gemini_generate_content" in result.output
     assert "generativelanguage.googleapis.com" in result.output
     assert "gemini-secret-key" not in result.output
@@ -785,7 +785,7 @@ def test_doctor_providers_live_requires_confirmation(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="openai-responses",
@@ -814,7 +814,7 @@ def test_doctor_providers_live_requires_confirmation(
     monkeypatch.setattr(root_mod, "validate_active_provider_live", fake_validate)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["doctor", "providers", "--live"],
         input="n\n",
         env={**_env(tmp_path), "OPENAI_API_KEY": "sk-openai-secret-value"},
@@ -831,7 +831,7 @@ def test_doctor_providers_live_yes_uses_redacted_validation(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = _cfg_with_profile(
         ProfileSpec(
             name="openai-responses",
@@ -881,13 +881,13 @@ def test_doctor_providers_live_yes_uses_redacted_validation(
     monkeypatch.setattr(root_mod, "probe_reasoning_suppression_live", fake_reasoning_probe)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["doctor", "providers", "--live", "--yes"],
         env={**_env(tmp_path), "OPENAI_API_KEY": "sk-openai-secret-value"},
     )
 
     assert result.exit_code == 0
-    assert "sylliptor doctor providers --live" in result.output
+    assert "alysis doctor providers --live" in result.output
     assert "gpt-5.4-mini" in result.output
     assert "passed" in result.output
     assert "sk-openai-secret-value" not in result.output
@@ -932,7 +932,7 @@ def test_web_search_live_probe_passes_through_resolved_adapter(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     probe = _CapturingSearchProbe(
@@ -971,13 +971,13 @@ def test_web_search_live_probe_reports_native_failure_and_fallback_success(
     """A gateway that statically looks ready but rejects real search calls must
     show up as a native failure served by a fallback, not as plain "ready"."""
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     # Static readiness still says the native adapter is fine.
     assert build_provider_diagnostics(cfg).web_search_registration_ready is True
 
-    from sylliptor_agent_cli.tools.web_search import WebSearchError
+    from alysis_code.tools.web_search import WebSearchError
 
     probe = _CapturingSearchProbe(
         [
@@ -1011,11 +1011,11 @@ def test_web_search_live_probe_reports_failure_when_all_backends_fail(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
 
-    from sylliptor_agent_cli.tools.web_search import WebSearchError
+    from alysis_code.tools.web_search import WebSearchError
 
     probe = _CapturingSearchProbe(
         [
@@ -1036,11 +1036,11 @@ def test_web_search_live_probe_native_mode_reports_the_native_error(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg(mode="native")
 
-    from sylliptor_agent_cli.tools.web_search import WebSearchError
+    from alysis_code.tools.web_search import WebSearchError
 
     probe = _CapturingSearchProbe(
         [WebSearchError("native web search via openai_responses failed: gateway broken")]
@@ -1061,12 +1061,12 @@ def test_web_search_live_probe_env_override_pins_the_backend(
     """An explicit env adapter override pins the backend exactly like the real
     web_search call path, so a failed probe must not try fallback backends."""
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", "openai_responses")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_ADAPTER", "openai_responses")
     cfg = _web_search_ready_cfg()
 
-    from sylliptor_agent_cli.tools.web_search import WebSearchError
+    from alysis_code.tools.web_search import WebSearchError
 
     probe = _CapturingSearchProbe([WebSearchError("Responses error 400: gateway broken")])
 
@@ -1085,7 +1085,7 @@ def test_web_search_live_probe_detects_in_call_fallback_on_first_attempt(
     override defeated the pin and an in-call fallback engaged), the report says
     so instead of pretending the resolved adapter worked."""
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     probe = _CapturingSearchProbe(
@@ -1111,7 +1111,7 @@ def test_web_search_live_probe_skips_when_web_search_is_disabled(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg(mode="off")
 
@@ -1128,7 +1128,7 @@ def test_reasoning_suppression_probe_reports_ignored_flag(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     captured: dict[str, object] = {}
@@ -1163,7 +1163,7 @@ def test_reasoning_suppression_probe_reports_suppressed(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     response = LLMResponse(
@@ -1191,7 +1191,7 @@ def test_reasoning_suppression_probe_reports_not_reported(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
     cfg = _web_search_ready_cfg()
     response = LLMResponse(
@@ -1216,10 +1216,10 @@ def test_reasoning_suppression_probe_uses_profile_default_model(
     tmp_path: Path,
 ) -> None:
     """The probe targets the active profile's default model; the legacy
-    SYLLIPTOR_MODEL_ROUTER override no longer influences it."""
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    ALYSIS_MODEL_ROUTER override no longer influences it."""
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret-value")
-    monkeypatch.setenv("SYLLIPTOR_MODEL_ROUTER", "legacy-router-model")
+    monkeypatch.setenv("ALYSIS_MODEL_ROUTER", "legacy-router-model")
     cfg = _web_search_ready_cfg()
     captured: dict[str, object] = {}
     response = LLMResponse(

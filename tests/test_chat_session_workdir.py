@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-import sylliptor_agent_cli.cli_impl.chat as chat_impl_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.subagents import SubagentDefinition
-from sylliptor_agent_cli.workspace_binding import resolve_workspace_binding
+import alysis_code.agent_loop as agent_loop_mod
+import alysis_code.cli_impl.chat as chat_impl_mod
+from alysis_code import cli as cli_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.session_store import read_session_events
+from alysis_code.subagents import SubagentDefinition
+from alysis_code.workspace_binding import resolve_workspace_binding
 
 
 def _fake_git_repo(root: Path) -> None:

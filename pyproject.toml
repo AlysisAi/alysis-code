@@ -3,8 +3,8 @@ requires = ["editables==0.5", "hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sylliptor-agent-cli"
-version = "0.12.0"
+name = "alysis-code"
+version = "0.13.0"
 description = "Local CLI coding agent powered by any API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,15 +46,16 @@ dependencies = [
   "rich>=13.7.1",
   "tiktoken>=0.7.0",
   "typer>=0.12.0",
+  "websockets>=15.0,<17.0",
 ]
 
 [project.urls]
-Changelog = "https://github.com/AlysisAi/Sylliptor/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/AlysisAi/Sylliptor/tree/main/docs"
+Changelog = "https://github.com/AlysisAi/alysis-code/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/AlysisAi/alysis-code/tree/main/docs"
 Funding = "https://github.com/sponsors/AlysisAi"
-Issues = "https://github.com/AlysisAi/Sylliptor/issues"
-Security = "https://github.com/AlysisAi/Sylliptor/blob/main/SECURITY.md"
-Source = "https://github.com/AlysisAi/Sylliptor"
+Issues = "https://github.com/AlysisAi/alysis-code/issues"
+Security = "https://github.com/AlysisAi/alysis-code/blob/main/SECURITY.md"
+Source = "https://github.com/AlysisAi/alysis-code"
 
 [project.optional-dependencies]
 dev = [
@@ -64,6 +65,10 @@ dev = [
   "pytest>=8.0.0",
   "ruff>=0.6.0",
 ]
+managed-build = [
+  "pyinstaller==6.21.0",
+  "pyinstaller-hooks-contrib==2026.6",
+]
 server = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
@@ -71,10 +76,14 @@ server = [
 ]
 
 [project.scripts]
-sylliptor = "sylliptor_agent_cli.cli:app"
+alysis = "alysis_code.cli:app"
+# Deprecated alias kept so muscle memory, shell aliases, CI scripts and IDE
+# configs written against the old name keep working. Prints a one-line notice
+# and forwards. Remove no earlier than the next major release.
+sylliptor = "alysis_code.cli:legacy_app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sylliptor_agent_cli"]
+packages = ["src/alysis_code"]
 exclude = [
   "**/__pycache__/**",
   "**/*.py[cod]",
@@ -88,7 +97,7 @@ include = [
   "/NOTICE",
   "/README.md",
   "/pyproject.toml",
-  "/src/sylliptor_agent_cli",
+  "/src/alysis_code",
 ]
 exclude = [
   "**/__pycache__/**",
@@ -100,7 +109,7 @@ testpaths = ["tests"]
 addopts = "--capture=sys"
 pythonpath = ["src", "."]
 markers = [
-  "smoke: portable mock-provider end-to-end build smoke across execution modes (pytest -m smoke)",
+    "smoke: portable mock-provider end-to-end build smoke across execution modes (pytest -m smoke)",
 ]
 
 [tool.ruff]

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, build_tools
-from sylliptor_agent_cli.session_store import SessionStore
+from alysis_code.agent_loop import AgentRuntimeError, build_tools
+from alysis_code.session_store import SessionStore
 
 
 def _store(root: Path) -> SessionStore:

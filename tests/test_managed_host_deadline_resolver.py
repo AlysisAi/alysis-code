@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.managed_host_deadline import (
+from alysis_code.managed_host_deadline import (
     DEFAULT_MANAGED_HOST_SHUTDOWN_RESERVE_SECONDS,
     ManagedHostDeadlineError,
     resolve_managed_host_deadline,
@@ -17,7 +17,7 @@ def test_managed_host_deadline_subtracts_reserve() -> None:
         reserve_source="agent_kwarg:managed_host_shutdown_reserve_sec",
     )
 
-    assert resolved.sylliptor_invocation_deadline_seconds == 555
+    assert resolved.alysis_invocation_deadline_seconds == 555
     assert resolved.host_remaining_timeout_seconds == 600
     assert resolved.host_shutdown_reserve_seconds == 45
     assert resolved.require_deadline is True
@@ -30,7 +30,7 @@ def test_managed_host_deadline_preserves_fractional_values_and_elapsed_time() ->
         elapsed_before_launch_seconds=3.5,
     )
 
-    assert resolved.sylliptor_invocation_deadline_seconds == 80.0
+    assert resolved.alysis_invocation_deadline_seconds == 80.0
     assert resolved.host_remaining_timeout_seconds == 87.25
 
 
@@ -42,7 +42,7 @@ def test_managed_host_deadline_uses_already_effective_timeout_without_second_mul
     )
 
     assert resolved.final_effective_host_agent_timeout_seconds == 2100
-    assert resolved.sylliptor_invocation_deadline_seconds == 2070
+    assert resolved.alysis_invocation_deadline_seconds == 2070
 
 
 def test_managed_host_deadline_default_reserve_is_host_owned() -> None:
@@ -51,7 +51,7 @@ def test_managed_host_deadline_default_reserve_is_host_owned() -> None:
     )
 
     assert resolved.host_shutdown_reserve_seconds == DEFAULT_MANAGED_HOST_SHUTDOWN_RESERVE_SECONDS
-    assert resolved.sylliptor_invocation_deadline_seconds == 90
+    assert resolved.alysis_invocation_deadline_seconds == 90
 
 
 @pytest.mark.parametrize(
@@ -99,7 +99,7 @@ def test_managed_host_deadline_rejects_elapsed_time_that_leaves_too_little_budge
         )
 
     assert exc_info.value.code == "remaining_duration_too_small"
-    assert exc_info.value.record["sylliptor_invocation_deadline_seconds"] == 0.5
+    assert exc_info.value.record["alysis_invocation_deadline_seconds"] == 0.5
 
 
 def test_managed_host_deadline_rejects_negative_elapsed_time() -> None:
@@ -117,7 +117,7 @@ def test_managed_host_deadline_diagnostic_record_is_sanitized_metadata_only() ->
         host_shutdown_reserve_seconds=5,
         elapsed_before_launch_seconds=1.25,
         timeout_source="agent_kwarg:managed_host_agent_timeout_sec",
-        reserve_source="environment:SYLLIPTOR_MANAGED_HOST_SHUTDOWN_RESERVE_SEC",
+        reserve_source="environment:ALYSIS_MANAGED_HOST_SHUTDOWN_RESERVE_SEC",
     )
 
     record = resolved.diagnostic_record()
@@ -126,11 +126,11 @@ def test_managed_host_deadline_diagnostic_record_is_sanitized_metadata_only() ->
         "schema_version": 1,
         "status": "ok",
         "timeout_source": "agent_kwarg:managed_host_agent_timeout_sec",
-        "reserve_source": "environment:SYLLIPTOR_MANAGED_HOST_SHUTDOWN_RESERVE_SEC",
+        "reserve_source": "environment:ALYSIS_MANAGED_HOST_SHUTDOWN_RESERVE_SEC",
         "final_effective_host_agent_timeout_seconds": 60.0,
         "elapsed_before_launch_seconds": 1.25,
         "host_shutdown_reserve_seconds": 5.0,
-        "sylliptor_invocation_deadline_seconds": 53.75,
+        "alysis_invocation_deadline_seconds": 53.75,
         "require_deadline": True,
     }
     assert "instruction" not in record

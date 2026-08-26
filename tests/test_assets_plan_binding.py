@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sylliptor_agent_cli.assets import (
+from alysis_code.assets import (
     AssetBriefingEntry,
     AssetError,
     TaskAssetBriefing,

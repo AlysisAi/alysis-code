@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.cli_impl.config_menu import ConfigMenuState
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.sandbox_settings import (
+from alysis_code.cli_impl.config_menu import ConfigMenuState
+from alysis_code.config import AppConfig
+from alysis_code.sandbox_settings import (
     apply_sandbox_mode_to_config,
     normalize_sandbox_mode,
     resolve_shell_sandbox_settings,
     sandbox_mode_from_config,
 )
-from sylliptor_agent_cli.verify_gate import resolve_verify_sandbox_mode
+from alysis_code.verify_gate import resolve_verify_sandbox_mode
 
 
 @pytest.fixture(autouse=True)
 def _clear_sandbox_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_SHELL_SANDBOX_MODE", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_VERIFY_SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("ALYSIS_SHELL_SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("ALYSIS_VERIFY_SANDBOX_MODE", raising=False)
 
 
 def test_normalize_sandbox_mode() -> None:

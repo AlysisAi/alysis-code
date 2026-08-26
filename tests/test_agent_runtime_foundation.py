@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sylliptor_agent_cli.agent_runtimes import (
+from alysis_code.agent_runtimes import (
     AgentRuntimeRegistry,
     AuthMethod,
     DuplicateRuntimeError,
@@ -20,7 +20,7 @@ from sylliptor_agent_cli.agent_runtimes import (
     RuntimeTurnResult,
     UnknownRuntimeError,
 )
-from sylliptor_agent_cli.config import (
+from alysis_code.config import (
     AgentRuntimeSettings,
     AppConfig,
     ConfigError,
@@ -125,7 +125,7 @@ def test_agent_runtime_config_round_trips_unknown_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps(
@@ -242,7 +242,7 @@ def test_save_config_revalidates_mutated_execution_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = AppConfig()
     cfg.execution.backend = "delegated"
 
@@ -254,7 +254,7 @@ def test_legacy_config_without_runtime_fields_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps({"base_url": "https://api.openai.com/v1", "model": "gpt-5.5"}),
@@ -272,7 +272,7 @@ def test_discarded_acli_config_migrates_to_canonical_runtime_shape(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps(

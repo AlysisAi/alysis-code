@@ -8,24 +8,24 @@ from pathlib import Path
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.index import AssetIndex
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, save_plan
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.index import AssetIndex
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, save_plan
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
 def _patch_surface_builder(monkeypatch, *, delay_seconds: float = 0.0) -> None:
-    from sylliptor_agent_cli.cli_impl import assets_cli
+    from alysis_code.cli_impl import assets_cli
 
     def fake_build_surface(*, cfg: AppConfig, run_paths):
         return AssetSurface(
@@ -52,12 +52,12 @@ def test_assets_list_and_show_json(tmp_path: Path, monkeypatch) -> None:
     _patch_surface_builder(monkeypatch)
 
     list_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "list", "--path", os.fspath(repo), "--format", "json"],
         env=_env(tmp_path),
     )
     show_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -91,7 +91,7 @@ def test_assets_add_wait_blocks_until_comprehension_finishes(tmp_path: Path, mon
 
     started = time.monotonic()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -146,7 +146,7 @@ def test_assets_add_binds_matching_existing_task(tmp_path: Path, monkeypatch) ->
     _patch_surface_builder(monkeypatch)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -177,7 +177,7 @@ def test_assets_add_without_wait_stages_pending_asset(tmp_path: Path, monkeypatc
     _patch_surface_builder(monkeypatch, delay_seconds=0.05)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -207,7 +207,7 @@ def test_assets_add_requires_title_when_non_interactive(tmp_path: Path) -> None:
     source = write_text_asset_source(repo, "brief.txt", "hello\n")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "add", os.fspath(source), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -231,7 +231,7 @@ def test_assets_add_dedupe_collision_requires_link(tmp_path: Path, monkeypatch) 
     _patch_surface_builder(monkeypatch)
 
     rejected = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -245,7 +245,7 @@ def test_assets_add_dedupe_collision_requires_link(tmp_path: Path, monkeypatch) 
         env=_env(tmp_path),
     )
     linked = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -288,12 +288,12 @@ def test_assets_delete_yes_and_noninteractive_confirmation_error(
     _patch_surface_builder(monkeypatch)
 
     rejected = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "delete", record.id, "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
     deleted = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "delete", record.id, "--path", os.fspath(repo), "--yes"],
         env=_env(tmp_path),
     )
@@ -322,7 +322,7 @@ def test_assets_edit_and_refresh_wait(tmp_path: Path, monkeypatch) -> None:
     _patch_surface_builder(monkeypatch)
 
     edited = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -337,7 +337,7 @@ def test_assets_edit_and_refresh_wait(tmp_path: Path, monkeypatch) -> None:
         env=_env(tmp_path),
     )
     refreshed = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -375,7 +375,7 @@ def test_assets_edit_refresh_runs_synchronously(tmp_path: Path, monkeypatch) -> 
 
     started = time.monotonic()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -414,7 +414,7 @@ def test_assets_refresh_without_wait_is_rejected(tmp_path: Path, monkeypatch) ->
     _patch_surface_builder(monkeypatch)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "refresh", record.id, "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -434,7 +434,7 @@ def test_assets_cancel_pending_reports_no_persistent_cli_worker(
     _patch_surface_builder(monkeypatch)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "cancel-pending", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -451,7 +451,7 @@ def test_assets_error_paths(tmp_path: Path, monkeypatch) -> None:
     _patch_surface_builder(monkeypatch)
 
     missing = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -465,7 +465,7 @@ def test_assets_error_paths(tmp_path: Path, monkeypatch) -> None:
         env=_env(tmp_path),
     )
     bad_file = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -479,7 +479,7 @@ def test_assets_error_paths(tmp_path: Path, monkeypatch) -> None:
         env=_env(tmp_path),
     )
     bad_title = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "assets",
@@ -556,7 +556,7 @@ def test_assets_check_plan_json_reports_drift(tmp_path: Path, monkeypatch) -> No
     _patch_surface_builder(monkeypatch)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "assets", "check-plan", "--path", os.fspath(repo), "--format", "json"],
         env=_env(tmp_path),
     )

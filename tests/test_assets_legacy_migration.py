@@ -10,14 +10,14 @@ from pathlib import Path
 import pytest
 from _assets_test_helpers import FakeAssetComprehender
 
-from sylliptor_agent_cli.assets import AssetError, AssetSurface
-from sylliptor_agent_cli.assets.legacy_migration import (
+from alysis_code.assets import AssetError, AssetSurface
+from alysis_code.assets.legacy_migration import (
     LegacyMigrationLock,
     migrate_legacy_assets,
 )
-from sylliptor_agent_cli.atomic_io import atomic_write_json
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, load_plan, save_plan
+from alysis_code.atomic_io import atomic_write_json
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, load_plan, save_plan
 
 
 def _cfg(*, enabled: bool) -> AppConfig:
@@ -101,7 +101,7 @@ def test_migration_failure_leaves_plan_v1_for_retry(tmp_path: Path) -> None:
     _, good = _legacy_file(paths, "good.txt", "good\n")
     bad = {
         "original_path": "missing.txt",
-        "stored_path": ".sylliptor/runs/missing/plan/assets/missing.txt",
+        "stored_path": ".alysis/runs/missing/plan/assets/missing.txt",
         "size_bytes": 1,
         "added_at": "2026-05-04T00:00:00+00:00",
     }
@@ -206,10 +206,10 @@ def test_windows_stale_migration_lock_probe_does_not_send_signal(
     def fail_kill(_pid: int, _signal: int) -> None:
         raise AssertionError("Windows migration lock probes must not call os.kill")
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.legacy_migration.os.name", "nt")
-    monkeypatch.setattr("sylliptor_agent_cli.assets.legacy_migration.os.kill", fail_kill)
+    monkeypatch.setattr("alysis_code.assets.legacy_migration.os.name", "nt")
+    monkeypatch.setattr("alysis_code.assets.legacy_migration.os.kill", fail_kill)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.legacy_migration._windows_process_is_running",
+        "alysis_code.assets.legacy_migration._windows_process_is_running",
         lambda _pid: False,
     )
 
@@ -230,7 +230,7 @@ def test_plan_write_failure_dedupes_on_retry(
     cfg = _cfg(enabled=False)
     surface = AssetSurface(cfg=cfg, run_paths=paths)
 
-    import sylliptor_agent_cli.forge as forge_mod
+    import alysis_code.forge as forge_mod
 
     real_save_plan = forge_mod.save_plan
 

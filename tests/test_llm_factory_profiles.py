@@ -4,27 +4,27 @@ from types import SimpleNamespace
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, set_config_value
-from sylliptor_agent_cli.llm.anthropic_messages import AnthropicMessagesClient
-from sylliptor_agent_cli.llm.base import ChatClient
-from sylliptor_agent_cli.llm.cache_capabilities import (
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, set_config_value
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
+from alysis_code.llm.base import ChatClient
+from alysis_code.llm.cache_capabilities import (
     CACHE_STRATEGY_OPENAI_PROMPT_CACHE,
     OPENROUTER_SESSION_ID_FIELD,
     XAI_CONVERSATION_ID_HEADER_FIELD,
     CacheCapabilitySpec,
 )
-from sylliptor_agent_cli.llm.factory import make_llm_client
-from sylliptor_agent_cli.llm.gemini_generate_content import GeminiGenerateContentClient
-from sylliptor_agent_cli.llm.gemini_interactions import (
+from alysis_code.llm.factory import make_llm_client
+from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.gemini_interactions import (
     GEMINI_INTERACTIONS_CONFIG_FLAG,
     GEMINI_INTERACTIONS_EXPERIMENT_ENV,
     GeminiInteractionsClient,
 )
-from sylliptor_agent_cli.llm.metadata import credential_scope_fingerprint
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.metadata import credential_scope_fingerprint
+from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.protocols import (
     ANTHROPIC_MESSAGES_PROTOCOL,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     GEMINI_INTERACTIONS_PROTOCOL,
@@ -32,10 +32,10 @@ from sylliptor_agent_cli.llm.protocols import (
     OPENAI_RESPONSES_PROTOCOL,
     UnsupportedProtocolError,
 )
-from sylliptor_agent_cli.llm.types import BillingMode
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile, set_active_profile
-from sylliptor_agent_cli.provider_auth import ProviderAuthError
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
+from alysis_code.llm.types import BillingMode
+from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
+from alysis_code.provider_auth import ProviderAuthError
+from alysis_code.surface.noop_surface import NoopSurface
 
 
 def _cfg_with_profile(profile: ProfileSpec, *, active: bool = True) -> AppConfig:
@@ -179,7 +179,7 @@ def test_make_llm_client_rejects_subscription_profile_transport_overrides(
         base_url="https://chatgpt.com/backend-api/codex",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.llm.factory.create_provider_auth",
+        "alysis_code.llm.factory.create_provider_auth",
         lambda provider_id, *, transport=None: adapter,
     )
     cfg = _cfg_with_profile(
@@ -203,7 +203,7 @@ def test_make_llm_client_rejects_unconfirmed_subscription_selection(
         base_url="https://chatgpt.com/backend-api/codex",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.llm.factory.create_provider_auth",
+        "alysis_code.llm.factory.create_provider_auth",
         lambda provider_id, *, transport=None: adapter,
     )
     cfg = _cfg_with_profile(
@@ -228,7 +228,7 @@ def test_factory_marks_subscription_and_local_billing_modes(
         base_url="https://chatgpt.com/backend-api/codex",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.llm.factory.create_provider_auth",
+        "alysis_code.llm.factory.create_provider_auth",
         lambda provider_id, *, transport=None: adapter,
     )
     subscription_profile = ProfileSpec(
@@ -400,7 +400,7 @@ def test_make_llm_client_derives_openai_prompt_cache_key_in_auto_mode() -> None:
 
     assert isinstance(client, OpenAIResponsesClient)
     assert client.prompt_cache_key is not None
-    assert client.prompt_cache_key.startswith("sylliptor:openai:")
+    assert client.prompt_cache_key.startswith("alysis:openai:")
     assert client.prompt_cache_retention is None
 
 
@@ -493,7 +493,7 @@ def test_make_llm_client_auto_projects_openrouter_session_id() -> None:
 
     assert isinstance(client, OpenAICompatClient)
     session_id = client.prompt_cache_request_field_values[OPENROUTER_SESSION_ID_FIELD]
-    assert session_id.startswith("sylliptor:openrouter:")
+    assert session_id.startswith("alysis:openrouter:")
     assert client.prompt_cache_key is None
     assert client.prompt_cache_policy_metadata is not None
     assert client.prompt_cache_policy_metadata["status"] == "enabled"
@@ -525,7 +525,7 @@ def test_make_llm_client_auto_projects_xai_conversation_header() -> None:
 
     assert isinstance(client, OpenAICompatClient)
     conversation_id = client.prompt_cache_request_field_values[XAI_CONVERSATION_ID_HEADER_FIELD]
-    assert conversation_id.startswith("sylliptor:xai:")
+    assert conversation_id.startswith("alysis:xai:")
     assert client.prompt_cache_policy_metadata is not None
     assert client.prompt_cache_policy_metadata["status"] == "enabled"
     assert client.prompt_cache_policy_metadata["strategy"] == "xai_conversation_header"

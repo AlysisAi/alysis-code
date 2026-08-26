@@ -1,23 +1,23 @@
 # MCP
 
-Sylliptor can connect to external Model Context Protocol (MCP) servers and expose selected MCP tools, resources, roots, and prompts to supported runtimes.
+Alysis Code can connect to external Model Context Protocol (MCP) servers and expose selected MCP tools, resources, roots, and prompts to supported runtimes.
 
 MCP integration is intentionally explicit. User configuration defines connection details, project configuration may only narrow exposure, and readonly sessions do not expose MCP tools.
 
 ## Supported Transports
 
-Sylliptor supports:
+Alysis Code supports:
 
 - stdio MCP servers
 - synchronous Streamable HTTP MCP servers
 - `tools/list` and `tools/call`
 - optional `roots/list` support for the current workspace root
-- optional listed resource access through Sylliptor-managed `mcp_resources_list` and `mcp_resource_read`
-- optional manual prompt listing and retrieval through `sylliptor mcp prompts ...`
+- optional listed resource access through Alysis Code-managed `mcp_resources_list` and `mcp_resource_read`
+- optional manual prompt listing and retrieval through `alysis mcp prompts ...`
 - static HTTP headers with `${ENV_VAR}` expansion
-- OAuth for configured HTTP MCP servers through manual `sylliptor mcp auth ...` commands
+- OAuth for configured HTTP MCP servers through manual `alysis mcp auth ...` commands
 
-Sylliptor does not currently implement GET SSE listening, resumability, polling, HTTP+SSE fallback, sampling, elicitation, resource subscriptions, resource templates, prompt subscriptions, or broad server-initiated request flows beyond the supported `roots/list` path.
+Alysis Code does not currently implement GET SSE listening, resumability, polling, HTTP+SSE fallback, sampling, elicitation, resource subscriptions, resource templates, prompt subscriptions, or broad server-initiated request flows beyond the supported `roots/list` path.
 
 ## Runtime Exposure
 
@@ -41,13 +41,13 @@ Forge execution can apply task-level MCP scope on top of the session catalog. A 
 User configuration lives at:
 
 ```text
-~/.config/sylliptor/mcp.json
+~/.config/alysis/mcp.json
 ```
 
 Project configuration lives at:
 
 ```text
-<workspace_root>/.sylliptor/mcp.json
+<workspace_root>/.alysis/mcp.json
 ```
 
 Both files use `schema_version: 1`. User config is authoritative for server connection details. Project config is lower-trust and can only narrow or disable an existing user-defined server.
@@ -142,7 +142,7 @@ Use `allowed_tools` and `denied_tools` to keep the MCP surface narrow:
 
 If `allowed_tools` is non-empty, only those tool names may be exposed. `denied_tools` removes tools from the effective catalog. A tool cannot appear in both lists.
 
-Sylliptor assigns local aliases for exposed MCP tools using the server id or configured `tool_prefix`, for example:
+Alysis Code assigns local aliases for exposed MCP tools using the server id or configured `tool_prefix`, for example:
 
 ```text
 mcp__docs__search
@@ -158,7 +158,7 @@ Roots are disabled by default. Enable the current workspace root for a server wi
 }
 ```
 
-When enabled in a supported runtime, Sylliptor answers `roots/list` with a single `file://` root for the bound workspace. Roots are not exposed in subagents, swarm workers, or conflict-resolution automation.
+When enabled in a supported runtime, Alysis Code answers `roots/list` with a single `file://` root for the bound workspace. Roots are not exposed in subagents, swarm workers, or conflict-resolution automation.
 
 ## Resources
 
@@ -170,7 +170,7 @@ Resources are disabled by default. Enable listed read-only resources with:
 }
 ```
 
-When enabled, Sylliptor lists resources for the session and exposes generic host tools:
+When enabled, Alysis Code lists resources for the session and exposes generic host tools:
 
 - `mcp_resources_list`
 - `mcp_resource_read`
@@ -190,9 +190,9 @@ Prompts are disabled by default. Enable manual listed prompt access with:
 Prompt entries are not exposed as autonomous model tools. Users inspect them through:
 
 ```bash
-sylliptor mcp prompts list
-sylliptor mcp prompts get <server_id> <prompt_name>
-sylliptor mcp status
+alysis mcp prompts list
+alysis mcp prompts get <server_id> <prompt_name>
+alysis mcp status
 ```
 
 Use `--refresh` on prompt list/get commands when you want to refresh the relevant prompt snapshot.
@@ -209,7 +209,7 @@ HTTP MCP servers may use an `oauth` block in user config:
       "transport": "http",
       "url": "https://mcp.example.com/mcp",
       "oauth": {
-        "client_id": "sylliptor",
+        "client_id": "alysis",
         "scopes": ["docs.read"]
       },
       "trust": "explicit"
@@ -229,12 +229,12 @@ Supported OAuth fields are:
 Manage tokens with:
 
 ```bash
-sylliptor mcp auth login <server_id>
-sylliptor mcp auth status
-sylliptor mcp auth logout <server_id>
+alysis mcp auth login <server_id>
+alysis mcp auth status
+alysis mcp auth logout <server_id>
 ```
 
-OAuth tokens are stored in the user config scope, separate from `mcp.json`. Sylliptor does not write raw tokens into project config or session diagnostics.
+OAuth tokens are stored in the user config scope, separate from `mcp.json`. Alysis Code does not write raw tokens into project config or session diagnostics.
 
 OAuth currently requires an interactive authorization-code login. Device-code flow, dynamic client registration, token revocation, and browserless paste-back auth are not implemented.
 
@@ -249,16 +249,30 @@ Resolved secret values are not written back into diagnostics, errors, or metadat
 Use:
 
 ```bash
-sylliptor mcp status
+alysis mcp status
 ```
 
 `status` reports resolved server exposure, transport readiness, tool/resource/prompt stale state, and manual prompt availability without dumping secret values.
 
+For a live IDE session, use the capability-negotiated `mcp.server.status`,
+`mcp.server.enable`, `mcp.server.disable`, and `mcp.server.restart` protocol methods. These methods
+are session- and server-bound and operate on the agent session's existing manager; they never create
+a temporary manager. Status does not materialize a connection and reports a dead owned stdio
+process as disconnected. One stable client lease per
+server is shared by frozen tool, resource, and prompt bindings. Lifecycle mutations require
+Workspace Trust and an idle session. Reconnect is atomic: the old connection remains usable if the
+replacement fails, differs from any frozen catalog, or reports a list-change notification while the
+catalog fence is running. A successful validated reconnect clears stale state inherited from the
+closed transport. Disabling remains fail-closed even if it happens before first catalog
+materialization. Disabling or closing a session shuts down every exact owned connection and leaves
+existing bindings fail-closed. Server-controlled stderr and remote response diagnostics are never
+echoed through the IDE protocol error payload.
+
 For prompt-enabled servers:
 
 ```bash
-sylliptor mcp prompts list --server <server_id>
-sylliptor mcp prompts get <server_id> <prompt_name>
+alysis mcp prompts list --server <server_id>
+alysis mcp prompts get <server_id> <prompt_name>
 ```
 
 Targeted prompt commands only load the requested server. Unfiltered prompt listing may touch all prompt-enabled servers for the selected runtime.

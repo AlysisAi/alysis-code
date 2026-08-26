@@ -1,10 +1,9 @@
-"""Adversarial finalize review: one bounded pass before a clean finish.
+"""Adversarial finalize review: one bounded pass for unverified clean claims.
 
 Scored-run near-misses cluster on small edits to existing files whose gate is
-otherwise clear: the agent's own reproduction passes while the acceptance
-criteria probe one more edge. The runtime spends exactly one extra pass
-stress-testing that claim; turns that only create new files, and turns with the
-feature disabled, finish exactly as before.
+otherwise clear but lacks fresh independent evidence. Freshly verified turns,
+turns that only create new files, and turns with the feature disabled finish
+without an extra model response.
 """
 
 from __future__ import annotations
@@ -16,12 +15,13 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.verification import TurnExecutionState
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 _VERIFY_OK_COMMAND = "pytest tests/test_cli.py -q"
 
@@ -180,17 +180,17 @@ def _bug_fix_script(*, finals: int) -> list[LLMResponse]:
     return script
 
 
-def test_adversarial_review_fires_once_on_a_small_edit_to_existing_code(
+def test_adversarial_review_skips_existing_code_with_fresh_verification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_ADVERSARIAL_FINALIZE", raising=False)
+    monkeypatch.delenv("ALYSIS_ADVERSARIAL_FINALIZE", raising=False)
     _init_git_repo_with_commit(tmp_path)
 
     exit_code, events, client = _run_turn(
         tmp_path,
-        session_id="adversarial-fires",
-        responses=_bug_fix_script(finals=3),
+        session_id="adversarial-fresh-verification",
+        responses=_bug_fix_script(finals=1),
     )
 
     assert exit_code == 0
@@ -199,9 +199,55 @@ def test_adversarial_review_fires_once_on_a_small_edit_to_existing_code(
         for payload in _payloads(events, "completion_gate_nudge")
         if payload.get("stage") == "adversarial_finalize_review"
     ]
-    assert len(nudges) == 1, "expected exactly one adversarial finalize review"
+    assert nudges == []
+    assert client.calls == 3
+
+
+def test_adversarial_review_fires_once_without_fresh_independent_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALYSIS_ADVERSARIAL_FINALIZE", raising=False)
+    original_record = TurnExecutionState.record_verification_evidence
+
+    def record_without_independent_acceptance(
+        self: TurnExecutionState,
+        evidence: Any,
+        *,
+        accepted: bool,
+        observed_exit_code: int | None = None,
+        observed_output: bool = False,
+    ) -> None:
+        _ = accepted
+        original_record(
+            self,
+            evidence,
+            accepted=False,
+            observed_exit_code=observed_exit_code,
+            observed_output=observed_output,
+        )
+
+    monkeypatch.setattr(
+        TurnExecutionState,
+        "record_verification_evidence",
+        record_without_independent_acceptance,
+    )
+    _init_git_repo_with_commit(tmp_path)
+
+    exit_code, events, client = _run_turn(
+        tmp_path,
+        session_id="adversarial-no-independent-verification",
+        responses=_bug_fix_script(finals=2),
+    )
+
+    assert exit_code == 0
+    nudges = [
+        payload
+        for payload in _payloads(events, "completion_gate_nudge")
+        if payload.get("stage") == "adversarial_finalize_review"
+    ]
+    assert len(nudges) == 1
     assert nudges[0]["touched_code_paths"] == ["util.py"]
-    # The advisory costs exactly one extra model response over the baseline.
     assert client.calls == 4
 
 
@@ -209,7 +255,7 @@ def test_adversarial_review_kill_switch_restores_previous_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_ADVERSARIAL_FINALIZE", "off")
+    monkeypatch.setenv("ALYSIS_ADVERSARIAL_FINALIZE", "off")
     _init_git_repo_with_commit(tmp_path)
 
     exit_code, events, client = _run_turn(
@@ -231,7 +277,7 @@ def test_adversarial_review_skips_turns_that_only_create_new_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_ADVERSARIAL_FINALIZE", raising=False)
+    monkeypatch.delenv("ALYSIS_ADVERSARIAL_FINALIZE", raising=False)
     _init_git_repo_with_commit(tmp_path)
     script = [
         LLMResponse(

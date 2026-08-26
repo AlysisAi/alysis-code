@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.compaction.importance import extract_text, score_text, score_turn
+from alysis_code.compaction.importance import extract_text, score_text, score_turn
 
 
 def test_score_turn_prioritizes_high_signal_requirement_turn() -> None:

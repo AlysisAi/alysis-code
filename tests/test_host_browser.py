@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sylliptor_agent_cli import host_browser
+from alysis_code import host_browser
 
 
 def test_native_browser_uses_python_webbrowser(monkeypatch) -> None:

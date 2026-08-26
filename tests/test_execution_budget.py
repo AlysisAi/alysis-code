@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_budget import (
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_budget import (
     DEFAULT_EXECUTION_HEADROOM_RESERVE_TOKENS,
     DEFAULT_EXECUTION_IMAGE_RESERVE_TOKENS_PER_IMAGE,
     DEFAULT_EXECUTION_RESPONSE_RESERVE_TOKENS,
@@ -10,8 +10,8 @@ from sylliptor_agent_cli.execution_budget import (
     DEFAULT_MINIMUM_EXECUTION_INSTRUCTION_BUDGET_TOKENS,
     compute_execution_prompt_budget,
 )
-from sylliptor_agent_cli.execution_shared import build_task_execution_instruction_bundle
-from sylliptor_agent_cli.request_estimation import (
+from alysis_code.execution_shared import build_task_execution_instruction_bundle
+from alysis_code.request_estimation import (
     estimate_message_tokens,
     estimate_tool_schema_tokens,
 )
@@ -38,8 +38,8 @@ def _dense_execution_plan() -> dict:
         ],
         "assets": [
             {
-                "stored_path": f".sylliptor/runs/r/plan/assets/spec_{i:03d}.md",
-                "text_copy_path": f".sylliptor/runs/r/plan/assets_text/spec_{i:03d}.txt",
+                "stored_path": f".alysis/runs/r/plan/assets/spec_{i:03d}.md",
+                "text_copy_path": f".alysis/runs/r/plan/assets_text/spec_{i:03d}.txt",
             }
             for i in range(36)
         ],
@@ -428,16 +428,16 @@ def test_managed_execution_startup_headroom_reduces_first_request_below_trigger(
         ],
         "dependencies": ["T40", "T41"],
         "estimated_files": [
-            "src/sylliptor_agent_cli/execution_budget.py",
-            "src/sylliptor_agent_cli/execution_context.py",
-            "src/sylliptor_agent_cli/execution_shared.py",
-            "src/sylliptor_agent_cli/cli_impl/forge.py",
+            "src/alysis_code/execution_budget.py",
+            "src/alysis_code/execution_context.py",
+            "src/alysis_code/execution_shared.py",
+            "src/alysis_code/cli_impl/forge.py",
         ],
         "write_scope": [
-            "src/sylliptor_agent_cli/execution_budget.py",
-            "src/sylliptor_agent_cli/execution_context.py",
-            "src/sylliptor_agent_cli/execution_shared.py",
-            "src/sylliptor_agent_cli/cli_impl/forge.py",
+            "src/alysis_code/execution_budget.py",
+            "src/alysis_code/execution_context.py",
+            "src/alysis_code/execution_shared.py",
+            "src/alysis_code/cli_impl/forge.py",
         ],
         "branch": "feat/startup-headroom",
         "status": "planned",

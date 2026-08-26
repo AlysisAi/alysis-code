@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
+from alysis_code.agent_loop import AgentRuntimeError, create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
 
 
 def _cfg() -> AppConfig:
@@ -188,7 +188,7 @@ def test_workspace_preview_tool_works_with_strict_unavailable_docker_image(
             "mode": "strict",
             "backend": "docker",
             "network": "off",
-            "docker_image": "private.invalid/sylliptor-sandbox:dev",
+            "docker_image": "private.invalid/alysis-sandbox:dev",
         }
     }
     session = create_session(

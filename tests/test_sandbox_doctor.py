@@ -4,9 +4,9 @@ import subprocess
 
 import pytest
 
-import sylliptor_agent_cli.sandbox_doctor as sandbox_doctor_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.sandbox_doctor import (
+import alysis_code.sandbox_doctor as sandbox_doctor_mod
+from alysis_code.config import AppConfig
+from alysis_code.sandbox_doctor import (
     configured_sandbox_images,
     diagnose_sandbox,
     pull_sandbox_images,
@@ -19,7 +19,7 @@ def _cfg(*, mode: str = "strict", backend: str = "auto") -> AppConfig:
         "shell_sandbox": {
             "mode": mode,
             "backend": backend,
-            "docker_image": "ghcr.io/example/sylliptor-sandbox:dev",
+            "docker_image": "ghcr.io/example/alysis-sandbox:dev",
         }
     }
     return cfg
@@ -88,17 +88,17 @@ def test_diagnose_sandbox_suggests_pull_when_docker_image_is_missing(
         check.name == "sandbox image" and check.status == "missing" for check in result.checks
     )
     assert result.next_steps == (
-        "Run `sylliptor sandbox pull` to download Sylliptor's safe runner image.",
+        "Run `alysis sandbox pull` to download Alysis Code's safe runner image.",
     )
 
 
 def test_configured_sandbox_images_uses_configured_shell_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_SERVER_DOCKER_IMAGE", "server:custom")
+    monkeypatch.setenv("ALYSIS_SERVER_DOCKER_IMAGE", "server:custom")
 
     assert configured_sandbox_images(_cfg(), include_server=True) == (
-        "ghcr.io/example/sylliptor-sandbox:dev",
+        "ghcr.io/example/alysis-sandbox:dev",
         "server:custom",
     )
 
@@ -107,7 +107,7 @@ def test_diagnose_sandbox_requires_server_image_when_checked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sandbox_doctor_mod.platform, "system", lambda: "Linux")
-    monkeypatch.setenv("SYLLIPTOR_SERVER_DOCKER_IMAGE", "server:custom")
+    monkeypatch.setenv("ALYSIS_SERVER_DOCKER_IMAGE", "server:custom")
     monkeypatch.setattr(
         sandbox_doctor_mod.shutil,
         "which",
@@ -117,7 +117,7 @@ def test_diagnose_sandbox_requires_server_image_when_checked(
     def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
         if args == ["docker", "info"]:
             return _cp(args, stdout="ok\n")
-        if args == ["docker", "image", "inspect", "ghcr.io/example/sylliptor-sandbox:dev"]:
+        if args == ["docker", "image", "inspect", "ghcr.io/example/alysis-sandbox:dev"]:
             return _cp(args, stdout="ok\n")
         if args == ["docker", "image", "inspect", "server:custom"]:
             return _cp(args, returncode=1, stderr="No such image")
@@ -132,7 +132,7 @@ def test_diagnose_sandbox_requires_server_image_when_checked(
     server_image = next(check for check in result.checks if check.name == "server sandbox image")
     assert server_image.status == "missing"
     assert result.next_steps == (
-        "Run `sylliptor sandbox pull --server` to download Sylliptor's server worker image.",
+        "Run `alysis sandbox pull --server` to download Alysis Code's server worker image.",
     )
 
 
@@ -163,7 +163,7 @@ def test_diagnose_sandbox_explicit_bwrap_reports_linux_only_on_other_platforms(
     bubblewrap = next(check for check in result.checks if check.name == "bubblewrap")
     assert bubblewrap.status == "skipped"
     assert "only supported on Linux" in bubblewrap.detail
-    assert "SYLLIPTOR_SHELL_SANDBOX_BACKEND=docker" in result.next_steps[0]
+    assert "ALYSIS_SHELL_SANDBOX_BACKEND=docker" in result.next_steps[0]
 
 
 def test_diagnose_sandbox_mode_off_is_reported_as_disabled() -> None:

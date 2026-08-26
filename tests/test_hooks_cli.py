@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.hooks import (
+from alysis_code import cli as cli_mod
+from alysis_code.hooks import (
     build_hook_audit_event,
     hook_audit_artifact_path,
     load_resolved_hooks_config,
     project_hooks_config_path,
 )
-from sylliptor_agent_cli.hooks.models import HookInvocationContext
+from alysis_code.hooks.models import HookInvocationContext
 
 
 def _init_git_repo(root: Path) -> None:
@@ -50,7 +50,7 @@ def test_hooks_trust_and_untrust_cli_updates_project_config_trust(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -63,7 +63,7 @@ def test_hooks_trust_and_untrust_cli_updates_project_config_trust(
             }
         },
     )
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
     trust_result = runner.invoke(
         cli_mod.app,
@@ -107,7 +107,7 @@ def test_hooks_trust_rejects_invalid_project_config(tmp_path: Path) -> None:
             }
         },
     )
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
     result = runner.invoke(
         cli_mod.app,
@@ -127,7 +127,7 @@ def test_hooks_doctor_reports_untrusted_project_hooks(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -145,7 +145,7 @@ def test_hooks_doctor_reports_untrusted_project_hooks(
     result = runner.invoke(
         cli_mod.app,
         ["hooks", "doctor", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
         terminal_width=200,
     )
 
@@ -164,7 +164,7 @@ def test_hooks_list_shows_runtime_and_session_metadata(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -189,14 +189,14 @@ def test_hooks_list_shows_runtime_and_session_metadata(
     trust_result = runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
     assert trust_result.exit_code == 0
 
     result = runner.invoke(
         cli_mod.app,
         ["hooks", "list", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
         terminal_width=220,
     )
 
@@ -220,7 +220,7 @@ def test_hooks_trace_reads_hook_audit_artifact(tmp_path: Path) -> None:
         session_id=session_id,
         context=HookInvocationContext(
             event_name="TurnComplete",
-            source_path="/tmp/workspace/.sylliptor/hooks.json",
+            source_path="/tmp/workspace/.alysis/hooks.json",
             source_scope="project",
             matcher="",
             hook_id="turn.stop",
@@ -250,8 +250,8 @@ def test_hooks_trace_reads_hook_audit_artifact(tmp_path: Path) -> None:
         cli_mod.app,
         ["hooks", "trace", session_id],
         env={
-            "SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir),
-            "SYLLIPTOR_DATA_DIR": os.fspath(data_dir),
+            "ALYSIS_CONFIG_DIR": os.fspath(cfg_dir),
+            "ALYSIS_DATA_DIR": os.fspath(data_dir),
         },
         terminal_width=200,
     )
@@ -271,7 +271,7 @@ def test_hooks_test_reports_matching_hook(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -295,7 +295,7 @@ def test_hooks_test_reports_matching_hook(
     trust_result = runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
     assert trust_result.exit_code == 0
 
@@ -313,7 +313,7 @@ def test_hooks_test_reports_matching_hook(
             "--session-source",
             "startup",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
         terminal_width=220,
     )
 
@@ -332,7 +332,7 @@ def test_hooks_test_reports_runtime_kind_mismatch(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -356,7 +356,7 @@ def test_hooks_test_reports_runtime_kind_mismatch(
     trust_result = runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
     assert trust_result.exit_code == 0
 
@@ -374,7 +374,7 @@ def test_hooks_test_reports_runtime_kind_mismatch(
             "--session-source",
             "startup",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
         terminal_width=220,
     )
 
@@ -393,7 +393,7 @@ def test_hooks_test_reports_missing_tool_target_for_tool_events(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -410,7 +410,7 @@ def test_hooks_test_reports_missing_tool_target_for_tool_events(
     trust_result = runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
     assert trust_result.exit_code == 0
 
@@ -424,7 +424,7 @@ def test_hooks_test_reports_missing_tool_target_for_tool_events(
             "--event",
             "PreToolUse",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
         terminal_width=220,
     )
 
@@ -453,7 +453,7 @@ def test_hooks_test_rejects_invalid_session_source(tmp_path: Path) -> None:
             "--session-source",
             "bad-source",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
 
     assert result.exit_code == 2
@@ -472,19 +472,19 @@ def test_hooks_init_creates_starter_config_and_gitignore_entry(tmp_path: Path) -
     )
 
     assert result.exit_code == 0
-    local_config = workspace / ".sylliptor" / "hooks.local.json"
+    local_config = workspace / ".alysis" / "hooks.local.json"
     assert local_config.exists()
     payload = json.loads(local_config.read_text(encoding="utf-8"))
     assert "hooks" in payload
     assert "SessionStart" in payload["hooks"]
     gitignore_text = (workspace / ".gitignore").read_text(encoding="utf-8")
-    assert ".sylliptor/hooks.local.json" in gitignore_text
+    assert ".alysis/hooks.local.json" in gitignore_text
 
 
 def test_hooks_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
-    local_config = workspace / ".sylliptor" / "hooks.local.json"
+    local_config = workspace / ".alysis" / "hooks.local.json"
     local_config.parent.mkdir(parents=True, exist_ok=True)
     local_config.write_text(json.dumps({"hooks": {}}) + "\n", encoding="utf-8")
 
@@ -505,7 +505,7 @@ def test_hooks_effective_reports_per_hook_fire_decision(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -529,7 +529,7 @@ def test_hooks_effective_reports_per_hook_fire_decision(
     runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
 
     result = runner.invoke(
@@ -546,7 +546,7 @@ def test_hooks_effective_reports_per_hook_fire_decision(
             "--runtime",
             "interactive_chat",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
 
     assert result.exit_code == 0
@@ -563,7 +563,7 @@ def test_hooks_effective_flags_runtime_filter_skip(
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -587,7 +587,7 @@ def test_hooks_effective_flags_runtime_filter_skip(
     runner.invoke(
         cli_mod.app,
         ["hooks", "trust", "--path", str(workspace)],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
 
     result = runner.invoke(
@@ -604,7 +604,7 @@ def test_hooks_effective_flags_runtime_filter_skip(
             "--runtime",
             "interactive_chat",
         ],
-        env={"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)},
+        env={"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)},
     )
 
     assert result.exit_code == 0
@@ -616,7 +616,7 @@ def test_hooks_effective_flags_runtime_filter_skip(
 def test_hooks_enable_and_disable_toggle_local_layer(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
-    local_config = workspace / ".sylliptor" / "hooks.local.json"
+    local_config = workspace / ".alysis" / "hooks.local.json"
     local_config.parent.mkdir(parents=True, exist_ok=True)
     local_config.write_text(
         json.dumps(
@@ -661,7 +661,7 @@ def test_hooks_enable_and_disable_toggle_local_layer(tmp_path: Path) -> None:
 def test_hooks_enable_errors_on_unknown_id(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
-    local_config = workspace / ".sylliptor" / "hooks.local.json"
+    local_config = workspace / ".alysis" / "hooks.local.json"
     local_config.parent.mkdir(parents=True, exist_ok=True)
     local_config.write_text(
         json.dumps({"hooks": {"SessionStart": [{"hooks": []}]}}) + "\n",
@@ -713,7 +713,7 @@ def _write_minimal_hook_audit_artifact(
         session_id=session_id,
         context=HookInvocationContext(
             event_name="TurnComplete",
-            source_path="/tmp/workspace/.sylliptor/hooks.json",
+            source_path="/tmp/workspace/.alysis/hooks.json",
             source_scope="project",
             matcher="",
             hook_id=hook_id,
@@ -743,7 +743,7 @@ def _write_minimal_hook_audit_artifact(
 def test_hooks_trace_latest_default_skips_foreign_owner_sessions(tmp_path: Path) -> None:
     import uuid
 
-    from sylliptor_agent_cli.session_store import local_session_owner
+    from alysis_code.session_store import local_session_owner
 
     runner = CliRunner()
     cfg_dir = tmp_path / "config"
@@ -776,8 +776,8 @@ def test_hooks_trace_latest_default_skips_foreign_owner_sessions(tmp_path: Path)
         cli_mod.app,
         ["hooks", "trace"],
         env={
-            "SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir),
-            "SYLLIPTOR_DATA_DIR": os.fspath(data_dir),
+            "ALYSIS_CONFIG_DIR": os.fspath(cfg_dir),
+            "ALYSIS_DATA_DIR": os.fspath(data_dir),
         },
         terminal_width=200,
     )
@@ -807,8 +807,8 @@ def test_hooks_trace_latest_default_explains_hidden_foreign_sessions(tmp_path: P
         cli_mod.app,
         ["hooks", "trace"],
         env={
-            "SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir),
-            "SYLLIPTOR_DATA_DIR": os.fspath(data_dir),
+            "ALYSIS_CONFIG_DIR": os.fspath(cfg_dir),
+            "ALYSIS_DATA_DIR": os.fspath(data_dir),
         },
         terminal_width=200,
     )

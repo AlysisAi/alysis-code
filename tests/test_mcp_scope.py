@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.mcp.forge_scope import (
+from alysis_code.mcp.forge_scope import (
     describe_task_mcp_scope,
     normalize_task_mcp_scope,
     serialize_task_mcp_scope,

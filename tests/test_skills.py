@@ -6,11 +6,11 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import build_tools, create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.skills import (
+from alysis_code.agent_loop import build_tools, create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.session_store import SessionStore
+from alysis_code.skills import (
     SkillBundle,
     build_explicit_skill_context_message,
     build_matched_skill_context,
@@ -22,11 +22,11 @@ from sylliptor_agent_cli.skills import (
     resolve_skill_by_name,
     validate_skill_bundle,
 )
-from sylliptor_agent_cli.skills.prompting import (
+from alysis_code.skills.prompting import (
     EXPLICIT_SKILL_CONTEXT_TOTAL_MAX_CHARS,
     EXPLICIT_SKILL_ENTRYPOINT_MAX_CHARS,
 )
-from sylliptor_agent_cli.skills.validation import (
+from alysis_code.skills.validation import (
     SKILL_DESCRIPTION_WARNING_CHARS,
     SKILL_ENTRYPOINT_WARNING_CHARS,
     SKILL_NAME_WARNING_CHARS,
@@ -97,7 +97,7 @@ def test_discover_skills_respects_ancestor_and_path_family_precedence(tmp_path: 
 
     _write_skill(
         repo,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "deploy",
         name="deploy",
         description="root native deploy",
@@ -137,7 +137,7 @@ def test_discover_skills_respects_ancestor_and_path_family_precedence(tmp_path: 
     )
     _write_skill(
         focus.parent,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "lint",
         name="lint",
         description="native lint",
@@ -157,7 +157,7 @@ def test_discover_skills_respects_ancestor_and_path_family_precedence(tmp_path: 
 
     assert lint is not None
     assert lint.description == "native lint"
-    assert lint.source_family == ".sylliptor_skills"
+    assert lint.source_family == ".alysis_skills"
     assert lint.ancestor_distance == 1
 
 
@@ -250,13 +250,13 @@ def test_discover_skills_skips_malformed_bundles_without_crashing(tmp_path: Path
     repo.mkdir()
     _write_skill(
         repo,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "good",
         name="good",
         description="valid skill",
         body="Valid instructions.",
     )
-    broken = repo / ".sylliptor_skills" / "broken"
+    broken = repo / ".alysis_skills" / "broken"
     broken.mkdir(parents=True)
     (broken / "SKILL.md").write_text("name: broken\n", encoding="utf-8")
 
@@ -275,13 +275,13 @@ def test_discover_skills_skips_invalid_utf8_project_local_bundle_without_crashin
     repo.mkdir()
     _write_skill(
         repo,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "good",
         name="good",
         description="valid skill",
         body="Valid instructions.",
     )
-    broken = _write_invalid_utf8_skill(repo, ".sylliptor_skills", "broken")
+    broken = _write_invalid_utf8_skill(repo, ".alysis_skills", "broken")
 
     discovered = discover_skills(focus_path=repo, workspace_root=repo)
 
@@ -356,7 +356,7 @@ def test_match_skills_returns_obvious_positive_and_negative_cases(tmp_path: Path
         entry_path=tmp_path / "python-debug" / "SKILL.md",
         source_scope="project",
         source_kind="native",
-        source_family=".sylliptor_skills",
+        source_family=".alysis_skills",
         source_path=tmp_path / "python-debug",
         trust_level="untrusted",
     )
@@ -369,7 +369,7 @@ def test_match_skills_returns_obvious_positive_and_negative_cases(tmp_path: Path
         entry_path=tmp_path / "docker-compose" / "SKILL.md",
         source_scope="project",
         source_kind="native",
-        source_family=".sylliptor_skills",
+        source_family=".alysis_skills",
         source_path=tmp_path / "docker-compose",
         trust_level="untrusted",
     )
@@ -388,7 +388,7 @@ def test_match_skills_returns_obvious_positive_and_negative_cases(tmp_path: Path
 def test_discovered_skill_source_path_refers_to_bundle_directory(tmp_path: Path) -> None:
     bundle = _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="python skill",
@@ -406,7 +406,7 @@ def test_discovered_skill_source_path_refers_to_bundle_directory(tmp_path: Path)
 def test_skill_read_entrypoint_nested_path_and_path_traversal_protection(tmp_path: Path) -> None:
     bundle = _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="python skill",
@@ -446,7 +446,7 @@ def test_skill_advertise_and_match_blocks_stay_bounded(tmp_path: Path) -> None:
             entry_path=tmp_path / f"skill-{idx}" / "SKILL.md",
             source_scope="project",
             source_kind="native",
-            source_family=".sylliptor_skills",
+            source_family=".alysis_skills",
             source_path=tmp_path / f"skill-{idx}",
             trust_level="untrusted",
         )
@@ -691,7 +691,7 @@ def test_build_explicit_skill_context_truncates_oversized_metadata_but_keeps_str
 def test_validate_skill_bundle_warns_on_oversized_metadata_fields(tmp_path: Path) -> None:
     bundle = _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "metadata-heavy",
         name="n" * (SKILL_NAME_WARNING_CHARS + 10),
         description="d" * (SKILL_DESCRIPTION_WARNING_CHARS + 10),
@@ -715,7 +715,7 @@ def test_create_session_adds_skill_advertise_and_separate_repo_conventions(tmp_p
     (tmp_path / "AGENTS.md").write_text("Agent conventions live here.\n", encoding="utf-8")
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -754,7 +754,7 @@ def test_create_session_omits_skill_context_and_skill_read_when_skills_disabled(
 ) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -786,7 +786,7 @@ def test_create_session_omits_skill_context_and_skill_read_when_skills_disabled(
 def test_skill_read_tool_reads_skill_bundle_and_rejects_path_escape(tmp_path: Path) -> None:
     bundle = _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -819,7 +819,7 @@ def test_skill_read_tool_reads_skill_bundle_and_rejects_path_escape(tmp_path: Pa
 def test_run_turn_explicit_skill_context_is_request_only(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "python",
         name="python",
         description="Work on Python code",
@@ -880,7 +880,7 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_auto_invoke_di
 ) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "pytest",
         name="pytest",
         description="Debug pytest failures and stack traces",
@@ -920,7 +920,7 @@ def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
 ) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "pytest",
         name="pytest",
         description="Debug pytest failures and stack traces",
@@ -964,7 +964,7 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disable
 ) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "pytest",
         name="pytest",
         description="Debug pytest failures and stack traces",
@@ -1002,13 +1002,13 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disable
 def test_create_session_skips_invalid_utf8_skills_without_failing_startup(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "good",
         name="good",
         description="valid skill",
         body="Valid instructions.",
     )
-    broken = _write_invalid_utf8_skill(tmp_path, ".sylliptor_skills", "broken")
+    broken = _write_invalid_utf8_skill(tmp_path, ".alysis_skills", "broken")
 
     session = create_session(
         cfg=AppConfig(model="test-model", web_search_mode="off"),
@@ -1031,7 +1031,7 @@ def test_create_session_skips_invalid_utf8_skills_without_failing_startup(tmp_pa
 def test_validate_skill_bundle_warns_on_oversized_entrypoint(tmp_path: Path) -> None:
     bundle = _write_skill(
         tmp_path,
-        ".sylliptor_skills",
+        ".alysis_skills",
         "oversized",
         name="oversized",
         description="large skill",

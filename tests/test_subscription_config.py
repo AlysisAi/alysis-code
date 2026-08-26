@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.cli_impl.config_menu import ConfigMenuState
-from sylliptor_agent_cli.cli_impl.tui.config_flow import ConfigFlow
-from sylliptor_agent_cli.config import (
+from alysis_code.agent_loop import create_session
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.cli_impl.config_menu import ConfigMenuState
+from alysis_code.cli_impl.tui.config_flow import ConfigFlow
+from alysis_code.config import (
     AppConfig,
     ConfigError,
     load_config,
@@ -15,14 +15,14 @@ from sylliptor_agent_cli.config import (
     save_config,
     set_config_value,
 )
-from sylliptor_agent_cli.profiles import (
+from alysis_code.profiles import (
     ProfileSpec,
     add_profile,
     get_active_profile,
     update_active_profile_defaults,
     update_profile,
 )
-from sylliptor_agent_cli.provider_auth import (
+from alysis_code.provider_auth import (
     ProviderAccountStatus,
     ProviderModel,
     ProviderReasoningEffort,
@@ -30,13 +30,6 @@ from sylliptor_agent_cli.provider_auth import (
 
 
 class _CatalogAdapter:
-    provider_id = "openai-codex"
-    protocol = "openai_responses"
-    base_url = "https://chatgpt.com/backend-api/codex"
-
-    def route_credential_scope(self) -> str:
-        return "test-subscription-account"
-
     def account_status(self) -> ProviderAccountStatus:
         return ProviderAccountStatus(connected=True)
 
@@ -89,7 +82,7 @@ def _subscription_cfg() -> AppConfig:
 def test_config_uses_subscription_catalog_for_models_and_effort(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = _CatalogAdapter()
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: adapter,
     )
     state = ConfigMenuState.from_cfg(_subscription_cfg())
@@ -121,7 +114,7 @@ def test_config_uses_subscription_catalog_for_models_and_effort(monkeypatch) -> 
         (
             "https://api.deepseek.com",
             "deepseek-v4-pro",
-            ("off", "high", "max", "auto"),
+            ("off", "low", "high", "max", "auto"),
         ),
         (
             "https://integrate.api.nvidia.com/v1",
@@ -148,7 +141,7 @@ def test_api_profile_reasoning_picker_uses_documented_model_contract(
 def test_tui_config_persists_subscription_model_and_supported_effort(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     adapter = _CatalogAdapter()
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: adapter,
     )
     cfg = _subscription_cfg()
@@ -179,16 +172,9 @@ def test_native_session_accepts_subscription_profile_without_api_key(
     monkeypatch,
     tmp_path,
 ) -> None:  # type: ignore[no-untyped-def]
-    def adapter_factory(_provider_id, **_kwargs):  # type: ignore[no-untyped-def]
-        return _CatalogAdapter()
-
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
-        adapter_factory,
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.llm.factory.create_provider_auth",
-        adapter_factory,
+        "alysis_code.provider_auth.create_provider_auth",
+        lambda _provider_id: _CatalogAdapter(),
     )
     cfg = _subscription_cfg()
     update_profile(
@@ -224,7 +210,7 @@ def test_config_preserves_saved_subscription_effort_when_catalog_is_offline(
             raise RuntimeError("offline")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: _OfflineAdapter(),
     )
     cfg = _subscription_cfg()
@@ -250,7 +236,7 @@ def test_offline_subscription_selection_remains_pending(
             raise RuntimeError("offline")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: _OfflineAdapter(),
     )
     cfg = _subscription_cfg()
@@ -275,7 +261,7 @@ def test_subscription_model_change_requires_paired_effort_confirmation(
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: _CatalogAdapter(),
     )
     cfg = _subscription_cfg()
@@ -304,7 +290,7 @@ def test_pending_confirmation_survives_profile_switch_and_subscription_reselecti
     adapter.base_url = "https://chatgpt.com/backend-api/codex"  # type: ignore[attr-defined]
     adapter.display_name = "ChatGPT Codex subscription"  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: adapter,
     )
     cfg = _subscription_cfg()
@@ -370,8 +356,8 @@ def test_subscription_effort_ignores_environment_overrides(
         reasoning_effort="low",
         allow_subscription_selection=True,
     )
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "ultra")
-    monkeypatch.setenv("SYLLIPTOR_LLM_ENABLE_THINKING", "false")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "ultra")
+    monkeypatch.setenv("ALYSIS_LLM_ENABLE_THINKING", "false")
 
     assert resolve_llm_reasoning_effort(cfg) == "low"
     assert resolve_llm_enable_thinking(cfg) is True
@@ -381,7 +367,7 @@ def test_subscription_model_and_effort_round_trip_on_disk(
     monkeypatch,
     tmp_path,
 ) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path))
     cfg = _subscription_cfg()
     state = ConfigMenuState.from_cfg(cfg)
     state.set_field("model", "gpt-codex-b")

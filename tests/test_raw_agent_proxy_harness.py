@@ -24,12 +24,12 @@ def test_raw_agent_proxy_command_enables_benchmark_profile(tmp_path: Path) -> No
     command = _raw_agent_command(
         scenario=scenario,
         repo_path=tmp_path,
-        cli_command=("sylliptor",),
+        cli_command=("alysis",),
         base_url="http://127.0.0.1:9999/v1",
         use_mock_provider=True,
     )
 
-    assert command[:2] == ("sylliptor", "run")
+    assert command[:2] == ("alysis", "run")
     assert "--benchmark" in command
     assert ("--path", os.fspath(tmp_path)) == (
         command[command.index("--path")],
@@ -56,7 +56,7 @@ def test_raw_agent_proxy_real_provider_command_uses_caller_config(tmp_path: Path
     command = _raw_agent_command(
         scenario=scenario,
         repo_path=tmp_path,
-        cli_command=("sylliptor",),
+        cli_command=("alysis",),
         base_url=None,
         use_mock_provider=False,
     )
@@ -70,10 +70,10 @@ def test_raw_agent_proxy_real_provider_command_uses_caller_config(tmp_path: Path
 def test_raw_agent_proxy_env_sets_isolated_raw_profile(tmp_path: Path) -> None:
     env = _raw_agent_env(config_dir=tmp_path / "cfg", data_dir=tmp_path / "data")
 
-    assert env["SYLLIPTOR_CONFIG_DIR"] == os.fspath(tmp_path / "cfg")
-    assert env["SYLLIPTOR_DATA_DIR"] == os.fspath(tmp_path / "data")
-    assert env["SYLLIPTOR_RUN_PROFILE"] == "raw-benchmark"
-    assert env["SYLLIPTOR_API_KEY"] == "mock-key"
+    assert env["ALYSIS_CONFIG_DIR"] == os.fspath(tmp_path / "cfg")
+    assert env["ALYSIS_DATA_DIR"] == os.fspath(tmp_path / "data")
+    assert env["ALYSIS_RUN_PROFILE"] == "raw-benchmark"
+    assert env["ALYSIS_API_KEY"] == "mock-key"
     assert "PYTHONPATH" in env
 
 
@@ -84,9 +84,9 @@ def test_raw_agent_proxy_real_provider_env_preserves_credentials(tmp_path: Path)
         use_mock_provider=False,
     )
 
-    assert env["SYLLIPTOR_RUN_PROFILE"] == "raw-benchmark"
-    assert "SYLLIPTOR_CONFIG_DIR" not in env
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert env["ALYSIS_RUN_PROFILE"] == "raw-benchmark"
+    assert "ALYSIS_CONFIG_DIR" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
 
 
@@ -111,7 +111,7 @@ def test_raw_agent_proxy_metrics_extract_controller_signals() -> None:
         events=events,
         exit_code=1,
         timed_out=False,
-        command=("sylliptor", "run", "--benchmark", "task"),
+        command=("alysis", "run", "--benchmark", "task"),
     )
 
     assert metrics["benchmark_profile"] is True

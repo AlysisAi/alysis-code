@@ -13,11 +13,11 @@ from click import Abort
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.cli_impl import setup_wizard as setup_wizard_mod
-from sylliptor_agent_cli.config import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.cli_impl import setup_wizard as setup_wizard_mod
+from alysis_code.config import (
     AppConfig,
     config_path,
     credentials_path,
@@ -28,10 +28,10 @@ from sylliptor_agent_cli.config import (
     save_persisted_api_key,
     save_persisted_profile_key,
 )
-from sylliptor_agent_cli.profile_presets import ProfilePreset, make_profile_from_preset
-from sylliptor_agent_cli.profiles import ProfileSpec
-from sylliptor_agent_cli.provider_auth import ProviderAccountStatus, ProviderModel
-from sylliptor_agent_cli.sandbox_doctor import (
+from alysis_code.profile_presets import ProfilePreset, make_profile_from_preset
+from alysis_code.profiles import ProfileSpec
+from alysis_code.provider_auth import ProviderAccountStatus, ProviderModel
+from alysis_code.sandbox_doctor import (
     BubblewrapInstallPlan,
     BubblewrapInstallResult,
     SandboxCheck,
@@ -91,7 +91,7 @@ def _patch_subscription_adapter(
     adapter: FakeSubscriptionAdapter,
 ) -> None:
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_auth.create_provider_auth",
+        "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: adapter,
     )
 
@@ -145,9 +145,9 @@ def _patch_console(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
 
 
 def _config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
@@ -165,15 +165,15 @@ def _sandbox_diagnostic(
         configured_mode="strict",
         configured_backend="auto",
         selected_backend="docker",
-        docker_image="ghcr.io/alysisai/sylliptor-sandbox:dev",
-        server_image="ghcr.io/alysisai/sylliptor-sandbox:server",
+        docker_image="ghcr.io/alysisai/alysis-sandbox:dev",
+        server_image="ghcr.io/alysisai/alysis-sandbox:server",
         checks=(
             SandboxCheck("Docker CLI", "ok", "/usr/bin/docker"),
             SandboxCheck("Docker daemon", "ok", "running"),
             SandboxCheck(
                 "sandbox image",
                 "ok" if ready else "missing",
-                "ghcr.io/alysisai/sylliptor-sandbox:dev",
+                "ghcr.io/alysisai/alysis-sandbox:dev",
             ),
         ),
         next_steps=next_steps,
@@ -240,7 +240,7 @@ def test_setup_wizard_full_flow_persists_everything(monkeypatch, tmp_path: Path)
     assert "OpenAI Codex" not in str(picker.connection_calls[0]["rows"])
     assert "Connection method selected: Use an API key" in output
     assert "Execution Backend" not in output
-    assert "Sylliptor native" not in output
+    assert "Alysis Code native" not in output
 
 
 def test_subscription_picker_back_returns_to_connection_methods(monkeypatch) -> None:
@@ -330,10 +330,10 @@ def test_setup_wizard_subscription_uses_native_profile_and_preserves_api_credent
     assert "Subscription:" in rendered
     assert "ChatGPT Codex subscription" in rendered
     assert "immediate external side effect" in rendered
-    assert "sylliptor auth login openai-codex" in rendered
+    assert "alysis auth login openai-codex" in rendered
     assert "not connected" in rendered
     assert "Execution Backend" not in rendered
-    assert "Sylliptor native" not in rendered
+    assert "Alysis Code native" not in rendered
     assert "(delegated)" not in rendered
 
 
@@ -481,7 +481,7 @@ def test_setup_wizard_subscription_login_failure_is_non_fatal(
 
     rendered = output.getvalue()
     assert "not connected (browser login closed)" in rendered
-    assert "sylliptor auth login openai-codex" in rendered
+    assert "alysis auth login openai-codex" in rendered
     assert load_config().execution.backend == "native"
     assert load_config().execution.runtime is None
 
@@ -512,7 +512,7 @@ def test_subscription_login_interrupt_reports_that_settings_are_already_saved(
     rendered = output.getvalue()
     assert "model access settings are already saved" in rendered
     assert "provider sign-in was skipped" in rendered
-    assert "sylliptor auth login openai-codex" in rendered
+    assert "alysis auth login openai-codex" in rendered
     assert load_config().execution.backend == "native"
     assert load_config().execution.runtime is None
 
@@ -751,11 +751,11 @@ def test_setup_profile_picker_separates_compatibility_and_native_presets() -> No
     advanced_keys = [preset.key for preset in advanced]
 
     # Native first-party providers lead the primary picker; every other hosted
-    # provider follows in registration order. The account-gated Sylliptor
-    # preset stays behind the advanced picker.
+    # provider follows in registration order. The account-gated hosted MiMo
+    # preset stays behind the advanced picker while no campaign is active.
     assert keys[:3] == ["openai-responses", "anthropic", "gemini"]
-    assert "sylliptor" not in keys
-    assert "xiaomi-mimo" not in keys
+    assert "alysis" not in keys
+    assert "xiaomi-mimo" in keys
     assert "deepseek" in keys
     assert "openrouter" in keys
     assert all(preset.protocol != "gemini_interactions" for preset in presets)
@@ -763,7 +763,7 @@ def test_setup_profile_picker_separates_compatibility_and_native_presets() -> No
     # Only compatibility duplicates, local endpoints, custom URLs, legacy
     # aliases, and the account-gated hosted preset are held back for the
     # advanced picker.
-    assert "sylliptor" in advanced_keys
+    assert "alysis" in advanced_keys
     assert "deepseek" not in advanced_keys
     assert "anthropic-compat" not in keys
     assert "gemini-compat" not in keys
@@ -1518,7 +1518,7 @@ def test_setup_wizard_offers_pull_when_image_missing(monkeypatch, tmp_path: Path
         return _sandbox_diagnostic(
             ready=False,
             can_pull=True,
-            next_steps=("Run `sylliptor sandbox pull`.",),
+            next_steps=("Run `alysis sandbox pull`.",),
         )
 
     pull = Mock(return_value=SandboxPullResult(ok=True, results=()))
@@ -1548,7 +1548,7 @@ def test_setup_wizard_pull_failure_logs_raw_output_without_printing_it(
         lambda _cfg, *, include_smoke=False: _sandbox_diagnostic(
             ready=False,
             can_pull=True,
-            next_steps=("Run `sylliptor sandbox pull`.",),
+            next_steps=("Run `alysis sandbox pull`.",),
         ),
     )
     monkeypatch.setattr(
@@ -1560,7 +1560,7 @@ def test_setup_wizard_pull_failure_logs_raw_output_without_printing_it(
                 error="docker pull failed",
                 results=(
                     SandboxImagePullResult(
-                        image="ghcr.io/alysisai/sylliptor-sandbox:dev",
+                        image="ghcr.io/alysisai/alysis-sandbox:dev",
                         ok=False,
                         output="RAW SUBPROCESS OUTPUT",
                     ),
@@ -1651,7 +1651,7 @@ def test_setup_wizard_escape_at_welcome_decline_reshows_welcome(
     monkeypatch.setattr(setup_wizard_mod, "_esc_aware_text_input", text_input)
 
     assert setup_wizard_mod.run_setup_wizard() is True
-    assert output.getvalue().count("Welcome to Sylliptor") == 2
+    assert output.getvalue().count("Welcome to Alysis Code") == 2
 
 
 def test_setup_wizard_escape_at_profile_returns_to_execution(monkeypatch, tmp_path: Path) -> None:
@@ -1663,7 +1663,7 @@ def test_setup_wizard_escape_at_profile_returns_to_execution(monkeypatch, tmp_pa
     monkeypatch.setattr(setup_wizard_mod, "_esc_aware_text_input", text_input)
 
     assert setup_wizard_mod.run_setup_wizard() is True
-    assert output.getvalue().count("Welcome to Sylliptor") == 1
+    assert output.getvalue().count("Welcome to Alysis Code") == 1
     assert [call["title"] for call in picker.calls] == [
         "Provider Profile",
         "Provider Profile",
@@ -1858,7 +1858,7 @@ def test_main_callback_triggers_wizard_on_first_run(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(cli_mod, "_run_default_chat_action", fake_chat)
 
     result = CliRunner().invoke(
-        sylliptor_app, [], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, [], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 0
@@ -1896,7 +1896,7 @@ def test_main_callback_skips_wizard_for_onboarded_partial_config(
     monkeypatch.setattr(cli_mod, "_run_default_chat_action", fake_chat)
 
     result = CliRunner().invoke(
-        sylliptor_app, [], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, [], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 0
@@ -1931,7 +1931,7 @@ def test_main_callback_migrates_delegated_subscription_and_opens_chat_shell(
     monkeypatch.setattr(cli_mod, "_run_default_chat_action", lambda: calls.append("chat"))
 
     result = CliRunner().invoke(
-        sylliptor_app, [], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, [], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 0
@@ -1967,7 +1967,7 @@ def test_main_callback_runs_wizard_when_config_lacks_onboarding(
     monkeypatch.setattr(cli_mod, "_run_default_chat_action", fake_chat)
 
     result = CliRunner().invoke(
-        sylliptor_app, [], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, [], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 0
@@ -1987,7 +1987,7 @@ def test_explicit_chat_with_no_model_starts_first_run_setup(monkeypatch, tmp_pat
     monkeypatch.setattr(cli_mod, "_maybe_run_first_run_setup_wizard", fake_setup)
 
     result = CliRunner().invoke(
-        sylliptor_app, ["chat"], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, ["chat"], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 0
@@ -2004,18 +2004,18 @@ def test_explicit_chat_with_no_model_noninteractive_prints_onboarding_guidance(
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: True)
 
     result = CliRunner().invoke(
-        sylliptor_app, ["chat"], env={"SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"]}
+        alysis_app, ["chat"], env={"ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"]}
     )
 
     assert result.exit_code == 2
     assert "No model is configured yet." in result.output
-    assert "sylliptor setup" in result.output
-    assert "sylliptor login" in result.output
+    assert "alysis setup" in result.output
+    assert "alysis login" in result.output
     assert "Config error" not in result.output
 
 
 def test_is_onboarded_marker_and_back_compat(monkeypatch, tmp_path: Path) -> None:
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
     _config_env(tmp_path, monkeypatch)
     # No config at all → not onboarded.
@@ -2054,7 +2054,7 @@ def test_setup_typer_command_runs_wizard(monkeypatch) -> None:
         ),
     )
 
-    result = CliRunner().invoke(sylliptor_app, ["setup"])
+    result = CliRunner().invoke(alysis_app, ["setup"])
 
     assert result.exit_code == 0, (result.output, result.exception)
     assert called == [True]
@@ -2068,7 +2068,7 @@ def test_setup_command_launches_chat_after_interactive_tui(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "_maybe_run_startup_config_menu", lambda: None)
     monkeypatch.setattr(cli_mod, "_run_chat_after_setup", lambda: chat_calls.append(True))
 
-    result = CliRunner().invoke(sylliptor_app, ["setup"])
+    result = CliRunner().invoke(alysis_app, ["setup"])
 
     assert result.exit_code == 0, (result.output, result.exception)
     assert chat_calls == [True]  # flows straight into chat
@@ -2086,7 +2086,7 @@ def test_setup_command_delegated_tui_finishes_without_launching_native_chat(monk
     monkeypatch.setattr(cli_mod, "load_config", lambda: delegated)
     monkeypatch.setattr(cli_mod, "_run_chat_after_setup", lambda: chat_calls.append(True))
 
-    result = CliRunner().invoke(sylliptor_app, ["setup"])
+    result = CliRunner().invoke(alysis_app, ["setup"])
 
     assert result.exit_code == 0
     assert chat_calls == []
@@ -2097,7 +2097,7 @@ def test_setup_command_tui_cancel_does_not_launch_chat(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "_try_setup_tui", lambda **_k: False)  # cancelled
     monkeypatch.setattr(cli_mod, "_run_chat_after_setup", lambda: chat_calls.append(True))
 
-    result = CliRunner().invoke(sylliptor_app, ["setup"])
+    result = CliRunner().invoke(alysis_app, ["setup"])
 
     assert result.exit_code == 0
     assert chat_calls == []
@@ -2106,7 +2106,7 @@ def test_setup_command_tui_cancel_does_not_launch_chat(monkeypatch) -> None:
 def test_run_chat_after_setup_uses_configured_workspace(monkeypatch, tmp_path) -> None:
     """After setup, chat launches in the saved workspace with broad consent so the
     guard does not re-ask about the folder the user just chose."""
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
     ws = tmp_path / "myproject"
     ws.mkdir()
@@ -2131,7 +2131,7 @@ def test_run_chat_after_setup_uses_configured_workspace(monkeypatch, tmp_path) -
 def test_run_default_chat_action_forwards_posture_flags(monkeypatch) -> None:
     """A relaunch (e.g. /config → switch project) must preserve the session's
     execution-posture flags instead of silently resetting approval policy/mode/logging."""
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
     captured: dict[str, Any] = {}
     monkeypatch.setattr(cli_mod, "chat", lambda **kw: captured.update(kw))
@@ -2156,7 +2156,7 @@ def test_run_default_chat_action_forwards_posture_flags(monkeypatch) -> None:
 
 def test_run_default_chat_action_defaults_unchanged(monkeypatch) -> None:
     """Plain launches (no forwarded flags) still get the default posture."""
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
     captured: dict[str, Any] = {}
     monkeypatch.setattr(cli_mod, "chat", lambda **kw: captured.update(kw))
@@ -2167,12 +2167,13 @@ def test_run_default_chat_action_defaults_unchanged(monkeypatch) -> None:
     assert captured["mode"] is None
     assert captured["no_log"] is False
     assert captured["verify_cmd"] is None
+    assert captured["apply"] is False
     assert captured["diagnostic_log"] is None
 
 
 def test_run_default_run_action_passes_concrete_typer_defaults(monkeypatch) -> None:
     """Direct Python dispatch must never leak Typer OptionInfo objects into run()."""
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
     captured: dict[str, Any] = {}
     monkeypatch.setattr(cli_mod, "run", lambda **kw: captured.update(kw))
@@ -2180,15 +2181,15 @@ def test_run_default_run_action_passes_concrete_typer_defaults(monkeypatch) -> N
     startup_mod._run_default_run_action("inspect")
 
     assert captured["instruction"] == "inspect"
+    assert captured["apply"] is False
     assert captured["benchmark"] is False
     assert captured["deadline_seconds"] is None
-    assert captured["no_deadline"] is False
     assert captured["require_deadline"] is False
     assert captured["diagnostic_log"] is None
 
 
 def _mimo_login_preset() -> ProfilePreset:
-    from sylliptor_agent_cli.sylliptor_cloud import PROFILE_KEY
+    from alysis_code.alysis_cloud import PROFILE_KEY
 
     # While no hosted campaign is running the MiMo login preset stays behind
     # the advanced picker — never on the primary provider picker.
@@ -2204,7 +2205,7 @@ def _profile_step_for(preset: ProfilePreset) -> Any:
 
 
 def test_setup_offers_login_for_mimo_preset(monkeypatch) -> None:
-    import sylliptor_agent_cli.account_login as account_login_mod
+    import alysis_code.account_login as account_login_mod
 
     console = Console(file=io.StringIO())
     monkeypatch.setattr(setup_wizard_mod, "_prompt_yes_no", lambda *a, **k: True)
@@ -2216,7 +2217,7 @@ def test_setup_offers_login_for_mimo_preset(monkeypatch) -> None:
 
     monkeypatch.setattr(account_login_mod, "login", fake_login)
 
-    setup_wizard_mod._maybe_offer_sylliptor_login(
+    setup_wizard_mod._maybe_offer_alysis_login(
         console, profile_result=_profile_step_for(_mimo_login_preset()), cfg=Mock()
     )
 
@@ -2224,7 +2225,7 @@ def test_setup_offers_login_for_mimo_preset(monkeypatch) -> None:
 
 
 def test_setup_skips_login_offer_for_other_presets(monkeypatch) -> None:
-    import sylliptor_agent_cli.account_login as account_login_mod
+    import alysis_code.account_login as account_login_mod
 
     console = Console(file=io.StringIO())
     other = next(
@@ -2236,7 +2237,7 @@ def test_setup_skips_login_offer_for_other_presets(monkeypatch) -> None:
     monkeypatch.setattr(setup_wizard_mod, "_prompt_yes_no", lambda *a, **k: True)
     monkeypatch.setattr(account_login_mod, "login", lambda *a, **k: calls.append(True))
 
-    setup_wizard_mod._maybe_offer_sylliptor_login(
+    setup_wizard_mod._maybe_offer_alysis_login(
         console, profile_result=_profile_step_for(other), cfg=Mock()
     )
 
@@ -2244,14 +2245,14 @@ def test_setup_skips_login_offer_for_other_presets(monkeypatch) -> None:
 
 
 def test_setup_login_offer_declined_does_not_log_in(monkeypatch) -> None:
-    import sylliptor_agent_cli.account_login as account_login_mod
+    import alysis_code.account_login as account_login_mod
 
     console = Console(file=io.StringIO())
     calls: list[bool] = []
     monkeypatch.setattr(setup_wizard_mod, "_prompt_yes_no", lambda *a, **k: False)
     monkeypatch.setattr(account_login_mod, "login", lambda *a, **k: calls.append(True))
 
-    setup_wizard_mod._maybe_offer_sylliptor_login(
+    setup_wizard_mod._maybe_offer_alysis_login(
         console, profile_result=_profile_step_for(_mimo_login_preset()), cfg=Mock()
     )
 

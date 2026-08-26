@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import _build_user_message, create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
+from alysis_code.agent_loop import _build_user_message, create_session
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.llm.openai_compat import LLMResponse
 
 
 def test_build_user_message_with_image_hides_base64_in_logs(tmp_path: Path) -> None:
@@ -84,7 +84,9 @@ def test_run_turn_with_image_adds_visual_input_hint(tmp_path: Path) -> None:
     assert "visual input" in system_text
 
     user_messages = [msg for msg in request_messages if msg.get("role") == "user"]
-    image_message = user_messages[-1]
+    image_message = next(
+        msg for msg in reversed(user_messages) if isinstance(msg.get("content"), list)
+    )
     content = image_message["content"]
     assert isinstance(content, list)
     assert content[0]["type"] == "image_url"

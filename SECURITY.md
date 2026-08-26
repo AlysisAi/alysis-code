@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Sylliptor tracks security support by release line and repository branch. Security
+Alysis Code tracks security support by release line and repository branch. Security
 fixes for the current 0.9 release line are handled on the `main` branch and shipped
 in the next patch release.
 

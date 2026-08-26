@@ -11,29 +11,43 @@ build/
 .venv/
 venv/
 .tmp_ci*/
-.pytest-*/
 
 # Tooling
 .dev/
 .pytest_cache/
+.pytest-*/
 .ruff_cache/
 .mypy_cache/
 .coverage
 htmlcov/
 node_modules/
+.alysis/
+# legacy (pre-rebrand) runtime dirs: still produced by older installs
 .sylliptor/
 .sylliptor_data_demo/
-.sylliptor_data_demo_verify/
 .sylliptor_images/
 sylliptor-feedback/
+.alysis_data_demo/
+.alysis_data_demo_verify/
+.alysis_images/
+alysis-feedback/
 reports/
 qa_reports/
 .qa-results/
 .workflow-release-dist/
 benchmark_results/
 benchmarks/terminal_bench/artifacts/
+
+# VS Code extension generated artifacts
+extensions/*/.vscode-test/
+extensions/*/node_modules/
+extensions/*/out/
+extensions/*/*.vsix
+
+# Local review/context bundles
 *_context_review.zip
 owner-scoping.patch
+alysis_ecs.tar.gz
 sylliptor_ecs.tar.gz
 
 # Claude Code local config

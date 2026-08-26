@@ -3,18 +3,18 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from sylliptor_agent_cli import agent_loop
-from sylliptor_agent_cli.custom_tools import (
+from alysis_code import agent_loop
+from alysis_code.custom_tools import (
     CustomToolCapabilities,
     CustomToolDiscoveryResult,
     CustomToolSessionState,
     CustomToolSpec,
 )
-from sylliptor_agent_cli.custom_tools.session import CustomToolCatalogEntry
-from sylliptor_agent_cli.custom_tools.trust import ProjectToolTrustState
-from sylliptor_agent_cli.extensions.activation import ActivationDecision
-from sylliptor_agent_cli.mcp.models import ResolvedMcpConfig, ResolvedMcpServer
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.custom_tools.session import CustomToolCatalogEntry
+from alysis_code.custom_tools.trust import ProjectToolTrustState
+from alysis_code.extensions.activation import ActivationDecision
+from alysis_code.mcp.models import ResolvedMcpConfig, ResolvedMcpServer
+from alysis_code.runtime_kind import RuntimeKind
 
 
 def _decision(*, enabled: tuple[str, ...]) -> ActivationDecision:
@@ -124,7 +124,7 @@ def test_mcp_server_from_disabled_plugin_is_filtered() -> None:
     config = ResolvedMcpConfig(
         workspace_root=Path("/tmp/repo"),
         user_config_path=Path("/tmp/mcp.json"),
-        project_config_path=Path("/tmp/repo/.sylliptor/mcp.json"),
+        project_config_path=Path("/tmp/repo/.alysis/mcp.json"),
         user_config_present=True,
         project_config_present=False,
         servers=(

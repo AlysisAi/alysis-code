@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.cli_impl.tui.app import _build_tui_style
+from alysis_code.cli_impl.tui.app import _build_tui_style
 
 
 def _rules(theme: str) -> dict[str, str]:

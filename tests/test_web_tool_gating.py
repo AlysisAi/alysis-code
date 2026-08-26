@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import ToolDef, build_tools
-from sylliptor_agent_cli.config import AppConfig, resolve_web_tools_enabled
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.tools.web import WebFetchError, web_fetch
-from sylliptor_agent_cli.tools.web_search import WebSearchError, web_search
+from alysis_code.agent_loop import ToolDef, build_tools
+from alysis_code.config import AppConfig, resolve_web_tools_enabled
+from alysis_code.session_store import SessionStore
+from alysis_code.tools.web import WebFetchError, web_fetch
+from alysis_code.tools.web_search import WebSearchError, web_search
 
-_ENV_VAR = "SYLLIPTOR_WEB_TOOLS"
+_ENV_VAR = "ALYSIS_WEB_TOOLS"
 
 
 @pytest.fixture(autouse=True)

@@ -13,16 +13,16 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import agent_loop as agent_loop_mod
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import forge as forge_mod
-from sylliptor_agent_cli import interactive_plan_mode as interactive_plan_mode_mod
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import chat as chat_impl_mod
-from sylliptor_agent_cli.cli_impl.chat import commands as chat_commands_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import (
+from alysis_code import agent_loop as agent_loop_mod
+from alysis_code import cli as cli_mod
+from alysis_code import forge as forge_mod
+from alysis_code import interactive_plan_mode as interactive_plan_mode_mod
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import chat as chat_impl_mod
+from alysis_code.cli_impl.chat import commands as chat_commands_mod
+from alysis_code.config import AppConfig
+from alysis_code.forge import (
     add_task,
     create_plan_run,
     load_current_run_paths,
@@ -30,18 +30,18 @@ from sylliptor_agent_cli.forge import (
     save_plan,
     write_current_run_pointer,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.plan_mode import instruction_with_approved_plan
-from sylliptor_agent_cli.run_lock import write_run_mutation_lock_metadata
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
-from sylliptor_agent_cli.swarm_trace import build_swarm_trace_event
-from sylliptor_agent_cli.usage_tracker import UsageSummary
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.plan_mode import instruction_with_approved_plan
+from alysis_code.run_lock import write_run_mutation_lock_metadata
+from alysis_code.session_store import SessionStore, read_session_events
+from alysis_code.swarm_trace import build_swarm_trace_event
+from alysis_code.usage_tracker import UsageSummary
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path),
     }
 
 
@@ -61,9 +61,9 @@ def _forge_run_paths(
     root: Path | None = None,
 ) -> SimpleNamespace:
     workspace_root = (root or tmp_path).resolve()
-    runtime_dir = tmp_path / ".sylliptor"
+    runtime_dir = tmp_path / ".alysis"
     runs_dir = runtime_dir / "runs"
-    run_dir = tmp_path / ".sylliptor" / "runs" / run_id
+    run_dir = tmp_path / ".alysis" / "runs" / run_id
     plan_dir = run_dir / "plan"
     notes_dir = plan_dir / "notes"
     context_dir = plan_dir / "context"
@@ -157,7 +157,7 @@ def _install_dummy_forge_entry(monkeypatch, tmp_path: Path) -> None:
         mode: str | None = None,
     ) -> bool:
         _ = root, console
-        plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+        plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
         notes_dir = plan_dir / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
         forge_state.ui_mode = "forge"
@@ -240,7 +240,7 @@ def test_chat_plan_command_on_off_status(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan status\n/plan on\n/plan status\n/plan off\n/plan status\nhello\nexit\n",
         env=_env(tmp_path),
@@ -276,7 +276,7 @@ def test_back_outside_forge_is_harmless(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/back\nexit\n",
         env=_env(tmp_path),
@@ -333,7 +333,7 @@ def test_plan_mode_commands_enter_persistent_readonly_mode(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"{command}\n/plan status\n/plan off\nhello\nexit\n",
         env=_env(tmp_path),
@@ -570,7 +570,7 @@ def test_plan_mode_on_rebuilds_to_narrow_readonly_tool_surface(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\nhello\nexit\n",
         env=_env(tmp_path),
@@ -685,7 +685,7 @@ def test_plan_mode_on_and_off_hide_then_restore_mcp_tool_surface(
     monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", wrapped_rebuild)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan mode\n/plan off\nexit\n",
         env=_env(tmp_path),
@@ -726,7 +726,7 @@ def test_plan_command_when_plan_mode_is_on_shows_exit_guidance_interactively(
             return None
 
     class _FakePromptSession:
-        _sylliptor_erase_when_done = True
+        _alysis_erase_when_done = True
 
         def __init__(self) -> None:
             self._responses = iter(["/plan mode", "/plan", "exit"])
@@ -748,7 +748,7 @@ def test_plan_command_when_plan_mode_is_on_shows_exit_guidance_interactively(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="",
         env=_env(tmp_path),
@@ -800,7 +800,7 @@ def test_plan_command_when_plan_mode_is_on_without_escape_support_shows_fallback
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan mode\n/plan\nexit\n",
         env=_env(tmp_path),
@@ -1098,7 +1098,7 @@ def test_chat_forge_plain_entry_still_resumes_session_local_run_within_same_work
     )
     assert workspace_context["workspace_root"] == os.fspath(repo.resolve())
     assert workspace_context["focus_relpath"] == "packages/b"
-    pointer = json.loads((repo / ".sylliptor" / "current_run.json").read_text(encoding="utf-8"))
+    pointer = json.loads((repo / ".alysis" / "current_run.json").read_text(encoding="utf-8"))
     assert pointer["run_id"] == original_run_id
     assert pointer["focus_path"] == os.fspath(focus_b.resolve())
     assert pointer["focus_relpath"] == "packages/b"
@@ -1133,7 +1133,7 @@ def test_chat_forge_same_workspace_reentry_does_not_steal_pointer_from_different
 
     other_paths = create_plan_run(focus_a)
     write_current_run_pointer(other_paths)
-    original_pointer = json.loads((repo / ".sylliptor" / "current_run.json").read_text("utf-8"))
+    original_pointer = json.loads((repo / ".alysis" / "current_run.json").read_text("utf-8"))
 
     back_result = chat_impl_mod._handle_forge_chat_command_impl(
         cli_mod,
@@ -1153,7 +1153,7 @@ def test_chat_forge_same_workspace_reentry_does_not_steal_pointer_from_different
     assert forge_state.paths.run_id == session_run_id
     assert forge_state.paths.focus_path == focus_b.resolve()
 
-    pointer = json.loads((repo / ".sylliptor" / "current_run.json").read_text(encoding="utf-8"))
+    pointer = json.loads((repo / ".alysis" / "current_run.json").read_text(encoding="utf-8"))
     assert pointer["run_id"] == other_paths.run_id
     assert pointer["focus_path"] == original_pointer["focus_path"]
     assert pointer["focus_relpath"] == original_pointer["focus_relpath"]
@@ -1267,7 +1267,7 @@ def test_chat_forge_tui_entry_defaults_plan_assistant_on(
     session = SimpleNamespace(
         mode="review",
         stream=False,
-        _sylliptor_tui_interactive=True,
+        _alysis_tui_interactive=True,
         client=SimpleNamespace(model="test-model", temperature=1.0),
         cfg=AppConfig(model="test-model", default_mode="review"),
     )
@@ -1295,7 +1295,7 @@ def test_chat_forge_tui_entry_defaults_plan_assistant_on(
 
 
 def test_parse_forge_enter_command_planner_flags() -> None:
-    from sylliptor_agent_cli.cli_impl.commands.chat_state import (
+    from alysis_code.cli_impl.commands.chat_state import (
         _parse_forge_enter_command,
     )
 
@@ -1334,7 +1334,7 @@ def test_chat_forge_planner_flag_overrides_tui_default(
         session = SimpleNamespace(
             mode="review",
             stream=False,
-            _sylliptor_tui_interactive=True,
+            _alysis_tui_interactive=True,
             client=SimpleNamespace(model="test-model", temperature=1.0),
             cfg=AppConfig(model="test-model", default_mode="review"),
         )
@@ -1495,7 +1495,7 @@ def test_plan_mode_approve_runs_single_turn(tmp_path: Path, monkeypatch) -> None
             assert kwargs.get("stream") is False
             assert kwargs.get("on_text_delta") is None
             return SimpleNamespace(
-                content="1. Update src/sylliptor_agent_cli/cli.py\n2. Run pytest -q",
+                content="1. Update src/alysis_code/cli.py\n2. Run pytest -q",
                 usage=None,
                 response_model=self.model,
                 tool_calls=[],
@@ -1524,7 +1524,7 @@ def test_plan_mode_approve_runs_single_turn(tmp_path: Path, monkeypatch) -> None
         lambda **kwargs: _DummySession(surface=kwargs["surface"]),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan implement feature\n1\nexit\n",
         env=_env(tmp_path),
@@ -1535,7 +1535,7 @@ def test_plan_mode_approve_runs_single_turn(tmp_path: Path, monkeypatch) -> None
     assert "implement feature" in result.output
     assert "Request:" not in result.output
     assert "Plan (draft)  2 steps" in result.output
-    assert "1. Update src/sylliptor_agent_cli/cli.py" in result.output
+    assert "1. Update src/alysis_code/cli.py" in result.output
     assert "2. Run pytest -q" in result.output
     assert "Applied approved plan." in result.output
     assert "Plan approved. Executing..." in result.output
@@ -1543,7 +1543,7 @@ def test_plan_mode_approve_runs_single_turn(tmp_path: Path, monkeypatch) -> None
     run_instruction = captured["run_turn_calls"][0][0]
     assert "implement feature" in run_instruction
     assert "Approved plan:" in run_instruction
-    assert "Update src/sylliptor_agent_cli/cli.py" in run_instruction
+    assert "Update src/alysis_code/cli.py" in run_instruction
 
 
 def test_render_plan_draft_omits_step_count_for_free_form_text() -> None:
@@ -1670,7 +1670,7 @@ def test_plan_mode_propose_changes_regenerates_plan(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft fix bug\n2\nplease include regression tests\n1\nexit\n",
         env=_env(tmp_path),
@@ -1773,7 +1773,7 @@ def test_plan_mode_approval_loop_finishes_surface_activity_before_action_prompt(
     assert result is None
 
 
-def test_plan_mode_approval_loop_can_use_tui_action_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_plan_mode_approval_loop_can_use_host_action_prompt(tmp_path: Path, monkeypatch) -> None:
     buffer = io.StringIO()
     console = Console(file=buffer, force_terminal=False, width=120)
     captured: dict[str, Any] = {}
@@ -1852,7 +1852,7 @@ def test_plan_mode_discard_exits_without_execution(tmp_path: Path, monkeypatch) 
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft refactor this\n3\nexit\n",
         env=_env(tmp_path),
@@ -1867,7 +1867,7 @@ def test_plan_command_in_forge_mode_uses_forge_plan_handler(tmp_path: Path, monk
     runner = CliRunner()
     _install_dummy_forge_entry(monkeypatch, tmp_path)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/plan on\n/back\nexit\n",
         env=_env(tmp_path),
@@ -1884,7 +1884,7 @@ def test_plan_command_in_forge_mode_guidance_is_wrap_stable_under_narrow_capture
     _install_dummy_forge_entry(monkeypatch, tmp_path)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/plan status\n/back\nexit\n",
         env=_env(tmp_path),
@@ -1919,7 +1919,7 @@ def test_help_command_in_forge_mode_shows_forge_commands(tmp_path: Path, monkeyp
         mode: str | None = None,
     ) -> bool:
         _ = root, console
-        plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+        plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
         notes_dir = plan_dir / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
         forge_state.ui_mode = "forge"
@@ -1943,7 +1943,7 @@ def test_help_command_in_forge_mode_shows_forge_commands(tmp_path: Path, monkeyp
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/help\n/back\nexit\n",
         env=_env(tmp_path),
@@ -2112,7 +2112,7 @@ def test_forge_plan_markdown_command_is_handled(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/plan markdown\n/back\nexit\n",
         env=_env(tmp_path),
@@ -2124,7 +2124,7 @@ def test_forge_plan_markdown_command_is_handled(tmp_path: Path, monkeypatch) -> 
 def test_forge_plan_markdown_falls_back_to_preview_when_pager_unavailable(
     tmp_path: Path, monkeypatch
 ) -> None:
-    plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+    plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
     plan_dir.mkdir(parents=True, exist_ok=True)
     paths = SimpleNamespace(
         plan_json_path=plan_dir / "plan.json",
@@ -2165,7 +2165,7 @@ def test_forge_plan_markdown_falls_back_to_preview_when_pager_unavailable(
 
 
 def test_forge_plan_markdown_shows_quit_hint_inside_pager(tmp_path: Path, monkeypatch) -> None:
-    plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+    plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
     plan_dir.mkdir(parents=True, exist_ok=True)
     paths = SimpleNamespace(
         plan_json_path=plan_dir / "plan.json",
@@ -2265,7 +2265,7 @@ def test_forge_execute_plan_runs_swarm_with_session_wiring(tmp_path: Path, monke
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nBuild src/dashboard.py with login and reporting\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -2355,8 +2355,8 @@ def test_execute_plan_refuses_execution_unready_mutating_task_after_reconciliati
                 "description": "Update implementation code.",
                 "acceptance_criteria": ["Calculator seed behavior is implemented."],
                 "dependencies": [],
-                "estimated_files": [".sylliptor/something.json"],
-                "write_scope": [".sylliptor/something.json"],
+                "estimated_files": [".alysis/something.json"],
+                "write_scope": [".alysis/something.json"],
                 "branch": "",
                 "status": "planned",
                 "attempts": 0,
@@ -2543,7 +2543,7 @@ def test_forge_execute_plan_reports_timeout_when_same_run_stays_locked(
     )
 
     monkeypatch.setattr(forge_mod, "now_iso", lambda: "2035-01-01T00:00:00+00:00")
-    monkeypatch.setenv("SYLLIPTOR_FORGE_LOCK_WAIT_TIMEOUT_S", "0")
+    monkeypatch.setenv("ALYSIS_FORGE_LOCK_WAIT_TIMEOUT_S", "0")
     monkeypatch.setattr(
         cli_mod,
         "run_swarm",
@@ -2749,7 +2749,7 @@ def test_forge_execute_plan_reports_human_summary(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -2862,7 +2862,7 @@ def test_forge_execute_plan_prints_validation_warnings_once_after_enrichment(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", lambda **_kwargs: 0)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -2958,7 +2958,7 @@ def test_forge_execute_plan_swarm_trace_compact(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nBuild src/landing.py landing page\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3059,7 +3059,7 @@ def test_forge_execute_plan_swarm_trace_full(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/trace full\nBuild src/landing.py landing page\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3151,7 +3151,7 @@ def test_forge_execute_plan_swarm_trace_off(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/trace off\nBuild a landing page\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3223,7 +3223,7 @@ def test_forge_planner_uses_session_api_key_and_cfg(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease design the auth flow\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3328,11 +3328,11 @@ def test_forge_planner_recovers_after_transient_request_retry_without_duplicate_
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.plan_assistant.OpenAICompatClient",
+        "alysis_code.plan_assistant.OpenAICompatClient",
         FakePlannerClient,
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease update the plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3421,7 +3421,7 @@ def test_forge_small_talk_routes_through_planner_when_assistant_on(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nhello\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3502,7 +3502,7 @@ def test_forge_greek_small_talk_routes_through_planner_when_assistant_on(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nγεια\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3576,7 +3576,7 @@ def test_forge_assistant_off_sets_empty_goal_from_free_text(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\na one-page hello world website\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3665,7 +3665,7 @@ def test_forge_no_plan_update_without_error_does_not_capture_requirement(
         cli_mod, "_capture_forge_requirement_from_planner_fallback", fake_capture_fallback
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\ntell me a joke\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3756,7 +3756,7 @@ def test_forge_noop_plan_update_does_not_capture_requirement(tmp_path: Path, mon
         cli_mod, "_capture_forge_requirement_from_planner_fallback", fake_capture_fallback
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nImplement robust parser planning\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3865,7 +3865,7 @@ def test_forge_planner_follow_up_keeps_protected_history_immutable(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a login follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -3981,7 +3981,7 @@ def test_forge_planner_follow_up_synthesizes_task_from_protected_update_only(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a slugify follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -4100,7 +4100,7 @@ def test_forge_planner_follow_up_synthesizes_same_file_task_from_protected_updat
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--model",
@@ -4223,7 +4223,7 @@ def test_forge_planner_follow_up_synthesizes_title_only_same_file_task(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--model",
@@ -4340,7 +4340,7 @@ def test_forge_planner_follow_up_synthesizes_title_only_new_path_task(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--model",
@@ -4457,7 +4457,7 @@ def test_forge_planner_follow_up_refuses_weak_generic_title_with_scope(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--model",
@@ -4576,7 +4576,7 @@ def test_forge_planner_follow_up_synthesizes_same_file_task_from_description_del
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a slugify lowercase follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -4686,7 +4686,7 @@ def test_forge_planner_follow_up_refuses_trivial_protected_update_without_new_pa
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a slugify follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -4803,7 +4803,7 @@ def test_forge_planner_follow_up_refuses_punctuation_only_same_file_delta(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a slugify follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -4919,7 +4919,7 @@ def test_forge_planner_follow_up_refuses_formatting_only_same_file_delta(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease add a slugify follow-up task\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5005,7 +5005,7 @@ def test_forge_router_offtopic_result_leaves_plan_unchanged(tmp_path: Path, monk
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nΠώς σε λένε;\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5097,7 +5097,7 @@ def test_forge_clarification_follow_up_accepts_terse_planning_answer(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlan the admin dashboard\nReact + Tailwind\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5189,7 +5189,7 @@ def test_forge_planner_failure_falls_back_to_goal_capture_when_goal_empty(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nImplement robust planner parsing\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5218,7 +5218,7 @@ def test_forge_error_fallback_sets_empty_goal_without_local_small_talk_gate(
         "tasks": [],
         "assets": [],
     }
-    plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+    plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
     notes_dir = plan_dir / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
     paths = SimpleNamespace(
@@ -5253,7 +5253,7 @@ def test_forge_error_fallback_sets_empty_goal_without_local_meta_gate(tmp_path: 
         "tasks": [],
         "assets": [],
     }
-    plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+    plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
     notes_dir = plan_dir / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
     paths = SimpleNamespace(
@@ -5354,7 +5354,7 @@ def test_forge_planner_trace_progress_compact(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\n/trace compact\nPlan API boundary and auth tasks\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5444,7 +5444,7 @@ def test_trace_compact_uses_truthful_planner_error_trace_and_summary(
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\n/trace compact\nPlan API boundary and auth tasks\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5458,7 +5458,7 @@ def test_trace_compact_uses_truthful_planner_error_trace_and_summary(
         for p in captured["progress"]
     )
 
-    plan_dir = tmp_path / ".sylliptor" / "runs" / "wf" / "plan"
+    plan_dir = tmp_path / ".alysis" / "runs" / "wf" / "plan"
     planner_summary = (plan_dir / "notes" / "planner_summary.md").read_text(encoding="utf-8")
     assert "planner error after 1 transient retry: empty_response" in planner_summary
     assert "no plan_update proposed" not in planner_summary
@@ -5540,7 +5540,7 @@ def test_forge_trace_off_disables_planner_trace_and_streaming(tmp_path: Path, mo
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\n/trace off\nPlan migration and tests\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5621,7 +5621,7 @@ def test_forge_execute_plan_enrichment_default_off_in_non_interactive(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", lambda **_kwargs: 0)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nImplement feature X\n/execute plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -5701,7 +5701,7 @@ def test_forge_execute_plan_enrichment_enabled_by_env_calls_planner(
                     {
                         "id": "T01",
                         "acceptance_criteria": ["Feature works with automated tests"],
-                        "estimated_files": ["src/sylliptor_agent_cli/cli.py"],
+                        "estimated_files": ["src/alysis_code/cli.py"],
                     }
                 ]
             },
@@ -5733,9 +5733,9 @@ def test_forge_execute_plan_enrichment_enabled_by_env_calls_planner(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     env = _env(tmp_path)
-    env["SYLLIPTOR_FORGE_ENRICH_PLAN"] = "1"
+    env["ALYSIS_FORGE_ENRICH_PLAN"] = "1"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nImplement feature X\n/execute plan\n/back\nexit\n",
         env=env,
@@ -5832,9 +5832,9 @@ def test_forge_execute_plan_enrichment_preserves_retry_context_on_final_error(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     env = _env(tmp_path)
-    env["SYLLIPTOR_FORGE_ENRICH_PLAN"] = "1"
+    env["ALYSIS_FORGE_ENRICH_PLAN"] = "1"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nImplement feature X\n/execute plan\n/back\nexit\n",
         env=env,
@@ -5975,12 +5975,12 @@ def test_forge_execute_plan_enrichment_keeps_protected_history_immutable(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     env = _env(tmp_path)
-    env["SYLLIPTOR_FORGE_ENRICH_PLAN"] = "1"
+    env["ALYSIS_FORGE_ENRICH_PLAN"] = "1"
     input_text = (
         "/trace full\n" if trace_full else ""
     ) + "/forge\nImplement feature X\n/execute plan\n/back\nexit\n"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=input_text,
         env=env,
@@ -6130,9 +6130,9 @@ def test_forge_execute_plan_enrichment_strips_protected_update_only_follow_up(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_run_planner_turn)
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     env = _env(tmp_path)
-    env["SYLLIPTOR_FORGE_ENRICH_PLAN"] = "1"
+    env["ALYSIS_FORGE_ENRICH_PLAN"] = "1"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\nImplement feature X\n/execute plan\n/back\nexit\n",
         env=env,
@@ -6257,7 +6257,7 @@ def test_plan_mode_llm_error_returns_to_prompt(tmp_path: Path, monkeypatch) -> N
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft implement X\nexit\n",
         env=_env(tmp_path),
@@ -6312,7 +6312,7 @@ def test_plan_mode_streaming_retry_falls_back_to_non_stream(tmp_path: Path, monk
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft implement fallback path\n1\nexit\n",
         env=_env(tmp_path),
@@ -6370,7 +6370,7 @@ def test_plan_mode_empty_feedback_is_rejected(tmp_path: Path, monkeypatch) -> No
         lambda *_args, **_kwargs: "",
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft improve docs\n2\n\n1\nexit\n",
         env=_env(tmp_path),
@@ -6431,7 +6431,7 @@ def test_plan_mode_esc_returns_to_prompt_without_execution(tmp_path: Path, monke
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Prompt.ask not expected")),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft implement feature\nexit\n",
         env=_env(tmp_path),
@@ -6493,7 +6493,7 @@ def test_plan_mode_feedback_esc_cancels_draft_without_execution(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft implement feature\nexit\n",
         env=_env(tmp_path),
@@ -6529,7 +6529,7 @@ def test_plan_mode_empty_prompt_escape_turns_off_plan_mode_and_restores_mode(
             return None
 
     class _FakePromptSession:
-        _sylliptor_erase_when_done = True
+        _alysis_erase_when_done = True
 
         def __init__(self) -> None:
             self._responses = iter(
@@ -6552,7 +6552,7 @@ def test_plan_mode_empty_prompt_escape_turns_off_plan_mode_and_restores_mode(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="",
         env=_env(tmp_path),
@@ -6608,7 +6608,7 @@ def test_plan_mode_iteration_limit_stops_loop(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     monkeypatch.setattr(cli_mod, "MAX_PLAN_ITERATIONS", 3)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft loop\n2\none\n2\ntwo\n2\nthree\nexit\n",
         env=_env(tmp_path),
@@ -6706,7 +6706,7 @@ def test_plan_mode_uses_single_readonly_turn_for_conversational_follow_up(
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("plan draft loop should not run")),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n{prompt}\nexit\n",
         env=_env(tmp_path),
@@ -6817,7 +6817,7 @@ def test_plan_mode_implementation_asks_stay_single_path_and_readonly(
     )
     prompt = "implement the parser fix and add regression tests"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n{prompt}\nexit\n",
         env=_env(tmp_path),
@@ -6917,7 +6917,7 @@ def test_plan_mode_approve_executes_latest_stored_draft(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n{task}\n/plan status\n/plan approve\nexit\n",
         env=_env(tmp_path),
@@ -7004,7 +7004,7 @@ def test_plan_mode_approve_rejects_missing_stored_draft(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\n/plan approve\nexit\n",
         env=_env(tmp_path),
@@ -7090,7 +7090,7 @@ def test_plan_mode_approve_rejects_readonly_origin_session(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n{task}\n/plan approve\n/plan status\nexit\n",
         env=_env(tmp_path),
@@ -7166,7 +7166,7 @@ def test_plan_mode_execute_now_follow_up_shows_host_guidance_and_does_not_run_tu
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\nok do it\nexit\n",
         env=_env(tmp_path),
@@ -7248,7 +7248,7 @@ def test_plan_mode_execute_now_follow_up_points_to_plan_approve_when_draft_is_st
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n{task}\nok do it\nexit\n",
         env=_env(tmp_path),
@@ -7317,7 +7317,7 @@ def test_plan_mode_off_restores_the_previous_mode(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\n/plan off\nhello\nexit\n",
         env=_env(tmp_path),
@@ -7366,7 +7366,7 @@ def test_plan_mode_on_does_not_mutate_default_mode(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
     monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", lambda **_kwargs: None)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\nexit\n",
         env=_env(tmp_path),
@@ -7402,7 +7402,7 @@ def test_plan_is_rejected_while_plan_mode_is_on(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", lambda **_kwargs: None)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan mode\n/plan implement feature\nexit\n",
         env=_env(tmp_path),
@@ -7441,7 +7441,7 @@ def test_plan_is_rejected_in_readonly_mode_with_guidance(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan implement feature\nexit\n",
         env=_env(tmp_path),
@@ -7505,7 +7505,7 @@ def test_mode_changes_are_rejected_while_plan_mode_is_on(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"/plan on\n/mode {requested_mode}\nhello\nexit\n",
         env=_env(tmp_path),
@@ -7562,7 +7562,7 @@ def test_mode_readonly_is_a_noop_while_plan_mode_is_on(
         lambda *, session, mode: captured["rebuild_modes"].append(mode),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan on\n/mode readonly\n/plan status\nhello\nexit\n",
         env=_env(tmp_path),
@@ -7761,7 +7761,7 @@ def test_plan_mode_generation_includes_conversation_and_workspace_context(
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft Implement the parser fix\n1\nexit\n",
         env=_env(tmp_path),
@@ -7852,7 +7852,7 @@ def test_plan_mode_lazily_scans_workspace_context_when_session_cache_is_empty(
     monkeypatch.setattr(cli_mod, "resolve_workspace_context", lambda _root: object())
     monkeypatch.setattr(cli_mod, "scan_workspace", fake_scan_workspace)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft implement the parser fix\n1\nexit\n",
         env=_env(tmp_path),
@@ -7919,7 +7919,7 @@ def test_plan_mode_propose_emits_trace_progress(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft improve cli flow\n2\ninclude docs updates\n3\nexit\n",
         env=_env(tmp_path),
@@ -7966,7 +7966,7 @@ def test_plan_mode_keyboard_interrupt_during_drafting_returns_to_chat(
         lambda **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/plan draft interrupt this draft\nexit\n",
         env=_env(tmp_path),

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.tools.web_search_tavily import TavilySearchError, tavily_search
+from alysis_code.tools.web_search_tavily import TavilySearchError, tavily_search
 
 
 def _public_resolver(_host: str, _port: int) -> list[str]:

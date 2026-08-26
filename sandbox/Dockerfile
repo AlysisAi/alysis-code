@@ -2,7 +2,7 @@
 
 ARG PYTHON_IMAGE=python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
 ARG VARIANT=dev
-ARG SOURCE_URL=https://github.com/AlysisAi/Sylliptor
+ARG SOURCE_URL=https://github.com/AlysisAi/alysis-code
 ARG GIT_SHA=dev
 ARG VERSION=dev
 ARG SOURCE_DATE_EPOCH=0
@@ -26,8 +26,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.title="Sylliptor Sandbox" \
-      org.opencontainers.image.description="Minimal Sylliptor shell sandbox runtime image." \
+      org.opencontainers.image.title="Alysis Code Sandbox" \
+      org.opencontainers.image.description="Minimal Alysis Code shell sandbox runtime image." \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
@@ -56,14 +56,14 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
     apt-mark manual ${packages}; \
     rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --gid 1000 sylliptor; \
-    useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash sylliptor; \
+RUN groupadd --gid 1000 alysis; \
+    useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash alysis; \
     install -d -m 0755 -o 1000 -g 1000 /workspace
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD git --version && rg --version
-CMD ["sh", "-lc", "echo sylliptor-sandbox ready"]
+CMD ["sh", "-lc", "echo alysis-sandbox ready"]
 WORKDIR /workspace
-USER sylliptor
+USER alysis
 
 FROM base AS dev
 SHELL ["/bin/sh", "-euxc"]
@@ -73,21 +73,19 @@ USER root
 ARG TARGETARCH
 # Each downloaded tool is version- and digest-pinned for both supported platforms.
 ARG NODE_VERSION=24.18.1
-ARG NPM_VERSION=12.0.1
-ARG NPM_SHA256=5e02bea4c784df1c3bbea9e55c7d2232329e1d1920c254789833ed9e8b0a5f16
 ARG NODE_LINUX_AMD64_SHA256=d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
 ARG NODE_LINUX_ARM64_SHA256=7201e3a09dc825bac57867c81913e2b8f0ef87d04cb9082af4cda82f6ff3d88c
-ARG GO_VERSION=1.26.5
-ARG GO_LINUX_AMD64_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-ARG GO_LINUX_ARM64_SHA256=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG GO_VERSION=1.26.4
+ARG GO_LINUX_AMD64_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
+ARG GO_LINUX_ARM64_SHA256=ef758ae7c6cf9267c9c0ef080b8965f453d89ab2d25d9eb22de4405925238768
 ARG RUSTUP_VERSION=1.28.2
 ARG RUSTUP_LINUX_AMD64_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
 ARG RUSTUP_LINUX_ARM64_SHA256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
 ARG RUST_VERSION=1.91.1
 
-ENV RUSTUP_HOME=/home/sylliptor/.rustup \
-    CARGO_HOME=/home/sylliptor/.cargo \
-    PATH=/home/sylliptor/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV RUSTUP_HOME=/home/alysis/.rustup \
+    CARGO_HOME=/home/alysis/.cargo \
+    PATH=/home/alysis/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update; \
     packages="pkg-config"; \
@@ -116,12 +114,6 @@ RUN case "${TARGETARCH:-amd64}" in \
     echo "${node_sha}  /tmp/node.tar.xz" | sha256sum -c -; \
     tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1; \
     rm /tmp/node.tar.xz; \
-    curl --proto '=https' --tlsv1.2 -fsSLo /tmp/npm.tgz \
-        "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"; \
-    echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -; \
-    npm --global install /tmp/npm.tgz; \
-    rm /tmp/npm.tgz; \
-    npm cache clean --force; \
     node --version; \
     npm --version
 
@@ -138,7 +130,7 @@ RUN case "${TARGETARCH:-amd64}" in \
     rm /tmp/go.tgz; \
     go version
 
-USER sylliptor
+USER alysis
 RUN case "${TARGETARCH:-amd64}" in \
         amd64) rust_host=x86_64-unknown-linux-gnu; rustup_sha="${RUSTUP_LINUX_AMD64_SHA256}" ;; \
         arm64) rust_host=aarch64-unknown-linux-gnu; rustup_sha="${RUSTUP_LINUX_ARM64_SHA256}" ;; \
@@ -161,33 +153,33 @@ RUN node -v; \
     pkg-config --version
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD git --version && rg --version
-CMD ["sh", "-lc", "echo sylliptor-sandbox ready"]
+CMD ["sh", "-lc", "echo alysis-sandbox ready"]
 WORKDIR /workspace
-USER sylliptor
+USER alysis
 
 FROM dev AS server
 SHELL ["/bin/sh", "-euxc"]
 
 USER root
-WORKDIR /opt/sylliptor
+WORKDIR /opt/alysis
 # The digest is an official multi-platform uv image; the lockfile supplies hashes
 # for all Python runtime and build dependencies.
 COPY --from=ghcr.io/astral-sh/uv@sha256:2381d6aa60c326b71fd40023f921a0a3b8f91b14d5db6b90402e65a635053709 /uv /usr/local/bin/uv
-COPY pyproject.toml uv.lock README.md /opt/sylliptor/
-COPY src /opt/sylliptor/src
+COPY pyproject.toml uv.lock README.md /opt/alysis/
+COPY src /opt/alysis/src
 ENV UV_LINK_MODE=copy \
     UV_NO_DEV=1 \
-    UV_PROJECT_ENVIRONMENT=/opt/sylliptor/.venv \
+    UV_PROJECT_ENVIRONMENT=/opt/alysis/.venv \
     UV_PYTHON_DOWNLOADS=never \
-    PATH=/opt/sylliptor/.venv/bin:/home/sylliptor/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/alysis/.venv/bin:/home/alysis/.cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN uv sync --locked --no-dev --no-editable --extra server; \
     uv cache clean; \
-    sylliptor --version
+    alysis --version
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD git --version && rg --version && sylliptor --version
-CMD ["sh", "-lc", "echo sylliptor-sandbox ready"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD git --version && rg --version && alysis --version
+CMD ["sh", "-lc", "echo alysis-sandbox ready"]
 WORKDIR /workspace
-USER sylliptor
+USER alysis
 
 FROM ${VARIANT} AS final
-USER sylliptor
+USER alysis

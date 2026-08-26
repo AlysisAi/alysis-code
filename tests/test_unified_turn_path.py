@@ -3,7 +3,7 @@
 The legacy pre-turn semantic router is deleted. No router client is ever
 provisioned, every text turn goes straight to the main model with the full
 per-mode agent surface, and execution posture derives from the execution
-mode. ``unified_turn_path_enabled`` (and ``SYLLIPTOR_UNIFIED_TURN_PATH``)
+mode. ``unified_turn_path_enabled`` (and ``ALYSIS_UNIFIED_TURN_PATH``)
 remain accepted for one release but are ignored: flag-off behaves identically
 to flag-on.
 """
@@ -16,22 +16,22 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent.prompt_context import (
+from alysis_code.agent.prompt_context import (
     _TASK_BRIEF_MARKER,
     refresh_session_task_brief_from_observed_turn,
 )
-from sylliptor_agent_cli.agent.reproduction_first import (
+from alysis_code.agent.reproduction_first import (
     REPRODUCTION_FIRST_CONDITIONAL_DIRECTIVE,
     ReproPhase,
     ReproRun,
 )
-from sylliptor_agent_cli.agent.turn_path import unified_turn_path_enabled
-from sylliptor_agent_cli.agent.verification import TurnExecutionState
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.plan_mode import instruction_with_approved_plan
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.agent.turn_path import unified_turn_path_enabled
+from alysis_code.agent.verification import TurnExecutionState
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.plan_mode import instruction_with_approved_plan
+from alysis_code.session_store import read_session_events
 
 
 class _FinalReplyClient:
@@ -41,6 +41,7 @@ class _FinalReplyClient:
     def __init__(self, reply: str) -> None:
         self.reply = reply
         self.calls = 0
+        self.message_snapshots: list[list[dict[str, Any]]] = []
 
     def chat(
         self,
@@ -51,8 +52,9 @@ class _FinalReplyClient:
         on_text_delta=None,  # type: ignore[no-untyped-def]
         temperature: float | None = None,
     ) -> LLMResponse:
-        _ = messages, tools, stream, on_text_delta, temperature
+        _ = tools, stream, on_text_delta, temperature
         self.calls += 1
+        self.message_snapshots.append(list(messages))
         return LLMResponse(content=self.reply, tool_calls=[], raw={})
 
 
@@ -120,7 +122,7 @@ def _unified_session(tmp_path: Path, *, mode: str = "review") -> Any:
 
 
 def test_unified_turn_path_default_is_on(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
     assert unified_turn_path_enabled(AppConfig(model="test-model")) is True
     assert unified_turn_path_enabled(None) is True
 
@@ -128,7 +130,7 @@ def test_unified_turn_path_default_is_on(monkeypatch) -> None:
 def test_unified_turn_path_config_value_still_parses_off(monkeypatch) -> None:
     # The resolver keeps honoring the stored value for one release even though
     # nothing consults it any more.
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
     cfg = AppConfig(model="test-model", unified_turn_path_enabled=False)
     assert unified_turn_path_enabled(cfg) is False
 
@@ -149,7 +151,7 @@ def test_unified_turn_path_config_value_still_parses_off(monkeypatch) -> None:
 def test_unified_turn_path_env_overrides_config(
     monkeypatch, env_value: str, config_value: bool, expected: bool
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_UNIFIED_TURN_PATH", env_value)
+    monkeypatch.setenv("ALYSIS_UNIFIED_TURN_PATH", env_value)
     cfg = AppConfig(model="test-model", unified_turn_path_enabled=config_value)
     assert unified_turn_path_enabled(cfg) is expected
 
@@ -178,7 +180,7 @@ def test_unified_session_provisions_no_router_client(tmp_path: Path) -> None:
 
 
 def test_default_session_provisions_no_router_client(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
     cfg = AppConfig(model="test-model")
     session = create_session(
         cfg=cfg,
@@ -198,7 +200,7 @@ def test_default_session_provisions_no_router_client(tmp_path: Path, monkeypatch
 def test_flag_off_session_provisions_no_router_client(tmp_path: Path, monkeypatch) -> None:
     # The flag is accepted-and-ignored: turning it off provisions exactly the
     # same router-free session as the default.
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
     cfg = AppConfig(model="test-model", unified_turn_path_enabled=False)
     session = create_session(
         cfg=cfg,
@@ -220,7 +222,7 @@ def test_flag_off_session_provisions_no_router_client(tmp_path: Path, monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_unified_repo_turn_executes_without_router(tmp_path: Path, monkeypatch) -> None:
+def test_unified_report_turn_runs_tools_without_router(tmp_path: Path, monkeypatch) -> None:
     session = _unified_session(tmp_path, mode="review")
     client = _SingleToolThenDoneClient()
     session.client = client  # type: ignore[assignment]
@@ -240,6 +242,7 @@ def test_unified_repo_turn_executes_without_router(tmp_path: Path, monkeypatch) 
     assert intents[0]["repo_turn_execution_intent"] == "execute"
     assert intents[0]["execution_safeguards_enabled"] is True
     assert intents[0]["unified_turn_path"] is True
+    assert _event_payloads(log_path, "interactive_no_material_edits_detected") == []
     operations = {
         str(payload.get("operation") or "") for payload in _event_payloads(log_path, "llm_usage")
     }
@@ -264,6 +267,73 @@ def test_unified_readonly_turn_posture_is_advisory(tmp_path: Path, monkeypatch) 
     assert intents[0]["repo_turn_execution_intent"] == "advisory_non_execution"
     assert intents[0]["execution_safeguards_enabled"] is False
     assert intents[0]["unified_turn_path"] is True
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "Inspect this workspace and report only; do not change any files.",
+        (
+            "\u0395\u03c0\u03b9\u03b8\u03b5\u03ce\u03c1\u03b7\u03c3\u03b5 \u03c4\u03bf\u03bd \u03c7\u03ce\u03c1\u03bf "
+            "\u03b5\u03c1\u03b3\u03b1\u03c3\u03af\u03b1\u03c2 \u03ba\u03b1\u03b9 \u03b4\u03ce\u03c3\u03b5 \u03b1\u03bd\u03b1\u03c6\u03bf\u03c1\u03ac. "
+            "\u039c\u03b7\u03bd \u03b1\u03bb\u03bb\u03ac\u03be\u03b5\u03b9\u03c2 \u03b1\u03c1\u03c7\u03b5\u03af\u03b1."
+        ),
+        "Inspecciona el repositorio y entrega un informe. No cambies ning\u00fan archivo.",
+    ],
+)
+def test_report_only_pre_read_finishes_from_observed_readonly_behavior(
+    tmp_path: Path,
+    instruction: str,
+) -> None:
+    session = _unified_session(tmp_path, mode="review")
+    client = _SingleToolThenDoneClient()
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn(instruction)
+        log_path = session.store.path
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert client.calls == 2
+    intents = _event_payloads(log_path, "turn_intent_resolved")
+    assert len(intents) == 1
+    assert intents[0]["classified_turn_intent"] == "execute"
+    assert intents[0]["repo_turn_execution_intent"] == "execute"
+    assert intents[0]["execution_safeguards_enabled"] is True
+    assert _event_payloads(log_path, "interactive_no_material_edits_detected") == []
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected_intent"),
+    [
+        ("Fix the parser bug and add a regression test.", "execute"),
+        ("Take a look at the parser.", "execute"),
+    ],
+)
+def test_mutating_and_ambiguous_prompts_keep_execute_posture(
+    tmp_path: Path,
+    instruction: str,
+    expected_intent: str,
+) -> None:
+    session = _unified_session(tmp_path, mode="review")
+    client = _FinalReplyClient("Done.")
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn(instruction)
+        log_path = session.store.path
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    intents = _event_payloads(log_path, "turn_intent_resolved")
+    assert intents[0]["classified_turn_intent"] == expected_intent
+    assert intents[0]["execution_safeguards_enabled"] is True
+    assert REPRODUCTION_FIRST_CONDITIONAL_DIRECTIVE in "\n".join(
+        str(message.get("content") or "") for message in client.message_snapshots[0]
+    )
 
 
 def test_unified_small_talk_flows_through_main_loop(tmp_path: Path, monkeypatch) -> None:
@@ -549,7 +619,7 @@ def test_flag_off_behaves_identically_to_flag_on(tmp_path: Path, monkeypatch) ->
     # The legacy routed path is deleted: with the flag off, the turn still
     # takes the unified path (no routing call, one main-model call, and the
     # turn-intent payload records the unified path).
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
     cfg = AppConfig(model="test-model", routing_mode="auto", unified_turn_path_enabled=False)
     session = create_session(
         cfg=cfg,

@@ -14,10 +14,10 @@ from types import SimpleNamespace
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from sylliptor_agent_cli.cli_impl.commands import chat_tui_panels as panels
-from sylliptor_agent_cli.cli_impl.commands.chat_status import _chat_mode_status_label
-from sylliptor_agent_cli.cli_impl.tui import run_tui
-from sylliptor_agent_cli.cli_impl.tui.state import TuiState
+from alysis_code.cli_impl.commands import chat_tui_panels as panels
+from alysis_code.cli_impl.commands.chat_status import _chat_mode_status_label
+from alysis_code.cli_impl.tui import run_tui
+from alysis_code.cli_impl.tui.state import TuiState
 
 # --------------------------------------------------------------- spec builders
 
@@ -389,7 +389,7 @@ def test_picker_rows_wrap_long_description_capped_and_full_width():
     # A description that does not fit on one line WRAPS onto continuation lines
     # (aligned under the description column) instead of clipping on the right,
     # and the option never grows past _PICKER_MAX_DESC_LINES lines.
-    from sylliptor_agent_cli.cli_impl.tui.app import _PICKER_MAX_DESC_LINES, _render_picker_rows
+    from alysis_code.cli_impl.tui.app import _PICKER_MAX_DESC_LINES, _render_picker_rows
 
     rows = [
         {"label": "explorer", "description": "Investigate the repository", "value": "explorer"},
@@ -422,7 +422,7 @@ def test_picker_rows_tag_override_replaces_current_tag():
     # in the tag slot, and an explicit empty tag suppresses the tag even on a
     # row flagged current (the Forge launch gate relies on both — its focused
     # row must not echo a redundant "(current)" next to the highlight band).
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_picker_rows
+    from alysis_code.cli_impl.tui.app import _render_picker_rows
 
     rows = [
         {
@@ -457,7 +457,7 @@ def test_picker_tag_never_orphans_onto_its_own_line():
     # A tag that does not fit after the last description line pulls the last
     # word of the description down with it, so the continuation reads as a
     # natural wrap instead of a lone, misaligned "(default)" line.
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_picker_rows
+    from alysis_code.cli_impl.tui.app import _render_picker_rows
 
     # width 25, label "L" → desc column at 8, desc width 17: "alpha beta gamma"
     # (16) fits on one line, but not together with " (default)" (10).
@@ -471,17 +471,17 @@ def test_picker_tag_never_orphans_onto_its_own_line():
 def test_picker_hint_wraps_and_honours_linebreaks_no_clip():
     # A long, two-line hint must wrap (never clip on the right) and keep both
     # segments fully intact.
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_picker_rows
+    from alysis_code.cli_impl.tui.app import _render_picker_rows
 
     rows = [{"label": "explorer", "description": "investigate", "value": "explorer"}]
-    hint = "↑↓ select · Enter to spawn · Esc cancel\nauto-delegate off · enable with /subagent on"
+    hint = "↑↓ select · Enter to spawn · Esc cancel\nauto-delegate off · configure before restart"
     width = 50
     rendered = _render_picker_rows(rows, 0, width, hint)
     assert all(sum(len(t) for _s, t in row) == width for row in rendered)
     joined = " ".join("".join(t for _s, t in row) for row in rendered)
     # Both the keybinding line and the full status note survive (nothing truncated).
     assert "Esc cancel" in joined
-    assert "enable with /subagent on" in joined
+    assert "configure before restart" in joined
 
 
 # ------------------------------------------------- float geometry (width drift)
@@ -498,7 +498,7 @@ def test_float_chrome_constants_match_prompt_toolkit():
     from prompt_toolkit.layout.margins import ScrollbarMargin
     from prompt_toolkit.widgets import Frame
 
-    from sylliptor_agent_cli.cli_impl.tui.app import _FRAME_COLS, _SCROLLBAR_COLS
+    from alysis_code.cli_impl.tui.app import _FRAME_COLS, _SCROLLBAR_COLS
 
     outer = 60
     plain = Window(FormattedTextControl(lambda: []))
@@ -522,7 +522,7 @@ def test_every_float_content_width_derives_from_its_own_float():
     # The popups are deliberately different widths, so each one's content width
     # must come from its own outer width minus its own chrome — borrowing a
     # sibling's formula is wrong at every terminal size.
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _FRAME_COLS,
         _SCROLLBAR_COLS,
         _approval_content_width_for,
@@ -551,7 +551,7 @@ def test_float_bodies_build_rows_at_their_own_content_width(monkeypatch):
     # row builder for ITS OWN content width. This is where the bug actually lived
     # — the geometry helpers can all be right while the body still calls the wrong
     # one. Drives the real body callables out of the real layout.
-    from sylliptor_agent_cli.cli_impl.tui import app as tui_app
+    from alysis_code.cli_impl.tui import app as tui_app
 
     cases = [
         ("class:tui.picker", "_render_picker_rows", 2, tui_app._picker_content_width_for),
@@ -586,7 +586,7 @@ def test_forge_planner_picker_renders_clean_at_95_columns():
     # columns past the edge and prompt_toolkit re-wrapped it as "…together b" /
     # "efore" at column 0, while the doubled screen rows pushed the hint line out
     # of the box entirely.
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _picker_content_width_for,
         _render_picker_rows,
     )
@@ -623,7 +623,7 @@ def test_panel_builders_emit_exact_width_rows_at_every_width():
     # instead of shrinking the label column, so on a narrow panel they emitted
     # rows wider than the window — which re-wrap to column 0 — even when handed a
     # correct width. The /help hint was likewise appended raw at 42 columns.
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _help_rows_for_sections,
         _render_kv_panel_rows,
     )
@@ -642,7 +642,7 @@ def test_help_panel_keeps_descriptions_readable_on_a_narrow_panel():
     # Fitting the row is not enough: one very long command must not consume the
     # whole panel and shred the descriptions a letter per line. The command column
     # is capped at half the panel and the command clipped into it.
-    from sylliptor_agent_cli.cli_impl.tui.app import _help_rows_for_sections
+    from alysis_code.cli_impl.tui.app import _help_rows_for_sections
 
     sections = [("Execution", [("/a-very-long-command-name-that-overflows", "change mode")])]
     width = 35
@@ -655,7 +655,7 @@ def test_approval_modal_always_shows_its_key_legend():
     # The modal does not scroll, so a long command used to push [y]/[a]/[n] past
     # the window height: the user was asked to consent with no visible way to
     # answer. The body is budgeted so the legend always survives.
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _FRAME_COLS,
         _approval_body_budget,
         _approval_content_width_for,
@@ -688,7 +688,7 @@ def test_approval_modal_elides_the_middle_not_the_tail_of_a_command():
     # A consent prompt must not hide the end of the command: the dangerous part is
     # as likely to be a suffix ("… && rm -rf /") as a prefix. Both ends survive and
     # the drop is stated.
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_approval_rows
+    from alysis_code.cli_impl.tui.app import _render_approval_rows
 
     request = SimpleNamespace(
         kind="shell_run",
@@ -709,7 +709,7 @@ def test_kv_panel_renderer_clips_long_keys_and_headers_to_width():
     # The cursor-pin scroll math requires every emitted row to be EXACTLY the
     # panel width; a key/header longer than its column must be clipped, never
     # allowed to overflow (which would wrap on screen and desync the scrollbar).
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_kv_panel_rows
+    from alysis_code.cli_impl.tui.app import _render_kv_panel_rows
 
     width = 40
     sections = [
@@ -756,6 +756,30 @@ def _run_headless(state, keys, **kwargs):
     with create_pipe_input() as pipe:
         pipe.send_text(keys)
         return run_tui(state, owl_color=False, input=pipe, output=DummyOutput(), **kwargs)
+
+
+def test_subagents_empty_window_reports_plain_message() -> None:
+    class _Scheduler:
+        def status(self):
+            return {"children": []}
+
+        def set_lifecycle_listener(self, _listener):
+            return None
+
+    class _Session(_FakeSession):
+        def __init__(self, surface) -> None:
+            super().__init__(surface)
+            self.child_scheduler = _Scheduler()
+
+    _result, transcript = _run_headless(
+        TuiState(model_name="m", username="t"),
+        "/subagents\r/exit\r",
+        session_builder=_Session,
+        command_runner=_runner([]),
+        background_turns=False,
+    )
+
+    assert ("system", "no active subagents") in transcript
 
 
 def _captured_app(cols: int, rows: int = 40):
@@ -949,65 +973,14 @@ def test_stream_picker_defaults_on_and_can_select_off():
     assert ("user", "/stream") not in transcript
 
 
-def test_subagent_picker_prefill_then_task_spawns_via_runner():
-    # Bare "/subagent" opens the picker; Enter selects the row and PREFILLS the
-    # input with "/subagent <name> "; the user types the task and Enter submits
-    # the explicit form to the command runner (which spawns it).
-    state = TuiState(model_name="m", username="t")
-    calls: list = []
-
-    def on_select(value):
-        return {"prefill": f"/subagent {value} "}
-
-    def subagent_picker():
-        return {
-            "title": "Spawn Subagent",
-            "rows": [
-                {
-                    "label": "explorer",
-                    "description": "maps the repo",
-                    "value": "explorer",
-                    "current": False,
-                },
-            ],
-            "on_select": on_select,
-        }
-
-    _run_headless(
-        state,
-        "/subagent\r\rmap the auth flow\r/exit\r",
-        session_builder=_FakeSession,
-        command_runner=_runner(calls),
-        picker_providers={"/subagent": subagent_picker},
-        background_turns=False,
-    )
-    assert any(c.strip() == "/subagent explorer map the auth flow" for c in calls)
-
-
-def test_subagent_picker_none_falls_through_to_runner():
-    # No subagents → picker provider returns None → bare "/subagent" must fall
-    # through to the command runner (which prints guidance), not be swallowed.
-    state = TuiState(model_name="m", username="t")
-    calls: list = []
-    _run_headless(
-        state,
-        "/subagent\r/exit\r",
-        session_builder=_FakeSession,
-        command_runner=_runner(calls),
-        picker_providers={"/subagent": lambda: None},
-        background_turns=False,
-    )
-    assert any(c.strip().lower() == "/subagent" for c in calls)
-
-
 # ------------------------------------------------------------- /resume picker
 
 
 def test_resume_picker_spec_builds_rows_from_sessions(tmp_path):
-    from sylliptor_agent_cli.cli_impl.commands.chat_resume_helpers import (
+    from alysis_code.cli_impl.commands.chat_resume_helpers import (
         _chat_resume_picker_spec,
     )
-    from sylliptor_agent_cli.session_store import SessionInfo
+    from alysis_code.session_store import SessionInfo
 
     newer = tmp_path / "sess-newer.jsonl"
     older = tmp_path / "sess-older.jsonl"
@@ -1027,7 +1000,7 @@ def test_resume_picker_spec_builds_rows_from_sessions(tmp_path):
 
 
 def test_resume_picker_spec_empty_returns_none():
-    from sylliptor_agent_cli.cli_impl.commands.chat_resume_helpers import (
+    from alysis_code.cli_impl.commands.chat_resume_helpers import (
         _chat_resume_picker_spec,
     )
 

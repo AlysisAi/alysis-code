@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from sylliptor_agent_cli.remote_sync import (
+from alysis_code.remote_sync import (
     create_pr_or_mr,
     detect_provider_from_remote_url,
     ensure_pr_or_mr,
@@ -32,6 +32,22 @@ def test_load_remote_settings_defaults_off() -> None:
     assert settings.create_pr is False
     assert settings.provider == "auto"
     assert settings.enabled is False
+
+
+def test_load_remote_settings_honors_legacy_environment_names() -> None:
+    settings = load_remote_settings_from_env(
+        {
+            "SYLLIPTOR_REMOTE_SYNC": "strict",
+            "SYLLIPTOR_REMOTE_NAME": "upstream",
+            "SYLLIPTOR_REMOTE_CREATE_PR": "1",
+            "SYLLIPTOR_REMOTE_PROVIDER": "github",
+        }
+    )
+
+    assert settings.sync_mode == "strict"
+    assert settings.remote_name == "upstream"
+    assert settings.create_pr is True
+    assert settings.provider == "github"
 
 
 def test_detect_provider_from_remote_urls() -> None:
@@ -92,7 +108,7 @@ def test_create_pr_or_mr_uses_gh_for_github(monkeypatch, tmp_path: Path) -> None
     repo = tmp_path / "repo"
     repo.mkdir()
     calls: list[list[str]] = []
-    monkeypatch.setattr("sylliptor_agent_cli.remote_sync.shutil.which", lambda cmd: "/usr/bin/gh")
+    monkeypatch.setattr("alysis_code.remote_sync.shutil.which", lambda cmd: "/usr/bin/gh")
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         calls.append(list(cmd))
@@ -118,7 +134,7 @@ def test_create_pr_or_mr_uses_glab_for_gitlab(monkeypatch, tmp_path: Path) -> No
     repo = tmp_path / "repo"
     repo.mkdir()
     calls: list[list[str]] = []
-    monkeypatch.setattr("sylliptor_agent_cli.remote_sync.shutil.which", lambda cmd: "/usr/bin/glab")
+    monkeypatch.setattr("alysis_code.remote_sync.shutil.which", lambda cmd: "/usr/bin/glab")
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         calls.append(list(cmd))
@@ -143,7 +159,7 @@ def test_create_pr_or_mr_uses_glab_for_gitlab(monkeypatch, tmp_path: Path) -> No
 def test_create_pr_or_mr_fails_when_cli_missing(monkeypatch, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr("sylliptor_agent_cli.remote_sync.shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("alysis_code.remote_sync.shutil.which", lambda _cmd: None)
     ok, url, output = create_pr_or_mr(
         repo,
         provider="github",
@@ -160,7 +176,7 @@ def test_create_pr_or_mr_fails_when_cli_missing(monkeypatch, tmp_path: Path) -> 
 def test_find_existing_pr_or_mr_for_github(monkeypatch, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr("sylliptor_agent_cli.remote_sync.shutil.which", lambda cmd: "/usr/bin/gh")
+    monkeypatch.setattr("alysis_code.remote_sync.shutil.which", lambda cmd: "/usr/bin/gh")
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         assert cmd[:3] == ["gh", "pr", "list"]
@@ -190,9 +206,9 @@ def test_ensure_pr_or_mr_reuses_existing_when_create_fails(monkeypatch, tmp_path
             return False, None, None, "none"
         return True, "https://github.com/org/repo/pull/99", "99", "existing"
 
-    monkeypatch.setattr("sylliptor_agent_cli.remote_sync.find_existing_pr_or_mr", fake_find)
+    monkeypatch.setattr("alysis_code.remote_sync.find_existing_pr_or_mr", fake_find)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.remote_sync.create_pr_or_mr",
+        "alysis_code.remote_sync.create_pr_or_mr",
         lambda *_args, **_kwargs: (False, None, "already exists"),
     )
 
@@ -214,11 +230,11 @@ def test_ensure_pr_or_mr_creates_when_missing(monkeypatch, tmp_path: Path) -> No
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(
-        "sylliptor_agent_cli.remote_sync.find_existing_pr_or_mr",
+        "alysis_code.remote_sync.find_existing_pr_or_mr",
         lambda *_args, **_kwargs: (False, None, None, "none"),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.remote_sync.create_pr_or_mr",
+        "alysis_code.remote_sync.create_pr_or_mr",
         lambda *_args, **_kwargs: (
             True,
             "https://gitlab.com/org/repo/-/merge_requests/7",

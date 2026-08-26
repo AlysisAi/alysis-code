@@ -16,12 +16,12 @@ from pathlib import Path
 import pytest
 import typer
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
-from sylliptor_agent_cli.cli_impl.commands import update as update_cmd_mod
-from sylliptor_agent_cli.cli_impl.tui.update_prompt import select_update_action
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.updates import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli_impl.commands import startup as startup_mod
+from alysis_code.cli_impl.commands import update as update_cmd_mod
+from alysis_code.cli_impl.tui.update_prompt import select_update_action
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.updates import (
     InstallerPlan,
     UpdateCacheRecord,
     UpdatePromptState,
@@ -67,13 +67,13 @@ def _status(
 
 @pytest.fixture(autouse=True)
 def _isolated_dirs(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
-    monkeypatch.delenv("SYLLIPTOR_UPDATE_PROMPT_ENABLED", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_UPDATE_CHECK_ENABLED", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_UPDATE_CHECK_INTERVAL_HOURS", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_UPDATE_CACHE_PATH", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_UPDATE_PROMPT_STATE_PATH", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.delenv("ALYSIS_UPDATE_PROMPT_ENABLED", raising=False)
+    monkeypatch.delenv("ALYSIS_UPDATE_CHECK_ENABLED", raising=False)
+    monkeypatch.delenv("ALYSIS_UPDATE_CHECK_INTERVAL_HOURS", raising=False)
+    monkeypatch.delenv("ALYSIS_UPDATE_CACHE_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UPDATE_PROMPT_STATE_PATH", raising=False)
     monkeypatch.setattr(update_cmd_mod, "_update_prompt_completed", False)
     # Pin the version the orchestrator compares against so the 0.9.8-seeded
     # caches stay "newer" even after the real package version catches up.
@@ -111,7 +111,7 @@ def test_prompt_state_rejects_corrupt_and_foreign_payloads() -> None:
     assert read_update_prompt_state() == UpdatePromptState()
 
     path.write_text(
-        json.dumps({"schema_version": 99, "package": "sylliptor-agent-cli"}),
+        json.dumps({"schema_version": 99, "package": "alysis-code"}),
         encoding="utf-8",
     )
     assert read_update_prompt_state() == UpdatePromptState()
@@ -155,9 +155,9 @@ def test_update_prompt_enabled_defaults_true() -> None:
 def test_update_prompt_enabled_config_and_env(monkeypatch) -> None:
     cfg = AppConfig(update_prompt_enabled=False)
     assert resolve_update_prompt_enabled(cfg) is False
-    monkeypatch.setenv("SYLLIPTOR_UPDATE_PROMPT_ENABLED", "1")
+    monkeypatch.setenv("ALYSIS_UPDATE_PROMPT_ENABLED", "1")
     assert resolve_update_prompt_enabled(cfg) is True
-    monkeypatch.setenv("SYLLIPTOR_UPDATE_PROMPT_ENABLED", "0")
+    monkeypatch.setenv("ALYSIS_UPDATE_PROMPT_ENABLED", "0")
     assert resolve_update_prompt_enabled(AppConfig()) is False
 
 
@@ -264,13 +264,13 @@ def _drive_popup(keys: str, **kwargs):
 
 def test_popup_enter_defaults_to_later() -> None:
     # Focus starts on "Remind me later" so a reflexive Enter never updates.
-    value, available = _drive_popup("\r", command="pipx upgrade sylliptor-agent-cli")
+    value, available = _drive_popup("\r", command="pipx upgrade alysis-code")
     assert available is True
     assert value == "later"
 
 
 def test_popup_digit_one_picks_update_now() -> None:
-    value, available = _drive_popup("1", command="pipx upgrade sylliptor-agent-cli")
+    value, available = _drive_popup("1", command="pipx upgrade alysis-code")
     assert available is True
     assert value == "update"
 
@@ -304,7 +304,7 @@ def _seed_cache(latest: str = "0.9.8") -> None:
     write_update_cache(
         UpdateCacheRecord(
             checked_at=datetime.now(UTC),
-            package="sylliptor-agent-cli",
+            package="alysis-code",
             source="pypi",
             latest_version=latest,
         )
@@ -315,7 +315,7 @@ def _supported_plan() -> InstallerPlan:
     return InstallerPlan(
         method="pipx",
         supported=True,
-        command=("pipx", "upgrade", "sylliptor-agent-cli"),
+        command=("pipx", "upgrade", "alysis-code"),
         reason="Detected a pipx-managed virtual environment.",
     )
 
@@ -324,7 +324,7 @@ def _supported_plan() -> InstallerPlan:
 def _startup_env(monkeypatch):
     monkeypatch.setattr(startup_mod, "_is_interactive_terminal", lambda: True)
     monkeypatch.setattr(cli_mod, "detect_installer_plan", _supported_plan, raising=False)
-    monkeypatch.setenv("SYLLIPTOR_TUI", "0")
+    monkeypatch.setenv("ALYSIS_TUI", "0")
     return monkeypatch
 
 
@@ -445,7 +445,7 @@ def test_startup_prompt_noop_when_non_interactive(monkeypatch) -> None:
 
 def test_startup_prompt_noop_when_disabled_via_env(_startup_env, monkeypatch) -> None:
     _seed_cache()
-    monkeypatch.setenv("SYLLIPTOR_UPDATE_PROMPT_ENABLED", "0")
+    monkeypatch.setenv("ALYSIS_UPDATE_PROMPT_ENABLED", "0")
 
     prompted: list[str] = []
     monkeypatch.setattr(
@@ -477,9 +477,9 @@ def test_startup_prompt_runs_once_per_process(_startup_env, monkeypatch) -> None
 
 
 def test_choice_dispatch_uses_tui_popup_when_enabled(monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.tui import update_prompt as popup_mod
+    from alysis_code.cli_impl.tui import update_prompt as popup_mod
 
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     captured: dict[str, object] = {}
 
     def _fake_select(**kwargs):
@@ -492,15 +492,15 @@ def test_choice_dispatch_uses_tui_popup_when_enabled(monkeypatch) -> None:
     choice = update_cmd_mod._prompt_update_choice(console, _status(), _supported_plan())
     assert choice == "update"
     assert captured["latest_version"] == "0.9.8"
-    assert captured["command"] == "pipx upgrade sylliptor-agent-cli"
+    assert captured["command"] == "pipx upgrade alysis-code"
     assert captured["unsupported_reason"] is None
     assert console.lines == []  # no classic output when the popup handled it
 
 
 def test_choice_dispatch_treats_popup_cancel_as_later(monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.tui import update_prompt as popup_mod
+    from alysis_code.cli_impl.tui import update_prompt as popup_mod
 
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     monkeypatch.setattr(popup_mod, "select_update_action", lambda **_k: (None, True))
 
     choice = update_cmd_mod._prompt_update_choice(_Console(), _status(), _supported_plan())
@@ -508,9 +508,9 @@ def test_choice_dispatch_treats_popup_cancel_as_later(monkeypatch) -> None:
 
 
 def test_choice_dispatch_falls_back_to_classic_when_popup_unavailable(monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.tui import update_prompt as popup_mod
+    from alysis_code.cli_impl.tui import update_prompt as popup_mod
 
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     monkeypatch.setattr(popup_mod, "select_update_action", lambda **_k: (None, False))
     monkeypatch.setattr(typer, "prompt", lambda *_a, **_k: "s")
 
@@ -521,9 +521,9 @@ def test_choice_dispatch_falls_back_to_classic_when_popup_unavailable(monkeypatc
 
 
 def test_choice_dispatch_passes_unsupported_reason(monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.tui import update_prompt as popup_mod
+    from alysis_code.cli_impl.tui import update_prompt as popup_mod
 
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     captured: dict[str, object] = {}
 
     def _fake_select(**kwargs):
@@ -544,7 +544,7 @@ def test_choice_dispatch_passes_unsupported_reason(monkeypatch) -> None:
 def test_classic_prompt_maps_answers(monkeypatch) -> None:
     console = _Console()
     plan = _supported_plan()
-    status = _status(url="https://pypi.org/project/sylliptor-agent-cli/")
+    status = _status(url="https://pypi.org/project/alysis-code/")
 
     for answer, expected in (("y", "update"), ("s", "skip"), ("n", "later"), ("", "later")):
         monkeypatch.setattr(typer, "prompt", lambda *_a, _answer=answer, **_k: _answer or "n")
@@ -560,14 +560,14 @@ def test_classic_prompt_maps_answers(monkeypatch) -> None:
         monkeypatch.setattr(typer, "prompt", _interrupt)
         assert update_cmd_mod._classic_update_prompt(console, status, plan) == "later"
     assert "0.9.8 is available" in console.text
-    assert "pipx upgrade sylliptor-agent-cli" in console.text
+    assert "pipx upgrade alysis-code" in console.text
 
 
 # --------------------------- config round-trip ---------------------------
 
 
 def test_update_prompt_enabled_round_trips_through_saved_config() -> None:
-    from sylliptor_agent_cli.config import load_config, save_config
+    from alysis_code.config import load_config, save_config
 
     cfg = AppConfig()
     set_config_value(cfg, "update_prompt_enabled", "false")
@@ -585,7 +585,7 @@ def test_startup_prompt_fires_from_stale_cache(_startup_env, monkeypatch) -> Non
     write_update_cache(
         UpdateCacheRecord(
             checked_at=datetime.now(UTC) - timedelta(hours=48),
-            package="sylliptor-agent-cli",
+            package="alysis-code",
             source="pypi",
             latest_version="0.9.8",
         )
@@ -604,8 +604,8 @@ def _root_launch_env(monkeypatch) -> list[str]:
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False, raising=False)
     monkeypatch.setattr(startup_mod, "_is_interactive_terminal", lambda: True)
     monkeypatch.setattr(cli_mod, "detect_installer_plan", _supported_plan, raising=False)
-    monkeypatch.setenv("SYLLIPTOR_TUI", "0")
-    monkeypatch.delenv("SYLLIPTOR_HOME_PROMPT", raising=False)
+    monkeypatch.setenv("ALYSIS_TUI", "0")
+    monkeypatch.delenv("ALYSIS_HOME_PROMPT", raising=False)
 
     def _wizard() -> bool:
         order.append("wizard")
@@ -618,7 +618,7 @@ def _root_launch_env(monkeypatch) -> list[str]:
 def test_bare_launch_prompts_before_setup_wizard(monkeypatch) -> None:
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli.cli import app as sylliptor_app
+    from alysis_code.cli import app as alysis_app
 
     _seed_cache()
     order = _root_launch_env(monkeypatch)
@@ -628,7 +628,7 @@ def test_bare_launch_prompts_before_setup_wizard(monkeypatch) -> None:
         lambda *a, **k: order.append("prompt") or "later",
     )
 
-    result = CliRunner().invoke(sylliptor_app, [])
+    result = CliRunner().invoke(alysis_app, [])
     assert result.exit_code == 0, result.output
     assert order == ["prompt", "wizard"]
 
@@ -636,7 +636,7 @@ def test_bare_launch_prompts_before_setup_wizard(monkeypatch) -> None:
 def test_bare_launch_update_success_exits_before_setup_wizard(monkeypatch) -> None:
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli.cli import app as sylliptor_app
+    from alysis_code.cli import app as alysis_app
 
     _seed_cache()
     order = _root_launch_env(monkeypatch)
@@ -647,7 +647,7 @@ def test_bare_launch_update_success_exits_before_setup_wizard(monkeypatch) -> No
     )
     monkeypatch.setattr(cli_mod, "run_installer_plan", lambda plan: 0, raising=False)
 
-    result = CliRunner().invoke(sylliptor_app, [])
+    result = CliRunner().invoke(alysis_app, [])
     assert result.exit_code == 0, result.output
     assert order == ["prompt"]  # process exits for restart; wizard never runs
     assert "Update installed." in result.output

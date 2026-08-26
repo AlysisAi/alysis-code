@@ -2,14 +2,14 @@
 
 ## Overview
 
-`sylliptor server start` exposes an HTTP API for creating run workspaces and executing jobs in an
+`alysis server start` exposes an HTTP API for creating run workspaces and executing jobs in an
 outer worker sandbox.
 
 - Run workspace mount inside worker: `/workspace`
-- Job artifact mount inside worker: `/sylliptor_job`
+- Job artifact mount inside worker: `/alysis_job`
 - Worker config/data paths inside sandbox:
-  - `SYLLIPTOR_CONFIG_DIR=/sylliptor_job/config`
-  - `SYLLIPTOR_DATA_DIR=/sylliptor_job/data`
+  - `ALYSIS_CONFIG_DIR=/alysis_job/config`
+  - `ALYSIS_DATA_DIR=/alysis_job/data`
 
 ## API Mode Support
 
@@ -27,13 +27,13 @@ execute inside the configured outer worker sandbox backend (`bwrap`/`docker`) an
 
 ## Authentication And Locality Policy
 
-Protected routes use `SYLLIPTOR_SERVER_TOKEN` as follows:
+Protected routes use `ALYSIS_SERVER_TOKEN` as follows:
 
-- If `SYLLIPTOR_SERVER_TOKEN` is set, requests must include
+- If `ALYSIS_SERVER_TOKEN` is set, requests must include
   `Authorization: Bearer <token>`.
   - Missing Bearer token: `401`
   - Wrong token: `403`
-- If `SYLLIPTOR_SERVER_TOKEN` is unset, protected routes only allow localhost clients
+- If `ALYSIS_SERVER_TOKEN` is unset, protected routes only allow localhost clients
   (`127.0.0.1`, `::1`, `localhost`).
   - Non-localhost clients are rejected with `403`.
 
@@ -46,26 +46,26 @@ Server mode uses the same package runtime baseline as the CLI: Python 3.11 or ne
 Install server dependencies:
 
 ```bash
-python -m pip install "sylliptor-agent-cli[server]"
+python -m pip install "alysis-code[server]"
 ```
 
 Start:
 
 ```bash
-sylliptor server start --host 127.0.0.1 --port 7070
+alysis server start --host 127.0.0.1 --port 7070
 ```
 
 Minimal authenticated API example:
 
 ```bash
-export SYLLIPTOR_SERVER_TOKEN="your-token"
+export ALYSIS_SERVER_TOKEN="your-token"
 
 RUN_ID=$(curl -sS -X POST \
-  -H "Authorization: Bearer $SYLLIPTOR_SERVER_TOKEN" \
+  -H "Authorization: Bearer $ALYSIS_SERVER_TOKEN" \
   http://127.0.0.1:7070/v1/runs/empty | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
 
 curl -sS -X POST \
-  -H "Authorization: Bearer $SYLLIPTOR_SERVER_TOKEN" \
+  -H "Authorization: Bearer $ALYSIS_SERVER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"instruction":"Implement the task","mode":"fullaccess"}' \
   "http://127.0.0.1:7070/v1/runs/${RUN_ID}/jobs/run"
@@ -76,10 +76,10 @@ curl -sS -X POST \
 Optional data directory override:
 
 ```bash
-sylliptor server start --data-dir /var/lib/sylliptor-server
+alysis server start --data-dir /var/lib/alysis-server
 ```
 
-`SYLLIPTOR_SERVER_MAX_JOBS` controls the server worker-pool size. It bounds both:
+`ALYSIS_SERVER_MAX_JOBS` controls the server worker-pool size. It bounds both:
 
 - how many jobs may execute in worker subprocesses at the same time
 - how many server worker threads are created to service queued jobs
@@ -88,12 +88,41 @@ sylliptor server start --data-dir /var/lib/sylliptor-server
 
 `POST /v1/runs` stages uploaded ZIP archives to a temporary file before import.
 
-- `SYLLIPTOR_SERVER_MAX_UPLOAD_BYTES` is enforced while the multipart body is being read in chunks.
+- `ALYSIS_SERVER_MAX_UPLOAD_BYTES` is enforced while the multipart body is being read in chunks.
 - Oversized uploads are rejected as soon as the configured limit is crossed; the server does not
   buffer the entire archive into a single Python `bytes` object first.
 - The staged temporary ZIP is removed after the request completes.
 - Existing ZIP validation still applies after staging succeeds, including bad-ZIP rejection, path
   sanitization, and the uncompressed-size guard during extraction.
+
+## Job Status And Machine Events
+
+Forge job status is derived from what the job **reported**, not from what its exit code
+implies. Forge worker commands run with `--machine`, so they emit the newline-delimited
+JSON event stream described in [Forge machine mode](forge.md#machine-mode---machine), and
+the runner reads the terminal event (`run_completed` or `error`) out of the job output:
+
+- `run_completed` with `data.ok: true` → `succeeded`
+- `run_completed` with `data.ok: false` → `failed`
+- `error` → `failed`, and `data.message` becomes the job's `error`
+- no terminal event in the output → fall back to the exit code
+
+`GET /v1/jobs/{job_id}` reports which of those happened:
+
+- `status_source: "terminal_event"` — the job said what happened.
+- `status_source: "exit_code"` — the status was inferred from the process result.
+
+The response also carries `terminal_event`, the raw envelope the job emitted, and
+`result.json` records `status_source` and `terminal_event` alongside the status.
+
+This matters because exit codes conflate outcomes: a Forge command that exits nonzero may
+have run perfectly and simply not accepted the work. The terminal event distinguishes the
+two; the exit code cannot.
+
+`ALYSIS_SERVER_MACHINE_EVENTS` controls whether `forge_exec` and `forge_swarm` job
+commands get `--machine` (default `1`). Set it to `0` to keep human-readable Forge job logs;
+job status then falls back to exit codes and `status_source` reports `exit_code`. `run` jobs
+are never affected — they are not Forge commands and always stay human-readable.
 
 ## Job Queue And Cancellation
 
@@ -108,63 +137,65 @@ Jobs move through `queued -> running -> succeeded|failed|cancelled`.
   teardown, the job becomes terminal `cancelled`.
 - Job metadata stays under the per-job directory while queued/running, and `result.json` is
   written when the job reaches a terminal state.
+- A cancelled job keeps `status_source: "exit_code"`: cancellation is decided by the server,
+  not by anything the job reported.
 
 ## Worker Backends
 
-`SYLLIPTOR_SERVER_WORKER_BACKEND` selects the outer worker sandbox backend:
+`ALYSIS_SERVER_WORKER_BACKEND` selects the outer worker sandbox backend:
 
 - `bwrap` on Linux by default
 - `docker` on macOS/Windows by default
 
 Worker sandbox mode default depends on backend when
-`SYLLIPTOR_SERVER_WORKER_SANDBOX_MODE` is unset:
+`ALYSIS_SERVER_WORKER_SANDBOX_MODE` is unset:
 
 - `strict` for `bwrap`
 - `warn` for `docker`
 
 Inside workers, nested tool sandbox defaults are hardened:
 
-- `SYLLIPTOR_SHELL_SANDBOX_BACKEND=bwrap`
-- `SYLLIPTOR_SHELL_SANDBOX_BWRAP_PROFILE=hardened`
-- `SYLLIPTOR_SHELL_SANDBOX_NETWORK=off`
-- `SYLLIPTOR_SHELL_SANDBOX_CLEAR_ENV=1`
-- `SYLLIPTOR_SHELL_SANDBOX_PROTECT_REPO_META=1`
+- `ALYSIS_SHELL_SANDBOX_BACKEND=bwrap`
+- `ALYSIS_SHELL_SANDBOX_BWRAP_PROFILE=hardened`
+- `ALYSIS_SHELL_SANDBOX_NETWORK=off`
+- `ALYSIS_SHELL_SANDBOX_CLEAR_ENV=1`
+- `ALYSIS_SHELL_SANDBOX_PROTECT_REPO_META=1`
 
 ## Model And Base URL Policy
 
 Security defaults are server-operator first:
 
 - Client `base_url` override is disabled by default
-  (`SYLLIPTOR_SERVER_ALLOW_CLIENT_BASE_URL=0`).
+  (`ALYSIS_SERVER_ALLOW_CLIENT_BASE_URL=0`).
 - If client `base_url` override is enabled, client-provided URLs must use
   `http://` or `https://`.
 - Client model override is enabled by default
-  (`SYLLIPTOR_SERVER_ALLOW_CLIENT_MODEL=1`).
+  (`ALYSIS_SERVER_ALLOW_CLIENT_MODEL=1`).
 - Set fixed defaults with:
-  - `SYLLIPTOR_SERVER_MODEL`
-  - `SYLLIPTOR_SERVER_BASE_URL`
+  - `ALYSIS_SERVER_MODEL`
+  - `ALYSIS_SERVER_BASE_URL`
 
-`SYLLIPTOR_SERVER_BASE_URL` must be an `http://` or `https://` URL.
+`ALYSIS_SERVER_BASE_URL` must be an `http://` or `https://` URL.
 
 ## Docker Worker Image
 
-By default, docker server workers use `ghcr.io/alysisai/sylliptor-sandbox:server`.
+By default, docker server workers use `ghcr.io/alysisai/alysis-sandbox:server`.
 
 Build the server worker image:
 
 ```bash
-docker build --build-arg VARIANT=server -t sylliptor-sandbox:server -f sandbox/Dockerfile .
+docker build --build-arg VARIANT=server -t alysis-sandbox:server -f sandbox/Dockerfile .
 ```
 
 Override image tag used by server workers:
 
 ```bash
-export SYLLIPTOR_SERVER_DOCKER_IMAGE=sylliptor-sandbox:server
+export ALYSIS_SERVER_DOCKER_IMAGE=alysis-sandbox:server
 ```
 
 The image should include:
 
-- `sylliptor-agent-cli` installed as a Python package
+- `alysis-code` installed as a Python package
 - `git`
 - `ripgrep`
 - `ca-certificates`

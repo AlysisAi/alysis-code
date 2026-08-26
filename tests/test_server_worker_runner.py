@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.server.worker_runner as worker_runner_mod
-from sylliptor_agent_cli.server.settings import ServerSettings
-from sylliptor_agent_cli.server.store import ServerStore
-from sylliptor_agent_cli.server.worker_runner import (
+import alysis_code.server.worker_runner as worker_runner_mod
+from alysis_code.server.settings import ServerSettings
+from alysis_code.server.store import ServerStore
+from alysis_code.server.worker_runner import (
     BwrapProcessRunner,
     DockerProcessRunner,
     JobRunner,
@@ -167,7 +167,7 @@ def test_bwrap_runner_mounts_job_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
     runner.spawn(
         workspace=workspace,
         job_dir=job_dir,
-        argv=["sylliptor", "--help"],
+        argv=["alysis", "--help"],
         env={"FOO": "bar"},
     )
     argv = list(captured["args"])
@@ -176,7 +176,7 @@ def test_bwrap_runner_mounts_job_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert argv[bind_idx + 2] == "/workspace"
     job_bind_idx = argv.index("--bind", bind_idx + 1)
     assert argv[job_bind_idx + 1] == os.fspath(job_dir.resolve())
-    assert argv[job_bind_idx + 2] == "/sylliptor_job"
+    assert argv[job_bind_idx + 2] == "/alysis_job"
     assert "--setenv" in argv
 
 
@@ -195,16 +195,16 @@ def test_docker_runner_mounts_job_dir(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(worker_runner_mod.subprocess, "Popen", fake_popen)
 
-    image = "test/sylliptor-sandbox:server"
+    image = "test/alysis-sandbox:server"
     runner = DockerProcessRunner(image=image, network="on")
     runner.spawn(
         workspace=workspace,
         job_dir=job_dir,
-        argv=["sylliptor", "--help"],
+        argv=["alysis", "--help"],
         env={"FOO": "bar"},
     )
     argv = list(captured["args"])
-    job_mount = f"{os.fspath(job_dir.resolve())}:/sylliptor_job:rw"
+    job_mount = f"{os.fspath(job_dir.resolve())}:/alysis_job:rw"
     assert job_mount in argv
     assert image in argv
 
@@ -231,7 +231,7 @@ class _CapturingRunner:
         return _DummyPopen(argv)
 
 
-def test_job_runner_maps_config_and_data_to_sylliptor_job(
+def test_job_runner_maps_config_and_data_to_alysis_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,7 +245,7 @@ def test_job_runner_maps_config_and_data_to_sylliptor_job(
         job_id="job_test",
         run_id=run_id,
         status="queued",
-        command=["sylliptor", "run", "--help"],
+        command=["alysis", "run", "--help"],
         created_at="2026-02-22T00:00:00+00:00",
         logs_path=os.fspath(job_paths.logs_path),
     )
@@ -260,11 +260,11 @@ def test_job_runner_maps_config_and_data_to_sylliptor_job(
     assert fake_runner.last_workspace == run_paths.workspace_dir
     assert fake_runner.last_job_dir == job_paths.job_dir
     assert fake_runner.last_env is not None
-    assert fake_runner.last_env["SYLLIPTOR_CONFIG_DIR"] == "/sylliptor_job/config"
-    assert fake_runner.last_env["SYLLIPTOR_DATA_DIR"] == "/sylliptor_job/data"
+    assert fake_runner.last_env["ALYSIS_CONFIG_DIR"] == "/alysis_job/config"
+    assert fake_runner.last_env["ALYSIS_DATA_DIR"] == "/alysis_job/data"
     assert fake_runner.last_env["HOME"] == "/tmp"
-    assert fake_runner.last_env["SYLLIPTOR_SHELL_SANDBOX_BACKEND"] == "bwrap"
-    assert fake_runner.last_env["SYLLIPTOR_SHELL_SANDBOX_PROTECT_REPO_META"] == "1"
+    assert fake_runner.last_env["ALYSIS_SHELL_SANDBOX_BACKEND"] == "bwrap"
+    assert fake_runner.last_env["ALYSIS_SHELL_SANDBOX_PROTECT_REPO_META"] == "1"
     assert state.status == "succeeded"
     assert state.exit_code == 0
     assert job_paths.logs_path.exists()
@@ -286,7 +286,7 @@ def test_job_runner_uses_default_linux_path_for_docker_workers(
         job_id="job_docker",
         run_id=run_id,
         status="queued",
-        command=["sylliptor", "run", "--help"],
+        command=["alysis", "run", "--help"],
         created_at="2026-02-22T00:00:00+00:00",
         logs_path=os.fspath(job_paths.logs_path),
     )
@@ -309,8 +309,8 @@ def test_job_runner_sets_strict_inner_shell_sandbox_for_docker_workers(tmp_path:
 
     env = runner._build_worker_env()
 
-    assert env["SYLLIPTOR_SHELL_SANDBOX_MODE"] == "strict"
-    assert env["SYLLIPTOR_VERIFY_SANDBOX_MODE"] == "strict"
+    assert env["ALYSIS_SHELL_SANDBOX_MODE"] == "strict"
+    assert env["ALYSIS_VERIFY_SANDBOX_MODE"] == "strict"
     runner.close()
 
 
@@ -330,16 +330,16 @@ def test_job_runner_uses_bounded_worker_pool_for_queued_jobs(
     monkeypatch.setattr(runner, "_outer_runner", lambda: fake_runner)
 
     try:
-        first_job = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-1"])
+        first_job = runner.start_job(run_id=run_id, command=["alysis", "run", "job-1"])
         _wait_for_status(runner, first_job, "running")
 
         queued_jobs = [
-            runner.start_job(run_id=run_id, command=["sylliptor", "run", f"job-{idx}"])
+            runner.start_job(run_id=run_id, command=["alysis", "run", f"job-{idx}"])
             for idx in range(2, 7)
         ]
 
         assert len(runner._worker_threads) == 1
-        assert [thread.name for thread in runner._worker_threads] == ["sylliptor-server-worker-1"]
+        assert [thread.name for thread in runner._worker_threads] == ["alysis-server-worker-1"]
         assert len(fake_runner.spawn_calls) == 1
         assert all(runner.get_status(job_id).status == "queued" for job_id in queued_jobs)
 
@@ -371,10 +371,10 @@ def test_queued_jobs_execute_and_persist_artifacts(
     monkeypatch.setattr(runner, "_outer_runner", lambda: fake_runner)
 
     try:
-        first_job = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-1"])
+        first_job = runner.start_job(run_id=run_id, command=["alysis", "run", "job-1"])
         _wait_for_status(runner, first_job, "running")
 
-        second_job = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-2"])
+        second_job = runner.start_job(run_id=run_id, command=["alysis", "run", "job-2"])
         second_job_dir = run_paths.jobs_dir / second_job
         second_meta = _read_json(second_job_dir / "meta.json")
         assert second_meta["status"] == "queued"
@@ -418,10 +418,10 @@ def test_cancel_queued_job_marks_terminal_and_skips_spawn(
     monkeypatch.setattr(runner, "_outer_runner", lambda: fake_runner)
 
     try:
-        first_job = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-1"])
+        first_job = runner.start_job(run_id=run_id, command=["alysis", "run", "job-1"])
         _wait_for_status(runner, first_job, "running")
 
-        queued_job = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-2"])
+        queued_job = runner.start_job(run_id=run_id, command=["alysis", "run", "job-2"])
         queued_job_dir = run_paths.jobs_dir / queued_job
         runner.cancel_job(queued_job)
 
@@ -460,7 +460,7 @@ def test_cancel_running_job_terminates_and_ends_cancelled(
     monkeypatch.setattr(runner, "_outer_runner", lambda: fake_runner)
 
     try:
-        job_id = runner.start_job(run_id=run_id, command=["sylliptor", "run", "job-1"])
+        job_id = runner.start_job(run_id=run_id, command=["alysis", "run", "job-1"])
         _wait_for_status(runner, job_id, "running")
 
         runner.cancel_job(job_id)

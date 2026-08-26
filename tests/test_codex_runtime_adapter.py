@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import subprocess
 
-from sylliptor_agent_cli.agent_runtimes.builtins import (
+from alysis_code.agent_runtimes.builtins import (
     RUNTIME_PLUGIN_OPT_IN_ENV,
     create_builtin_runtime_registry,
     runtime_setup_options,
 )
-from sylliptor_agent_cli.agent_runtimes.codex_cli import CodexCliRuntimeAdapter
-from sylliptor_agent_cli.config import AgentRuntimeSettings
+from alysis_code.agent_runtimes.codex_cli import CodexCliRuntimeAdapter
+from alysis_code.config import AgentRuntimeSettings
 
 
 def _settings() -> AgentRuntimeSettings:
@@ -27,11 +27,30 @@ def test_builtin_codex_runtime_metadata_and_registry() -> None:
 def test_runtime_entry_points_are_not_loaded_without_explicit_opt_in(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_PLUGIN_OPT_IN_ENV, raising=False)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.builtins.entry_points",
+        "alysis_code.agent_runtimes.builtins.entry_points",
         lambda: (_ for _ in ()).throw(AssertionError("entry points must not load")),
     )
 
     assert [option.id for option in runtime_setup_options()] == ["openai-codex"]
+
+
+def test_legacy_runtime_plugin_opt_in_is_honored(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _EntryPoints:
+        def select(self, *, group: str):
+            calls.append(group)
+            return ()
+
+    monkeypatch.delenv(RUNTIME_PLUGIN_OPT_IN_ENV, raising=False)
+    monkeypatch.setenv("SYLLIPTOR_ENABLE_AGENT_RUNTIME_PLUGINS", "1")
+    monkeypatch.setattr(
+        "alysis_code.agent_runtimes.builtins.entry_points",
+        lambda: _EntryPoints(),
+    )
+
+    assert [option.id for option in runtime_setup_options()] == ["openai-codex"]
+    assert calls == ["alysis.agent_runtimes"]
 
 
 def test_codex_probe_reports_missing_executable(monkeypatch) -> None:

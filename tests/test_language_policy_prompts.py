@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.plan_assistant import PLANNER_SYSTEM_PROMPT
-from sylliptor_agent_cli.plan_mode import PLAN_MODE_SYSTEM_PROMPT
+from alysis_code.plan_assistant import PLANNER_SYSTEM_PROMPT
+from alysis_code.plan_mode import PLAN_MODE_SYSTEM_PROMPT
 
 
 def _assert_language_script_policy(prompt: str) -> None:

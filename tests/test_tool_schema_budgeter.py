@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.context.tool_schema_budgeter import (
+from alysis_code.context.tool_schema_budgeter import (
     analyze_tool_schema_budget,
     compact_custom_mcp_tool_parameters,
     tool_schema_signature,

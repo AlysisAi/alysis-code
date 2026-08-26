@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.compaction.settings import CompactionSettings
-from sylliptor_agent_cli.runtime_context_features import resolve_runtime_context_features
+from alysis_code.compaction.settings import CompactionSettings
+from alysis_code.runtime_context_features import resolve_runtime_context_features
 
 
 def test_legacy_enable_compaction_preserves_previous_behavior() -> None:

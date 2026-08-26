@@ -5,18 +5,18 @@ from pathlib import Path
 
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.budget_allocator import (
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.budget_allocator import (
     AssetInclusionDecision,
     TaskAssetAllocation,
     allocate_task_assets,
     write_task_asset_allocation,
 )
-from sylliptor_agent_cli.assets.worker_mirror import mirror_task_assets
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.llm.openai_compat import LLMError, LLMResponse, ToolCall
-from sylliptor_agent_cli.model_registry import ModelRegistry
+from alysis_code.assets.worker_mirror import mirror_task_assets
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
+from alysis_code.llm.openai_compat import LLMError, LLMResponse, ToolCall
+from alysis_code.model_registry import ModelRegistry
 
 
 class _AllocatorClient:
@@ -116,7 +116,7 @@ def test_allocator_accepts_valid_structured_decisions(
         ]
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.budget_allocator.make_llm_client",
+        "alysis_code.assets.budget_allocator.make_llm_client",
         lambda **_kwargs: client,
     )
 
@@ -166,7 +166,7 @@ def test_allocator_retries_then_falls_back_on_invalid_decisions(
         ]
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.budget_allocator.make_llm_client",
+        "alysis_code.assets.budget_allocator.make_llm_client",
         lambda **_kwargs: client,
     )
 
@@ -204,7 +204,7 @@ def test_allocator_uses_json_mode_when_tool_calls_are_unsupported(
         ]
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.budget_allocator.make_llm_client",
+        "alysis_code.assets.budget_allocator.make_llm_client",
         lambda **_kwargs: client,
     )
 

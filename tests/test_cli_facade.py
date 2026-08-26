@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typer
 
-from sylliptor_agent_cli.cli import app
+from alysis_code.cli import app
 
 
 def test_cli_app_is_exported_and_has_core_commands() -> None:

@@ -9,16 +9,16 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent.session as session_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.process_reaping import (
+import alysis_code.agent.session as session_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.process_reaping import (
     ProcessGroupRegistry,
     ProcessReapOutcome,
     process_group_exists,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import read_session_events
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX process-group behavior")
 
@@ -148,7 +148,7 @@ def test_interactive_session_close_reaps(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_kill_switch_restores_legacy_behavior(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PROCESS_REAPING", "off")
+    monkeypatch.setenv("ALYSIS_PROCESS_REAPING", "off")
     fake = _FakeReaper(outcomes=(_outcome(),))
     _install_fake_reaper(monkeypatch, fake)
     session, sessions_dir = _make_session(
@@ -324,10 +324,7 @@ def test_real_interactive_survivor_is_reported_then_reaped_at_close(tmp_path: Pa
 
 
 @posix_only
-def test_session_shell_runner_places_commands_in_their_own_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_MODE", "off")
+def test_session_shell_runner_places_commands_in_their_own_group(tmp_path: Path) -> None:
     session, _sessions_dir = _make_session(
         tmp_path, runtime_kind=RuntimeKind.ONE_SHOT, session_id="reap-runner"
     )

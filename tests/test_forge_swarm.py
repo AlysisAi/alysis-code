@@ -14,48 +14,48 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig, clone_cfg
-from sylliptor_agent_cli.conflict_auto_resolver import (
+from alysis_code import cli as cli_mod
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig, clone_cfg
+from alysis_code.conflict_auto_resolver import (
     AutoResolveOutcome,
     ConflictAutoResolveSettings,
 )
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.forge import (
+from alysis_code.failure_category import FailureCategory
+from alysis_code.forge import (
     add_task,
     create_plan_run,
     load_plan,
     save_plan,
 )
-from sylliptor_agent_cli.git_ops import GitOpsError
-from sylliptor_agent_cli.integration_gate import IntegrationGateResult
-from sylliptor_agent_cli.knowledge_base import load_knowledge_index, write_task_attempt_entry
-from sylliptor_agent_cli.knowledge_capture import persist_execution_knowledge_capture
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.merge_conflict_reviewer import ConflictReviewOutcome
-from sylliptor_agent_cli.plan_assistant import PlannerTurnResult
-from sylliptor_agent_cli.plan_validation import PlannerFailedError
-from sylliptor_agent_cli.remote_sync import RemoteSettings
-from sylliptor_agent_cli.replanning import ReplanAttemptResult, run_replanning_attempt
-from sylliptor_agent_cli.review_gate import ReviewOutcome
-from sylliptor_agent_cli.run_lock import write_run_mutation_lock_metadata
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.swarm_backend import PreparedTaskWorkspace
-from sylliptor_agent_cli.swarm_orchestrator import (
+from alysis_code.git_ops import GitOpsError
+from alysis_code.integration_gate import IntegrationGateResult
+from alysis_code.knowledge_base import load_knowledge_index, write_task_attempt_entry
+from alysis_code.knowledge_capture import persist_execution_knowledge_capture
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.merge_conflict_reviewer import ConflictReviewOutcome
+from alysis_code.plan_assistant import PlannerTurnResult
+from alysis_code.plan_validation import PlannerFailedError
+from alysis_code.remote_sync import RemoteSettings
+from alysis_code.replanning import ReplanAttemptResult, run_replanning_attempt
+from alysis_code.review_gate import ReviewOutcome
+from alysis_code.run_lock import write_run_mutation_lock_metadata
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.swarm_backend import PreparedTaskWorkspace
+from alysis_code.swarm_orchestrator import (
     _worker_result_nonexecuting_verification_reason,
     run_swarm,
 )
-from sylliptor_agent_cli.swarm_trace import SwarmWorkerTraceSurface, build_swarm_trace_event
-from sylliptor_agent_cli.swarm_worker import TaskWorkerResult, run_task_worker
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.swarm_trace import SwarmWorkerTraceSurface, build_swarm_trace_event
+from alysis_code.swarm_worker import TaskWorkerResult, run_task_worker
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -169,10 +169,10 @@ def _ok_worker_result(
             else f"commit-{task_id}"
         ),
         error=None,
-        report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-        patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-        log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-        log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+        report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+        patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+        log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+        log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
         warnings=[],
         changed_files=(
             list(changed_files)
@@ -181,7 +181,7 @@ def _ok_worker_result(
         ),
         verify_failed=False,
         verify_summary=verify_summary,
-        verify_artifact_path=f".sylliptor/runs/x/execution/verify/{task_id}.txt",
+        verify_artifact_path=f".alysis/runs/x/execution/verify/{task_id}.txt",
         knowledge_capture_artifact_dir=knowledge_capture_artifact_dir,
         task_attempt_entry_id=task_attempt_entry_id,
         task_attempt_knowledge_file_path=task_attempt_knowledge_file_path,
@@ -296,15 +296,15 @@ def _snapshot_worker_result(
         summary="ok",
         commit_hash=commit_hash,
         error=None,
-        report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-        patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-        log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-        log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+        report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+        patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+        log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+        log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
         warnings=[],
         changed_files=changed_files,
         verify_failed=False,
         verify_summary="verification passed (1/1)",
-        verify_artifact_path=f".sylliptor/runs/x/execution/verify/{task_id}.txt",
+        verify_artifact_path=f".alysis/runs/x/execution/verify/{task_id}.txt",
     )
 
 
@@ -333,15 +333,15 @@ def _worker_result_for_path(
         summary=summary,
         commit_hash=commit_hash,
         error=error,
-        report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-        patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-        log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-        log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+        report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+        patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+        log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+        log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
         warnings=[],
         changed_files=changed_files or ["src/example.py"],
         verify_failed=verify_failed,
         verify_summary=verify_summary,
-        verify_artifact_path=f".sylliptor/runs/x/execution/verify/{task_id}.txt",
+        verify_artifact_path=f".alysis/runs/x/execution/verify/{task_id}.txt",
     )
 
 
@@ -611,9 +611,9 @@ def test_forge_swarm_cli_reports_structured_timeout_when_same_run_stays_locked(
     monkeypatch.setattr(cli_mod, "resolve_model_for_role", lambda **_kwargs: "test-model")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "swarm", "--path", os.fspath(repo), "--mode", "auto"],
-        env={**_env(tmp_path), "SYLLIPTOR_FORGE_LOCK_WAIT_TIMEOUT_S": "0"},
+        env={**_env(tmp_path), "ALYSIS_FORGE_LOCK_WAIT_TIMEOUT_S": "0"},
     )
 
     assert result.exit_code == 2
@@ -656,7 +656,7 @@ def test_forge_swarm_reports_timeout_when_same_workspace_stays_locked_by_another
         },
     )
 
-    monkeypatch.setenv("SYLLIPTOR_FORGE_LOCK_WAIT_TIMEOUT_S", "0")
+    monkeypatch.setenv("ALYSIS_FORGE_LOCK_WAIT_TIMEOUT_S", "0")
     with pytest.raises(
         Exception, match="Another Forge execution is already mutating this workspace"
     ):
@@ -822,7 +822,7 @@ def test_swarm_dry_run_prints_schedule_and_does_not_execute(tmp_path: Path) -> N
     save_plan(paths, plan)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -875,7 +875,7 @@ def test_execution_ignores_superseded_tasks(tmp_path: Path) -> None:
     save_plan(paths, plan)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -906,7 +906,7 @@ def test_forge_swarm_cli_rejects_guarded_workspace_without_override(
     monkeypatch.setattr(workspace_binding_mod, "_home_directory", lambda: home.resolve())
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -930,7 +930,7 @@ def test_forge_swarm_cli_rejects_blocked_workspace(tmp_path: Path) -> None:
     runner = CliRunner()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -956,7 +956,7 @@ def test_forge_swarm_cli_missing_current_run_gives_actionable_error(tmp_path: Pa
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -974,7 +974,7 @@ def test_forge_swarm_cli_missing_current_run_gives_actionable_error(tmp_path: Pa
 
     assert result.exit_code == 2
     assert "No current forge run was found for this workspace." in result.output
-    assert "sylliptor forge plan --path" in result.output
+    assert "alysis forge plan --path" in result.output
 
 
 def test_swarm_summary_and_trace_include_binding_metadata(tmp_path: Path) -> None:
@@ -1138,7 +1138,7 @@ def test_forge_swarm_cli_passes_no_worker_max_steps_without_override(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1175,7 +1175,7 @@ def test_forge_swarm_cli_defaults_scope_to_strict(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1223,7 +1223,7 @@ def test_forge_swarm_refuses_execution_unready_mutating_task_after_reconciliatio
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1272,7 +1272,7 @@ def test_forge_swarm_refuses_ready_for_merge_task_without_runnable_scope(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1321,7 +1321,7 @@ def test_forge_swarm_refuses_retry_merge_conflict_task_without_runnable_scope(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1359,7 +1359,7 @@ def test_forge_swarm_cli_scope_warn_override(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1397,7 +1397,7 @@ def test_forge_swarm_cli_scope_off_override(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1496,7 +1496,7 @@ def test_forge_swarm_cli_honors_max_steps_override(
 
     monkeypatch.setattr(cli_mod, "run_swarm", fake_run_swarm)
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -1834,13 +1834,13 @@ def test_swarm_refines_generic_fallback_to_node_test_for_js_task_reports(
         captured["runtime_kind"] = kwargs.get("runtime_kind")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
@@ -1863,7 +1863,7 @@ def test_swarm_refines_generic_fallback_to_node_test_for_js_task_reports(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     def ensure_worktree(**kwargs):  # type: ignore[no-untyped-def]
         task_obj = kwargs["task"]
@@ -1957,7 +1957,7 @@ def test_swarm_strict_scope_bootstrap_exact_file_task_filters_ancestor_placehold
         (egg_info / "PKG-INFO").write_text("Metadata-Version: 2.4\n", encoding="utf-8")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
 
     code = run_swarm(
         paths=paths,
@@ -2053,13 +2053,13 @@ def test_swarm_refines_generic_fallback_to_node_test_from_structured_task_text(
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.build_execution_reporting_diff_with_commit_range",
+        "alysis_code.swarm_worker.build_execution_reporting_diff_with_commit_range",
         lambda *_a, **_k: SimpleNamespace(changed_files=(), patch_text=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
@@ -2082,7 +2082,7 @@ def test_swarm_refines_generic_fallback_to_node_test_from_structured_task_text(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_task_verification", fake_verify)
 
     def ensure_worktree(**kwargs):  # type: ignore[no-untyped-def]
         task_obj = kwargs["task"]
@@ -2265,15 +2265,15 @@ def test_run_swarm_flushes_trace_artifact_on_worker_failure(tmp_path: Path) -> N
             summary="worker failed",
             commit_hash=None,
             error="max_steps exceeded",
-            report_path=".sylliptor/runs/x/execution/reports/T01.md",
-            patch_path=".sylliptor/runs/x/execution/patches/T01.diff",
-            log_path=".sylliptor/runs/x/execution/logs/T01.jsonl",
-            log_pointer_path=".sylliptor/runs/x/execution/logs/T01.log.json",
+            report_path=".alysis/runs/x/execution/reports/T01.md",
+            patch_path=".alysis/runs/x/execution/patches/T01.diff",
+            log_path=".alysis/runs/x/execution/logs/T01.jsonl",
+            log_pointer_path=".alysis/runs/x/execution/logs/T01.log.json",
             warnings=[],
             changed_files=[],
             verify_failed=False,
             verify_summary="verification failed (0/1)",
-            verify_artifact_path=".sylliptor/runs/x/execution/verify/T01.txt",
+            verify_artifact_path=".alysis/runs/x/execution/verify/T01.txt",
             failure_reason="noop_verification_failed",
         )
 
@@ -2437,15 +2437,15 @@ def test_swarm_review_receives_structured_verification_payload_from_worker_outpu
             summary="ok",
             commit_hash=f"commit-{task_id}",
             error=None,
-            report_path=f".sylliptor/runs/x/execution/reports/{task_id}.md",
-            patch_path=f".sylliptor/runs/x/execution/patches/{task_id}.diff",
-            log_path=f".sylliptor/runs/x/execution/logs/{task_id}.jsonl",
-            log_pointer_path=f".sylliptor/runs/x/execution/logs/{task_id}.log.json",
+            report_path=f".alysis/runs/x/execution/reports/{task_id}.md",
+            patch_path=f".alysis/runs/x/execution/patches/{task_id}.diff",
+            log_path=f".alysis/runs/x/execution/logs/{task_id}.jsonl",
+            log_pointer_path=f".alysis/runs/x/execution/logs/{task_id}.log.json",
             warnings=[],
             changed_files=["src/example.py"],
             verify_failed=False,
             verify_summary=None,
-            verify_artifact_path=f".sylliptor/runs/x/execution/verify/{task_id}.txt",
+            verify_artifact_path=f".alysis/runs/x/execution/verify/{task_id}.txt",
             verify_payload=verify_payload,
         )
 
@@ -3320,9 +3320,7 @@ def test_run_swarm_flushes_trace_artifact_on_merge_failure(
     add_task(plan, title="Task A", estimated_files=["src/a.py"], branch="feat/t01-a")
     save_plan(paths, plan)
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files", lambda _root: []
-    )
+    monkeypatch.setattr("alysis_code.swarm_orchestrator.list_unmerged_files", lambda _root: [])
 
     def fake_merge_runner(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise GitOpsError("merge exploded")
@@ -3658,28 +3656,24 @@ def test_swarm_preserves_role_models_in_worker_cfg(tmp_path: Path, monkeypatch) 
         captured["model"] = cfg.model
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.swarm_worker.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.ensure_not_staged_prefixes", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.staged_files",
+        "alysis_code.swarm_worker.staged_files",
         lambda _root: ["src/a.py"],
     )
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.commit_all", lambda *_a, **_k: "deadbeef")
+    monkeypatch.setattr("alysis_code.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.format_patch_stdout", lambda *_a, **_k: "PATCH\n"
-    )
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.changed_files_between",
+        "alysis_code.swarm_worker.changed_files_between",
         lambda *_a, **_k: ["src/a.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_worker.list_changed_files_including_untracked",
+        "alysis_code.swarm_worker.list_changed_files_including_untracked",
         lambda _root: ["src/a.py"],
     )
 
@@ -3756,15 +3750,15 @@ def test_swarm_merge_conflict_marks_status_and_continues_other_tasks(
         return "merge-ok"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_conflict_auto_resolve_settings",
+        "alysis_code.swarm_orchestrator.load_conflict_auto_resolve_settings",
         lambda *, cfg: ConflictAutoResolveSettings(enabled=False),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -3775,7 +3769,7 @@ def test_swarm_merge_conflict_marks_status_and_continues_other_tasks(
         },
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.review_merge_conflict",
+        "alysis_code.swarm_orchestrator.review_merge_conflict",
         lambda **_kwargs: ConflictReviewOutcome(
             review_json={
                 "task_id": t1["id"],
@@ -3791,7 +3785,7 @@ def test_swarm_merge_conflict_marks_status_and_continues_other_tasks(
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
@@ -3882,11 +3876,11 @@ def test_swarm_pending_ready_merge_failure_does_not_block_remaining_schedule(
         return "merge-ok"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -3897,7 +3891,7 @@ def test_swarm_pending_ready_merge_failure_does_not_block_remaining_schedule(
         },
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.review_merge_conflict",
+        "alysis_code.swarm_orchestrator.review_merge_conflict",
         lambda **_kwargs: ConflictReviewOutcome(
             review_json={
                 "task_id": t1["id"],
@@ -3913,7 +3907,7 @@ def test_swarm_pending_ready_merge_failure_does_not_block_remaining_schedule(
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
@@ -3983,11 +3977,11 @@ def test_swarm_merge_conflict_review_artifact_records_retry_recovery(
         raise GitOpsError("conflict")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -4019,11 +4013,11 @@ def test_swarm_merge_conflict_review_artifact_records_retry_recovery(
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
@@ -4093,11 +4087,11 @@ def test_swarm_merge_conflict_review_artifact_truthfully_labels_final_failure_af
         raise GitOpsError("conflict")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -4119,11 +4113,11 @@ def test_swarm_merge_conflict_review_artifact_truthfully_labels_final_failure_af
             return type("Resp", (), {"content": "not-json"})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.merge_conflict_reviewer.OpenAICompatClient",
+        "alysis_code.merge_conflict_reviewer.OpenAICompatClient",
         FakeClient,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
@@ -4190,7 +4184,7 @@ def test_swarm_merge_failure_without_unmerged_marks_failed(tmp_path: Path, monke
         raise GitOpsError("failed to checkout base")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: [],
     )
 
@@ -4339,11 +4333,11 @@ def test_swarm_merge_conflict_auto_resolve_success_marks_done(tmp_path: Path, mo
         raise GitOpsError("conflict")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -4354,7 +4348,7 @@ def test_swarm_merge_conflict_auto_resolve_success_marks_done(tmp_path: Path, mo
         },
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.review_merge_conflict",
+        "alysis_code.swarm_orchestrator.review_merge_conflict",
         lambda **_kwargs: ConflictReviewOutcome(
             review_json=None,
             review_markdown="# Merge conflict review\n",
@@ -4362,14 +4356,14 @@ def test_swarm_merge_conflict_auto_resolve_success_marks_done(tmp_path: Path, mo
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_conflict_auto_resolve_settings",
+        "alysis_code.swarm_orchestrator.load_conflict_auto_resolve_settings",
         lambda *, cfg: ConflictAutoResolveSettings(
             enabled=True,
             verify_mode="strict",
@@ -4403,7 +4397,7 @@ def test_swarm_merge_conflict_auto_resolve_success_marks_done(tmp_path: Path, mo
         )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.attempt_auto_resolve_conflict",
+        "alysis_code.swarm_orchestrator.attempt_auto_resolve_conflict",
         fake_auto_resolve,
     )
 
@@ -4467,11 +4461,11 @@ def test_swarm_merge_conflict_auto_resolve_failure_stays_merge_conflict(
         raise GitOpsError("conflict")
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.list_unmerged_files",
+        "alysis_code.swarm_orchestrator.list_unmerged_files",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.capture_merge_conflict_context",
+        "alysis_code.swarm_orchestrator.capture_merge_conflict_context",
         lambda _root, *, base_branch, task_branch, merge_error: {
             "base_branch": base_branch,
             "task_branch": task_branch,
@@ -4482,7 +4476,7 @@ def test_swarm_merge_conflict_auto_resolve_failure_stays_merge_conflict(
         },
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.review_merge_conflict",
+        "alysis_code.swarm_orchestrator.review_merge_conflict",
         lambda **_kwargs: ConflictReviewOutcome(
             review_json=None,
             review_markdown="# Merge conflict review\n",
@@ -4490,14 +4484,14 @@ def test_swarm_merge_conflict_auto_resolve_failure_stays_merge_conflict(
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.try_abort_merge",
+        "alysis_code.swarm_orchestrator.try_abort_merge",
         lambda _root, *, base_branch: (
             True,
             f"$ git -C {_root} merge --abort\nbase={base_branch}\n",
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_conflict_auto_resolve_settings",
+        "alysis_code.swarm_orchestrator.load_conflict_auto_resolve_settings",
         lambda *, cfg: ConflictAutoResolveSettings(
             enabled=True,
             verify_mode="strict",
@@ -4531,7 +4525,7 @@ def test_swarm_merge_conflict_auto_resolve_failure_stays_merge_conflict(
         )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.attempt_auto_resolve_conflict",
+        "alysis_code.swarm_orchestrator.attempt_auto_resolve_conflict",
         fake_auto_resolve,
     )
 
@@ -5155,7 +5149,7 @@ def test_swarm_rejects_non_auto_mode_unless_dry_run(tmp_path: Path) -> None:
     save_plan(paths, plan)
 
     reject = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -5174,7 +5168,7 @@ def test_swarm_rejects_non_auto_mode_unless_dry_run(tmp_path: Path) -> None:
     assert "swarm requires --mode auto (non-interactive)" in reject.output
 
     allow_dry_run = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -5211,7 +5205,7 @@ def test_swarm_recovers_stale_in_progress_tasks_on_start(tmp_path: Path, monkeyp
     def fake_prune(_root: Path) -> None:
         called["pruned"] = True
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_orchestrator.prune_worktrees", fake_prune)
+    monkeypatch.setattr("alysis_code.swarm_orchestrator.prune_worktrees", fake_prune)
 
     code = run_swarm(
         paths=paths,
@@ -5511,7 +5505,7 @@ def test_swarm_verify_strict_failure_marks_verify_failed_and_skips_merge(tmp_pat
             changed_files=["src/a.py"],
             verify_failed=True,
             verify_summary="verification failed (0/1)",
-            verify_artifact_path=".sylliptor/runs/x/execution/verify/T01.txt",
+            verify_artifact_path=".alysis/runs/x/execution/verify/T01.txt",
         )
 
     def fake_merge_runner(_root, *, base_branch: str, task_branch: str, message: str) -> str:
@@ -7522,8 +7516,8 @@ def test_swarm_replanning_apply_bad_plan_fails_closed_before_next_worker(
         remaining = next(
             task for task in replanned_plan["tasks"] if task["id"] == str(second["id"])
         )
-        remaining["estimated_files"] = [".sylliptor/something.json"]
-        remaining["write_scope"] = [".sylliptor/something.json"]
+        remaining["estimated_files"] = [".alysis/something.json"]
+        remaining["write_scope"] = [".alysis/something.json"]
         save_plan(paths, replanned_plan)
         return _replan_result(
             paths=paths,
@@ -7579,7 +7573,7 @@ def test_swarm_replanning_apply_bad_plan_fails_closed_before_next_worker(
 
     assert exc_info.value.failure_category == FailureCategory.PLANNER_FAILED
     assert "R2" in str(exc_info.value)
-    assert ".sylliptor/" in str(exc_info.value)
+    assert ".alysis/" in str(exc_info.value)
     assert worker_calls == [str(first["id"])]
 
 
@@ -8598,7 +8592,7 @@ def test_swarm_snapshot_backend_skips_remote_sync_with_warning(
     save_plan(paths, plan)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_remote_settings_from_env",
+        "alysis_code.swarm_orchestrator.load_remote_settings_from_env",
         lambda: RemoteSettings(
             sync_mode="warn",
             remote_name="origin",
@@ -8607,11 +8601,11 @@ def test_swarm_snapshot_backend_skips_remote_sync_with_warning(
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_branch",
+        "alysis_code.swarm_orchestrator.push_branch",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push_branch should not run")),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_base",
+        "alysis_code.swarm_orchestrator.push_base",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push_base should not run")),
     )
 
@@ -8659,11 +8653,11 @@ def test_swarm_remote_sync_off_by_default_does_not_push(tmp_path: Path, monkeypa
     save_plan(paths, plan)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_branch",
+        "alysis_code.swarm_orchestrator.push_branch",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push_branch should not run")),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_base",
+        "alysis_code.swarm_orchestrator.push_base",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push_base should not run")),
     )
 
@@ -8733,7 +8727,7 @@ def test_swarm_remote_warn_push_failure_allows_local_merge(tmp_path: Path, monke
 
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_remote_settings_from_env",
+        "alysis_code.swarm_orchestrator.load_remote_settings_from_env",
         lambda: RemoteSettings(
             sync_mode="warn",
             remote_name="origin",
@@ -8742,7 +8736,7 @@ def test_swarm_remote_warn_push_failure_allows_local_merge(tmp_path: Path, monke
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.get_remote_url",
+        "alysis_code.swarm_orchestrator.get_remote_url",
         lambda *_a, **_k: "git@github.com:org/repo.git",
     )
 
@@ -8750,9 +8744,9 @@ def test_swarm_remote_warn_push_failure_allows_local_merge(tmp_path: Path, monke
         calls.append((remote, branch))
         return False, "push failed"
 
-    monkeypatch.setattr("sylliptor_agent_cli.swarm_orchestrator.push_branch", fake_push_branch)
+    monkeypatch.setattr("alysis_code.swarm_orchestrator.push_branch", fake_push_branch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_base",
+        "alysis_code.swarm_orchestrator.push_base",
         lambda *_a, **_k: (False, "base push failed"),
     )
 
@@ -8825,7 +8819,7 @@ def test_swarm_remote_strict_push_failure_blocks_merge(tmp_path: Path, monkeypat
     merges: list[str] = []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_remote_settings_from_env",
+        "alysis_code.swarm_orchestrator.load_remote_settings_from_env",
         lambda: RemoteSettings(
             sync_mode="strict",
             remote_name="origin",
@@ -8834,11 +8828,11 @@ def test_swarm_remote_strict_push_failure_blocks_merge(tmp_path: Path, monkeypat
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.get_remote_url",
+        "alysis_code.swarm_orchestrator.get_remote_url",
         lambda *_a, **_k: "git@github.com:org/repo.git",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_branch",
+        "alysis_code.swarm_orchestrator.push_branch",
         lambda *_a, **_k: (False, "push failed"),
     )
 
@@ -8916,7 +8910,7 @@ def test_swarm_remote_strict_existing_pr_does_not_block_merge(tmp_path: Path, mo
     merges: list[str] = []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.load_remote_settings_from_env",
+        "alysis_code.swarm_orchestrator.load_remote_settings_from_env",
         lambda: RemoteSettings(
             sync_mode="strict",
             remote_name="origin",
@@ -8925,15 +8919,15 @@ def test_swarm_remote_strict_existing_pr_does_not_block_merge(tmp_path: Path, mo
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.get_remote_url",
+        "alysis_code.swarm_orchestrator.get_remote_url",
         lambda *_a, **_k: "git@github.com:org/repo.git",
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_branch",
+        "alysis_code.swarm_orchestrator.push_branch",
         lambda *_a, **_k: (True, "pushed"),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.ensure_pr_or_mr",
+        "alysis_code.swarm_orchestrator.ensure_pr_or_mr",
         lambda *_a, **_k: (
             True,
             "https://github.com/org/repo/pull/77",
@@ -8942,7 +8936,7 @@ def test_swarm_remote_strict_existing_pr_does_not_block_merge(tmp_path: Path, mo
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_orchestrator.push_base",
+        "alysis_code.swarm_orchestrator.push_base",
         lambda *_a, **_k: (True, "base pushed"),
     )
 

@@ -1,6 +1,6 @@
 # Custom Tools
 
-Custom tools let you add trusted Python tools without changing Sylliptor itself.
+Custom tools let you add trusted Python tools without changing Alysis Code itself.
 
 They are intended for local or team-owned helpers such as issue lookups, repository metadata checks, private API reads, and repeatable project utilities.
 
@@ -8,12 +8,12 @@ Custom tools are trusted Python code. Review them the same way you would review 
 
 ## Tool Roots
 
-Sylliptor discovers custom tools from:
+Alysis Code discovers custom tools from:
 
-- project tools: `<workspace>/.sylliptor/tools/*.py`
+- project tools: `<workspace>/.alysis/tools/*.py`
 - user-global tools: `<user-config-dir>/tools/*.py`
 
-The user config directory follows the same platform config location used for Sylliptor config. `SYLLIPTOR_CONFIG_DIR` can redirect that root for tests or local overrides.
+The user config directory follows the same platform config location used for Alysis Code config. `ALYSIS_CONFIG_DIR` can redirect that root for tests or local overrides.
 
 Discovery is conservative:
 
@@ -99,7 +99,7 @@ Important rules:
 - `isolation` must be `subprocess`
 - `run(args)` is the only supported entrypoint
 - package-directory tools are not supported
-- tools must not import private Sylliptor host APIs
+- tools must not import private Alysis Code host APIs
 - `inprocess` execution is rejected
 
 Tools with missing required environment variables remain visible in CLI inspection output, but they are not exposed to the model until the variables are available.
@@ -136,8 +136,8 @@ This means editing, moving, or copying a project tool invalidates trust.
 Trust and untrust project tools with:
 
 ```bash
-sylliptor tool trust TOOL_NAME --path .
-sylliptor tool untrust TOOL_NAME --path .
+alysis tool trust TOOL_NAME --path .
+alysis tool untrust TOOL_NAME --path .
 ```
 
 Trust commands apply only to project tools.
@@ -165,13 +165,13 @@ Mode behavior:
 
 ## Execution Model
 
-Default execution is subprocess-based. For each invocation, Sylliptor:
+Default execution is subprocess-based. For each invocation, Alysis Code:
 
 - validates arguments against `input_schema`
 - verifies the source hash still matches discovery metadata
 - reloads project-tool trust state
 - executes a sealed temporary copy in a worker process
-- injects a small `SYLLIPTOR_*` environment contract
+- injects a small `ALYSIS_*` environment contract
 - passes only declared environment variables and declared secret references
 - applies selected capability checks in the worker
 - captures stdout/stderr previews and writes full logs to local artifacts
@@ -179,11 +179,11 @@ Default execution is subprocess-based. For each invocation, Sylliptor:
 
 Injected variables:
 
-- `SYLLIPTOR_WORKSPACE_ROOT`
-- `SYLLIPTOR_SESSION_ID`
-- `SYLLIPTOR_TOOL_PATH`
-- `SYLLIPTOR_TOOL_SCOPE`
-- `SYLLIPTOR_TOOL_NAME`
+- `ALYSIS_WORKSPACE_ROOT`
+- `ALYSIS_SESSION_ID`
+- `ALYSIS_TOOL_PATH`
+- `ALYSIS_TOOL_SCOPE`
+- `ALYSIS_TOOL_NAME`
 
 Unrelated host secrets are not inherited unless the manifest declares them.
 
@@ -192,23 +192,23 @@ Unrelated host secrets are not inherited unless the manifest declares them.
 List the effective catalog:
 
 ```bash
-sylliptor tool list --path .
+alysis tool list --path .
 ```
 
 Inspect one tool:
 
 ```bash
-sylliptor tool info TOOL_NAME --path .
+alysis tool info TOOL_NAME --path .
 ```
 
 Manage project-tool trust:
 
 ```bash
-sylliptor tool trust TOOL_NAME --path .
-sylliptor tool untrust TOOL_NAME --path .
+alysis tool trust TOOL_NAME --path .
+alysis tool untrust TOOL_NAME --path .
 ```
 
-`sylliptor tools` shows built-in tools. Custom tools use the separate `sylliptor tool ...` command group.
+`alysis tools` shows built-in tools. Custom tools use the separate `alysis tool ...` command group.
 
 ## Security Notes
 

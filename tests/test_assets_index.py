@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.assets import AssetError, AssetIndex, AssetRecord, ComprehensionData
-from sylliptor_agent_cli.assets.index import (
+from alysis_code.assets import AssetError, AssetIndex, AssetRecord, ComprehensionData
+from alysis_code.assets.index import (
     _AssetIndexLock,
     _build_lock_metadata,
     _metadata_text,
 )
-from sylliptor_agent_cli.assets.models import ComprehensionRecord
-from sylliptor_agent_cli.atomic_io import atomic_write_json
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.assets.models import ComprehensionRecord
+from alysis_code.atomic_io import atomic_write_json
+from alysis_code.forge import create_plan_run
 
 
 def _record(asset_id: str, sha: str, *, added_at: str = "2026-05-03T00:00:00+00:00") -> AssetRecord:
@@ -29,8 +29,8 @@ def _record(asset_id: str, sha: str, *, added_at: str = "2026-05-03T00:00:00+00:
         original_filename=f"{asset_id}.txt",
         size_bytes=5,
         sha256=sha,
-        stored_path=f".sylliptor/runs/r/assets/raw/{asset_id}/{asset_id}.txt",
-        extracted_text_path=f".sylliptor/runs/r/assets/raw/{asset_id}/{asset_id}.txt",
+        stored_path=f".alysis/runs/r/assets/raw/{asset_id}/{asset_id}.txt",
+        extracted_text_path=f".alysis/runs/r/assets/raw/{asset_id}/{asset_id}.txt",
         thumbnail_path=None,
         pinned=False,
         added_at=added_at,
@@ -208,7 +208,7 @@ def test_stale_lock_recovery_replaces_only_verified_stale_lock(
     )
     paths.assets_index_lock_path.write_text(stale_text, encoding="utf-8")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.index._lock_metadata_is_stale",
+        "alysis_code.assets.index._lock_metadata_is_stale",
         lambda metadata: metadata.get("owner_token") == "stale",
     )
 

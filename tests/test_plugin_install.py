@@ -7,31 +7,31 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.extensions import install as install_mod
-from sylliptor_agent_cli.extensions.install import (
+from alysis_code.extensions import install as install_mod
+from alysis_code.extensions.install import (
     ComponentInstallSummary,
     PluginInstallError,
     install_plugin,
     uninstall_plugin,
 )
-from sylliptor_agent_cli.extensions.models import ExtensionState, InstalledExtensionState
-from sylliptor_agent_cli.extensions.registry import RegistryEntry, RegistryFile
-from sylliptor_agent_cli.extensions.state import load_global_state
-from sylliptor_agent_cli.skills.install import SkillInstallResult
+from alysis_code.extensions.models import ExtensionState, InstalledExtensionState
+from alysis_code.extensions.registry import RegistryEntry, RegistryFile
+from alysis_code.extensions.state import load_global_state
+from alysis_code.skills.install import SkillInstallResult
 
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
 
 
 def _manifest(
     *,
     plugin_id: str = "acme.demo",
-    sylliptor: str = ">=0.1,<1",
+    alysis: str = ">=0.1,<1",
     platforms: str = '["linux", "darwin", "windows"]',
     components: bool = True,
 ) -> str:
@@ -46,7 +46,7 @@ author = "Acme"
 license = "MIT"
 
 [compatibility]
-sylliptor = "{sylliptor}"
+alysis = "{alysis}"
 platforms = {platforms}
 """
     if not components:
@@ -85,15 +85,15 @@ def _write_plugin_tree(
     root: Path,
     *,
     plugin_id: str = "acme.demo",
-    sylliptor: str = ">=0.1,<1",
+    alysis: str = ">=0.1,<1",
     platforms: str = '["linux", "darwin", "windows"]',
     components: bool = True,
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "sylliptor-plugin.toml").write_text(
+    (root / "alysis-plugin.toml").write_text(
         _manifest(
             plugin_id=plugin_id,
-            sylliptor=sylliptor,
+            alysis=alysis,
             platforms=platforms,
             components=components,
         ),
@@ -316,7 +316,7 @@ def test_manifest_validation_failure_aborts_before_subsystems(
 
     def clone(*, git_url: str, commit: str, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
-        (destination / "sylliptor-plugin.toml").write_text("schema_version = 1\n", encoding="utf-8")
+        (destination / "alysis-plugin.toml").write_text("schema_version = 1\n", encoding="utf-8")
 
     monkeypatch.setattr(install_mod, "_clone_pinned_git_repo", clone)
     monkeypatch.setattr(
@@ -335,7 +335,7 @@ def test_compatibility_version_mismatch_mentions_running_and_spec(
 ) -> None:
     _env(monkeypatch, tmp_path)
     _mock_registry(monkeypatch)
-    _mock_clone(monkeypatch, components=False, sylliptor=">=999")
+    _mock_clone(monkeypatch, components=False, alysis=">=999")
 
     with pytest.raises(PluginInstallError) as excinfo:
         install_plugin(source="acme.demo", repo_root=tmp_path, trust_prompt=lambda request: True)
@@ -536,7 +536,7 @@ def test_atomicity_write_failure_leaves_previous_state_unchanged(
     def fail_write(*args: object, **kwargs: object) -> None:
         raise OSError("write failed")
 
-    monkeypatch.setattr("sylliptor_agent_cli.extensions.state.atomic_write_json", fail_write)
+    monkeypatch.setattr("alysis_code.extensions.state.atomic_write_json", fail_write)
 
     with pytest.raises(PluginInstallError, match="write failed"):
         install_plugin(source="acme.demo", repo_root=tmp_path, trust_prompt=lambda request: True)

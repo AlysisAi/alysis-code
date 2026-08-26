@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.assets.index import AssetIndex
-from sylliptor_agent_cli.atomic_io import atomic_write_json
-from sylliptor_agent_cli.cli_impl.assets_modal import run_assets_modal
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import ForgeError, create_plan_run, load_plan, save_plan
+from alysis_code.assets.index import AssetIndex
+from alysis_code.atomic_io import atomic_write_json
+from alysis_code.cli_impl.assets_modal import run_assets_modal
+from alysis_code.config import AppConfig
+from alysis_code.forge import ForgeError, create_plan_run, load_plan, save_plan
 
 
 def _legacy_asset(paths, name: str, text: str) -> dict[str, object]:
@@ -41,7 +41,7 @@ def test_load_plan_triggers_legacy_asset_migration(
     cfg = AppConfig(model="fake-model")
     cfg.assets.enabled = False
 
-    monkeypatch.setattr("sylliptor_agent_cli.config.load_config", lambda: cfg)
+    monkeypatch.setattr("alysis_code.config.load_config", lambda: cfg)
 
     migrated = load_plan(paths)
 
@@ -61,7 +61,7 @@ def test_load_plan_v2_is_noop_without_lock(
     def fail_load_config() -> AppConfig:
         raise AssertionError("v2 load should not check migration config")
 
-    monkeypatch.setattr("sylliptor_agent_cli.config.load_config", fail_load_config)
+    monkeypatch.setattr("alysis_code.config.load_config", fail_load_config)
 
     loaded = load_plan(paths)
 
@@ -82,7 +82,7 @@ def test_load_plan_rejects_malformed_legacy_assets_without_migrating(
     cfg = AppConfig(model="fake-model")
     cfg.assets.enabled = False
 
-    monkeypatch.setattr("sylliptor_agent_cli.config.load_config", lambda: cfg)
+    monkeypatch.setattr("alysis_code.config.load_config", lambda: cfg)
 
     with pytest.raises(ForgeError, match="'assets' must be an array"):
         load_plan(paths)
@@ -105,7 +105,7 @@ def test_assets_modal_triggers_legacy_asset_migration(
     save_plan(paths, plan)
     cfg = AppConfig(model="fake-model")
     cfg.assets.enabled = False
-    monkeypatch.setattr("sylliptor_agent_cli.config.load_config", lambda: cfg)
+    monkeypatch.setattr("alysis_code.config.load_config", lambda: cfg)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     stream = io.StringIO()
 

@@ -6,15 +6,15 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agentbox_integration as agentbox_integration
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.agentbox_integration import (
+import alysis_code.agentbox_integration as agentbox_integration
+from alysis_code.agent_loop import create_session
+from alysis_code.agentbox_integration import (
     AgentBoxTelemetry,
     sanitize_task_hint,
     tool_category,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.types import LLMResponse, LLMUsage, ToolCall
+from alysis_code.config import AppConfig
+from alysis_code.llm.types import LLMResponse, LLMUsage, ToolCall
 
 
 class _ScriptedClient:
@@ -204,7 +204,9 @@ def test_agentbox_run_turn_emits_metadata_only_events(
 
     try:
         assert (
-            session.run_turn("Inspect /workspace/private-repo/src/auth.py and summarize `def x()`.")
+            session.run_turn(
+                "Inspect /Users/bings_jr/alysis internal/src/auth.py and summarize `def x()`."
+            )
             == 0
         )
         assert session.run_turn("Run the verification step.") == 0
@@ -226,7 +228,7 @@ def test_agentbox_run_turn_emits_metadata_only_events(
         "Inspect file and summarize.",
         "Run the verification step.",
     ]
-    assert not any("/workspace" in event or "def x" in event for event in task_events)
+    assert not any("/Users" in event or "def x" in event for event in task_events)
 
 
 def test_agentbox_uses_enrolled_machine_config(
@@ -250,8 +252,8 @@ def test_agentbox_uses_enrolled_machine_config(
                 # valid on Windows as well as POSIX hosts.
                 f'queue_dir = "{(tmp_path / "queue").as_posix()}"',
                 "",
-                "[runtime.sylliptor]",
-                'agent_id = "machine_b_sylliptor_custom"',
+                "[runtime.alysis]",
+                'agent_id = "machine_b_alysis_custom"',
             ]
         ),
         encoding="utf-8",
@@ -269,7 +271,7 @@ def test_agentbox_uses_enrolled_machine_config(
         "org_id": "org_a",
         "person_id": "person_a",
         "machine_id": "machine_b",
-        "agent_id": "machine_b_sylliptor_custom",
+        "agent_id": "machine_b_alysis_custom",
         "runtime_version": "test",
         "queue_dir": str(tmp_path / "sdk-queue"),
         "task_detail": "category",
@@ -328,12 +330,12 @@ def test_agentbox_ignores_invalid_or_incomplete_config(
 
 def test_agentbox_task_sanitizer_removes_content_and_paths() -> None:
     hint = sanitize_task_hint(
-        "Refactor /workspace/project/src/auth.py then ```secret diff``` and `def login()` "
+        "Refactor /Users/bings_jr/project/src/auth.py then ```secret diff``` and `def login()` "
         + ("x" * 200)
     )
 
     assert 0 < len(hint) <= 140
-    assert "/workspace" not in hint
+    assert "/Users" not in hint
     assert "secret diff" not in hint
     assert "def login" not in hint
 
@@ -346,7 +348,7 @@ def test_agentbox_tool_category_mapping_matches_event_contract() -> None:
     assert tool_category("custom_agentbox_probe") == "other"
 
 
-def test_unreachable_agentbox_plane_does_not_fail_sylliptor_run(
+def test_unreachable_agentbox_plane_does_not_fail_alysis_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

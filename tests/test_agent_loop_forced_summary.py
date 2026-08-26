@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.types import AssistantResponsePhase
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.types import AssistantResponsePhase
+from alysis_code.session_store import read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
 
 SMOKE_MODEL = "gpt-4o-mini"
 

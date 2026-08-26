@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.integration_gate import integration_issue_signature_for_commands
-from sylliptor_agent_cli.knowledge_base import (
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.integration_gate import integration_issue_signature_for_commands
+from alysis_code.knowledge_base import (
     rebuild_knowledge_index,
     write_decision_entry,
     write_fact_entry,
@@ -14,8 +14,8 @@ from sylliptor_agent_cli.knowledge_base import (
     write_task_attempt_entry,
     write_task_attempt_resolution_entry,
 )
-from sylliptor_agent_cli.knowledge_capture import persist_execution_knowledge_capture
-from sylliptor_agent_cli.knowledge_librarian import (
+from alysis_code.knowledge_capture import persist_execution_knowledge_capture
+from alysis_code.knowledge_librarian import (
     prepare_planner_knowledge,
     prepare_relevant_knowledge,
     select_relevant_knowledge,

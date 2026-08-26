@@ -10,17 +10,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from sylliptor_agent_cli.cli_impl.tui import run_tui
-from sylliptor_agent_cli.cli_impl.tui.app import _model_access_setup_hint
-from sylliptor_agent_cli.cli_impl.tui.config import is_tui_enabled
-from sylliptor_agent_cli.cli_impl.tui.content import (
+from alysis_code.cli_impl.tui import run_tui
+from alysis_code.cli_impl.tui.app import _model_access_setup_hint
+from alysis_code.cli_impl.tui.config import is_tui_enabled
+from alysis_code.cli_impl.tui.content import (
     HEADING_TEXT,
     HINT_TEXT,
     pretty_model_label,
 )
-from sylliptor_agent_cli.cli_impl.tui.footer import footer_fragments
-from sylliptor_agent_cli.cli_impl.tui.owl import load_owl_animation
-from sylliptor_agent_cli.cli_impl.tui.state import TuiState
+from alysis_code.cli_impl.tui.footer import footer_fragments
+from alysis_code.cli_impl.tui.owl import load_owl_animation
+from alysis_code.cli_impl.tui.state import TuiState
 
 
 def _plain(fragments) -> str:
@@ -31,15 +31,21 @@ def _plain(fragments) -> str:
 
 
 def test_tui_enabled_by_default(monkeypatch):
-    monkeypatch.delenv("SYLLIPTOR_TUI", raising=False)
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
     assert is_tui_enabled() is True
+
+
+def test_legacy_tui_flag_still_disables_tui(monkeypatch):
+    monkeypatch.delenv("ALYSIS_TUI", raising=False)
+    monkeypatch.setenv("SYLLIPTOR_TUI", "0")
+    assert is_tui_enabled() is False
 
 
 @pytest.mark.parametrize(
     "value,expected", [("1", True), ("true", True), ("0", False), ("off", False), ("", True)]
 )
 def test_tui_flag_parsing(monkeypatch, value, expected):
-    monkeypatch.setenv("SYLLIPTOR_TUI", value)
+    monkeypatch.setenv("ALYSIS_TUI", value)
     assert is_tui_enabled() is expected
 
 
@@ -47,20 +53,20 @@ def test_tui_flag_parsing(monkeypatch, value, expected):
 
 
 def test_static_text_matches_target():
-    from sylliptor_agent_cli.cli_impl.tui.content import CREDIT_TEXT
+    from alysis_code.cli_impl.tui.content import CREDIT_TEXT
 
-    # The heading is the Sylliptor wordmark (the prompt question lives in the box).
-    assert HEADING_TEXT == "Sylliptor"
+    # The heading is the Alysis Code wordmark (the prompt question lives in the box).
+    assert HEADING_TEXT == "Alysis Code"
     assert CREDIT_TEXT == "crafted by AlysisAI"
-    # Hint leads with Sylliptor's signature command; @ file-mentions aren't wired.
+    # Hint leads with Alysis Code's signature command; @ file-mentions aren't wired.
     assert "/forge" in HINT_TEXT
     assert "@" not in HINT_TEXT
 
 
-def test_input_placeholder_is_sylliptor_greeting():
-    from sylliptor_agent_cli.cli_impl.tui.content import INPUT_PLACEHOLDER
+def test_input_placeholder_is_alysis_greeting():
+    from alysis_code.cli_impl.tui.content import INPUT_PLACEHOLDER
 
-    assert "Sylliptor" in INPUT_PLACEHOLDER
+    assert "Alysis Code" in INPUT_PLACEHOLDER
     assert "coding buddy" in INPUT_PLACEHOLDER
 
 
@@ -88,51 +94,56 @@ def test_pretty_model_label(model, expected):
 # --------------------------- footer ---------------------------
 
 
-def test_footer_auto_on():
-    state = TuiState(model_name="deepseek-chat", username="developer", context_pct=100.0)
+def test_footer_core_fields():
+    state = TuiState(model_name="deepseek-chat", username="perdikis", context_pct=100.0)
     text = _plain(footer_fragments(state, width=90))
-    assert "sylliptor" in text
+    assert "alysis" in text
     assert "DeepSeek Chat" in text
     assert "context: 100% left" in text
     assert "0 processed" in text and "$0.0000" in text
-    assert "developer" in text
-    assert "sensitive: auto" in text and "shift+tab" not in text
+    assert "perdikis" in text
+    assert "shift+tab" not in text
     # Distinct from Cline: no "(0)", no "▶▶", no Plan/Act toggle.
     assert "(0)" not in text
     assert "▶▶" not in text
     assert "Plan" not in text and "Act" not in text and "(Tab)" not in text
 
 
-def test_footer_auto_off():
-    state = TuiState(model_name="deepseek-chat", username="developer", auto_approve=False)
-    text = _plain(footer_fragments(state, width=90))
-    assert "sensitive: ask" in text
-    assert "auto-approve off" not in text
+def test_footer_has_no_separate_sensitive_indicator():
+    # The approval policy is the execution mode and nothing else. A second
+    # indicator could disagree with the mode badge, which is exactly the
+    # "footer says safe while everything auto-approves" bug this removed.
+    for mode in ("readonly", "review", "auto", "fullaccess"):
+        text = _plain(
+            footer_fragments(
+                TuiState(model_name="deepseek-chat", exec_mode=mode, username="perdikis"),
+                width=100,
+            )
+        )
+        assert "sensitive:" not in text
+        assert "auto-approve" not in text
 
 
-def test_footer_fast_mode_with_manual_sensitive_approvals_is_not_contradictory():
-    state = TuiState(
-        model_name="deepseek-chat",
-        exec_mode="auto",
-        username="developer",
-        auto_approve=False,
+def test_footer_mode_badge_is_the_approval_indicator():
+    text = _plain(
+        footer_fragments(
+            TuiState(model_name="deepseek-chat", exec_mode="auto", username="perdikis"),
+            width=100,
+        )
     )
-    text = _plain(footer_fragments(state, width=100))
-
     assert "fast" in text
-    assert "sensitive: ask" in text
-    assert "auto-approve off" not in text
+    assert "sensitive:" not in text
 
 
 def test_footer_shows_workspace_and_branch():
     state = TuiState(
         model_name="m",
-        username="developer",
+        username="perdikis",
         workspace="~/coder-plugin-install",
         branch="feat/tui-rebuild",
     )
     text = _plain(footer_fragments(state, width=120))
-    assert "developer" in text
+    assert "perdikis" in text
     assert "~/coder-plugin-install" in text
     assert "feat/tui-rebuild" in text
 
@@ -145,12 +156,15 @@ def test_footer_context_indicator_value():
 
 
 def test_footer_context_unmeasured_reads_na_not_fabricated_100():
+    # Default state has no measured value yet: the footer must say n/a rather
+    # than a fabricated "100% left" (which would mislead if the compute failed).
     text = _plain(footer_fragments(TuiState(model_name="m", username="u"), width=90))
     assert "context: n/a" in text
     assert "% left" not in text.split("\n")[0]
 
 
 def test_footer_context_never_rounds_up_to_full_or_down_to_empty():
+    # A partially-used window reads 1–99, never a misleading 100 or premature 0.
     near_full = _plain(footer_fragments(TuiState(model_name="m", context_pct=99.6), width=90))
     assert "context: 99% left" in near_full
     near_empty = _plain(footer_fragments(TuiState(model_name="m", context_pct=0.4), width=90))
@@ -158,7 +172,9 @@ def test_footer_context_never_rounds_up_to_full_or_down_to_empty():
 
 
 def test_footer_context_metric_uses_effective_provider_capacity():
-    from sylliptor_agent_cli.cli_impl.commands.startup import _chat_context_percent_value
+    from alysis_code.cli_impl.commands.startup import (
+        _chat_context_percent_value,
+    )
 
     measured = SimpleNamespace(
         _hud_context_cache=SimpleNamespace(
@@ -176,6 +192,8 @@ def test_footer_context_metric_uses_effective_provider_capacity():
         )
     )
     assert _chat_context_percent_value(window_fallback) == 95.7
+
+    # No measurement yet → None (footer renders n/a).
     assert _chat_context_percent_value(SimpleNamespace(_hud_context_cache=None)) is None
 
 
@@ -184,7 +202,7 @@ def test_footer_usage_hud_off_hides_usage_metrics():
         footer_fragments(
             TuiState(
                 model_name="deepseek-chat",
-                username="developer",
+                username="perdikis",
                 usage_hud_enabled=False,
                 context_pct=42.0,
                 tokens=1234,
@@ -201,7 +219,7 @@ def test_footer_usage_hud_off_hides_usage_metrics():
 
 
 def test_tui_session_state_sync_updates_local_command_footer_state():
-    from sylliptor_agent_cli.cli_impl.chat.loop import _sync_tui_session_state
+    from alysis_code.cli_impl.chat.loop import _sync_tui_session_state
 
     state = TuiState(
         model_name="m",
@@ -211,6 +229,7 @@ def test_tui_session_state_sync_updates_local_command_footer_state():
     )
     session = SimpleNamespace(
         mode="auto",
+        cfg=SimpleNamespace(),
         _usage_hud_enabled=False,
     )
 
@@ -228,7 +247,7 @@ def test_footer_forge_badge_hidden_by_default():
 def test_footer_forge_badge_shown_when_active():
     state = TuiState(
         model_name="m",
-        username="developer",
+        username="perdikis",
         exec_mode="review",
         forge_mode=True,
         forge_run_id="run-1a2b",
@@ -245,7 +264,7 @@ def test_footer_forge_badge_shown_when_active():
 
 
 def test_forge_placeholder_constant():
-    from sylliptor_agent_cli.cli_impl.tui.content import INPUT_PLACEHOLDER_FORGE
+    from alysis_code.cli_impl.tui.content import INPUT_PLACEHOLDER_FORGE
 
     assert "Forge" in INPUT_PLACEHOLDER_FORGE
     assert "/goal" in INPUT_PLACEHOLDER_FORGE
@@ -256,10 +275,12 @@ def test_footer_is_two_lines_and_right_aligned():
     lines = _plain(footer_fragments(state, width=100)).split("\n")
     assert len(lines) == 2
     assert lines[0].rstrip().endswith("$0.0000")  # cost right-aligned, line 1
-    assert lines[0].startswith("◇ sylliptor")  # brand mark + wordmark, line 1 left
+    assert lines[0].startswith("◇ alysis")  # brand mark + wordmark, line 1 left
     assert "1,234 processed" in lines[0]  # comma-grouped cumulative usage
-    assert "u" in lines[1]  # username still present on line 2
-    assert lines[1].rstrip().endswith("sensitive: auto")  # approval policy right-aligned
+    assert lines[1].startswith("u")  # username remains on line 2
+    # Line 2 has no right half — the mode badge on the left is the sole
+    # approval indicator, so nothing is right-aligned here.
+    assert lines[1].rstrip().endswith("u")
 
 
 def test_footer_never_overflows_width():
@@ -291,8 +312,8 @@ def test_owl_frames_load():
 
 
 def test_neutral_owl_uses_the_terminal_foreground(monkeypatch) -> None:
-    from sylliptor_agent_cli.cli_impl.commands import welcome as welcome_mod
-    from sylliptor_agent_cli.cli_impl.tui import owl as owl_mod
+    from alysis_code.cli_impl.commands import welcome as welcome_mod
+    from alysis_code.cli_impl.tui import owl as owl_mod
 
     monkeypatch.setattr(welcome_mod, "_detect_owl_theme", lambda _stream: "neutral")
 
@@ -306,13 +327,13 @@ def test_neutral_owl_uses_the_terminal_foreground(monkeypatch) -> None:
 # --------------------------- headless app ---------------------------
 
 
-def _run_headless(state: TuiState, keys: str):
+def _run_headless(state: TuiState, keys: str, **kwargs):
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
     with create_pipe_input() as pipe:
         pipe.send_text(keys)
-        return run_tui(state, owl_color=False, input=pipe, output=DummyOutput())
+        return run_tui(state, owl_color=False, input=pipe, output=DummyOutput(), **kwargs)
 
 
 def test_app_exits_on_exit_word():
@@ -372,7 +393,7 @@ def test_app_login_picker_exits_with_selected_connection():
                 "/login": lambda: {
                     "title": "Log in",
                     "rows": [
-                        {"label": "Sylliptor", "value": "sylliptor"},
+                        {"label": "Alysis Code", "value": "alysis"},
                         {"label": "ChatGPT Codex", "value": "openai-codex"},
                     ],
                     "on_select": lambda value: {
@@ -391,7 +412,7 @@ def test_app_explicit_login_connection_exits_for_browser_flow():
     from prompt_toolkit.output import DummyOutput
 
     with create_pipe_input() as pipe:
-        pipe.send_text("/login sylliptor\r")
+        pipe.send_text("/login alysis\r")
         result, _transcript = run_tui(
             TuiState(),
             owl_color=False,
@@ -399,14 +420,51 @@ def test_app_explicit_login_connection_exits_for_browser_flow():
             output=DummyOutput(),
         )
 
-    assert result == ("login_connection", "sylliptor")
+    assert result == ("login_connection", "alysis")
 
 
-def test_app_shift_tab_toggles_auto_approve_then_exits():
-    state = TuiState(model_name="deepseek-chat", username="t", auto_approve=True)
-    # Shift+Tab changes approval prompts from auto-allow to ask, then exits.
+def test_app_shift_tab_invokes_mode_cycle_then_exits():
+    state = TuiState(model_name="deepseek-chat", username="t", exec_mode="review")
+    calls: list[int] = []
+
+    def _cycle() -> list[tuple[str, str]] | None:
+        calls.append(1)
+        state.exec_mode = "auto"
+        return [("system", "Mode → fast (auto)")]
+
+    _run_headless(state, "\x1b[Z/exit\r", mode_cycle=_cycle)
+    assert calls == [1]
+    assert state.exec_mode == "auto"
+
+
+def test_app_shift_tab_is_inert_without_a_mode_cycle_callback():
+    # No callback (Phase 1 shell) must not flip a footer-only field: the mode is
+    # owned by the session, so a display-only change would be a lie.
+    state = TuiState(model_name="deepseek-chat", username="t", exec_mode="review")
     _run_headless(state, "\x1b[Z/exit\r")
-    assert state.auto_approve is False
+    assert state.exec_mode == "review"
+
+
+def test_tui_state_has_no_auto_approve_axis():
+    # The approval policy lives in exec_mode alone; a second toggle could
+    # auto-answer every prompt review mode raised while the badge read "safe".
+    state = TuiState(model_name="m")
+    assert not hasattr(state, "auto_approve")
+    assert not hasattr(state, "toggle_auto_approve")
+
+
+def test_next_exec_mode_cycles_all_four_modes_and_wraps():
+    from alysis_code.cli_impl.tui.state import EXEC_MODE_CYCLE, next_exec_mode
+
+    assert EXEC_MODE_CYCLE == ("readonly", "review", "auto", "fullaccess")
+    assert next_exec_mode("readonly") == "review"
+    assert next_exec_mode("review") == "auto"
+    assert next_exec_mode("auto") == "fullaccess"
+    assert next_exec_mode("fullaccess") == "readonly"
+    # Unknown/empty starts the cycle rather than raising.
+    assert next_exec_mode("") == "readonly"
+    assert next_exec_mode("nonsense") == "readonly"
+    assert next_exec_mode("  REVIEW  ") == "auto"
 
 
 # --------------------------- mouse wheel / status line ---------------------------
@@ -421,7 +479,7 @@ def test_tui_state_has_no_mouse_mode_toggle():
 def test_footer_omits_mouse_mode_chip():
     default = _plain(footer_fragments(TuiState(model_name="m", username="u"), width=120))
     line2 = default.split("\n")[1]
-    assert line2.rstrip().endswith("sensitive: auto")
+    assert line2.rstrip().endswith("u")
     assert "F2" not in line2
 
 
@@ -437,7 +495,7 @@ def test_footer_omits_repeated_connection_status():
 
 
 def test_status_line_is_blank_when_idle_and_shows_interrupt_when_running():
-    from sylliptor_agent_cli.cli_impl.tui.app import _status_line_fragments
+    from alysis_code.cli_impl.tui.app import _status_line_fragments
 
     assert _plain(_status_line_fragments(running=False)) == ""
     assert "Copied 12 characters" in _plain(
@@ -472,7 +530,7 @@ def test_has_conversation_ignores_startup_notices():
     # Startup notices (the streaming-disabled warning, system/trace lines) must
     # NOT count as a conversation, otherwise they dismiss the owl landing the
     # moment the app opens.
-    from sylliptor_agent_cli.cli_impl.tui.app import _has_conversation
+    from alysis_code.cli_impl.tui.app import _has_conversation
 
     assert _has_conversation([]) is False
     assert _has_conversation([("warn", "streaming is disabled")]) is False
@@ -488,7 +546,7 @@ def test_startup_warning_keeps_welcome_then_exits():
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from sylliptor_agent_cli.cli_impl.tui.app import _has_conversation
+    from alysis_code.cli_impl.tui.app import _has_conversation
 
     class _WarningSession:
         def __init__(self, surface) -> None:

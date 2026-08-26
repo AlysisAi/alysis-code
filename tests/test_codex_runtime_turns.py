@@ -9,13 +9,13 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_runtimes import RuntimeTurnRequest
-from sylliptor_agent_cli.agent_runtimes.codex_cli import (
+from alysis_code.agent_runtimes import RuntimeTurnRequest
+from alysis_code.agent_runtimes.codex_cli import (
     CodexCliRuntimeAdapter,
     _runtime_environment,
     _terminate_process_tree,
 )
-from sylliptor_agent_cli.config import AgentRuntimeSettings
+from alysis_code.config import AgentRuntimeSettings
 
 _THREAD_ID = "123e4567-e89b-12d3-a456-426614174000"
 _OTHER_THREAD_ID = "123e4567-e89b-12d3-a456-426614174001"
@@ -118,7 +118,7 @@ def test_fresh_turn_uses_real_cwd_sandbox_images_ephemeral_and_minimal_env(
     image = tmp_path / "diagram.png"
     image.write_bytes(b"image")
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._resolve_executable",
+        "alysis_code.agent_runtimes.codex_cli._resolve_executable",
         lambda _configured: "/opt/codex/bin/codex",
     )
     monkeypatch.setattr(subprocess, "Popen", _SuccessfulPopen)
@@ -182,7 +182,7 @@ def test_resume_turn_uses_resume_grammar_and_workspace_write_override(
 ) -> None:
     _SuccessfulPopen.instances.clear()
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._resolve_executable",
+        "alysis_code.agent_runtimes.codex_cli._resolve_executable",
         lambda _configured: "/opt/codex/bin/codex",
     )
     monkeypatch.setattr(subprocess, "Popen", _SuccessfulPopen)
@@ -215,10 +215,6 @@ def test_resume_turn_rejects_option_shaped_or_non_uuid_session_id(
     def fail_popen(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("Codex must not start for an invalid session id")
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._resolve_executable",
-        lambda _configured: None,
-    )
     monkeypatch.setattr(subprocess, "Popen", fail_popen)
 
     with pytest.raises(ValueError, match="must be UUIDs"):
@@ -257,7 +253,7 @@ def test_turn_timeout_cleans_process_tree_and_returns_partial_events(
     _TimeoutPopen.instances.clear()
     terminated: list[_TimeoutPopen] = []
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._resolve_executable",
+        "alysis_code.agent_runtimes.codex_cli._resolve_executable",
         lambda _configured: "/opt/codex/bin/codex",
     )
     monkeypatch.setattr(subprocess, "Popen", _TimeoutPopen)
@@ -267,7 +263,7 @@ def test_turn_timeout_cleans_process_tree_and_returns_partial_events(
         process.returncode = -getattr(signal, "SIGKILL", signal.SIGTERM)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._terminate_process_tree",
+        "alysis_code.agent_runtimes.codex_cli._terminate_process_tree",
         fake_terminate,
     )
 
@@ -309,12 +305,12 @@ def test_keyboard_interrupt_cleans_process_tree_before_propagating(
             return self.returncode
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._resolve_executable",
+        "alysis_code.agent_runtimes.codex_cli._resolve_executable",
         lambda _configured: "/opt/codex/bin/codex",
     )
     monkeypatch.setattr(subprocess, "Popen", InterruptPopen)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.agent_runtimes.codex_cli._terminate_process_tree",
+        "alysis_code.agent_runtimes.codex_cli._terminate_process_tree",
         lambda process: terminated.append(process),
     )
 

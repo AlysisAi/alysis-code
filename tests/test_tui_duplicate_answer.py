@@ -17,8 +17,8 @@ Both are content-based and provider-agnostic (no model-specific logic).
 
 from __future__ import annotations
 
-from sylliptor_agent_cli.cli_impl.tui.app import _duplicate_assistant_indices
-from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
+from alysis_code.cli_impl.tui.app import _duplicate_assistant_indices
+from alysis_code.cli_impl.tui.transcript import TuiTranscript
 
 
 def _assistant_texts(t: TuiTranscript) -> list[str]:

@@ -6,8 +6,8 @@ import socket
 import httpx
 import pytest
 
-from sylliptor_agent_cli.safety import SafeHttpError, safe_http_request
-from sylliptor_agent_cli.safety import safe_http as safe_http_mod
+from alysis_code.safety import SafeHttpError, safe_http_request
+from alysis_code.safety import safe_http as safe_http_mod
 
 
 def _run(coro: object) -> httpx.Response:

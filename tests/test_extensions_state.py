@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.extensions.models import ExtensionState, ProjectExtensionOverrides
-from sylliptor_agent_cli.extensions.state import (
+from alysis_code.extensions.models import ExtensionState, ProjectExtensionOverrides
+from alysis_code.extensions.state import (
     compute_effective_enabled,
     load_global_state,
     load_project_overrides,
@@ -17,7 +17,7 @@ def test_load_missing_global_and_project_state_returns_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
 
     global_state = load_global_state()
     project_overrides = load_project_overrides(tmp_path / "repo")
@@ -53,8 +53,8 @@ def test_state_models_preserve_unknown_keys_when_loaded(
     data_dir = tmp_path / "data"
     repo_root = tmp_path / "repo"
     (data_dir / "extensions").mkdir(parents=True, exist_ok=True)
-    (repo_root / ".sylliptor").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(data_dir))
+    (repo_root / ".alysis").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(data_dir))
 
     (data_dir / "extensions" / "state.json").write_text(
         json.dumps(
@@ -66,7 +66,7 @@ def test_state_models_preserve_unknown_keys_when_loaded(
         ),
         encoding="utf-8",
     )
-    (repo_root / ".sylliptor" / "extensions.json").write_text(
+    (repo_root / ".alysis" / "extensions.json").write_text(
         json.dumps(
             {
                 "enabled": ["ext.two"],

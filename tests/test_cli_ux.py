@@ -12,22 +12,22 @@ from typing import Any
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import chat as chat_facade
-from sylliptor_agent_cli.cli_impl import setup_wizard as setup_wizard_mod
-from sylliptor_agent_cli.cli_impl.commands import welcome as welcome_mod
-from sylliptor_agent_cli.compaction.conversation_compactor import CompactionState
-from sylliptor_agent_cli.config import AppConfig, ConfigError, load_config, save_config
-from sylliptor_agent_cli.profiles import ProfileSpec
+from alysis_code import cli as cli_mod
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import chat as chat_facade
+from alysis_code.cli_impl import setup_wizard as setup_wizard_mod
+from alysis_code.cli_impl.commands import welcome as welcome_mod
+from alysis_code.compaction.conversation_compactor import CompactionState
+from alysis_code.config import AppConfig, ConfigError, load_config, save_config
+from alysis_code.profiles import ProfileSpec
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
     }
 
@@ -89,7 +89,7 @@ def test_forge_llm_commands_use_subscription_readiness_gate(monkeypatch) -> None
     ]
 
     for argv, expected in cases:
-        result = runner.invoke(sylliptor_app, argv)
+        result = runner.invoke(alysis_app, argv)
         assert result.exit_code == 17, result.output
         assert calls[-1] == expected
 
@@ -97,13 +97,13 @@ def test_forge_llm_commands_use_subscription_readiness_gate(monkeypatch) -> None
 def test_no_args_shows_home_screen(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [],
         input="quit\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
-    assert "Sylliptor Home" in result.output
+    assert "Alysis Code Home" in result.output
     assert "Quick actions" in result.output
 
 
@@ -118,7 +118,7 @@ def test_no_args_interactive_defaults_to_chat(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
-    monkeypatch.delenv("SYLLIPTOR_HOME_PROMPT", raising=False)
+    monkeypatch.delenv("ALYSIS_HOME_PROMPT", raising=False)
     monkeypatch.setattr(cli_mod.typer, "prompt", _unexpected_prompt)
     monkeypatch.setattr(cli_mod, "chat", _fake_chat)
     monkeypatch.setattr(cli_mod, "_maybe_run_first_run_setup_wizard", lambda: True)
@@ -153,11 +153,11 @@ def test_config_set_cannot_bypass_subscription_model_and_effort_menu(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(_subscription_cfg())
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["config", "set", "model", "not-in-catalog"],
         env=_env(tmp_path),
     )
@@ -179,7 +179,7 @@ def test_run_rejects_blank_instruction_before_agent_call(
 
     for instruction in ("", "   "):
         result = runner.invoke(
-            sylliptor_app,
+            alysis_app,
             ["run", "--path", str(tmp_path / "repo"), "--create-path", instruction],
             env=_env(tmp_path),
         )
@@ -193,7 +193,7 @@ def test_setup_wizard_saves_config(monkeypatch, tmp_path: Path) -> None:
     _patch_setup_wizard_dependencies(monkeypatch)
     runner = CliRunner()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["setup"],
         input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
@@ -210,7 +210,7 @@ def test_setup_wizard_can_persist_api_key(monkeypatch, tmp_path: Path) -> None:
     _patch_setup_wizard_dependencies(monkeypatch)
     runner = CliRunner()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["setup"],
         input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
@@ -220,7 +220,7 @@ def test_setup_wizard_can_persist_api_key(monkeypatch, tmp_path: Path) -> None:
     credentials = json.loads((tmp_path / "cfg" / "credentials.json").read_text(encoding="utf-8"))
     assert credentials["profile_keys"]["openai-responses"] == "persisted-key"
 
-    show = runner.invoke(sylliptor_app, ["config", "show"], env=_env(tmp_path))
+    show = runner.invoke(alysis_app, ["config", "show"], env=_env(tmp_path))
     assert show.exit_code == 0
     payload = json.loads(show.output)
     assert payload["api_key_set"] is True
@@ -230,7 +230,7 @@ def test_setup_wizard_can_persist_api_key(monkeypatch, tmp_path: Path) -> None:
 def test_config_commands_can_set_and_clear_persisted_api_key(tmp_path: Path) -> None:
     runner = CliRunner()
     set_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["config", "set-api-key"],
         input="persisted-key\n",
         env=_env(tmp_path),
@@ -240,7 +240,7 @@ def test_config_commands_can_set_and_clear_persisted_api_key(tmp_path: Path) -> 
     assert credentials_path.exists()
 
     clear_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["config", "clear-api-key"],
         env=_env(tmp_path),
     )
@@ -618,7 +618,7 @@ def test_chat_help_panel_uses_compact_text_on_narrow_terminal(monkeypatch) -> No
     assert "/examples" not in panel.renderable
     assert "/usage-hud" not in panel.renderable
     assert "/usage  token count & cost; /usage hud on|off toggles HUD" in panel.renderable
-    assert "/subagents" not in panel.renderable
+    assert "/subagents  open an active subagent run" in panel.renderable
     assert "/skills" not in panel.renderable
     assert "/context  context window left" in panel.renderable
     assert "/ctx" not in panel.renderable
@@ -642,6 +642,7 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
         "/persona",
         "/ask",
         "/status",
+        "/subagents",
         "/terminals",
         "/pwd",
         "/usage",
@@ -655,7 +656,6 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
         "/toolbar",
         "/assets",
         "/image",
-        "/subagent",
         "/forge",
         "/report",
         "/feedback",
@@ -676,9 +676,6 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
             "/terminals show",
             "/terminals kill",
             "/terminals help",
-            "/subagent on",
-            "/subagent off",
-            "/subagent status",
             "/assets",
             "/plan mode",
             "/plan approve",
@@ -695,9 +692,6 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
             "/terminals show",
             "/terminals kill",
             "/terminals help",
-            "/subagent on",
-            "/subagent off",
-            "/subagent status",
             "/assets",
             "/execute plan",
             "/goal",
@@ -712,14 +706,38 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
     )
 
 
+def test_removed_subagent_command_is_absent_from_chat_registries() -> None:
+    assert "/subagent" not in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
+    assert "/subagent" not in cli_mod._CHAT_COMMANDS
+    assert not any(
+        command.startswith("/subagent ")
+        for command in cli_mod._chat_completer_commands()
+    )
+    suggestion = cli_mod._suggest_chat_command("/subagen")
+    assert suggestion != "/subagent"
+    assert suggestion is None or suggestion in cli_mod._CHAT_COMMANDS
+    stream = io.StringIO()
+    Console(file=stream, force_terminal=False).print(cli_mod._chat_help_panel())
+    assert re.search(r"/subagent(?:\s|$)", stream.getvalue()) is None
+
+
+def test_plural_subagents_command_is_in_every_chat_registry() -> None:
+    assert "/subagents" in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
+    assert "/subagents" in cli_mod._CHAT_COMMANDS
+    assert "/subagents" in cli_mod._chat_completer_commands()
+    stream = io.StringIO()
+    Console(file=stream, force_terminal=False).print(cli_mod._chat_help_panel())
+    assert "/subagents" in stream.getvalue()
+
+
 def test_chat_config_menu_reload_uses_injected_helpers_without_login_shadowing(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl import config_menu as config_menu_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
     monkeypatch.setattr(
         config_menu_mod,
@@ -832,8 +850,8 @@ def test_chat_config_menu_closes_session_when_connection_protocol_changes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl import config_menu as config_menu_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
 
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
     monkeypatch.setattr(
@@ -870,9 +888,9 @@ def test_chat_login_closes_session_when_connection_protocol_changes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli import config as config_mod
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
-    from sylliptor_agent_cli.cli_impl.commands import auth as auth_mod
+    from alysis_code import config as config_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl.commands import auth as auth_mod
 
     monkeypatch.setattr(
         auth_mod,
@@ -908,8 +926,8 @@ def test_chat_config_menu_closes_subscription_session_when_model_pair_changes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl import config_menu as config_menu_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
 
     previous = _subscription_cfg(model="gpt-codex-old", effort="high")
     reloaded = _subscription_cfg(model="gpt-codex-new", effort="xhigh")
@@ -955,10 +973,10 @@ def test_chat_config_set_model_reports_success_after_reload(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
-    from sylliptor_agent_cli.config import load_config
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.config import load_config
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     reloaded: list[AppConfig] = []
 
     def fake_apply_config_menu_changes_to_session(*, session: Any, cfg: AppConfig) -> None:
@@ -995,7 +1013,7 @@ def test_chat_config_set_cannot_bypass_subscription_model_picker(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     cfg = _subscription_cfg()
     save_config(cfg)
     session = SimpleNamespace(cfg=cfg, client=SimpleNamespace(model=cfg.model))
@@ -1040,7 +1058,7 @@ def test_model_command_refresh_failure_keeps_verified_model_and_route(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
 
     cfg = AppConfig(model="verified-model")
     verified_route = SimpleNamespace(fingerprint="verified-route")
@@ -1116,7 +1134,7 @@ def test_explicit_chat_defers_subscription_readiness_to_tui(
         lambda _cli, *args, **kwargs: launches.append({"args": args, "kwargs": dict(kwargs)}),
     )
 
-    result = CliRunner().invoke(sylliptor_app, ["chat"], env=_env(tmp_path))
+    result = CliRunner().invoke(alysis_app, ["chat"], env=_env(tmp_path))
 
     assert result.exit_code == 0
     assert gates == [{"model": None, "base_url": None, "require_ready": False}]
@@ -1126,9 +1144,9 @@ def test_explicit_chat_defers_subscription_readiness_to_tui(
 def test_subscription_availability_distinguishes_login_from_model_selection(
     monkeypatch,
 ) -> None:
-    from sylliptor_agent_cli import provider_auth as provider_auth_mod
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
-    from sylliptor_agent_cli.profiles import SUBSCRIPTION_SELECTION_REQUIRED_KEY
+    from alysis_code import provider_auth as provider_auth_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
+    from alysis_code.profiles import SUBSCRIPTION_SELECTION_REQUIRED_KEY
 
     cfg = _subscription_cfg()
     adapter = SimpleNamespace(
@@ -1168,10 +1186,10 @@ def test_disconnected_subscription_opens_tui_without_creating_session(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(_subscription_cfg())
     captured: dict[str, object] = {}
 
@@ -1200,7 +1218,7 @@ def test_disconnected_subscription_opens_tui_without_creating_session(
     monkeypatch.setattr(tui_pkg, "run_tui", _fake_tui)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--path", os.fspath(tmp_path)],
         env=_env(tmp_path),
     )
@@ -1213,7 +1231,7 @@ def test_disconnected_subscription_opens_tui_without_creating_session(
     assert captured["state"].connection_status == "subscription not connected"
     login_picker = captured["picker_providers"]["/login"]
     login_spec = login_picker()
-    assert [row["value"] for row in login_spec["rows"]] == ["sylliptor", "openai-codex"]
+    assert [row["value"] for row in login_spec["rows"]] == ["alysis", "openai-codex"]
     assert login_spec["on_select"]("openai-codex") == {"exit": ("login_connection", "openai-codex")}
 
 
@@ -1221,11 +1239,11 @@ def test_tui_login_runs_auth_then_relaunches_chat(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.commands import auth as auth_mod
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.commands import auth as auth_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(_subscription_cfg())
     connected: list[str] = []
     relaunched: list[dict[str, object]] = []
@@ -1264,7 +1282,7 @@ def test_tui_login_runs_auth_then_relaunches_chat(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--path", os.fspath(tmp_path)],
         env=_env(tmp_path),
     )
@@ -1285,15 +1303,16 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
     # /config save reloads live instead of restarting the TUI session.
     from prompt_toolkit.application import current as prompt_toolkit_current
 
-    from sylliptor_agent_cli.cli_impl import tui as tui_pkg
-    from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
-    from sylliptor_agent_cli.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl import tui as tui_pkg
+    from alysis_code.cli_impl.chat import loop as chat_loop_mod
+    from alysis_code.cli_impl.commands import startup as startup_mod
+    from alysis_code.cli_impl.tui.app import ConfigReloadOutcome
 
     relaunched: list[dict[str, object]] = []
     exits: list[tuple[str, str]] = []
     base_url = "https://router-restart.example/v1"
 
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(
         AppConfig(
             model="persisted-model",
@@ -1301,7 +1320,7 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
             routing_mode="auto",
         )
     )
-    monkeypatch.delenv("SYLLIPTOR_ROUTING_MODE", raising=False)
+    monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
     monkeypatch.setattr(tui_pkg, "is_tui_enabled", lambda: True)
 
@@ -1335,7 +1354,7 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
 
         on_config_saved = kwargs["on_config_saved"]
         assert callable(on_config_saved)
-        assert on_config_saved() is True
+        assert on_config_saved() is ConfigReloadOutcome.APPLIED
         assert exits == []
         return ("quit", ""), []
 
@@ -1361,7 +1380,7 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--path",
@@ -1389,12 +1408,12 @@ def test_one_shot_run_checks_subscription_readiness_before_launch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(_subscription_cfg())
     monkeypatch.setattr(cli_mod, "_provider_auth_ready_for_chat", lambda: False)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["run", "inspect"],
         env=_env(tmp_path),
     )
@@ -1406,11 +1425,11 @@ def test_explicit_subscription_model_override_is_rejected(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_config(_subscription_cfg())
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "outside-config"],
         env=_env(tmp_path),
     )
@@ -1429,10 +1448,7 @@ def test_chat_command_sections_describe_forge_workspace_safe_resume_contract() -
         dict(sections[2][1])["/clear"]
         == "wipe conversation (keeps session id + log; Ctrl+L clears terminal)"
     )
-    assert (
-        tools_rows["/subagent"]
-        == "no args opens picker; /subagent on|off|status toggles delegation"
-    )
+    assert "/subagent" not in tools_rows
     assert tools_rows["/skill"] == "no args lists; <name> shows info; <name> <task> attaches"
     forge_tools_rows = dict(cli_mod._chat_command_sections(ui_mode="forge")[3][1])
     assert forge_tools_rows["/skill"] == "no args lists; <name> shows info; <name> <task> attaches"
@@ -1593,7 +1609,7 @@ def test_print_welcome_banner_is_boxless_with_context(monkeypatch) -> None:
     assert lines
     assert banner.startswith("\n")
     assert banner.endswith("\n")
-    assert "sylliptor chat" not in banner
+    assert "alysis chat" not in banner
     assert "I'll build it" not in banner
 
     plain_lines = [cli_mod.stripAnsi(line) for line in lines]
@@ -1603,7 +1619,7 @@ def test_print_welcome_banner_is_boxless_with_context(monkeypatch) -> None:
     assert "╰" not in plain
     assert "│" not in plain
     assert " by " not in plain
-    assert "Sylliptor  ·  AlysisAI" in plain
+    assert "Alysis Code  ·  AlysisAI" in plain
     assert "The autonomous coding agent" in plain
     assert "workspace ~/myproject   model opus-4.7   version 0.8.2" in plain
     assert "/forge     begin an autonomous run" in plain
@@ -1621,7 +1637,7 @@ def test_print_welcome_text_palette_adapts_to_terminal_theme(monkeypatch) -> Non
     )
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("OWL_THEME", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_THEME", raising=False)
+    monkeypatch.delenv("ALYSIS_THEME", raising=False)
 
     monkeypatch.setenv("COLORFGBG", "0;15")
     light_banner = cli_mod.printWelcome(
@@ -1637,10 +1653,10 @@ def test_print_welcome_text_palette_adapts_to_terminal_theme(monkeypatch) -> Non
         version="0.8.2",
     )
 
-    assert "\x1b[1;30mSylliptor" in light_banner
+    assert "\x1b[1;30mAlysis Code" in light_banner
     assert "\x1b[30mThe autonomous coding agent" in light_banner
     assert "\x1b[2;30m" not in light_banner
-    assert "\x1b[1;97mSylliptor" in dark_banner
+    assert "\x1b[1;97mAlysis Code" in dark_banner
     assert "\x1b[97mThe autonomous coding agent" in dark_banner
     assert "\x1b[2;37m" not in dark_banner
 
@@ -1667,7 +1683,7 @@ def test_print_welcome_uses_neutral_palette_when_theme_unknown(monkeypatch) -> N
     assert "\x1b[48;5;231m" not in banner
     assert "\x1b[97mThe autonomous coding agent" not in banner
     assert "\x1b[30mThe autonomous coding agent" not in banner
-    assert "\x1b[1mSylliptor" in banner
+    assert "\x1b[1mAlysis Code" in banner
     assert "The autonomous coding agent" in banner
 
 
@@ -1758,7 +1774,7 @@ def test_print_welcome_banner_keeps_compact_owl_beside_text_at_80_columns(monkey
     assert any("▝▜██▅▅▅▅▅▅▅██▛▘" in line for line in plain_lines)
     assert any("█" in line for line in plain_lines)
     owl_index = next(i for i, line in enumerate(plain_lines) if "█" in line)
-    brand_index = next(i for i, line in enumerate(plain_lines) if "Sylliptor" in line)
+    brand_index = next(i for i, line in enumerate(plain_lines) if "Alysis Code" in line)
     assert owl_index == brand_index
 
 
@@ -1804,7 +1820,7 @@ def test_print_welcome_banner_keeps_wide_side_by_side_layout_untruncated(
     assert all(len(line) < 120 for line in plain_lines)
     assert "..." not in plain
     assert "workspace ~/myproject   model opus-4.7   version 0.8.2" in plain
-    assert any("█" in line and "Sylliptor" in line for line in plain_lines)
+    assert any("█" in line and "Alysis Code" in line for line in plain_lines)
 
 
 def test_print_welcome_banner_narrow_mode_stacks_and_omits_context(monkeypatch) -> None:
@@ -1826,7 +1842,7 @@ def test_print_welcome_banner_narrow_mode_stacks_and_omits_context(monkeypatch) 
     assert "model opus-4.7" not in plain
     assert "version 0.8.2" not in plain
     assert "─" not in plain
-    assert "Sylliptor  ·  AlysisAI" in plain
+    assert "Alysis Code  ·  AlysisAI" in plain
     assert "/forge  /status  /help" in plain
 
 
@@ -1852,10 +1868,10 @@ def test_print_welcome_animates_owl_logo_once_on_tty(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod.sys, "stdout", stream)
     monkeypatch.setattr(cli_mod.sys, "stdin", stream)
     monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_NO_INTRO", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_NO_OWL", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_INTRO", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_OWL", raising=False)
     monkeypatch.delenv("CI", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_CI", raising=False)
+    monkeypatch.delenv("ALYSIS_CI", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("COLORFGBG", "15;0")
     monkeypatch.setattr(
@@ -1876,7 +1892,7 @@ def test_print_welcome_animates_owl_logo_once_on_tty(monkeypatch) -> None:
 
     frame_count = len(welcome_mod._load_owl_logo_frames(stream=stream, color_enabled=True))
     assert sleeps == [0.10] * frame_count
-    assert "Sylliptor" in output
+    assert "Alysis Code" in output
     assert "◇  ◇" not in output
     assert "\x1b[" in output
     assert "\x1b[2K" in output
@@ -1897,13 +1913,13 @@ def test_detect_owl_theme_reads_windows_terminal_settings_jsonc(
             "list": [
               {
                 "guid": "{11111111-1111-1111-1111-111111111111}",
-                "colorScheme": "Sylliptor Dark",
+                "colorScheme": "Alysis Code Dark",
               },
             ],
           },
           "schemes": [
             {
-              "name": "Sylliptor Dark",
+              "name": "Alysis Code Dark",
               "background": "#101820",
             },
           ],
@@ -1916,7 +1932,7 @@ def test_detect_owl_theme_reads_windows_terminal_settings_jsonc(
     monkeypatch.setenv("OWL_FALLBACK_THEME", "light")
     monkeypatch.setenv("WT_SESSION", "test-session")
     monkeypatch.setenv("WT_PROFILE_ID", "{11111111-1111-1111-1111-111111111111}")
-    monkeypatch.setenv("SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS", str(settings))
+    monkeypatch.setenv("ALYSIS_WINDOWS_TERMINAL_SETTINGS", str(settings))
 
     assert welcome_mod._detect_owl_theme(stream=None) == "dark"
 
@@ -1942,7 +1958,7 @@ def test_detect_owl_theme_knows_windows_terminal_builtin_light_scheme(
     monkeypatch.delenv("COLORFGBG", raising=False)
     monkeypatch.setenv("OWL_FALLBACK_THEME", "dark")
     monkeypatch.setenv("WT_SESSION", "test-session")
-    monkeypatch.setenv("SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS", str(settings))
+    monkeypatch.setenv("ALYSIS_WINDOWS_TERMINAL_SETTINGS", str(settings))
 
     assert welcome_mod._detect_owl_theme(stream=None) == "light"
 
@@ -1956,7 +1972,7 @@ def test_detect_owl_theme_defaults_windows_terminal_to_campbell(
     monkeypatch.delenv("COLORFGBG", raising=False)
     monkeypatch.setenv("OWL_FALLBACK_THEME", "light")
     monkeypatch.setenv("WT_SESSION", "test-session")
-    monkeypatch.setenv("SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS", str(settings))
+    monkeypatch.setenv("ALYSIS_WINDOWS_TERMINAL_SETTINGS", str(settings))
 
     assert welcome_mod._detect_owl_theme(stream=None) == "dark"
 
@@ -1969,7 +1985,7 @@ def test_detect_owl_theme_defaults_unreadable_windows_terminal_to_dark(
     monkeypatch.delenv("COLORFGBG", raising=False)
     monkeypatch.setenv("OWL_FALLBACK_THEME", "light")
     monkeypatch.setenv("WT_SESSION", "test-session")
-    monkeypatch.setenv("SYLLIPTOR_WINDOWS_TERMINAL_SETTINGS", str(missing_settings))
+    monkeypatch.setenv("ALYSIS_WINDOWS_TERMINAL_SETTINGS", str(missing_settings))
 
     assert welcome_mod._detect_owl_theme(stream=None) == "dark"
 
@@ -1987,22 +2003,22 @@ def test_should_animate_owl_logo_requires_interactive_stdio(monkeypatch) -> None
     monkeypatch.setattr(cli_mod.sys, "stdout", stream)
     monkeypatch.setattr(cli_mod.sys, "stdin", stream)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_NO_OWL", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_NO_INTRO", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_OWL", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_INTRO", raising=False)
     monkeypatch.delenv("CI", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_CI", raising=False)
+    monkeypatch.delenv("ALYSIS_CI", raising=False)
 
     assert cli_mod._should_animate_owl_logo(stream) is True
     assert cli_mod._should_animate_owl_logo(_TTYStream()) is False
     assert cli_mod._should_animate_owl_logo(_PipeStream()) is False
 
-    monkeypatch.setenv("SYLLIPTOR_NO_OWL", "1")
+    monkeypatch.setenv("ALYSIS_NO_OWL", "1")
     assert cli_mod._should_animate_owl_logo(stream) is False
-    monkeypatch.delenv("SYLLIPTOR_NO_OWL", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_OWL", raising=False)
 
-    monkeypatch.setenv("SYLLIPTOR_NO_INTRO", "0")
+    monkeypatch.setenv("ALYSIS_NO_INTRO", "0")
     assert cli_mod._should_animate_owl_logo(stream) is False
-    monkeypatch.delenv("SYLLIPTOR_NO_INTRO", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_INTRO", raising=False)
 
     monkeypatch.setenv("CI", "1")
     assert cli_mod._should_animate_owl_logo(stream) is False
@@ -2028,7 +2044,7 @@ def test_print_welcome_skips_animation_for_no_color(monkeypatch) -> None:
 
     stream = _TTYStream()
     monkeypatch.setenv("NO_COLOR", "1")
-    monkeypatch.delenv("SYLLIPTOR_NO_INTRO", raising=False)
+    monkeypatch.delenv("ALYSIS_NO_INTRO", raising=False)
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(
         cli_mod.shutil,
@@ -2071,7 +2087,7 @@ def test_print_welcome_skips_animation_for_no_intro(monkeypatch) -> None:
 
     stream = _TTYStream()
     monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_NO_INTRO", "1")
+    monkeypatch.setenv("ALYSIS_NO_INTRO", "1")
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(
         cli_mod.shutil,
@@ -2097,7 +2113,7 @@ def test_print_welcome_skips_animation_for_no_intro(monkeypatch) -> None:
 
 def test_owl_shell_scripts_do_not_override_home_env_var() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    script = repo_root / "src/sylliptor_agent_cli/assets/owl/show-owl.sh"
+    script = repo_root / "src/alysis_code/assets/owl/show-owl.sh"
     text = script.read_text(encoding="utf-8")
     assert 'HOME="${ESC}[H"' not in text
     assert "\nHOME=" not in text
@@ -2105,7 +2121,7 @@ def test_owl_shell_scripts_do_not_override_home_env_var() -> None:
 
 def test_show_owl_dark_theme_uses_light_frames_with_white_panel() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    script = repo_root / "src/sylliptor_agent_cli/assets/owl/show-owl.sh"
+    script = repo_root / "src/alysis_code/assets/owl/show-owl.sh"
     text = script.read_text(encoding="utf-8")
 
     assert "white_panel_file()" in text
@@ -2126,7 +2142,7 @@ def test_home_chat_action_forwards_plain_defaults(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setenv("SYLLIPTOR_HOME_PROMPT", "1")
+    monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "chat", _fake_chat)
     monkeypatch.setattr(cli_mod, "_maybe_run_startup_config_menu", lambda: None)
@@ -2168,7 +2184,7 @@ def test_home_run_action_forwards_plain_defaults(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setenv("SYLLIPTOR_HOME_PROMPT", "1")
+    monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "run", _fake_run)
     cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
@@ -2194,7 +2210,6 @@ def test_home_run_action_forwards_plain_defaults(monkeypatch) -> None:
         "yes": False,
         "benchmark": False,
         "deadline_seconds": None,
-        "no_deadline": False,
         "require_deadline": False,
         "diagnostic_log": None,
     }
@@ -2213,7 +2228,7 @@ def test_home_plan_action_forwards_plain_defaults(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setenv("SYLLIPTOR_HOME_PROMPT", "1")
+    monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "forge_plan", _fake_plan)
     cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
@@ -2234,7 +2249,7 @@ def test_setup_wizard_can_pick_first_suggested_model(monkeypatch, tmp_path: Path
     _patch_setup_wizard_dependencies(monkeypatch)
     runner = CliRunner()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["setup"],
         input=f"\n1\n1\npersisted-key\n1\n1\n{tmp_path}\n",
         env=_env(tmp_path),
@@ -2251,7 +2266,7 @@ def test_setup_wizard_reprompts_invalid_workspace(monkeypatch, tmp_path: Path) -
     _patch_setup_wizard_dependencies(monkeypatch)
     runner = CliRunner()
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["setup"],
         input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n/does/not/exist\n{tmp_path}\n",
         env=_env(tmp_path),
@@ -2277,7 +2292,7 @@ def test_home_run_action_accepts_numeric_shortcut(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli_mod.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setenv("SYLLIPTOR_HOME_PROMPT", "1")
+    monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "run", _fake_run)
     cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
@@ -2303,7 +2318,6 @@ def test_home_run_action_accepts_numeric_shortcut(monkeypatch) -> None:
         "yes": False,
         "benchmark": False,
         "deadline_seconds": None,
-        "no_deadline": False,
         "require_deadline": False,
         "diagnostic_log": None,
     }
@@ -2335,7 +2349,7 @@ def test_chat_auto_binds_sane_project_dir_before_session_creation(
     monkeypatch.chdir(repo)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=_env(tmp_path),
@@ -2384,7 +2398,7 @@ def test_chat_preserves_dash_leading_unusual_prompt_text(
     monkeypatch.chdir(repo)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input=f"{prompt_text}\nexit\n",
         env=_env(tmp_path),
@@ -2421,7 +2435,7 @@ def test_chat_passes_explicit_max_steps_as_chat_turn_fixed_override(
     monkeypatch.chdir(repo)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--model",
@@ -2477,7 +2491,7 @@ def test_chat_keeps_legacy_cap_dormant_under_autonomous_policy(tmp_path: Path, m
     monkeypatch.chdir(repo)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=_env(tmp_path),
@@ -2524,10 +2538,10 @@ def test_chat_home_path_uses_guarded_binding_flow(tmp_path: Path, monkeypatch) -
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--path", os.fspath(home), "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
-        env={**_env(tmp_path), "SYLLIPTOR_TUI": "0"},
+        env={**_env(tmp_path), "ALYSIS_TUI": "0"},
     )
 
     assert result.exit_code == 0
@@ -2589,10 +2603,10 @@ def test_chat_guarded_create_folder_flow_works_with_mocked_prompts(
     monkeypatch.setattr(workspace_binding_mod, "_home_directory", lambda: home.resolve())
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--path", os.fspath(home), "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
-        env={**_env(tmp_path), "SYLLIPTOR_TUI": "0"},
+        env={**_env(tmp_path), "ALYSIS_TUI": "0"},
     )
 
     assert result.exit_code == 0
@@ -2629,7 +2643,7 @@ def test_chat_forge_from_guarded_workspace_is_blocked(tmp_path: Path, monkeypatc
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "chat",
             "--path",
@@ -2680,14 +2694,14 @@ def test_chat_welcome_prints_after_workspace_resolution_with_context(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env={**_env(tmp_path), "COLUMNS": "140"},
     )
 
     assert result.exit_code == 0
-    welcome_index = result.output.find("Sylliptor")
+    welcome_index = result.output.find("Alysis Code")
     marker_index = result.output.find("WORKSPACE_RESOLUTION_MARKER")
     assert welcome_index >= 0
     assert marker_index >= 0
@@ -2850,7 +2864,7 @@ def test_chat_prints_session_info_line_without_ready_hint(tmp_path: Path, monkey
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=_env(tmp_path),
@@ -2888,7 +2902,7 @@ def test_chat_retries_with_warn_shell_sandbox_when_default_strict_backend_unavai
             raise ConfigError(
                 "Shell sandbox strict mode is enabled, but no usable backend is available: "
                 "auto backend could not find bwrap or docker. Install bubblewrap (Linux) or "
-                "Docker, or set SYLLIPTOR_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
+                "Docker, or set ALYSIS_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
             )
         return _DummySession()
 
@@ -2903,7 +2917,7 @@ def test_chat_retries_with_warn_shell_sandbox_when_default_strict_backend_unavai
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=_env(tmp_path),
@@ -2928,7 +2942,7 @@ def test_chat_does_not_retry_shell_sandbox_when_strict_mode_is_explicit(
         raise ConfigError(
             "Shell sandbox strict mode is enabled, but no usable backend is available: "
             "auto backend could not find bwrap or docker. Install bubblewrap (Linux) or "
-            "Docker, or set SYLLIPTOR_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
+            "Docker, or set ALYSIS_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
         )
 
     def fake_resolve_startup_workspace_binding(**_kwargs: object):
@@ -2942,9 +2956,9 @@ def test_chat_does_not_retry_shell_sandbox_when_strict_mode_is_explicit(
     )
 
     env = _env(tmp_path)
-    env["SYLLIPTOR_SHELL_SANDBOX_MODE"] = "strict"
+    env["ALYSIS_SHELL_SANDBOX_MODE"] = "strict"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="exit\n",
         env=env,
@@ -2990,7 +3004,7 @@ def test_chat_fallback_prompt_uses_arrow_suffix(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr(cli_mod.typer, "prompt", fake_prompt)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         env=_env(tmp_path),
     )
@@ -3057,7 +3071,7 @@ def test_chat_interactive_path_skips_model_session_summary_generation(
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="hello\nexit\n",
         env=_env(tmp_path),

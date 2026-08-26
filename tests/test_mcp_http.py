@@ -14,32 +14,32 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.mcp.client import (
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.mcp.client import (
     MCP_HTTP_PREFERRED_PROTOCOL_VERSION,
     McpClientError,
     McpHttpClient,
 )
-from sylliptor_agent_cli.mcp.config import load_resolved_mcp_config, user_mcp_config_path
-from sylliptor_agent_cli.mcp.manager import McpManager
-from sylliptor_agent_cli.mcp.oauth import (
+from alysis_code.mcp.config import load_resolved_mcp_config, user_mcp_config_path
+from alysis_code.mcp.manager import McpManager
+from alysis_code.mcp.oauth import (
     McpOAuthAuthRequiredError,
     McpOAuthInsufficientScopeError,
     McpOAuthReLoginRequired,
 )
-from sylliptor_agent_cli.mcp.oauth_store import (
+from alysis_code.mcp.oauth_store import (
     McpOAuthTokenRecord,
     load_oauth_token_record,
     save_oauth_token_record,
 )
-from sylliptor_agent_cli.mcp.transport_http import (
+from alysis_code.mcp.transport_http import (
     McpHttpTransportAuthRequiredError,
     McpHttpTransportProtocolError,
     McpHttpTransportRemoteError,
     McpHttpTransportTimeoutError,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
+from alysis_code.runtime_kind import RuntimeKind
 
 
 @dataclass(frozen=True)
@@ -409,7 +409,7 @@ def _resolved_http_server(
     server_overrides: dict[str, object] | None = None,
 ):
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     server_payload: dict[str, object] = {
         "transport": "http",
         "url": url,
@@ -1951,7 +1951,7 @@ def test_http_client_tolerates_delete_405_on_close(
 def test_http_client_static_header_auth_success_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_HTTP_MCP_TOKEN", "Bearer http-secret")
+    monkeypatch.setenv("ALYSIS_HTTP_MCP_TOKEN", "Bearer http-secret")
 
     def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
         assert request.headers.get("authorization") == "Bearer http-secret"
@@ -1975,7 +1975,7 @@ def test_http_client_static_header_auth_success_path(
         tmp_path,
         monkeypatch,
         server,
-        headers={"Authorization": "${SYLLIPTOR_HTTP_MCP_TOKEN}"},
+        headers={"Authorization": "${ALYSIS_HTTP_MCP_TOKEN}"},
     )
     try:
         tools = client.list_tools()
@@ -2209,7 +2209,7 @@ def test_http_manager_exposes_tools_only_in_supported_runtimes(
 def test_http_manager_snapshot_metadata_stays_non_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_HTTP_SECRET", "Bearer snapshot-secret")
+    monkeypatch.setenv("ALYSIS_HTTP_SECRET", "Bearer snapshot-secret")
     session_id = "snapshot-session-secret"
 
     def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
@@ -2234,7 +2234,7 @@ def test_http_manager_snapshot_metadata_stays_non_secret(
         tmp_path,
         monkeypatch,
         server.base_url,
-        headers={"Authorization": "${SYLLIPTOR_HTTP_SECRET}"},
+        headers={"Authorization": "${ALYSIS_HTTP_SECRET}"},
     )
     manager = McpManager(
         resolved_config=load_resolved_mcp_config(workspace_root=tmp_path),
@@ -2542,14 +2542,14 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
             return _json_response(_jsonrpc_response(request, {"prompts": pages[1]}))
         if method == "prompts/get":
             assert payload["params"]["name"] == "review_pr"
-            assert payload["params"]["arguments"] == {"repo": "owner/sylliptor"}
+            assert payload["params"]["arguments"] == {"repo": "owner/alysis"}
             return _json_response(
                 _jsonrpc_response(
                     request,
                     _prompt_get_result(
                         name="review_pr",
                         description="Review helper",
-                        text="Review repo owner/sylliptor.",
+                        text="Review repo owner/alysis.",
                     ),
                 )
             )
@@ -2563,10 +2563,10 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
 
         prompt_result = client.get_prompt(
             name="review_pr",
-            arguments={"repo": "owner/sylliptor"},
+            arguments={"repo": "owner/alysis"},
         )
         assert prompt_result.description == "Review helper"
-        assert prompt_result.text == "Review repo owner/sylliptor."
+        assert prompt_result.text == "Review repo owner/alysis."
         assert "user: text(28 chars)" in prompt_result.content_summary
     finally:
         client.close()
@@ -2693,7 +2693,7 @@ def test_http_client_rejects_malformed_prompt_get_result(
 def test_http_client_oauth_injects_bearer_header_on_requests_and_close(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="test_access", refresh_token="test_refresh")
     )
@@ -2740,7 +2740,7 @@ def test_http_client_oauth_injects_bearer_header_on_requests_and_close(
 def test_http_client_oauth_close_uses_stored_token_without_refresh_or_clearing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="test_access", refresh_token="test_refresh")
     )
@@ -2801,7 +2801,7 @@ def test_http_client_oauth_close_uses_stored_token_without_refresh_or_clearing(
 def test_http_client_oauth_refreshes_expired_token_before_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha",
         _oauth_record(
@@ -2860,7 +2860,7 @@ def test_http_client_oauth_refreshes_expired_token_before_request(
 def test_http_client_oauth_refresh_preserves_granted_scopes_without_config_scopes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     oauth_fixture_server.rotate_refresh_token = False
     oauth_fixture_server.refresh_response_override = {
         "access_token": "refreshed_access",
@@ -2926,7 +2926,7 @@ def test_http_client_oauth_refresh_preserves_granted_scopes_without_config_scope
 def test_http_client_oauth_retries_once_after_401_for_safe_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="stale-access", refresh_token="test_refresh")
     )
@@ -2987,7 +2987,7 @@ def test_http_client_oauth_retries_once_after_401_for_safe_request(
 def test_http_client_oauth_refresh_failure_clears_tokens_and_requires_relogin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     oauth_fixture_server.refresh_response_status = 400
     oauth_fixture_server.refresh_response_override = {"error": "invalid_grant"}
     save_oauth_token_record(
@@ -3056,7 +3056,7 @@ def test_http_client_oauth_missing_token_raises_auth_required_before_request(
 def test_http_client_oauth_403_insufficient_scope_raises_typed_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="test_access", refresh_token="test_refresh")
     )
@@ -3109,7 +3109,7 @@ def test_http_client_oauth_403_insufficient_scope_raises_typed_error(
 def test_http_client_oauth_401_relogin_error_includes_challenge_scope_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record("alpha", _oauth_record(access_token="test_access", refresh_token=None))
 
     def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
@@ -3162,7 +3162,7 @@ def test_http_client_oauth_401_relogin_error_includes_challenge_scope_hint(
 def test_http_client_oauth_tools_call_is_not_auto_replayed_after_401(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="stale-access", refresh_token="test_refresh")
     )
@@ -3223,7 +3223,7 @@ def test_http_client_oauth_tools_call_is_not_auto_replayed_after_401(
 def test_http_client_oauth_retry_budget_is_bounded_to_one_refresh_and_one_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oauth_fixture_server
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     save_oauth_token_record(
         "alpha", _oauth_record(access_token="stale-access", refresh_token="test_refresh")
     )

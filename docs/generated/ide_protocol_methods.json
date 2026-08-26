@@ -1,0 +1,2335 @@
+{
+  "schema_version": 1,
+  "generated_from": [
+    "src/alysis_code/ide/health.py",
+    "src/alysis_code/ide/management_protocol.py",
+    "extensions/vscode-alysis/src/backend/BackendActionMetadata.ts"
+  ],
+  "secret_forbidden_fields": [
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "authorization"
+  ],
+  "method_defaults": {
+    "required_params": [],
+    "optional_params": [],
+    "secret_forbidden_fields": [
+      "api_key",
+      "token",
+      "secret",
+      "password",
+      "credential",
+      "authorization"
+    ],
+    "mutates": false,
+    "workspace_trust_required": false,
+    "workspace_required": false,
+    "result_redaction": {
+      "secret_values_included": false
+    }
+  },
+  "method_groups": [
+    {
+      "id": "protocol_metadata",
+      "methods": [
+        "initialize",
+        "health",
+        "getCapabilities",
+        "bridge.shutdown"
+      ]
+    },
+    {
+      "id": "read_only_no_params",
+      "methods": [
+        "session.list",
+        "config.get",
+        "config.schema",
+        "profile.list",
+        "profile.presets",
+        "tools.catalog",
+        "doctor.summary",
+        "doctor.providers",
+        "doctor.bundle"
+      ]
+    },
+    {
+      "id": "live_session_read_only",
+      "methods": [
+        "session.status",
+        "session.usage",
+        "session.context",
+        "session.images.list",
+        "session.modelInfo",
+        "session.subagents.status"
+      ],
+      "required_params": [
+        "session_id"
+      ]
+    },
+    {
+      "id": "workspace_metadata_read_only",
+      "methods": [
+        "tool.list",
+        "skill.list",
+        "mcp.status",
+        "mcp.prompts.list",
+        "mcp.auth.status",
+        "hooks.list",
+        "hooks.doctor",
+        "conventions.list",
+        "conventions.render",
+        "ext.list"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "focus_path",
+        "max_chars",
+        "max_bytes",
+        "server",
+        "limit",
+        "include_disabled",
+        "include_global"
+      ],
+      "workspace_required": true
+    },
+    {
+      "id": "forge_scoped_read_only",
+      "methods": [
+        "forge.status",
+        "forge.show",
+        "forge.assets.list",
+        "forge.assets.cancelPending",
+        "forge.assets.checkPlan",
+        "forge.plan.getState",
+        "forge.plan.validate"
+      ],
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ]
+    }
+  ],
+  "methods": {
+    "bridge.shutdown": {
+      "mutates": true
+    },
+    "session.create": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "mode",
+        "model",
+        "base_url",
+        "temperature",
+        "stream",
+        "verify_cmd",
+        "verify_commands",
+        "subagents_enabled",
+        "no_log",
+        "yes",
+        "max_steps",
+        "session_id",
+        "workspace_trusted",
+        "host_capabilities"
+      ]
+    },
+    "chat.send": {
+      "required_params": [
+        "session_id",
+        "message"
+      ],
+      "optional_params": [
+        "instruction",
+        "images",
+        "image_paths",
+        "idempotency_key",
+        "context_blocks",
+        "temperature",
+        "stream",
+        "verify_cmd",
+        "verify_commands",
+        "model",
+        "base_url",
+        "max_steps",
+        "no_log",
+        "yes",
+        "subagents_enabled"
+      ]
+    },
+    "chat.queue.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "states",
+        "limit",
+        "after_sequence"
+      ]
+    },
+    "chat.queue.get": {
+      "required_params": [
+        "session_id",
+        "prompt_id"
+      ]
+    },
+    "chat.queue.delete": {
+      "required_params": [
+        "session_id",
+        "prompt_id"
+      ],
+      "mutates": true
+    },
+    "checkpoint.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "limit"
+      ]
+    },
+    "checkpoint.diff": {
+      "required_params": [
+        "session_id",
+        "checkpoint_id"
+      ],
+      "optional_params": [
+        "max_bytes"
+      ]
+    },
+    "checkpoint.revert": {
+      "required_params": [
+        "session_id",
+        "checkpoint_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "checkpoint.redo": {
+      "required_params": [
+        "session_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "checkpoint.branch": {
+      "required_params": [
+        "session_id",
+        "checkpoint_id",
+        "name"
+      ],
+      "mutates": true
+    },
+    "session.tasks.get": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "target_session_id"
+      ]
+    },
+    "session.tasks.replace": {
+      "required_params": [
+        "session_id",
+        "expected_revision",
+        "tasks",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "session.questions.create": {
+      "required_params": [
+        "session_id",
+        "idempotency_key",
+        "questions",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expires_in_seconds"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "session.questions.get": {
+      "required_params": [
+        "session_id",
+        "question_set_id"
+      ]
+    },
+    "session.questions.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "statuses",
+        "limit"
+      ]
+    },
+    "session.questions.answer": {
+      "required_params": [
+        "session_id",
+        "question_set_id",
+        "answers",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "session.questions.cancel": {
+      "required_params": [
+        "session_id",
+        "question_set_id",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "permission.rules.list": {},
+    "permission.rules.grant": {
+      "required_params": [
+        "effect"
+      ],
+      "optional_params": [
+        "tool_pattern",
+        "path_pattern",
+        "command_pattern",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true
+    },
+    "permission.rules.revoke": {
+      "required_params": [
+        "rule_id"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true
+    },
+    "permission.evaluate": {
+      "required_params": [
+        "tool_name"
+      ],
+      "optional_params": [
+        "paths",
+        "command",
+        "workspace"
+      ]
+    },
+    "permission.session.list": {
+      "required_params": [
+        "session_id"
+      ]
+    },
+    "permission.session.revoke": {
+      "required_params": [
+        "session_id",
+        "grant_id"
+      ],
+      "mutates": true
+    },
+    "code.review.start": {
+      "required_params": [
+        "session_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "scope",
+        "base",
+        "head",
+        "revision"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "code.review.result": {
+      "required_params": [
+        "job_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "run.start": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "message",
+        "instruction",
+        "mode",
+        "model",
+        "base_url",
+        "temperature",
+        "stream",
+        "verify_cmd",
+        "verify_commands",
+        "max_steps",
+        "no_log",
+        "yes",
+        "subagents_enabled",
+        "images",
+        "workspace_trusted",
+        "host_capabilities"
+      ]
+    },
+    "session.history": {
+      "required_params": [
+        "session_id",
+        "pattern"
+      ],
+      "optional_params": [
+        "max_results",
+        "max_text_chars"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.search": {
+      "required_params": [
+        "session_id",
+        "query"
+      ],
+      "optional_params": [
+        "max_results",
+        "max_sessions"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.compact": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "focus"
+      ],
+      "mutates": true
+    },
+    "session.resume": {
+      "required_params": [
+        "session_id",
+        "target_session_id"
+      ],
+      "optional_params": [
+        "max_messages"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      },
+      "mutates": true
+    },
+    "session.show": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "max_events",
+        "max_total_bytes"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.score": {
+      "optional_params": [
+        "session_id",
+        "latest"
+      ]
+    },
+    "session.trace.status": {
+      "required_params": [
+        "session_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.trace.setLevel": {
+      "required_params": [
+        "session_id",
+        "level"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.trace.listEvents": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "after_sequence",
+        "max_events",
+        "max_bytes"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.trace.readArtifact": {
+      "required_params": [
+        "session_id",
+        "artifact_id"
+      ],
+      "optional_params": [
+        "max_bytes"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.trace.clear": {
+      "required_params": [
+        "session_id"
+      ],
+      "mutates": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.terminals.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.terminals.show": {
+      "required_params": [
+        "session_id",
+        "process_id"
+      ],
+      "optional_params": [
+        "since",
+        "max_lines",
+        "max_bytes"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.terminals.kill": {
+      "required_params": [
+        "session_id",
+        "process_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.terminals.clear": {
+      "required_params": [
+        "session_id",
+        "process_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "session.images.add": {
+      "required_params": [
+        "session_id",
+        "images"
+      ],
+      "mutates": true
+    },
+    "session.images.clear": {
+      "required_params": [
+        "session_id"
+      ],
+      "mutates": true
+    },
+    "session.setMode": {
+      "required_params": [
+        "session_id",
+        "mode"
+      ],
+      "mutates": true
+    },
+    "session.setModel": {
+      "required_params": [
+        "session_id",
+        "model"
+      ],
+      "optional_params": [
+        "base_url"
+      ],
+      "mutates": true
+    },
+    "session.setStream": {
+      "required_params": [
+        "session_id",
+        "stream"
+      ],
+      "mutates": true
+    },
+    "session.setActiveWorkdir": {
+      "required_params": [
+        "session_id",
+        "path"
+      ],
+      "mutates": true
+    },
+    "session.clear": {
+      "required_params": [
+        "session_id"
+      ],
+      "mutates": true
+    },
+    "session.cancel": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "reason",
+        "close_when_idle"
+      ],
+      "active_runtime_cancellation_supported": true,
+      "idle_session_close_supported": true,
+      "close_after_active_job_supported": true,
+      "close_after_active_job_cancels_queued_prompts": true,
+      "running_job_behavior": "cooperative_cancellation_requested",
+      "result_states": [
+        "closed",
+        "cancellation_requested",
+        "non_cancellable",
+        "cancelled",
+        "completed",
+        "failed"
+      ],
+      "stale_active_jobs_reconciled": true
+    },
+    "approval.respond": {
+      "required_params": [
+        "session_id",
+        "approval_id",
+        "allow"
+      ],
+      "optional_params": [
+        "allow_for_session"
+      ]
+    },
+    "host.action.respond": {
+      "required_params": [
+        "session_id",
+        "host_action_id",
+        "workspace_fence",
+        "capability_fingerprint",
+        "ok"
+      ],
+      "optional_params": [
+        "result",
+        "error"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "job.status": {
+      "required_params": [
+        "job_id"
+      ]
+    },
+    "session.getEvents": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "after_sequence",
+        "max_events"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "artifact.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "max_items",
+        "max_depth"
+      ]
+    },
+    "artifact.read": {
+      "required_params": [
+        "session_id",
+        "artifact_id"
+      ],
+      "optional_params": [
+        "max_bytes"
+      ]
+    },
+    "browser.start": {
+      "required_params": [
+        "session_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "executable_path",
+        "network_scope",
+        "allow_local_destinations",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "confirmation_required_when": "network_scope=public_loopback (or legacy allow_local_destinations=true)",
+      "public_destinations_by_default": true,
+      "network_scopes": [
+        "public",
+        "public_loopback"
+      ],
+      "legacy_allow_local_destinations": "compatibility-only alias for public_loopback; cannot be combined with network_scope",
+      "public_loopback_policy": "public and literal/named loopback only; LAN, link-local, multicast, reserved, mixed-DNS, proxy, and DevTools destinations remain denied",
+      "public_loopback_actor_scope": "direct IDE only; filtered and rejected by all model-controlled browser tools",
+      "owner_scope": "session_id",
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.navigate": {
+      "required_params": [
+        "session_id",
+        "browser_session_id",
+        "url",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "timeout_seconds"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "url_policy": "http_https_without_userinfo; DNS-aware public-only, or public plus loopback for a separately confirmed direct-IDE public_loopback session; LAN and link-local remain denied",
+      "redirect_and_subresource_policy": "same policy is enforced through CDP Fetch interception",
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.snapshot": {
+      "required_params": [
+        "session_id",
+        "browser_session_id"
+      ],
+      "optional_params": [
+        "kind",
+        "timeout_seconds"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.screenshot": {
+      "required_params": [
+        "session_id",
+        "browser_session_id"
+      ],
+      "optional_params": [
+        "full_page",
+        "timeout_seconds"
+      ],
+      "mutates": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.artifact.read": {
+      "required_params": [
+        "session_id",
+        "browser_session_id",
+        "artifact_id"
+      ],
+      "optional_params": [
+        "offset",
+        "max_bytes"
+      ],
+      "workspace_required": true,
+      "encoding": "base64",
+      "maximum_chunk_bytes": 1048576,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.diagnostics": {
+      "required_params": [
+        "session_id",
+        "browser_session_id"
+      ],
+      "optional_params": [
+        "max_events",
+        "timeout_seconds"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.click": {
+      "required_params": [
+        "session_id",
+        "browser_session_id",
+        "selector",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "timeout_seconds"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.type": {
+      "required_params": [
+        "session_id",
+        "browser_session_id",
+        "selector",
+        "text",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "replace",
+        "timeout_seconds"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_echoes_input_text": false,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.status": {
+      "required_params": [
+        "session_id",
+        "browser_session_id"
+      ],
+      "workspace_required": true,
+      "result_includes_network_scope": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "workspace_required": true,
+      "result_includes_network_scope": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "browser.close": {
+      "required_params": [
+        "session_id",
+        "browser_session_id"
+      ],
+      "optional_params": [
+        "delete_artifacts",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": false,
+      "workspace_required": true,
+      "confirmation_required": true,
+      "cleanup": "exact owned process tree, private profile, and ephemeral screenshots; delete_artifacts=false is rejected; failures remain retryable",
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.plan": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "instruction",
+        "task",
+        "model",
+        "base_url",
+        "temperature"
+      ]
+    },
+    "forge.plan.start": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "instruction",
+        "task",
+        "model",
+        "base_url",
+        "temperature",
+        "idempotency_key"
+      ]
+    },
+    "forge.plan.result": {
+      "required_params": [
+        "job_id"
+      ]
+    },
+    "forge.list": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "max_items"
+      ]
+    },
+    "forge.open": {
+      "required_params": [
+        "plan_id"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ]
+    },
+    "forge.resume": {
+      "required_params": [
+        "plan_id"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ]
+    },
+    "forge.attach": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "source_path",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "wait"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.review": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "model",
+        "base_url",
+        "temperature"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.assets.show": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "asset_id"
+      ],
+      "optional_params": [
+        "workspace_trusted",
+        "yes"
+      ]
+    },
+    "forge.assets.add": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "source_path",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "wait"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.assets.delete": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "asset_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.assets.edit": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "asset_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "title",
+        "description",
+        "pinned",
+        "refresh"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.assets.refresh": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "asset_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.assets.pruneLegacy": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.executePreview": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "optional_params": [
+        "task_ids",
+        "mode",
+        "model",
+        "base_url",
+        "temperature",
+        "max_steps",
+        "no_log"
+      ]
+    },
+    "forge.execute": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_ids",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "mode",
+        "model",
+        "base_url",
+        "temperature",
+        "max_steps",
+        "no_log"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "forge.cancel": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "optional_params": [
+        "reason"
+      ],
+      "supported": true,
+      "callable": true,
+      "behavior": "cooperative_cancellation_requested",
+      "active_runtime_cancellation_supported": true,
+      "result_states": [
+        "no_active_job",
+        "cancellation_requested",
+        "non_cancellable",
+        "cancelled",
+        "completed",
+        "failed"
+      ],
+      "must_not_mark_cancelled_without_interrupt": false
+    },
+    "diff.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "plan_id"
+      ]
+    },
+    "diff.get": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "diff_id"
+      ],
+      "optional_params": [
+        "max_bytes"
+      ]
+    },
+    "config.validate": {
+      "optional_params": [
+        "workspace",
+        "path",
+        "values"
+      ]
+    },
+    "config.set": {
+      "required_params": [
+        "key",
+        "value",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.show": {
+      "required_params": [
+        "name"
+      ]
+    },
+    "profile.add": {
+      "required_params": [
+        "name",
+        "base_url",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "protocol",
+        "default_model",
+        "web_search_adapter",
+        "web_search_model",
+        "notes"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.remove": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.use": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.rename": {
+      "required_params": [
+        "old",
+        "new",
+        "workspace_trusted"
+      ],
+      "forbidden_params": [
+        "name",
+        "new_name"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.preset": {
+      "required_params": [
+        "preset",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "preset_key",
+        "name",
+        "base_url",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "profile.convert": {
+      "required_params": [
+        "name",
+        "target",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "tool.info": {
+      "required_params": [
+        "name"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "workspace_trusted"
+      ],
+      "workspace_required": true
+    },
+    "tool.trust": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "tool.untrust": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "skill.info": {
+      "required_params": [
+        "name"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "workspace_trusted"
+      ],
+      "workspace_required": true
+    },
+    "skill.init": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "skill.validate": {
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "exactly_one_of": [
+        "bundle",
+        "name",
+        "all"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "bundle",
+        "name",
+        "all"
+      ],
+      "workspace_required": true
+    },
+    "skill.install": {
+      "required_params": [
+        "source",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "allow_remote",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "skill.enable": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "skill.disable": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "skill.remove": {
+      "required_params": [
+        "name",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "sandbox.doctor": {
+      "optional_params": [
+        "smoke",
+        "include_server",
+        "env"
+      ]
+    },
+    "sandbox.setup": {
+      "required_params": [
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "pull"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "sandbox.pull": {
+      "required_params": [
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "images",
+        "include_server",
+        "timeout_s"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true
+    },
+    "update.check": {
+      "optional_params": [
+        "cached",
+        "allow_network",
+        "force"
+      ]
+    },
+    "doctor.providers.live": {
+      "required_params": [
+        "allow_live"
+      ],
+      "optional_params": [
+        "timeout_s"
+      ]
+    },
+    "report.create": {
+      "required_params": [
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "latest",
+        "feedback",
+        "local_only"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "doctor.bundle": {
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.server.status": {
+      "required_params": [
+        "session_id",
+        "server_id"
+      ],
+      "owner_scope": "exact live IDE session and configured server",
+      "temporary_manager": false,
+      "materializes_connection": false,
+      "stdio_process_liveness": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.server.enable": {
+      "required_params": [
+        "session_id",
+        "server_id",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "idle_session_required": true,
+      "owner_scope": "exact live IDE session and configured server",
+      "temporary_manager": false,
+      "catalog_fence": "frozen tool/resource/prompt catalogs must match and list-change races are rejected",
+      "atomic_replacement": true,
+      "server_diagnostics_in_error": false
+    },
+    "mcp.server.disable": {
+      "required_params": [
+        "session_id",
+        "server_id",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "idle_session_required": true,
+      "owner_scope": "exact live IDE session and configured server",
+      "temporary_manager": false,
+      "fail_closed": true,
+      "server_diagnostics_in_error": false
+    },
+    "mcp.server.restart": {
+      "required_params": [
+        "session_id",
+        "server_id",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "idle_session_required": true,
+      "owner_scope": "exact live IDE session and configured server",
+      "temporary_manager": false,
+      "catalog_fence": "frozen tool/resource/prompt catalogs must match and list-change races are rejected",
+      "atomic_replacement": true,
+      "server_diagnostics_in_error": false
+    },
+    "mcp.prompts.get": {
+      "required_params": [
+        "server_id",
+        "name"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "arguments"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.auth.login.start": {
+      "required_params": [
+        "server_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "supported": true,
+      "callable": true,
+      "behavior": "returns_browser_url_and_completes_via_loopback_callback",
+      "browser_opened_by_bridge": false,
+      "tokens_in_protocol_params": false,
+      "authorization_code_in_protocol": false,
+      "secret_store_required": true,
+      "lifecycle_methods": [
+        "mcp.auth.login.start",
+        "mcp.auth.login.status",
+        "mcp.auth.login.cancel"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.auth.login.status": {
+      "required_params": [
+        "server_id",
+        "flow_id"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.auth.login.cancel": {
+      "required_params": [
+        "server_id",
+        "flow_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "mcp.auth.logout": {
+      "required_params": [
+        "server_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "hooks.trace": {
+      "optional_params": [
+        "session_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "hooks.test": {
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "event",
+        "tool",
+        "command"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "hooks.effective": {
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "event"
+      ],
+      "workspace_required": true
+    },
+    "conventions.render": {
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "focus_path",
+        "max_chars",
+        "max_bytes"
+      ],
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
+    },
+    "hooks.trust": {
+      "required_params": [
+        "target",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "hooks.untrust": {
+      "required_params": [
+        "target",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "hooks.init": {
+      "required_params": [
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "hooks.enable": {
+      "required_params": [
+        "hook_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "layer"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "hooks.disable": {
+      "required_params": [
+        "hook_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "layer"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "ext.search": {
+      "required_params": [
+        "query"
+      ]
+    },
+    "ext.info": {
+      "required_params": [
+        "plugin_id"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "workspace_trusted",
+        "id",
+        "ext_id"
+      ],
+      "workspace_required": true
+    },
+    "ext.install": {
+      "required_params": [
+        "source",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "yes",
+        "confirm",
+        "trust_approval"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "ext.uninstall": {
+      "required_params": [
+        "plugin_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "id",
+        "ext_id",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "ext.enable": {
+      "required_params": [
+        "plugin_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "id",
+        "ext_id",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "ext.disable": {
+      "required_params": [
+        "plugin_id",
+        "workspace_trusted"
+      ],
+      "requires_one_of": [
+        "workspace",
+        "path"
+      ],
+      "optional_params": [
+        "workspace",
+        "path",
+        "project",
+        "id",
+        "ext_id",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true
+    },
+    "session.modelInfo": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "model"
+      ],
+      "result_redaction": {
+        "secret_values_included": false,
+        "base_url_redacted": true
+      }
+    },
+    "session.subagents.status": {
+      "required_params": [
+        "session_id"
+      ],
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "session.subagents.setEnabled": {
+      "required_params": [
+        "session_id",
+        "enabled",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.getState": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.setAssistant": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "instruction",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expected_revision"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.setGoal": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "goal",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expected_revision"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.updateTask": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_id"
+      ],
+      "optional_params": [
+        "title",
+        "body",
+        "status",
+        "expected_revision",
+        "workspace_trusted"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.validate": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "result_redaction": {
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.regenerate": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expected_revision",
+        "instruction",
+        "focus"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.regenerate.start": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expected_revision",
+        "instruction",
+        "focus"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.plan.regenerate.result": {
+      "required_params": [
+        "job_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.review.start": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "model",
+        "base_url",
+        "temperature"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.review.result": {
+      "required_params": [
+        "job_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.start": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "idempotency_key",
+        "parallel",
+        "approval_scope_grants",
+        "model",
+        "base_url",
+        "temperature"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.resume": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "job_id",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "expected_revision",
+        "parallel",
+        "approval_scope_grants",
+        "model",
+        "base_url",
+        "temperature"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "behavior": "explicit_permission_bound_resume",
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.list": {
+      "required_params": [
+        "session_id"
+      ],
+      "optional_params": [
+        "limit"
+      ],
+      "behavior": "durable_restart_safe_listing",
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.status": {
+      "required_params": [
+        "session_id",
+        "job_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.result": {
+      "required_params": [
+        "job_id"
+      ],
+      "optional_params": [
+        "session_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.cancel": {
+      "required_params": [
+        "session_id",
+        "job_id"
+      ],
+      "optional_params": [
+        "reason",
+        "expected_revision"
+      ],
+      "mutates": true,
+      "supported": true,
+      "callable": true,
+      "behavior": "atomic_durable_cancellation_with_cooperative_runtime_stop",
+      "result_states": [
+        "cancellation_requested",
+        "non_cancellable",
+        "cancelled",
+        "completed",
+        "failed"
+      ]
+    },
+    "forge.swarm.reconcile": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "optional_params": [
+        "action",
+        "task_ids",
+        "base_branch",
+        "workspace_trusted",
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.review": {
+      "required_params": [
+        "session_id",
+        "plan_id"
+      ],
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.apply": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_ids",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "base_branch"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "forge.swarm.discard": {
+      "required_params": [
+        "session_id",
+        "plan_id",
+        "task_ids",
+        "workspace_trusted"
+      ],
+      "optional_params": [
+        "yes",
+        "confirm"
+      ],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "secret_values_included": false
+      }
+    },
+    "session.personas.list": {
+      "required_params": [
+        "session_id"
+      ]
+    },
+    "session.persona.set": {
+      "required_params": [
+        "session_id",
+        "persona"
+      ],
+      "mutates": true
+    }
+  }
+}

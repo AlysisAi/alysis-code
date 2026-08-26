@@ -8,8 +8,8 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.mcp.oauth_store import (
+from alysis_code import cli as cli_mod
+from alysis_code.mcp.oauth_store import (
     McpOAuthTokenRecord,
     load_oauth_token_record,
     save_oauth_token_record,
@@ -28,7 +28,7 @@ def _write_http_oauth_config(
 ) -> dict[str, str]:
     cfg_dir = tmp_path / "cfg"
     _write_json(cfg_dir / "mcp.json", {"servers": servers})
-    return {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    return {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
 
 def _token_record(*, access_token: str, refresh_token: str | None) -> McpOAuthTokenRecord:
@@ -61,14 +61,14 @@ def test_mcp_auth_login_cli_completes_with_localhost_callback(
             }
         },
     )
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", env["SYLLIPTOR_CONFIG_DIR"])
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", env["ALYSIS_CONFIG_DIR"])
 
     def _browser_open(url: str) -> bool:
         response = httpx.get(url, follow_redirects=True, timeout=5.0)
         assert response.status_code == 200
         return True
 
-    monkeypatch.setattr("sylliptor_agent_cli.mcp.oauth_runtime.webbrowser.open", _browser_open)
+    monkeypatch.setattr("alysis_code.mcp.oauth_runtime.webbrowser.open", _browser_open)
 
     result = CliRunner().invoke(
         cli_mod.app,
@@ -115,14 +115,14 @@ def test_mcp_auth_login_cli_falls_back_to_metadata_scopes_supported(
             }
         },
     )
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", env["SYLLIPTOR_CONFIG_DIR"])
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", env["ALYSIS_CONFIG_DIR"])
 
     def _browser_open(url: str) -> bool:
         response = httpx.get(url, follow_redirects=True, timeout=5.0)
         assert response.status_code == 200
         return True
 
-    monkeypatch.setattr("sylliptor_agent_cli.mcp.oauth_runtime.webbrowser.open", _browser_open)
+    monkeypatch.setattr("alysis_code.mcp.oauth_runtime.webbrowser.open", _browser_open)
 
     result = CliRunner().invoke(
         cli_mod.app,
@@ -162,7 +162,7 @@ def test_mcp_auth_login_cli_requires_protected_resource_metadata_for_scope_fallb
             }
         },
     )
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", env["SYLLIPTOR_CONFIG_DIR"])
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", env["ALYSIS_CONFIG_DIR"])
 
     result = CliRunner().invoke(
         cli_mod.app,
@@ -201,7 +201,7 @@ def test_mcp_auth_status_cli_lists_oauth_servers_and_redacts_tokens(
             },
         },
     )
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", env["SYLLIPTOR_CONFIG_DIR"])
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", env["ALYSIS_CONFIG_DIR"])
     save_oauth_token_record(
         "alpha", _token_record(access_token="alpha-secret-token", refresh_token="alpha-refresh")
     )
@@ -244,7 +244,7 @@ def test_mcp_auth_logout_cli_deletes_stored_tokens_cleanly(tmp_path: Path, monke
             }
         },
     )
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", env["SYLLIPTOR_CONFIG_DIR"])
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", env["ALYSIS_CONFIG_DIR"])
     save_oauth_token_record(
         "alpha", _token_record(access_token="logout-secret", refresh_token="logout-refresh")
     )

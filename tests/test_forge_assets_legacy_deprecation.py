@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.forge import attach_asset, create_plan_run, load_plan
+from alysis_code.forge import attach_asset, create_plan_run, load_plan
 
 
 def test_attach_asset_emits_deprecation_warning(tmp_path: Path) -> None:

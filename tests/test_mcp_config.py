@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import ConfigError
-from sylliptor_agent_cli.mcp.config import (
+from alysis_code.config import ConfigError
+from alysis_code.mcp.config import (
     load_resolved_mcp_config,
     redact_sensitive_mapping,
     user_mcp_config_path,
 )
-from sylliptor_agent_cli.mcp.errors import McpConfigError
+from alysis_code.mcp.errors import McpConfigError
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -42,7 +42,7 @@ def test_mcp_config_rejects_unknown_user_server_fields_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -69,7 +69,7 @@ def test_mcp_config_rejects_invalid_enabled_in_runtime_kind_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -97,7 +97,7 @@ def test_user_mcp_config_accepts_schema_version_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -117,7 +117,7 @@ def test_project_mcp_config_accepts_schema_version_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -128,7 +128,7 @@ def test_project_mcp_config_accepts_schema_version_1(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "schema_version": 1,
             "servers": {
@@ -149,7 +149,7 @@ def test_user_mcp_config_accepts_roots_mode_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -169,7 +169,7 @@ def test_project_mcp_config_may_narrow_roots_mode_to_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -179,7 +179,7 @@ def test_project_mcp_config_may_narrow_roots_mode_to_disabled(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -199,7 +199,7 @@ def test_project_mcp_config_cannot_broaden_roots_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -208,7 +208,7 @@ def test_project_mcp_config_cannot_broaden_roots_mode(
             },
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -233,7 +233,7 @@ def test_user_mcp_config_accepts_resources_mode_listed_read_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -253,7 +253,7 @@ def test_project_mcp_config_may_narrow_resources_mode_to_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -263,7 +263,7 @@ def test_project_mcp_config_may_narrow_resources_mode_to_disabled(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -283,7 +283,7 @@ def test_project_mcp_config_cannot_broaden_resources_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -292,7 +292,7 @@ def test_project_mcp_config_cannot_broaden_resources_mode(
             },
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -317,7 +317,7 @@ def test_user_mcp_config_accepts_prompts_mode_listed_get_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -337,7 +337,7 @@ def test_project_mcp_config_may_narrow_prompts_mode_to_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -347,7 +347,7 @@ def test_project_mcp_config_may_narrow_prompts_mode_to_disabled(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -367,7 +367,7 @@ def test_project_mcp_config_cannot_broaden_prompts_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -376,7 +376,7 @@ def test_project_mcp_config_cannot_broaden_prompts_mode(
             },
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -402,7 +402,7 @@ def test_user_mcp_config_rejects_unsupported_schema_version_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -428,7 +428,7 @@ def test_user_mcp_config_rejects_non_integer_schema_version_lookalikes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: object
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -454,7 +454,7 @@ def test_project_mcp_config_rejects_unsupported_schema_version_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -464,7 +464,7 @@ def test_project_mcp_config_rejects_unsupported_schema_version_with_file_path(
             },
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -491,7 +491,7 @@ def test_project_mcp_config_rejects_non_integer_schema_version_lookalikes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: object
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -501,7 +501,7 @@ def test_project_mcp_config_rejects_non_integer_schema_version_lookalikes(
             },
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -527,7 +527,7 @@ def test_mcp_config_accepts_omitted_schema_version_for_backward_compatibility(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -537,7 +537,7 @@ def test_mcp_config_accepts_omitted_schema_version_for_backward_compatibility(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -557,7 +557,7 @@ def test_user_mcp_config_reports_user_path_for_mixed_case_allow_deny_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -576,7 +576,7 @@ def test_user_mcp_config_reports_user_path_for_mixed_case_allow_deny_overlap(
 
     message = str(excinfo.value)
     assert os.fspath(config_path) in message
-    assert os.fspath(tmp_path / ".sylliptor" / "mcp.json") not in message
+    assert os.fspath(tmp_path / ".alysis" / "mcp.json") not in message
     assert "alpha" in message
     assert "allowed_tools/denied_tools" in message
     assert "cannot overlap after merge" in message
@@ -586,7 +586,7 @@ def test_project_mcp_config_cannot_reenable_user_disabled_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -595,7 +595,7 @@ def test_project_mcp_config_cannot_reenable_user_disabled_server(
             }
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -621,7 +621,7 @@ def test_project_mcp_config_can_disable_user_enabled_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -631,7 +631,7 @@ def test_project_mcp_config_can_disable_user_enabled_server(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -651,7 +651,7 @@ def test_project_mcp_config_can_narrow_enabled_in_from_all_runtimes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -661,7 +661,7 @@ def test_project_mcp_config_can_narrow_enabled_in_from_all_runtimes(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -681,8 +681,8 @@ def test_project_mcp_config_rejects_broader_enabled_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         user_mcp_config_path(),
         {
@@ -716,8 +716,8 @@ def test_project_mcp_config_rejects_superset_allowlist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         user_mcp_config_path(),
         {
@@ -751,7 +751,7 @@ def test_project_mcp_config_accepts_allowlist_when_user_has_no_explicit_allowlis
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -761,7 +761,7 @@ def test_project_mcp_config_accepts_allowlist_when_user_has_no_explicit_allowlis
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -781,7 +781,7 @@ def test_project_mcp_config_unions_denied_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -791,7 +791,7 @@ def test_project_mcp_config_unions_denied_tools(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -817,8 +817,8 @@ def test_project_mcp_config_cannot_increase_timeout(
     project_value: float,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         user_mcp_config_path(),
         {
@@ -852,7 +852,7 @@ def test_project_mcp_config_can_reduce_timeouts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -862,7 +862,7 @@ def test_project_mcp_config_can_reduce_timeouts(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -884,8 +884,8 @@ def test_project_mcp_config_rejects_merged_allow_deny_overlap_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         user_mcp_config_path(),
         {
@@ -919,7 +919,7 @@ def test_project_mcp_config_cannot_introduce_new_servers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -932,7 +932,7 @@ def test_project_mcp_config_cannot_introduce_new_servers(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "beta": {
@@ -947,7 +947,7 @@ def test_project_mcp_config_cannot_introduce_new_servers(
 
     message = str(excinfo.value)
     assert "unknown server id 'beta'" in message
-    assert os.fspath(tmp_path / ".sylliptor" / "mcp.json") in message
+    assert os.fspath(tmp_path / ".alysis" / "mcp.json") in message
 
 
 @pytest.mark.parametrize(
@@ -969,7 +969,7 @@ def test_project_mcp_config_cannot_override_connection_fields(
     field_value: object,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -982,7 +982,7 @@ def test_project_mcp_config_cannot_override_connection_fields(
         },
     )
     _write_json(
-        tmp_path / ".sylliptor" / "mcp.json",
+        tmp_path / ".alysis" / "mcp.json",
         {
             "servers": {
                 "alpha": {
@@ -1011,7 +1011,7 @@ def test_project_mcp_config_cannot_override_non_monotonic_policy_fields(
     field_value: object,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1020,7 +1020,7 @@ def test_project_mcp_config_cannot_override_non_monotonic_policy_fields(
             }
         },
     )
-    project_path = tmp_path / ".sylliptor" / "mcp.json"
+    project_path = tmp_path / ".alysis" / "mcp.json"
     _write_json(
         project_path,
         {
@@ -1046,7 +1046,7 @@ def test_user_http_config_rejects_remote_plain_http_url_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1079,7 +1079,7 @@ def test_user_http_config_allows_loopback_plain_http_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1100,7 +1100,7 @@ def test_user_mcp_config_rejects_unsupported_trust_mode_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1124,7 +1124,7 @@ def test_user_http_oauth_config_is_resolved_and_normalized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1158,7 +1158,7 @@ def test_static_header_only_http_config_remains_valid_without_oauth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1187,7 +1187,7 @@ def test_mcp_oauth_scope_normalization_is_deterministic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1213,7 +1213,7 @@ def test_mcp_config_rejects_oauth_with_static_authorization_header(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1240,7 +1240,7 @@ def test_mcp_config_rejects_oauth_on_stdio_server_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1263,7 +1263,7 @@ def test_mcp_config_rejects_invalid_oauth_authorization_server_url_with_file_pat
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1292,7 +1292,7 @@ def test_mcp_config_rejects_invalid_oauth_redirect_port_with_file_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1321,7 +1321,7 @@ def test_mcp_config_rejects_oauth_redirect_host_with_embedded_port(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,
@@ -1350,7 +1350,7 @@ def test_mcp_env_expansion_and_redaction_are_deterministic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1402,7 +1402,7 @@ def test_mcp_env_expansion_missing_variable_raises_clear_error_without_secret_va
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_path = user_mcp_config_path()
     _write_json(
         config_path,

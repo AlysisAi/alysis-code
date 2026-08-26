@@ -8,15 +8,15 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.forge_events import EVENT_NAMES, EVENT_SCOPE_AMENDED
-from sylliptor_agent_cli.plan_validation import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.forge_events import EVENT_NAMES, EVENT_SCOPE_AMENDED
+from alysis_code.plan_validation import (
     SCOPE_GLOB_PREFERENCE_GUIDANCE,
     find_plan_acceptance_issues,
 )
-from sylliptor_agent_cli.task_scope import (
+from alysis_code.task_scope import (
     SCOPE_ADJACENT_GENERATED_ARTIFACT,
     SCOPE_ADJACENT_NEW_FILE_IN_SCOPE_DIR,
     SCOPE_ADJACENT_SIBLING_TEST,
@@ -221,7 +221,7 @@ def test_workspace_escaping_paths_are_protected(tmp_path: Path) -> None:
 
 def test_is_protected_scope_path_covers_internal_and_vcs_paths() -> None:
     assert is_protected_scope_path(".git/config") is True
-    assert is_protected_scope_path(".sylliptor/state.json") is True
+    assert is_protected_scope_path(".alysis/state.json") is True
     assert is_protected_scope_path(".forge/run.json") is True
     assert is_protected_scope_path("C:/Windows/system32/hosts") is True
     assert is_protected_scope_path("/etc/passwd") is True
@@ -399,10 +399,10 @@ def test_missing_write_scope_issue_carries_glob_guidance() -> None:
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -438,7 +438,7 @@ def _exec_args(task_id: str, repo: Path) -> list[str]:
 
 
 def _report_text(repo: Path, task_id: str) -> str:
-    pointer = json.loads((repo / ".sylliptor" / "current_run.json").read_text(encoding="utf-8"))
+    pointer = json.loads((repo / ".alysis" / "current_run.json").read_text(encoding="utf-8"))
     run_dir = repo / pointer["run_path"]
     return (run_dir / "execution" / "reports" / f"{task_id}.md").read_text(encoding="utf-8")
 
@@ -463,7 +463,7 @@ def test_exec_accepts_worker_creating_a_new_sibling_test_file(tmp_path: Path, mo
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
-    result = runner.invoke(sylliptor_app, _exec_args(task_id, repo), env=_env(tmp_path))
+    result = runner.invoke(alysis_app, _exec_args(task_id, repo), env=_env(tmp_path))
 
     assert result.exit_code == 0, result.output
     final_plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -497,7 +497,7 @@ def test_exec_machine_stream_reports_the_scope_amendment(tmp_path: Path, monkeyp
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [*_exec_args(task_id, repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -539,7 +539,7 @@ def test_exec_blocks_worker_editing_an_unrelated_top_level_module(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
-    result = runner.invoke(sylliptor_app, _exec_args(task_id, repo), env=_env(tmp_path))
+    result = runner.invoke(alysis_app, _exec_args(task_id, repo), env=_env(tmp_path))
 
     assert result.exit_code == 1, result.output
     final_plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -567,7 +567,7 @@ def test_exec_rejects_a_task_that_changed_nothing_with_a_did_nothing_message(
 
     monkeypatch.setattr(cli_mod, "run_agent", lambda **_kwargs: 0)
 
-    result = runner.invoke(sylliptor_app, _exec_args(task_id, repo), env=_env(tmp_path))
+    result = runner.invoke(alysis_app, _exec_args(task_id, repo), env=_env(tmp_path))
 
     assert result.exit_code == 1, result.output
     report_text = _report_text(repo, task_id)
@@ -595,7 +595,7 @@ def test_exec_accepts_a_task_whose_only_changes_were_adjacent(tmp_path: Path, mo
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
-    result = runner.invoke(sylliptor_app, _exec_args(task_id, repo), env=_env(tmp_path))
+    result = runner.invoke(alysis_app, _exec_args(task_id, repo), env=_env(tmp_path))
 
     assert result.exit_code == 0, result.output
     final_plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -626,7 +626,7 @@ def test_exec_scope_warn_mode_still_only_warns_and_never_amends(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [*_exec_args(task_id, repo), "--scope", "warn"],
         env=_env(tmp_path),
     )

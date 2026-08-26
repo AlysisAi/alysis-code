@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse hook that runs ruff format on fs_write content.
 
-Wire it in .sylliptor/hooks.json:
+Wire it in .alysis/hooks.json:
 
     {
       "hooks": {

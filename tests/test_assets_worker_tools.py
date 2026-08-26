@@ -5,17 +5,17 @@ from pathlib import Path
 
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.usage_logger import AssetUsageLogger
-from sylliptor_agent_cli.assets.worker_mirror import mirror_task_assets
-from sylliptor_agent_cli.assets.worker_tools import (
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.usage_logger import AssetUsageLogger
+from alysis_code.assets.worker_mirror import mirror_task_assets
+from alysis_code.assets.worker_tools import (
     build_worker_asset_mcp_manager,
     compose_worker_asset_mcp_manager,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.mcp.manager import McpHostToolBinding
-from sylliptor_agent_cli.model_registry import ModelRegistry
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
+from alysis_code.mcp.manager import McpHostToolBinding
+from alysis_code.model_registry import ModelRegistry
 
 
 def _tool_case(tmp_path: Path):

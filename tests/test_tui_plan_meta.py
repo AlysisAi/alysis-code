@@ -15,11 +15,11 @@ from pathlib import Path
 
 from rich.console import Console
 
-from sylliptor_agent_cli.cli_impl.commands.cli_common import (
+from alysis_code.cli_impl.commands.cli_common import (
     _print_forge_meta,
     _print_forge_warning_messages,
 )
-from sylliptor_agent_cli.cli_impl.tui.plan_meta import (
+from alysis_code.cli_impl.tui.plan_meta import (
     parse_plan_meta,
     plan_meta_rows,
 )
@@ -379,7 +379,7 @@ def test_collapsed_single_note_clips_with_expand_hint():
 
 
 def test_plan_meta_rows_are_copyable_and_strip_chrome():
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _COPYABLE_TRANSCRIPT_ROLES,
         _strip_transcript_copy_chrome,
     )
@@ -424,8 +424,8 @@ def test_plan_meta_rows_are_copyable_and_strip_chrome():
 def test_wrapped_continuation_rows_copy_content_verbatim():
     from prompt_toolkit.data_structures import Point
 
-    from sylliptor_agent_cli.cli_impl.tui.app import _selected_text
-    from sylliptor_agent_cli.cli_impl.tui.plan_meta import plan_meta_rows_with_kinds
+    from alysis_code.cli_impl.tui.app import _selected_text
+    from alysis_code.cli_impl.tui.plan_meta import plan_meta_rows_with_kinds
 
     # A note containing bare '+', '~', '·' tokens wrapped on a narrow panel:
     # continuation rows may START with one of those characters, and the copy
@@ -447,7 +447,7 @@ def test_wrapped_continuation_rows_copy_content_verbatim():
 def test_partial_sweep_never_leaks_hint_fragments():
     from prompt_toolkit.data_structures import Point
 
-    from sylliptor_agent_cli.cli_impl.tui.app import _selected_text
+    from alysis_code.cli_impl.tui.app import _selected_text
 
     row = "▸ plan updated · 2 notes · 1 warning  ·  click to expand"
     # Release the sweep two characters into the hint text.
@@ -464,7 +464,7 @@ def test_partial_sweep_never_leaks_hint_fragments():
 def test_plan_meta_mouse_click_vs_drag_contract():
     from prompt_toolkit.data_structures import Point
 
-    from sylliptor_agent_cli.cli_impl.tui.app import (
+    from alysis_code.cli_impl.tui.app import (
         _plan_meta_click_toggles,
         _plan_meta_press_hit,
     )
@@ -494,7 +494,7 @@ def test_plan_meta_mouse_click_vs_drag_contract():
 
 
 def test_wrap_segments_clips_oversized_lead():
-    from sylliptor_agent_cli.cli_impl.tui.plan_meta import _wrap_segments
+    from alysis_code.cli_impl.tui.plan_meta import _wrap_segments
 
     rows = _wrap_segments([("s", "X" * 30)], [("d", "alpha beta")], 10, cont_indent=4)
     assert all(sum(len(t) for _s, t in row) <= 10 for row in rows)
@@ -524,8 +524,8 @@ def test_collapsed_single_note_boundaries():
 def test_selected_text_copies_plan_meta_block_cleanly():
     from prompt_toolkit.data_structures import Point
 
-    from sylliptor_agent_cli.cli_impl.tui.app import _selected_text
-    from sylliptor_agent_cli.cli_impl.tui.plan_meta import plan_meta_rows_with_kinds
+    from alysis_code.cli_impl.tui.app import _selected_text
+    from alysis_code.cli_impl.tui.plan_meta import plan_meta_rows_with_kinds
 
     console, buf = _capture_console(width=4096)
     _emit_screenshot_scenario(console)
@@ -548,10 +548,10 @@ def test_selected_text_copies_plan_meta_block_cleanly():
 
 def test_forge_emit_sites_match_parser_contract():
     """The parser keys on literals owned by this repo — keep them in sync."""
-    import sylliptor_agent_cli.cli_impl.commands.forge_helpers as forge_helpers
-    import sylliptor_agent_cli.plan_assistant as plan_assistant
-    import sylliptor_agent_cli.plan_reconciliation as plan_reconciliation
-    import sylliptor_agent_cli.task_readiness as task_readiness
+    import alysis_code.cli_impl.commands.forge_helpers as forge_helpers
+    import alysis_code.plan_assistant as plan_assistant
+    import alysis_code.plan_reconciliation as plan_reconciliation
+    import alysis_code.task_readiness as task_readiness
 
     source = Path(forge_helpers.__file__).read_text(encoding="utf-8")
     # Status lines the headline fold matches by prefix.
@@ -586,7 +586,7 @@ def test_forge_emit_sites_match_parser_contract():
     # so the rejoin never injects a space mid-token. Pin the kwargs at the
     # construction site feeding the planmeta aside, not just in this test's
     # mirror console.
-    import sylliptor_agent_cli.cli_impl.chat.loop as chat_loop
+    import alysis_code.cli_impl.chat.loop as chat_loop
 
     loop_source = Path(chat_loop.__file__).read_text(encoding="utf-8")
     planner_block = loop_source.split("def _tui_make_forge_planner_execute", 1)[1].split(

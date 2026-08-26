@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.task_readiness import (
+from alysis_code.task_readiness import (
     TASK_KIND_ANALYSIS_ONLY,
     TASK_KIND_IMPLEMENTATION,
     TASK_KIND_TEST_ONLY,

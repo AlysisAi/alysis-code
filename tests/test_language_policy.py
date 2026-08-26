@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.agent_loop import _build_turn_language_system_message
-from sylliptor_agent_cli.language_policy import (
+from alysis_code.agent_loop import _build_turn_language_system_message
+from alysis_code.language_policy import (
     normalize_language_name,
     normalize_script_name,
 )

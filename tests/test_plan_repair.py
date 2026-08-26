@@ -14,9 +14,9 @@ from typing import Any
 
 import httpx
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.plan_assistant import run_planner_turn
-from sylliptor_agent_cli.plan_repair import (
+from alysis_code.config import AppConfig
+from alysis_code.plan_assistant import run_planner_turn
+from alysis_code.plan_repair import (
     PLAN_STATUS_DRAFT,
     PLAN_STATUS_EXECUTION_READY,
     TERMINAL_FAILED,
@@ -145,21 +145,21 @@ def test_policy_defaults_to_three_attempts_and_two_clarification_rounds() -> Non
 
 
 def test_policy_attempts_are_configurable_and_capped(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR_ATTEMPTS", "5")
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR_CLARIFICATION_ROUNDS", "1")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR_ATTEMPTS", "5")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR_CLARIFICATION_ROUNDS", "1")
     assert resolve_plan_repair_policy(None).max_payload_attempts == 5
     assert resolve_plan_repair_policy(None).max_clarification_rounds == 1
 
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR_ATTEMPTS", "9999")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR_ATTEMPTS", "9999")
     assert resolve_plan_repair_policy(None).max_payload_attempts == 6
 
     # A nonsense value falls back to the default rather than disabling the bound.
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR_ATTEMPTS", "not-a-number")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR_ATTEMPTS", "not-a-number")
     assert resolve_plan_repair_policy(None).max_payload_attempts == 3
 
 
 def test_kill_switch_restores_the_single_retry_shape(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR", "off")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR", "off")
     policy = resolve_plan_repair_policy(None)
 
     assert policy.enabled is False
@@ -395,7 +395,7 @@ def test_recorded_repair_history_stays_bounded() -> None:
 
 
 def test_wrong_types_are_repaired_by_re_prompting_the_model(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     # acceptance_criteria as a bare string, dependencies as a number: both are
     # type errors the strict validator rejects outright.
@@ -442,7 +442,7 @@ def test_wrong_types_are_repaired_by_re_prompting_the_model(monkeypatch) -> None
 
 
 def test_unknown_keys_exhaust_retries_then_host_repair_records_the_fields(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     # An unsupported key is rejected strictly but is repairable host-side, so
     # this exercises "model first, host last".
@@ -499,7 +499,7 @@ def test_unknown_keys_exhaust_retries_then_host_repair_records_the_fields(monkey
 
 
 def test_truncated_json_reaches_a_terminal_state_without_looping(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     truncated = (
         '{"assistant_message": "Plan updated.", "plan_update": {"tasks_add": [{"title": "Imp'
@@ -527,8 +527,8 @@ def test_truncated_json_reaches_a_terminal_state_without_looping(monkeypatch) ->
 
 
 def test_attempt_budget_is_configurable_end_to_end(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR_ATTEMPTS", "2")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR_ATTEMPTS", "2")
     prompts: list[str] = []
     transport = _scripted_transport(["nonsense"], prompts=prompts)
 
@@ -547,7 +547,7 @@ def test_attempt_budget_is_configurable_end_to_end(monkeypatch) -> None:
 
 
 def test_repair_retries_use_the_json_retry_temperature(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     temperatures: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -571,7 +571,7 @@ def test_repair_retries_use_the_json_retry_temperature(monkeypatch) -> None:
 
 
 def test_execution_unready_plan_update_is_re_prompted_with_the_rule_errors(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     # Schema-valid, but the task has no runnable write scope: exec would reject it.
     unready = json.dumps(_good_payload(write_scope=[]))
@@ -604,7 +604,7 @@ def test_landed_task_failing_an_acceptance_rule_is_re_prompted_with_the_rule_id(
     monkeypatch,
 ) -> None:
     """A task that survives apply but fails R1-R5 is reported by rule id."""
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     # Docs-only scope survives apply (it is runnable file scope) but fails R3:
     # there is no primary implementation path for a mutating task.
@@ -647,7 +647,7 @@ def test_landed_task_failing_an_acceptance_rule_is_re_prompted_with_the_rule_id(
 
 def test_task_update_for_an_unknown_id_is_re_prompted(monkeypatch) -> None:
     """An update aimed at a task that does not exist can never land."""
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     ghost_update = json.dumps(
         {
@@ -677,7 +677,7 @@ def test_task_update_for_an_unknown_id_is_re_prompted(monkeypatch) -> None:
 
 
 def test_persistently_unready_plan_update_is_kept_as_a_draft(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     unready = json.dumps(_good_payload(write_scope=[]))
     transport = _scripted_transport([unready], prompts=prompts)
@@ -700,14 +700,14 @@ def test_persistently_unready_plan_update_is_kept_as_a_draft(monkeypatch) -> Non
     assert result.repair.readiness_retries == 2
     assert result.repair.execution_readiness_errors
 
-    from sylliptor_agent_cli.plan_assistant import apply_guarded_planner_plan_update
+    from alysis_code.plan_assistant import apply_guarded_planner_plan_update
 
     apply_guarded_planner_plan_update(plan, copy.deepcopy(result.plan_update))
     assert apply_plan_status(plan).status == PLAN_STATUS_DRAFT
 
 
 def test_pre_existing_unreadiness_does_not_trigger_repair_retries(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     plan = _base_plan()
     # The plan is already unready before this turn starts.
@@ -743,7 +743,7 @@ def test_pre_existing_unreadiness_does_not_trigger_repair_retries(monkeypatch) -
 
 
 def test_clarification_only_turn_is_not_held_to_the_acceptance_rules(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     prompts: list[str] = []
     clarifying = json.dumps(
         {
@@ -770,7 +770,7 @@ def test_clarification_only_turn_is_not_held_to_the_acceptance_rules(monkeypatch
 
 
 def test_clarification_cap_forces_a_concrete_draft_instead_of_stalling(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     clarifying = json.dumps(
         {
             "assistant_message": "I need more detail before planning.",
@@ -809,7 +809,7 @@ def test_clarification_cap_forces_a_concrete_draft_instead_of_stalling(monkeypat
 
 
 def test_below_the_clarification_cap_the_planner_still_gets_to_ask(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     clarifying = json.dumps(
         {
             "assistant_message": "I need more detail before planning.",
@@ -840,7 +840,7 @@ def test_below_the_clarification_cap_the_planner_still_gets_to_ask(monkeypatch) 
 
 
 def test_greenfield_clarification_cap_forces_a_scaffold_draft(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     clarifying = json.dumps(
         {
             "assistant_message": "Tell me more about the app.",
@@ -867,8 +867,8 @@ def test_greenfield_clarification_cap_forces_a_scaffold_draft(monkeypatch) -> No
 
 
 def test_kill_switch_disables_readiness_retries_and_the_clarification_cap(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR", "off")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR", "off")
     prompts: list[str] = []
     transport = _scripted_transport([json.dumps(_good_payload(write_scope=[]))], prompts=prompts)
 
@@ -890,8 +890,8 @@ def test_kill_switch_disables_readiness_retries_and_the_clarification_cap(monkey
 
 
 def test_kill_switch_restores_eager_host_repair_on_the_first_parse(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
-    monkeypatch.setenv("SYLLIPTOR_PLAN_REPAIR", "off")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_PLAN_REPAIR", "off")
     prompts: list[str] = []
     repairable = json.dumps(
         {
@@ -922,7 +922,7 @@ def test_kill_switch_restores_eager_host_repair_on_the_first_parse(monkeypatch) 
 
 def test_every_malformed_shape_reaches_a_terminal_state(monkeypatch) -> None:
     """No input shape leaves the turn without a terminal state or an answer."""
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     shapes = [
         "",  # nothing at all
         "not json at all",
@@ -965,7 +965,7 @@ def test_every_malformed_shape_reaches_a_terminal_state(monkeypatch) -> None:
 
 
 def test_malformed_output_never_mutates_the_caller_plan(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     plan = _base_plan()
     before = copy.deepcopy(plan)
     transport = _scripted_transport([json.dumps(_good_payload(write_scope=[]))])

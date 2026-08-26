@@ -1,146 +1,148 @@
-# Benchmarking Sylliptor with Terminal-Bench
+# Alysis Code Terminal-Bench Adapter
 
-This directory contains the public adapters needed to run Sylliptor against
-[Terminal-Bench](https://www.tbench.ai/) through
-[Harbor](https://www.harborframework.com/). The goal is reproducibility: the
-agent, model, package, dataset, timeout, and raw outputs should all be explicit.
+This adapter runs the plain one-shot Alysis Code agent through `alysis run`.
+It does not use Forge or subagents.
 
-The benchmark integration is intentionally separate from Sylliptor's normal
-runtime. It does not include private datasets, unpublished results, or hidden
-execution modes.
+## Provider Configuration
 
-## What is included
+The adapter works with any OpenAI-compatible endpoint. `ALYSIS_BASE_URL`
+and `ALYSIS_MODEL` are required; there are no built-in provider defaults.
+Set the key outside the command so it is not written to shell history.
 
-| Adapter | Use |
-| --- | --- |
-| `benchmarks.terminal_bench.harbor_agent:SylliptorAgent` | Recommended adapter for current Harbor releases |
-| `benchmarks.terminal_bench.sylliptor_agent:SylliptorSimpleAgent` | Compatibility adapter for the legacy `terminal-bench` runner |
-
-Both adapters install Sylliptor inside the task container and invoke
-`sylliptor run` non-interactively. The current Harbor adapter installs an exact
-wheel supplied by the benchmark operator. The legacy adapter copies a clean
-snapshot of the local source tree.
-
-## Prerequisites
-
-- Docker with enough resources for the selected Terminal-Bench tasks.
-- Harbor installed according to its official documentation.
-- A Sylliptor wheel built from the exact commit being evaluated.
-- An OpenAI-compatible model endpoint and API key.
-
-Build the wheel from the repository root:
+For example, with OpenRouter:
 
 ```bash
-uv build
+export OPENROUTER_API_KEY="..."
+export ALYSIS_BASE_URL="https://openrouter.ai/api/v1"
+export ALYSIS_MODEL="<provider>/<model>"
 ```
 
-Set benchmark configuration in your shell. Keep real credentials outside the
-repository and shell command arguments:
+## Alibaba / DashScope
 
 ```bash
-export SYLLIPTOR_WHEEL="/absolute/path/to/dist/sylliptor_agent_cli-<version>-py3-none-any.whl"
-export SYLLIPTOR_BENCH_VERSION="<git-commit-or-release>"
-export SYLLIPTOR_API_KEY="<provider-api-key>"
-export SYLLIPTOR_BASE_URL="https://provider.example/v1"
-export SYLLIPTOR_MODEL="<provider-model-id>"
+export DASHSCOPE_API_KEY="..."
+export ALYSIS_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+export ALYSIS_MODEL="qwen3-coder-plus"
 ```
 
-No provider, endpoint, or model is selected implicitly. This prevents a local
-environment from silently changing the configuration being measured.
-
-## Quick start with Harbor
-
-From the repository root, run the public Terminal-Bench 2.1 dataset with the
-custom installed-agent adapter:
+For China-region DashScope use the China compatible-mode base URL instead:
 
 ```bash
-harbor run \
-  --dataset terminal-bench/terminal-bench-2-1 \
-  --agent benchmarks.terminal_bench.harbor_agent:SylliptorAgent \
-  --model "$SYLLIPTOR_MODEL"
+export ALYSIS_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ```
 
-Harbor CLI flags can change between releases. If your installed version uses a
-different dataset or custom-agent flag, follow Harbor's
-[agent documentation](https://www.harborframework.com/docs/agents) while
-keeping the same adapter import path.
+## Smoke Run
 
-Start with a small task subset before launching the full dataset. Terminal
-benchmarks can be expensive and may run for many hours.
-
-## Configuration
-
-Required environment variables:
-
-| Variable | Purpose |
-| --- | --- |
-| `SYLLIPTOR_WHEEL` | Absolute path to the wheel evaluated by Harbor |
-| `SYLLIPTOR_API_KEY` | Provider credential passed to the container at run time |
-| `SYLLIPTOR_BASE_URL` | OpenAI-compatible provider endpoint |
-| `SYLLIPTOR_MODEL` | Exact provider model identifier |
-
-Useful optional variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SYLLIPTOR_BENCH_VERSION` | Wheel filename | Version recorded by the adapter |
-| `SYLLIPTOR_RUN_PROFILE` | `auto` | Sylliptor execution profile |
-| `SYLLIPTOR_MAX_STEPS` | Sylliptor default | Maximum agent steps |
-| `SYLLIPTOR_DEADLINE_SECONDS` | Harbor-controlled | Inner Sylliptor deadline |
-| `SYLLIPTOR_LLM_TIMEOUT_S` | Sylliptor default | Per-request model timeout |
-| `SYLLIPTOR_WEB_SEARCH_MODE` | `off` | Web-search policy for the run |
-| `SYLLIPTOR_EXTRA_ARGS` | Empty | Additional CLI arguments parsed with shell-style quoting |
-
-The legacy adapter additionally requires the final effective host timeout as
-`managed_host_agent_timeout_sec`. It subtracts setup time and a shutdown
-reserve before passing a required deadline to Sylliptor. This lets Sylliptor
-finalize and flush diagnostics before the outer runner terminates the task.
-
-## How a run works
-
-1. Harbor creates an isolated task container.
-2. The adapter uploads the selected wheel and the public `setup.sh`.
-3. `setup.sh` creates a dedicated Python environment and installs that wheel.
-4. The adapter runs one headless Sylliptor task with the supplied instruction.
-5. Harbor runs the dataset's verifier and stores the trial result and artifacts.
-
-Sylliptor's shell sandbox is disabled inside the benchmark container because
-the container is the isolation boundary. Do not run the benchmark adapter
-directly against a host workspace.
-
-## Reproducible reporting
-
-When publishing a result, include:
-
-- Sylliptor commit, release, and wheel SHA-256.
-- Harbor version and exact dataset name/version.
-- Model identifier, endpoint provider, and reasoning settings.
-- Task subset, number of independent trials, concurrency, and timeout policy.
-- Whether web search or any additional tools were enabled.
-- Aggregate score together with per-task results and failures.
-- Raw Harbor job artifacts, with secrets and user data removed.
-
-Run multiple isolated trials when making comparative claims. A single run is
-useful for development but not enough to characterize agent performance.
-
-## Security and privacy
-
-- Credentials are read from environment variables and are never embedded in
-  the generated `sylliptor run` command.
-- The setup phase does not read provider credentials.
-- Setup and agent output are written to Harbor's task artifact directories.
-- Review artifacts before publishing them; task output can contain repository
-  content or model-generated sensitive text.
-- Use dedicated, rate-limited benchmark credentials whenever possible.
-
-## Development
-
-Run the adapter contract tests without installing Harbor:
+From the repository root:
 
 ```bash
-pytest -q tests/test_terminal_bench_deadline_adapter.py
+export TB_AGENT_TIMEOUT_SEC=1800
+uvx terminal-bench run \
+  --dataset terminal-bench-core==0.1.1 \
+  --agent-import-path benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
+  --global-agent-timeout-sec "$TB_AGENT_TIMEOUT_SEC" \
+  --agent-kwarg managed_host_agent_timeout_sec="$TB_AGENT_TIMEOUT_SEC" \
+  --task-id hello-world \
+  --n-concurrent 1
 ```
 
-The module provides small compatibility shims when the optional benchmark
-packages are absent, so the public safety and command-construction contracts
-remain covered by the normal repository test suite.
+## Full Run
+
+```bash
+export TB_AGENT_TIMEOUT_SEC=1800
+uvx terminal-bench run \
+  --dataset terminal-bench-core==0.1.1 \
+  --agent-import-path benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
+  --global-agent-timeout-sec "$TB_AGENT_TIMEOUT_SEC" \
+  --agent-kwarg managed_host_agent_timeout_sec="$TB_AGENT_TIMEOUT_SEC" \
+  --n-concurrent 4
+```
+
+Optional overrides:
+
+```bash
+export ALYSIS_MAX_STEPS=120
+export ALYSIS_TEMPERATURE=0.2
+export ALYSIS_INSTALL_SPEC="alysis-code"
+export ALYSIS_MANAGED_HOST_SHUTDOWN_RESERVE_SEC=30
+```
+
+Use `ALYSIS_INSTALL_SPEC` to pin a release or branch, for example:
+
+```bash
+export ALYSIS_INSTALL_SPEC="alysis-code==0.1.5"
+export ALYSIS_INSTALL_SPEC="git+https://github.com/AlysisAi/alysis-code.git@main"
+```
+
+## Verification Authority
+
+The adapter does not provide a fake default verifier. When no explicit verifier
+is supplied, Alysis Code treats the host verifier as unavailable and falls back to
+its normal repo-native verification discovery; it does not export
+`ALYSIS_VERIFY_CMD`, write `true` into `verify_commands`, or pass
+`--verify-cmd true`. Container setup also clears managed-profile explicit
+verifier commands and records a managed-host-unavailable marker so repo-native
+discovery can run without inheriting a stale verifier.
+
+To provide a real host verifier, pass a non-empty `verify_cmd` or `verify_cmds`
+agent kwarg. A sequence becomes one `--verify-cmd` flag per command; commands
+are not joined into a shell string. Vacuous or failure-masking commands such as
+`true`, `echo ok`, `python -c 'pass'`, or `pytest -q || true` fail closed before
+the task container setup starts. Supplying both `verify_cmd` and `verify_cmds`,
+an empty string, an empty sequence member, a set, or another unordered iterable
+also fails before source copy, setup, session creation, or model invocation.
+Command order is preserved for ordered sequences.
+
+## Managed-Host Deadline Contract
+
+Terminal-Bench owns the outer agent timeout. Alysis Code must receive a smaller
+one-shot deadline so it can enter its own finalization window, flush artifacts,
+and return before Terminal-Bench kills the task.
+
+The current `terminal-bench` runner computes the final agent timeout inside the
+harness:
+
+- if `--global-agent-timeout-sec` is set, that value is the final effective
+  timeout;
+- otherwise it uses the task `max_agent_timeout_sec` multiplied by
+  `--global-timeout-multiplier`.
+
+That computed value is passed to `asyncio.wait_for(agent.perform_task, ...)` but
+is not exposed to imported agents through constructor kwargs, `perform_task`,
+session metadata, or `TerminalCommand`. For this adapter, use
+`--global-agent-timeout-sec` and pass the same already-effective value through
+the required `managed_host_agent_timeout_sec` agent kwarg. Do not multiply it
+again in the adapter.
+
+Deadline arithmetic:
+
+```text
+alysis_deadline_seconds =
+  managed_host_agent_timeout_sec
+  - monotonic_elapsed_before_alysis_launch
+  - managed_host_shutdown_reserve_sec
+```
+
+`managed_host_shutdown_reserve_sec` is host-owned reserve for process
+collection, tmux/session teardown, result serialization, and artifact flushing.
+It is separate from Alysis Code's internal finalization reserve. Precedence is:
+
+1. `--agent-kwarg managed_host_shutdown_reserve_sec=<seconds>`
+2. `ALYSIS_MANAGED_HOST_SHUTDOWN_RESERVE_SEC`
+3. default `30`
+
+The adapter fails closed when `managed_host_agent_timeout_sec` is absent,
+non-finite, non-positive, consumed by reserve, or too small after elapsed time.
+On success, the generated command includes `--deadline-seconds`,
+`--require-deadline`, and a positional `--` before the complete instruction.
+The instruction remains one shell-quoted argument, so dash-leading, quoted,
+multiline, Unicode, and shell-looking text stays data.
+
+When Terminal-Bench provides an agent logging directory, the adapter writes
+`agent-logs/managed-host-deadline.json`. The artifact contains sanitized
+metadata only: schema version, timeout source, final effective host agent
+timeout, elapsed pre-launch time, host shutdown reserve, computed Alysis Code
+deadline, requirement status, validation status, command timeout, host verifier
+status/source/count, and stable verifier command hashes. It does not record raw
+verifier commands, API keys, authorization headers, environment dumps, task
+instructions, prompts, tool arguments, command output, or source contents.

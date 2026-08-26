@@ -11,14 +11,14 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import forge as forge_mod
-from sylliptor_agent_cli import workspace_binding as workspace_binding_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import forge as forge_cli
-from sylliptor_agent_cli.cli_impl.commands.forge_helpers import _workspace_context_payload_for_paths
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import (
+from alysis_code import cli as cli_mod
+from alysis_code import forge as forge_mod
+from alysis_code import workspace_binding as workspace_binding_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import forge as forge_cli
+from alysis_code.cli_impl.commands.forge_helpers import _workspace_context_payload_for_paths
+from alysis_code.config import AppConfig
+from alysis_code.forge import (
     ForgeError,
     add_task,
     append_planner_chat,
@@ -32,8 +32,8 @@ from sylliptor_agent_cli.forge import (
     render_plan_markdown,
     save_plan,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMError
-from sylliptor_agent_cli.plan_assistant import PlannerTurnResult
+from alysis_code.llm.openai_compat import LLMError
+from alysis_code.plan_assistant import PlannerTurnResult
 
 _MCP_FIXTURE_SERVER = (
     Path(__file__).resolve().parent / "fixtures" / "mcp_servers" / "minimal_stdio_server.py"
@@ -72,8 +72,8 @@ def test_workspace_context_payload_threads_greenfield_signal(tmp_path: Path) -> 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
     }
 
 
@@ -99,7 +99,7 @@ def _write_mcp_stdio_config(
         "command": sys.executable,
         "args": [os.fspath(_MCP_FIXTURE_SERVER)],
         "env": {
-            "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+            "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
         },
     }
     if server_overrides:
@@ -139,7 +139,7 @@ def test_forge_plan_creates_run_and_pointer(tmp_path: Path) -> None:
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=(
             "/goal Build a local planning workflow\n"
@@ -151,7 +151,7 @@ def test_forge_plan_creates_run_and_pointer(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
 
-    pointer = repo / ".sylliptor" / "current_run.json"
+    pointer = repo / ".alysis" / "current_run.json"
     assert pointer.exists()
     pointer_data = _load_json(pointer)
     assert pointer_data["run_id"]
@@ -255,14 +255,14 @@ def test_manual_task_recovers_explicit_path_hint_into_estimated_files_and_write_
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Auth fix\n/task Fix src/auth.py login bug\n/done\n",
         env=_env(tmp_path),
     )
 
     assert result.exit_code == 0
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan = _load_json(repo / pointer["run_path"] / "plan" / "plan.json")
     task = plan["tasks"][0]
     assert task["estimated_files"] == ["src/auth.py"]
@@ -426,7 +426,7 @@ def test_manual_task_rejects_mutating_title_without_runnable_scope(tmp_path: Pat
     repo.mkdir()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Auth fix\n/task Fix login bug\n/done\n",
         env=_env(tmp_path),
@@ -435,7 +435,7 @@ def test_manual_task_rejects_mutating_title_without_runnable_scope(tmp_path: Pat
     assert result.exit_code == 0
     assert "Task rejected" in result.output
     assert "repo-relative file paths" in result.output
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan = _load_json(repo / pointer["run_path"] / "plan" / "plan.json")
     assert plan["tasks"] == []
 
@@ -467,7 +467,7 @@ def test_forge_plan_does_not_launch_mcp_servers_for_planner_context(tmp_path: Pa
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/done\n",
         env=_env(tmp_path),
@@ -568,7 +568,7 @@ def test_forge_attach_copies_and_updates_plan_json(tmp_path: Path) -> None:
     repo.mkdir()
 
     plan_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/done\n",
         env=_env(tmp_path),
@@ -579,20 +579,20 @@ def test_forge_attach_copies_and_updates_plan_json(tmp_path: Path) -> None:
     source.write_text("This is a small text asset.\n", encoding="utf-8")
 
     attach_1 = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
     assert attach_1.exit_code == 0
 
     attach_2 = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
     assert attach_2.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_json_path = repo / pointer["run_path"] / "plan" / "plan.json"
     plan = _load_json(plan_json_path)
 
@@ -618,16 +618,16 @@ def test_forge_plan_from_git_subdir_writes_workspace_root_pointer(tmp_path: Path
     subdir.mkdir(parents=True)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(subdir)],
         input="/goal Plan from subdir\n/done\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
-    pointer_path = repo / ".sylliptor" / "current_run.json"
+    pointer_path = repo / ".alysis" / "current_run.json"
     assert pointer_path.exists()
-    assert not (subdir / ".sylliptor" / "current_run.json").exists()
+    assert not (subdir / ".alysis" / "current_run.json").exists()
 
     pointer = _load_json(pointer_path)
     assert pointer["workspace_root"] == os.fspath(repo.resolve())
@@ -662,11 +662,11 @@ def test_load_current_run_paths_loads_current_pointer_from_nested_path(tmp_path:
     paths.run_dir.mkdir(parents=True, exist_ok=True)
     pointer = {
         "run_id": paths.run_id,
-        "run_path": os.fspath(Path(".sylliptor") / "runs" / paths.run_id),
+        "run_path": os.fspath(Path(".alysis") / "runs" / paths.run_id),
         "updated_at": "2026-03-07T00:00:00+00:00",
     }
-    (project_root / ".sylliptor").mkdir(parents=True, exist_ok=True)
-    (project_root / ".sylliptor" / "current_run.json").write_text(
+    (project_root / ".alysis").mkdir(parents=True, exist_ok=True)
+    (project_root / ".alysis" / "current_run.json").write_text(
         json.dumps(pointer, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -694,7 +694,7 @@ def test_create_plan_run_bootstraps_missing_directory_when_requested(tmp_path: P
     assert paths.binding_requested_path == missing.resolve()
     assert paths.workspace_created_at_startup is True
 
-    pointer = _load_json(missing / ".sylliptor" / "current_run.json")
+    pointer = _load_json(missing / ".alysis" / "current_run.json")
     assert pointer["binding_requested_path"] == os.fspath(missing.resolve())
     assert pointer["workspace_created_at_startup"] is True
     assert pointer["binding_source"] == "explicit_path"
@@ -713,7 +713,7 @@ def test_create_plan_run_rejects_guarded_workspace_without_override(
         create_plan_run(home)
 
     paths = create_plan_run(home, allow_broad_workspace=True)
-    pointer = _load_json(home / ".sylliptor" / "current_run.json")
+    pointer = _load_json(home / ".alysis" / "current_run.json")
 
     assert paths.binding_risk_level == "guarded"
     assert pointer["binding_risk_level"] == "guarded"
@@ -726,7 +726,7 @@ def test_forge_plan_cli_bootstraps_missing_directory(tmp_path: Path) -> None:
     missing = tmp_path / "new" / "repo"
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "plan",
@@ -740,7 +740,7 @@ def test_forge_plan_cli_bootstraps_missing_directory(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert missing.exists()
-    pointer = _load_json(missing / ".sylliptor" / "current_run.json")
+    pointer = _load_json(missing / ".alysis" / "current_run.json")
     assert pointer["workspace_created_at_startup"] is True
 
 
@@ -754,7 +754,7 @@ def test_forge_plan_cli_guarded_workspace_requires_override(
     monkeypatch.setattr(workspace_binding_mod, "_home_directory", lambda: home.resolve())
 
     blocked = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(home)],
         input="/done\n",
         env=_env(tmp_path),
@@ -763,7 +763,7 @@ def test_forge_plan_cli_guarded_workspace_requires_override(
     assert "--allow-broad-workspace" in blocked.output
 
     allowed = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "plan",
@@ -781,7 +781,7 @@ def test_forge_plan_cli_rejects_blocked_workspace(tmp_path: Path) -> None:
     runner = CliRunner()
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(Path(os.path.abspath(os.sep)))],
         input="/done\n",
         env=_env(tmp_path),
@@ -797,7 +797,7 @@ def test_forge_show_prints_summary(tmp_path: Path) -> None:
     repo.mkdir()
 
     plan_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/goal Deliver plan phase\n/task Create docs/initial.md artifact\n/done\n",
         env=_env(tmp_path),
@@ -807,14 +807,14 @@ def test_forge_show_prints_summary(tmp_path: Path) -> None:
     source = repo / "requirements.txt"
     source.write_text("Requirement A\n", encoding="utf-8")
     attach_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
     assert attach_result.exit_code == 0
 
     show_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -833,7 +833,7 @@ def test_forge_show_loads_current_run_from_git_subdir(tmp_path: Path) -> None:
     subdir.mkdir()
 
     plan_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(subdir)],
         input="/goal Show from subdir\n/task Keep pointer canonical README.md\n/done\n",
         env=_env(tmp_path),
@@ -841,7 +841,7 @@ def test_forge_show_loads_current_run_from_git_subdir(tmp_path: Path) -> None:
     assert plan_result.exit_code == 0
 
     show_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(subdir)],
         env=_env(tmp_path),
     )
@@ -869,8 +869,8 @@ def test_forge_plan_assistant_updates_plan_and_notes(tmp_path: Path, monkeypatch
                         "description": "Integrate planner call in loop",
                         "acceptance_criteria": ["Assistant can be toggled"],
                         "dependencies": [],
-                        "estimated_files": ["src/sylliptor_agent_cli/cli.py"],
-                        "write_scope": [".sylliptor/runs"],
+                        "estimated_files": ["src/alysis_code/cli.py"],
+                        "write_scope": [".alysis/runs"],
                     }
                 ],
             },
@@ -879,7 +879,7 @@ def test_forge_plan_assistant_updates_plan_and_notes(tmp_path: Path, monkeypatch
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease update the plan\n/done\n"),
         env=_env(tmp_path),
@@ -890,7 +890,7 @@ def test_forge_plan_assistant_updates_plan_and_notes(tmp_path: Path, monkeypatch
     assert "I will add a task and requirement." in result.output
     assert "Applied planner update to plan." in result.output
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_dir = repo / pointer["run_path"] / "plan"
     plan = _load_json(plan_dir / "plan.json")
     assert plan["requirements"] == ["Need assistant-backed planning updates"]
@@ -960,8 +960,8 @@ def test_forge_planner_turn_policy_matches_chat_forge(tmp_path: Path, monkeypatc
                         "description": "Use the same apply/save/reconcile flow in chat and CLI Forge.",
                         "acceptance_criteria": ["Both entrypoints apply the same update"],
                         "dependencies": [],
-                        "estimated_files": ["src/sylliptor_agent_cli/cli.py"],
-                        "write_scope": ["src/sylliptor_agent_cli/cli.py"],
+                        "estimated_files": ["src/alysis_code/cli.py"],
+                        "write_scope": ["src/alysis_code/cli.py"],
                     }
                 ],
             },
@@ -984,13 +984,13 @@ def test_forge_planner_turn_policy_matches_chat_forge(tmp_path: Path, monkeypatc
     monkeypatch.setattr(cli_mod, "_enter_forge_mode", fake_enter_forge_mode)
 
     cli_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(cli_repo)],
         input=("/assistant on\nPlease update the plan\n/done\n"),
         env=_env(tmp_path),
     )
     chat_result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
         input="/forge\n/assistant on\nPlease update the plan\n/back\nexit\n",
         env=_env(tmp_path),
@@ -999,7 +999,7 @@ def test_forge_planner_turn_policy_matches_chat_forge(tmp_path: Path, monkeypatc
     assert cli_result.exit_code == 0
     assert chat_result.exit_code == 0
 
-    cli_pointer = _load_json(cli_repo / ".sylliptor" / "current_run.json")
+    cli_pointer = _load_json(cli_repo / ".alysis" / "current_run.json")
     cli_plan_dir = cli_repo / cli_pointer["run_path"] / "plan"
     cli_plan = _load_json(cli_plan_dir / "plan.json")
     chat_plan = _load_json(chat_paths.plan_json_path)
@@ -1054,7 +1054,7 @@ def test_forge_plan_assistant_recovers_after_transient_request_retry(
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.plan_assistant.OpenAICompatClient",
+        "alysis_code.plan_assistant.OpenAICompatClient",
         FakePlannerClient,
     )
     monkeypatch.setattr(
@@ -1064,9 +1064,9 @@ def test_forge_plan_assistant_recovers_after_transient_request_retry(
     )
 
     env = _env(tmp_path)
-    env["SYLLIPTOR_API_KEY"] = "k"
+    env["ALYSIS_API_KEY"] = "k"
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease update the plan\n/done\n"),
         env=env,
@@ -1078,7 +1078,7 @@ def test_forge_plan_assistant_recovers_after_transient_request_retry(
     assert "Planner request recovered after 1 transient retry." in result.output
     assert calls == {"planner": 3}
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_dir = repo / pointer["run_path"] / "plan"
     plan = _load_json(plan_dir / "plan.json")
     assert len(plan["tasks"]) == 1
@@ -1110,7 +1110,7 @@ def test_forge_plan_assistant_surfaces_planner_error_with_retry_context(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease update the plan\n/done\n"),
         env=_env(tmp_path),
@@ -1122,7 +1122,7 @@ def test_forge_plan_assistant_surfaces_planner_error_with_retry_context(
     assert "Planner: Final planner error: empty_response" in result.output
     assert "Planner proposed no plan update." not in result.output
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_dir = repo / pointer["run_path"] / "plan"
     plan = _load_json(plan_dir / "plan.json")
     assert plan["tasks"] == []
@@ -1180,7 +1180,7 @@ def test_forge_plan_assistant_keeps_protected_history_immutable(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a login follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1241,7 +1241,7 @@ def test_forge_plan_assistant_synthesizes_follow_up_from_protected_update_only(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1310,7 +1310,7 @@ def test_forge_plan_assistant_synthesizes_same_file_follow_up_from_protected_upd
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify lowercase follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1371,7 +1371,7 @@ def test_forge_plan_assistant_synthesizes_title_only_same_file_follow_up(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify lowercase follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1430,7 +1430,7 @@ def test_forge_plan_assistant_synthesizes_title_only_new_path_follow_up(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify docs follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1489,7 +1489,7 @@ def test_forge_plan_assistant_refuses_weak_generic_title_with_scope(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1551,7 +1551,7 @@ def test_forge_plan_assistant_synthesizes_same_file_follow_up_from_description_d
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify lowercase follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1614,7 +1614,7 @@ def test_forge_plan_assistant_refuses_trivial_protected_update_without_new_path_
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1682,7 +1682,7 @@ def test_forge_plan_assistant_refuses_punctuation_only_same_file_delta(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1743,7 +1743,7 @@ def test_forge_plan_assistant_refuses_formatting_only_same_file_delta(
     monkeypatch.setattr(cli_mod, "run_planner_turn", fake_planner_turn)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant on\nPlease add a slugify follow-up task\n/done\n"),
         env=_env(tmp_path),
@@ -1769,14 +1769,14 @@ def test_forge_plan_finalization_applies_reconciliation_additively(tmp_path: Pat
     (repo / "README.md").write_text("project docs\n", encoding="utf-8")
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input="/task Update README.md for release notes\n/done\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
-    pointer = _load_json(repo / ".sylliptor" / "current_run.json")
+    pointer = _load_json(repo / ".alysis" / "current_run.json")
     plan_dir = repo / pointer["run_path"] / "plan"
     plan = _load_json(plan_dir / "plan.json")
     task = plan["tasks"][0]
@@ -1801,7 +1801,7 @@ def test_forge_plan_assistant_without_arg_uses_picker(tmp_path: Path, monkeypatc
     )
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "plan", "--path", os.fspath(repo)],
         input=("/assistant\n/done\n"),
         env=_env(tmp_path),

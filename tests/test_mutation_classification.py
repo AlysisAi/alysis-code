@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     build_acceptance_contract,
     finalize_acceptance_contract,
 )
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     MutationPathCategory,
     _run_with_command_mutation_detection,
     benign_runtime_mutation_paths,
     classify_mutation_path,
     material_mutation_paths,
 )
-from sylliptor_agent_cli.runtime_artifacts import is_runtime_artifact_path
+from alysis_code.runtime_artifacts import is_runtime_artifact_path
 
 
 def _write(path: Path, content: str = "x\n") -> None:

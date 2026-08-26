@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import __version__
+from alysis_code import __version__
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -27,8 +27,8 @@ def _entrypoint_env() -> dict[str, str]:
 @pytest.mark.parametrize(
     "module_name",
     [
-        "sylliptor_agent_cli",
-        "sylliptor_agent_cli.cli",
+        "alysis_code",
+        "alysis_code.cli",
     ],
 )
 def test_module_entrypoint_help_outputs_cli_usage(module_name: str) -> None:
@@ -51,8 +51,8 @@ def test_module_entrypoint_help_outputs_cli_usage(module_name: str) -> None:
 @pytest.mark.parametrize(
     "module_name",
     [
-        "sylliptor_agent_cli",
-        "sylliptor_agent_cli.cli",
+        "alysis_code",
+        "alysis_code.cli",
     ],
 )
 def test_module_entrypoint_version_outputs_package_version(module_name: str) -> None:
@@ -66,5 +66,13 @@ def test_module_entrypoint_version_outputs_package_version(module_name: str) -> 
     )
 
     assert proc.returncode == 0
-    assert proc.stdout.strip() == __version__
+    # One line, version first, then the build stamp. The bare version stays the
+    # leading token because downstream readers (the VS Code extension, the
+    # managed-CLI smoke test, the release distribution validator) parse it by
+    # prefix, non-emptiness and substring respectively.
+    printed = proc.stdout.strip()
+    assert printed.splitlines() == [printed]
+    assert printed.split()[0] == __version__
+    for marker in ("commit:", "built:", "dirty:"):
+        assert marker in printed
     assert proc.stderr.strip() == ""

@@ -5,7 +5,7 @@ from pathlib import Path
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 
-from sylliptor_agent_cli.cli_impl.chat_slash_completer import (
+from alysis_code.cli_impl.chat_slash_completer import (
     ChatSlashCompleter,
     get_chat_specs,
     get_forge_specs,
@@ -37,6 +37,7 @@ def test_get_chat_specs_match_curated_visible_surface() -> None:
         "persona",
         "ask",
         "status",
+        "subagents",
         "terminals",
         "pwd",
         "usage",
@@ -52,7 +53,6 @@ def test_get_chat_specs_match_curated_visible_surface() -> None:
         "toolbar",
         "assets",
         "image",
-        "subagent",
         "forge",
         "report",
         "feedback",
@@ -88,7 +88,7 @@ def test_chat_completions_exclude_hidden_and_removed_commands() -> None:
     assert "paste-image" not in spec_names
     assert "clear-images" not in spec_names
     assert "skills" not in spec_names
-    assert "subagents" not in spec_names
+    assert "subagents" in spec_names
     assert not {"back", "done", "show", "goal", "task", "assistant", "execute"} & names
 
 
@@ -100,10 +100,9 @@ def test_forge_completions_include_general_chat_and_forge_commands() -> None:
     assert _completion_names(completer, "/ta") == ["task"]
 
 
-def test_nested_chat_completions_cover_usage_subagent_and_skill_names() -> None:
+def test_nested_chat_completions_cover_usage_and_skill_names() -> None:
     completer = ChatSlashCompleter(
         mode_provider=lambda: "chat",
-        subagent_names_provider=lambda: ["explorer", "reviewer"],
         skill_names_provider=lambda: ["python", "docker"],
     )
 
@@ -123,13 +122,6 @@ def test_nested_chat_completions_cover_usage_subagent_and_skill_names() -> None:
         "stream on",
         "stream off",
         "stream status",
-    ]
-    assert _completion_names(completer, "/subagent ") == [
-        "subagent on",
-        "subagent off",
-        "subagent status",
-        "subagent explorer",
-        "subagent reviewer",
     ]
     assert _completion_names(completer, "/skill ") == ["skill python", "skill docker"]
 
@@ -155,13 +147,12 @@ def test_completion_carries_usage_and_description() -> None:
 def test_completion_display_rows_are_bounded() -> None:
     completer = ChatSlashCompleter(
         mode_provider=lambda: "chat",
-        subagent_names_provider=lambda: ["reviewer-with-a-very-long-name-that-keeps-going"],
-        skill_names_provider=lambda: ["python"],
+        skill_names_provider=lambda: ["skill-with-a-very-long-name-that-keeps-going"],
     )
 
     rows = [
         _display_text(completion.display)
-        for completion in completer.get_completions(Document(text="/subagent "), None)
+        for completion in completer.get_completions(Document(text="/skill "), None)
     ]
 
     assert rows
@@ -180,20 +171,33 @@ def test_completion_yields_all_matching_top_level_commands() -> None:
     assert "/plan" in completion_names
     assert "/resume" in completion_names
     assert "/config" in completion_names
-    assert "/subagent" in completion_names
+    assert "/subagent" not in completion_names
+    assert "/subagents" in completion_names
     assert "/skill" in completion_names
     assert "/forge" in completion_names
     assert "/exit" in completion_names
 
 
+def test_removed_subagent_command_has_no_completions() -> None:
+    completer = ChatSlashCompleter(
+        mode_provider=lambda: "chat",
+    )
+
+    top_level = _completion_names(completer, "/suba")
+    nested = _completion_names(completer, "/subagent ")
+
+    assert "subagent" not in top_level
+    assert nested == []
+
+
 def test_specs_match_legacy_chat_handler() -> None:
-    source = Path("src/sylliptor_agent_cli/cli_impl/chat/commands.py").read_text(encoding="utf-8")
+    source = Path("src/alysis_code/cli_impl/chat/commands.py").read_text(encoding="utf-8")
     handler_source = _source_between(
         source,
         "def _handle_chat_command(",
         "def _handle_forge_chat_command(",
     )
-    cli_source = Path("src/sylliptor_agent_cli/cli.py").read_text(encoding="utf-8")
+    cli_source = Path("src/alysis_code/cli.py").read_text(encoding="utf-8")
 
     for spec in get_chat_specs():
         token = f'"/{spec.name}"'
@@ -205,7 +209,7 @@ def test_specs_match_legacy_chat_handler() -> None:
 
 
 def test_forge_specs_match_legacy_forge_handler() -> None:
-    source = Path("src/sylliptor_agent_cli/cli_impl/chat/commands.py").read_text(encoding="utf-8")
+    source = Path("src/alysis_code/cli_impl/chat/commands.py").read_text(encoding="utf-8")
     handler_source = source[source.index("def _handle_forge_chat_command(") :]
 
     for spec in get_forge_specs():

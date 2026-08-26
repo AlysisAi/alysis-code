@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.llm.usage_normalization import parse_compatible_usage
+from alysis_code.llm.usage_normalization import parse_compatible_usage
 
 
 def test_deepseek_hit_and_miss_tokens_are_normalized() -> None:

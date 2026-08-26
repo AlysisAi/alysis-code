@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import pytest
 
-import sylliptor_agent_cli.model_registry as model_registry_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.litellm_static_provider import (
+import alysis_code.model_registry as model_registry_mod
+from alysis_code.config import AppConfig
+from alysis_code.litellm_static_provider import (
     BUNDLED_MODEL_CATALOG_SOURCE,
     LiteLLMStaticMetadata,
 )
-from sylliptor_agent_cli.model_metadata_policy import (
+from alysis_code.model_metadata_policy import (
     ActiveModelRef,
     ModelMetadataPolicyError,
     evaluate_active_model_metadata_policy,
 )
-from sylliptor_agent_cli.model_registry import ModelRegistry
+from alysis_code.model_registry import ModelRegistry
 
 
 def _bundled_meta(
@@ -55,7 +55,7 @@ def test_evaluate_active_model_metadata_policy_warn_dedupes_same_model_roles() -
     assert "Unknown model unknown-model-xyz" in warning
     assert "default context limits" in warning
     assert "/config set unknown-model-xyz <context> <max_output>" in warning
-    assert "SYLLIPTOR_CONTEXT_WINDOW" in warning
+    assert "ALYSIS_CONTEXT_WINDOW" in warning
     assert "coding, router" not in warning
     assert "fallback capacity metadata" not in warning
     assert "Registry detail" not in warning

@@ -8,7 +8,7 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli.agent.sensitive_output import (
+from alysis_code.agent.sensitive_output import (
     collect_sensitive_response_taints,
     redact_sensitive_response_for_persistence,
     redact_sensitive_response_taints,
@@ -16,25 +16,25 @@ from sylliptor_agent_cli.agent.sensitive_output import (
     redact_sensitive_tool_result,
     sensitive_tool_boundary,
 )
-from sylliptor_agent_cli.agent_loop import AgentSession, ToolDef
-from sylliptor_agent_cli.compaction.tool_output_offload import ToolOutputOffloader
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.hooks.models import HookDispatchResult
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.session_artifacts import SessionArtifactLayout
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.surface.events import (
+from alysis_code.agent_loop import AgentSession, ToolDef
+from alysis_code.compaction.tool_output_offload import ToolOutputOffloader
+from alysis_code.config import AppConfig
+from alysis_code.hooks.models import HookDispatchResult
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.model_registry import ModelMeta
+from alysis_code.session_artifacts import SessionArtifactLayout
+from alysis_code.session_store import SessionStore
+from alysis_code.surface.events import (
     Event,
     ToolCallCompleted,
     ToolCallProgress,
     ToolCallStarted,
 )
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.usage_tracker import UsageSummary
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.usage_tracker import UsageSummary
 
-_CANARY = "SYLLIPTOR_SECRET_CANARY_7dc6f758"
-_ERROR_CANARY = "SYLLIPTOR_EXCEPTION_CANARY_c18afe42"
+_CANARY = "ALYSIS_SECRET_CANARY_7dc6f758"
+_ERROR_CANARY = "ALYSIS_EXCEPTION_CANARY_c18afe42"
 
 
 class _FakeRegistry:
@@ -253,7 +253,7 @@ def test_sensitive_policy_redacts_every_durable_and_display_boundary(tmp_path: P
     result = {
         "path": ".env",
         "content": _CANARY,
-        "_sylliptor_output_policy": {
+        "_alysis_output_policy": {
             "sensitive": True,
             "persist": "redact",
             "display": "redact",
@@ -305,12 +305,12 @@ def test_sensitive_policy_redacts_every_durable_and_display_boundary(tmp_path: P
 def test_provider_echo_of_approved_secret_is_taint_redacted_before_every_boundary(
     tmp_path: Path,
 ) -> None:
-    similar_non_secret = "SYLLIPTOR_SECRET_CANARY_7dc6f759"
+    similar_non_secret = "ALYSIS_SECRET_CANARY_7dc6f759"
     echoed_reply = f"Approved value: {_CANARY}. Similar value: {similar_non_secret}."
     result = {
         "path": ".env",
         "content": _CANARY,
-        "_sylliptor_output_policy": {
+        "_alysis_output_policy": {
             "sensitive": True,
             "persist": "redact",
             "display": "redact",
@@ -355,7 +355,7 @@ def test_exact_taint_redaction_leaves_similar_and_non_sensitive_values_unchanged
     result = {
         "path": ".env",
         "content": _CANARY,
-        "_sylliptor_output_policy": {
+        "_alysis_output_policy": {
             "sensitive": True,
             "persist": "redact",
             "display": "redact",
@@ -363,7 +363,7 @@ def test_exact_taint_redaction_leaves_similar_and_non_sensitive_values_unchanged
         },
     }
     taints = collect_sensitive_response_taints("fs_read", arguments, result)
-    similar = "SYLLIPTOR_SECRET_CANARY_7dc6f759"
+    similar = "ALYSIS_SECRET_CANARY_7dc6f759"
     response = LLMResponse(
         content=f"secret={_CANARY}; similar={similar}",
         tool_calls=[],
@@ -383,7 +383,7 @@ def test_taint_collection_redacts_bare_assignment_and_json_secret_values() -> No
     result = {
         "path": ".env",
         "content": f'API_TOKEN={_CANARY}\nJSON={{"token":"{_ERROR_CANARY}"}}\n',
-        "_sylliptor_output_policy": {
+        "_alysis_output_policy": {
             "sensitive": True,
             "persist": "redact",
             "display": "redact",
@@ -450,7 +450,10 @@ def test_sensitive_exception_text_is_never_replayed_or_persisted(tmp_path: Path)
     )
     assert _ERROR_CANARY not in everything
     assert all(_ERROR_CANARY not in request for request in client.request_snapshots)
-    assert "Sensitive tool operation failed; details redacted." in everything
+    assert (
+        "Sensitive path is protected and will not be readable after this failure. "
+        "No content was returned. This failure is terminal; do not retry."
+    ) in everything
 
 
 def test_non_sensitive_values_are_returned_byte_for_byte() -> None:
@@ -583,7 +586,7 @@ def test_sensitive_error_result_is_never_sent_or_persisted(tmp_path: Path) -> No
     # than raising) must get the same fail-closed redaction on every boundary.
     result = {
         "error": f"lookup repr exposed {_ERROR_CANARY}",
-        "_sylliptor_output_policy": {
+        "_alysis_output_policy": {
             "sensitive": True,
             "persist": "redact",
             "display": "redact",
@@ -615,4 +618,7 @@ def test_sensitive_error_result_is_never_sent_or_persisted(tmp_path: Path) -> No
         }
     )
     assert _ERROR_CANARY not in durable_and_display
-    assert "Sensitive tool operation failed; details redacted." in durable_and_display
+    assert (
+        "Sensitive path is protected and will not be readable after this failure. "
+        "No content was returned. This failure is terminal; do not retry."
+    ) in durable_and_display

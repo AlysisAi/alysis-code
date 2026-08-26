@@ -4,21 +4,22 @@ import builtins
 
 import pytest
 
-import sylliptor_agent_cli.litellm_static_provider as provider_mod
-import sylliptor_agent_cli.model_registry as model_registry_mod
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.litellm_static_provider import (
+import alysis_code.litellm_static_provider as provider_mod
+import alysis_code.model_registry as model_registry_mod
+from alysis_code.config import AppConfig
+from alysis_code.litellm_static_provider import (
     BUNDLED_MODEL_CATALOG_SOURCE,
     LiteLLMStaticMetadata,
     get_bundled_model_catalog_provenance,
     resolve_litellm_static_metadata,
 )
-from sylliptor_agent_cli.model_registry import (
+from alysis_code.model_registry import (
+    CANONICAL_MODEL_CATALOG_SOURCE,
     OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE,
     ModelRegistry,
 )
-from sylliptor_agent_cli.token_budget import compute_input_budget
-from sylliptor_agent_cli.usage_tracker import compute_context_left
+from alysis_code.token_budget import compute_input_budget
+from alysis_code.usage_tracker import compute_context_left
 
 
 def _bundled_meta(
@@ -381,11 +382,11 @@ def test_env_overrides_beat_user_and_bundled_catalog(monkeypatch) -> None:
             output_cost_per_token=0.2,
         ),
     )
-    monkeypatch.setenv("SYLLIPTOR_CONTEXT_WINDOW", "64000")
-    monkeypatch.setenv("SYLLIPTOR_MAX_OUTPUT_TOKENS", "4000")
-    monkeypatch.setenv("SYLLIPTOR_SUPPORTS_VISION", "1")
-    monkeypatch.setenv("SYLLIPTOR_INPUT_COST_PER_TOKEN", "0.01")
-    monkeypatch.setenv("SYLLIPTOR_OUTPUT_COST_PER_TOKEN", "0.02")
+    monkeypatch.setenv("ALYSIS_CONTEXT_WINDOW", "64000")
+    monkeypatch.setenv("ALYSIS_MAX_OUTPUT_TOKENS", "4000")
+    monkeypatch.setenv("ALYSIS_SUPPORTS_VISION", "1")
+    monkeypatch.setenv("ALYSIS_INPUT_COST_PER_TOKEN", "0.01")
+    monkeypatch.setenv("ALYSIS_OUTPUT_COST_PER_TOKEN", "0.02")
 
     cfg = AppConfig(base_url="https://api.openai.com/v1", model="gpt-5-nano")
     cfg.extra_fields = {
@@ -407,8 +408,8 @@ def test_env_overrides_beat_user_and_bundled_catalog(monkeypatch) -> None:
     assert meta.supports_vision is True
     assert meta.input_cost_per_token == 0.01
     assert meta.output_cost_per_token == 0.02
-    assert meta.field_sources["context_window_tokens"] == "env:SYLLIPTOR_CONTEXT_WINDOW"
-    assert meta.field_sources["max_output_tokens"] == "env:SYLLIPTOR_MAX_OUTPUT_TOKENS"
+    assert meta.field_sources["context_window_tokens"] == "env:ALYSIS_CONTEXT_WINDOW"
+    assert meta.field_sources["max_output_tokens"] == "env:ALYSIS_MAX_OUTPUT_TOKENS"
 
 
 def test_user_overrides_beat_bundled_catalog(monkeypatch) -> None:
@@ -504,7 +505,7 @@ def test_bundled_catalog_beats_fallback_when_available(monkeypatch) -> None:
     assert meta.field_sources["supports_vision"] == BUNDLED_MODEL_CATALOG_SOURCE
 
 
-def test_built_in_deepseek_v4_metadata_beats_fallback_when_bundled_catalog_lags(
+def test_official_deepseek_v4_metadata_beats_fallback_when_bundled_catalog_lags(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -525,10 +526,15 @@ def test_built_in_deepseek_v4_metadata_beats_fallback_when_bundled_catalog_lags(
     assert meta.context_window_tokens == 1_000_000
     assert meta.max_output_tokens == 384_000
     assert meta.supports_reasoning is True
-    assert meta.input_cost_per_token == 0.000000435
-    assert meta.output_cost_per_token == 0.00000087
-    assert meta.field_sources["context_window_tokens"] == "built_in"
-    assert meta.field_sources["max_output_tokens"] == "built_in"
+    assert meta.input_cost_per_token == 0.00000132
+    assert meta.output_cost_per_token == 0.00000396
+    assert meta.cache_read_input_cost_per_token == 0.000000044
+    assert meta.field_sources["context_window_tokens"] == (
+        f"{CANONICAL_MODEL_CATALOG_SOURCE}:deepseek-v4-pro"
+    )
+    assert meta.field_sources["max_output_tokens"] == (
+        f"{CANONICAL_MODEL_CATALOG_SOURCE}:deepseek-v4-pro"
+    )
     assert registry.last_error is None
     assert not any("fallback context/max_output" in warning for warning in meta.warnings)
 
@@ -541,18 +547,235 @@ def test_official_qwen38_max_metadata_fills_the_unbundled_catalog_gap() -> None:
 
     meta = ModelRegistry(cfg=cfg).get("qwen3.8-max")
 
-    assert meta.context_window_tokens == 1_048_576
+    assert meta.context_window_tokens == 1_000_000
     assert meta.max_output_tokens == 131_072
     assert meta.supports_vision is True
     assert meta.supports_reasoning is True
     assert meta.input_cost_per_token is None
     assert meta.output_cost_per_token is None
     assert meta.cache_read_input_cost_per_token is None
-    assert meta.field_sources["context_window_tokens"] == ("official_provider_model_catalog:qwen")
+    assert meta.field_sources["context_window_tokens"] == (
+        f"{CANONICAL_MODEL_CATALOG_SOURCE}:qwen3.8-max"
+    )
     assert (
-        "https://help.aliyun.com/en/model-studio/text-generation-model/"
+        "https://help.aliyun.com/en/model-studio/qwen3-8-max"
         in (meta.raw_metadata["catalog_sources"])
     )
+
+
+def test_canonical_model_metadata_is_provider_independent() -> None:
+    cfg = AppConfig(base_url="https://models.example/v1", model="deepseek-v4-pro")
+
+    meta = ModelRegistry(cfg=cfg).get("deepseek-v4-pro")
+
+    assert meta.context_window_tokens == 1_000_000
+    assert meta.max_output_tokens == 384_000
+    assert meta.supports_vision is False
+    assert meta.supports_reasoning is True
+    assert meta.input_cost_per_token is None
+    assert meta.output_cost_per_token is None
+    assert "input_cost_per_token" not in meta.raw_metadata
+    assert "output_cost_per_token" not in meta.raw_metadata
+    assert meta.field_sources["max_output_tokens"] == (
+        f"{CANONICAL_MODEL_CATALOG_SOURCE}:deepseek-v4-pro"
+    )
+    assert meta.raw_metadata["canonical_model"] == "deepseek-v4-pro"
+    assert not any("fallback context/max_output" in warning for warning in meta.warnings)
+
+
+def test_noncanonical_catalog_pricing_does_not_cross_unknown_compatible_route() -> None:
+    cfg = AppConfig(base_url="https://compatible.example/v1", model="claude-opus-4-1")
+
+    meta = ModelRegistry(cfg=cfg).get("claude-opus-4-1")
+
+    assert meta.context_window_tokens == 232_000
+    assert meta.max_output_tokens == 32_000
+    assert meta.input_cost_per_token is None
+    assert meta.output_cost_per_token is None
+    assert "input_cost_per_token" not in meta.raw_metadata
+    assert "output_cost_per_token" not in meta.raw_metadata
+    assert meta.field_sources["context_window_tokens"] == BUNDLED_MODEL_CATALOG_SOURCE
+
+
+def test_catalog_route_hint_preserves_pricing_across_provider_aliases() -> None:
+    cfg = AppConfig(
+        base_url="https://api.fireworks.ai/inference/v1",
+        model="accounts/fireworks/models/minimax-m3",
+    )
+
+    meta = ModelRegistry(cfg=cfg).get("accounts/fireworks/models/minimax-m3")
+
+    assert meta.provider_key == "fireworks"
+    assert meta.raw_metadata["catalog_provider_hint"] == "fireworks"
+    assert meta.raw_metadata["litellm_provider"] == "fireworks_ai"
+    assert meta.input_cost_per_token is not None
+    assert meta.output_cost_per_token is not None
+    assert meta.field_sources["input_cost_per_token"] == BUNDLED_MODEL_CATALOG_SOURCE
+    assert meta.field_sources["output_cost_per_token"] == BUNDLED_MODEL_CATALOG_SOURCE
+
+
+def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
+    endpoint = "https://compatible.example/v1"
+    cfg = AppConfig(base_url=endpoint, model="claude-opus-4-1")
+    cfg.extra_fields = {
+        "model_metadata_overrides": {
+            "endpoints": {
+                endpoint: {
+                    "models": {
+                        "claude-opus-4-1": {
+                            "input_cost_per_token": 0.000_004,
+                            "output_cost_per_token": 0.000_012,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    meta = ModelRegistry(cfg=cfg).get("claude-opus-4-1")
+
+    assert meta.input_cost_per_token == 0.000_004
+    assert meta.output_cost_per_token == 0.000_012
+    assert meta.field_sources["input_cost_per_token"] == (
+        "user:endpoints['https://compatible.example/v1'].models['claude-opus-4-1']"
+    )
+    assert meta.field_sources["output_cost_per_token"] == (
+        "user:endpoints['https://compatible.example/v1'].models['claude-opus-4-1']"
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "base_url",
+        "model",
+        "context_window",
+        "max_output",
+        "canonical_model",
+        "supports_vision",
+        "input_cost",
+        "output_cost",
+    ),
+    [
+        (
+            "https://api.deepseek.com",
+            "deepseek-v4-flash-vision-exp",
+            1_000_000,
+            384_000,
+            "deepseek-v4-flash-vision-exp",
+            True,
+            0.00000044,
+            0.00000132,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "qwen/qwen3.8-max",
+            1_000_000,
+            131_072,
+            "qwen3.8-max",
+            True,
+            0.000002,
+            0.000006,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "deepseek/deepseek-v4-pro-0813",
+            1_048_576,
+            384_000,
+            "deepseek-v4-pro",
+            False,
+            0.000001188,
+            0.000003564,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "deepseek/deepseek-v4-flash-0731",
+            1_310_720,
+            384_000,
+            "deepseek-v4-flash",
+            False,
+            0.00000008,
+            0.00000018,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "deepseek/deepseek-v4-flash-vision-exp",
+            1_048_576,
+            384_000,
+            "deepseek-v4-flash-vision-exp",
+            True,
+            0.00000044,
+            0.00000132,
+        ),
+        (
+            "https://api.together.ai/v1",
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            1_048_576,
+            384_000,
+            "deepseek-v4-pro",
+            False,
+            0.00000132,
+            0.00000396,
+        ),
+        (
+            "https://api.together.ai/v1",
+            "deepseek-ai/DeepSeek-V4-Flash-0731",
+            1_000_000,
+            384_000,
+            "deepseek-v4-flash",
+            False,
+            0.00000014,
+            0.00000028,
+        ),
+        (
+            "https://api.fireworks.ai/inference/v1",
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            1_048_576,
+            384_000,
+            "deepseek-v4-pro",
+            False,
+            0.00000132,
+            0.00000396,
+        ),
+        (
+            "https://api.fireworks.ai/inference/v1",
+            "accounts/fireworks/models/deepseek-v4-flash-0731",
+            1_048_576,
+            384_000,
+            "deepseek-v4-flash",
+            False,
+            0.00000014,
+            0.00000028,
+        ),
+    ],
+)
+def test_official_catalog_covers_current_qwen_and_deepseek_routes(
+    base_url: str,
+    model: str,
+    context_window: int,
+    max_output: int,
+    canonical_model: str,
+    supports_vision: bool,
+    input_cost: float,
+    output_cost: float,
+) -> None:
+    meta = ModelRegistry(cfg=AppConfig(base_url=base_url, model=model)).get(model)
+
+    assert meta.context_window_tokens == context_window
+    assert meta.max_output_tokens == max_output
+    assert meta.supports_vision is supports_vision
+    assert meta.supports_reasoning is True
+    assert meta.input_cost_per_token == input_cost
+    assert meta.output_cost_per_token == output_cost
+    assert meta.reasoning_output_cost_per_token == output_cost
+    assert meta.field_sources["context_window_tokens"] != "fallback"
+    assert meta.field_sources["max_output_tokens"] == (
+        f"{CANONICAL_MODEL_CATALOG_SOURCE}:{canonical_model}"
+    )
+    assert meta.raw_metadata["canonical_model"] == canonical_model
+    assert meta.raw_metadata["catalog_sources"]
+    assert not any("fallback context/max_output" in warning for warning in meta.warnings)
+    if model == "qwen/qwen3.8-max":
+        assert meta.cache_creation_input_cost_per_token == 0.0000025
 
 
 @pytest.mark.parametrize(
@@ -601,6 +824,10 @@ def test_official_nvidia_catalog_covers_hosted_deepseek_models(model: str) -> No
     assert meta.field_sources["context_window_tokens"] == (
         f"{OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE}:nvidia"
     )
+    assert meta.field_sources["max_output_tokens"] == (
+        f"{OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE}:nvidia"
+    )
+    assert meta.raw_metadata["canonical_model"] == model.rsplit("/", 1)[-1]
     assert meta.raw_metadata["catalog_sources"] == [f"https://build.nvidia.com/{model}"]
 
 
@@ -771,7 +998,7 @@ def test_official_moonshot_metadata_is_scoped_to_moonshot_routes() -> None:
 
 
 def test_per_field_mixing_sets_source_to_mixed(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONTEXT_WINDOW", "64000")
+    monkeypatch.setenv("ALYSIS_CONTEXT_WINDOW", "64000")
     monkeypatch.setattr(
         model_registry_mod,
         "resolve_litellm_static_metadata",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 
-from sylliptor_agent_cli.llm.cache_capabilities import resolve_effective_cache_capability
-from sylliptor_agent_cli.profile_presets import (
+from alysis_code.llm.cache_capabilities import resolve_effective_cache_capability
+from alysis_code.profile_presets import (
     PROFILE_PRESETS,
     advanced_provider_selection_presets,
     canonical_model_alias_for_preset,
@@ -16,7 +16,7 @@ from sylliptor_agent_cli.profile_presets import (
     provider_selection_presets,
     target_preset_for_profile_conversion,
 )
-from sylliptor_agent_cli.profiles import ProfileSpec
+from alysis_code.profiles import ProfileSpec
 
 
 def test_at_least_15_presets_registered() -> None:
@@ -122,6 +122,7 @@ def test_presets_without_provider_hosted_search_remain_model_independent() -> No
         "together",
         "fireworks",
         "kimi-code",
+        "xiaomi-mimo",
         "ollama",
         "lm-studio",
         "vllm",
@@ -188,8 +189,8 @@ def test_moonshot_presets_alias_retired_kimi_k2_to_current_model() -> None:
 
 def test_provider_presets_use_current_openai_compatible_base_urls() -> None:
     expected_base_urls = {
-        # The Sylliptor hosted proxy (llm Edge Function, DeepSeek upstream).
-        "sylliptor": "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1",
+        # The Alysis Code hosted proxy (llm Edge Function, DeepSeek upstream).
+        "alysis": "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1",
         "openai": "https://api.openai.com/v1",
         "openai-responses": "https://api.openai.com/v1",
         "anthropic": "https://api.anthropic.com/v1",
@@ -209,6 +210,7 @@ def test_provider_presets_use_current_openai_compatible_base_urls() -> None:
         "kimi-code": "https://api.kimi.com/coding/v1",
         "moonshot-cn": "https://api.moonshot.cn/v1",
         "minimax": "https://api.minimax.io/v1",
+        "xiaomi-mimo": "https://api.xiaomimimo.com/v1",
         "bytedance": "https://ark.cn-beijing.volces.com/api/v3",
         "groq": "https://api.groq.com/openai/v1",
         "cerebras": "https://api.cerebras.ai/v1",
@@ -301,7 +303,11 @@ def test_first_party_presets_do_not_default_to_preview_only_models() -> None:
 
 def test_launch_provider_presets_use_supported_chat_models() -> None:
     expected_models = {
-        "deepseek": ("deepseek-v4-pro", "deepseek-v4-flash"),
+        "deepseek": (
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+        ),
         "gemini": (
             "gemini-3.7-flash",
             "gemini-3.6-flash",
@@ -348,12 +354,16 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "openai/gpt-5.6-terra",
             "openai/gpt-5.6-luna",
             "z-ai/glm-5.2",
-            "deepseek/deepseek-v4-pro",
+            "deepseek/deepseek-v4-pro-0813",
+            "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4-flash-vision-exp",
+            "qwen/qwen3.8-max",
         ),
         "together": (
             "zai-org/GLM-5.2",
             "moonshotai/Kimi-K2.7-Code",
-            "deepseek-ai/DeepSeek-V4-Pro",
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "deepseek-ai/DeepSeek-V4-Flash-0731",
             "MiniMaxAI/MiniMax-M3",
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
@@ -435,8 +445,19 @@ def test_qwen_intl_offers_38_max_without_changing_the_balanced_default() -> None
         "qwen3.7-max",
     )
     assert preset.suggested_model_descriptions["qwen3.8-max"].startswith("advanced")
-    assert "qwen3.8-max" not in us_preset.suggested_models
-    assert "qwen3.8-max" not in cn_preset.suggested_models
+    assert us_preset.suggested_models[:3] == preset.suggested_models[:3]
+    assert cn_preset.suggested_models[:3] == preset.suggested_models[:3]
+
+
+def test_fireworks_uses_current_dated_deepseek_v4_ids() -> None:
+    preset = get_preset("fireworks")
+
+    assert preset is not None
+    assert "accounts/fireworks/models/deepseek-v4-pro-0813" in preset.suggested_models
+    assert "accounts/fireworks/models/deepseek-v4-flash-0731" in preset.suggested_models
+    assert "accounts/fireworks/models/deepseek-v4-pro" not in preset.suggested_models
+    assert "accounts/fireworks/models/deepseek-v4-flash" not in preset.suggested_models
+    assert preset.validation_model == "accounts/fireworks/models/deepseek-v4-flash-0731"
 
 
 def test_gemini_aliases_preserve_active_and_provider_managed_model_ids() -> None:
@@ -638,20 +659,49 @@ def test_make_profile_from_preset_uses_preset_key_as_name_default() -> None:
     assert make_profile_from_preset(preset).name == "openai"
 
 
-def test_primary_picker_never_carries_the_sylliptor_brand_as_a_provider() -> None:
+def test_xiaomi_mimo_is_a_plain_byok_preset() -> None:
+    preset = get_preset("xiaomi-mimo")
+
+    assert preset is not None
+    assert preset.label == "Xiaomi MiMo"
+    assert preset.protocol == "openai_compat"
+    assert preset.base_url == "https://api.xiaomimimo.com/v1"
+    assert preset.api_key_env == "XIAOMI_API_KEY"
+    assert preset.suggested_models == ("mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2.5")
+    assert all(model in preset.suggested_model_descriptions for model in preset.suggested_models)
+    assert preset.validation_model == "mimo-v2.5-pro"
+    # The legacy bare "mimo" placeholder migrates to the flagship model.
+    assert canonical_model_alias_for_preset(preset, "mimo") == "mimo-v2.5-pro"
+    # No special label casing: the picker shows the plain preset label.
+    assert preset_selection_label(preset) == "Xiaomi MiMo"
+
+
+def test_primary_picker_lists_xiaomi_mimo_in_registration_order_without_alysis() -> None:
+    keys = [preset.key for preset in provider_selection_presets()]
+
+    assert "alysis" not in keys
+    assert "xiaomi-mimo" in keys
+    # Registration order among the other hosted vendors — no special sorting,
+    # not a headline choice, not sorted last.
+    assert keys.index("minimax") < keys.index("xiaomi-mimo") < keys.index("bytedance")
+    assert keys[0] != "xiaomi-mimo"
+    assert keys[-1] != "xiaomi-mimo"
+
+
+def test_primary_picker_never_carries_the_alysis_brand_as_a_provider() -> None:
     for preset in provider_selection_presets():
-        assert "sylliptor" not in preset.label.casefold(), preset.key
-        assert "sylliptor" not in preset_selection_label(preset).casefold(), preset.key
+        assert "alysis" not in preset.label.casefold(), preset.key
+        assert "alysis" not in preset_selection_label(preset).casefold(), preset.key
 
 
-def test_hosted_sylliptor_preset_stays_intact_behind_the_advanced_picker() -> None:
+def test_hosted_alysis_preset_stays_intact_behind_the_advanced_picker() -> None:
     advanced_keys = [preset.key for preset in advanced_provider_selection_presets()]
-    assert "sylliptor" in advanced_keys
+    assert "alysis" in advanced_keys
 
-    hosted = get_preset("sylliptor")
+    hosted = get_preset("alysis")
     assert hosted is not None
-    assert preset_selection_label(hosted) == "Sylliptor Pro (hosted models) - requires login"
-    # The preset itself must keep working for `sylliptor login` / sylliptor_cloud.
+    assert preset_selection_label(hosted) == "Alysis Code Pro (hosted models) - requires login"
+    # The preset itself must keep working for `alysis login` / alysis_cloud.
     assert hosted.api_key_env is None
     # Retired MiMo-trial ids migrate to the Pro default.
     assert canonical_model_alias_for_preset(hosted, "mimo") == "deepseek-v4-flash"

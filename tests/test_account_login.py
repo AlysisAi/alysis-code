@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import account_login
-from sylliptor_agent_cli.config import (
+from alysis_code import account_login
+from alysis_code.config import (
     load_config,
     load_persisted_profile_keys,
     resolve_api_key,
 )
-from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
+from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
 _GATEWAY_KEY = "slk_test-1111-2222-3333-4444"
 _USER_CODE = "ABCD-EFGH"
@@ -93,9 +93,9 @@ class _StubDeviceFlowServer:
 
 
 def _config_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
@@ -107,17 +107,17 @@ def _noop_browser(opened: list[str]):
     return _open
 
 
-def test_sylliptor_preset_offers_pro_models() -> None:
-    preset = get_preset("sylliptor")
+def test_alysis_preset_offers_pro_models() -> None:
+    preset = get_preset("alysis")
     assert preset is not None
     assert preset.api_key_env is None
     assert preset.suggested_models[0] == "deepseek-v4-flash"
     assert set(preset.suggested_models) == {"deepseek-v4-flash", "deepseek-v4-pro"}
-    profile = make_profile_from_preset(preset, name="sylliptor")
+    profile = make_profile_from_preset(preset, name="alysis")
     assert profile.default_model == "deepseek-v4-flash"
     # Retired MiMo-trial ids canonicalize to the Pro default via preset aliases,
     # so old sessions stop pointing at models we no longer serve.
-    from sylliptor_agent_cli.profile_presets import canonical_model_alias_for_preset
+    from alysis_code.profile_presets import canonical_model_alias_for_preset
 
     assert canonical_model_alias_for_preset(preset, "mimo") == "deepseek-v4-flash"
     assert canonical_model_alias_for_preset(preset, "mimo-v2.5-pro") == "deepseek-v4-flash"
@@ -140,7 +140,7 @@ def test_logout_when_not_logged_in_returns_false(tmp_path: Path, monkeypatch) ->
 def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer(approve_after=3)  # a couple of pending polls first
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     opened: list[str] = []
     try:
         cfg = load_config()
@@ -151,22 +151,22 @@ def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch
         # The CLI kept polling until approval.
         assert stub.polls == 3
 
-        # Result reflects an active sylliptor profile with the Pro default model.
-        assert result.profile_name == "sylliptor"
+        # Result reflects an active alysis profile with the Pro default model.
+        assert result.profile_name == "alysis"
         assert result.model == "deepseek-v4-flash"
         assert result.base_url.rstrip("/").endswith("/v1")
 
-        # The gateway key is persisted as the sylliptor profile key.
-        assert load_persisted_profile_keys()["sylliptor"] == _GATEWAY_KEY
+        # The gateway key is persisted as the alysis profile key.
+        assert load_persisted_profile_keys()["alysis"] == _GATEWAY_KEY
 
-        # Reloaded config has sylliptor active with the default model.
+        # Reloaded config has alysis active with the default model.
         reloaded = load_config()
-        assert reloaded.extra_fields["active_profile"] == "sylliptor"
+        assert reloaded.extra_fields["active_profile"] == "alysis"
         assert reloaded.model == "deepseek-v4-flash"
 
         # The crucial wiring: resolve_api_key returns the gateway key as the
-        # Bearer for the sylliptor profile (so requests hit the gateway authed).
-        resolution = resolve_api_key(reloaded, profile_name="sylliptor")
+        # Bearer for the alysis profile (so requests hit the gateway authed).
+        resolution = resolve_api_key(reloaded, profile_name="alysis")
         assert resolution.key == _GATEWAY_KEY
 
         status = account_login.login_status(reloaded)
@@ -180,11 +180,11 @@ def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch
 def test_login_denied_persists_nothing(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer(terminal="denied")
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     try:
-        with pytest.raises(account_login.SylliptorLoginError, match="rejected"):
+        with pytest.raises(account_login.AlysisLoginError, match="rejected"):
             account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
-        assert "sylliptor" not in load_persisted_profile_keys()
+        assert "alysis" not in load_persisted_profile_keys()
     finally:
         stub.close()
 
@@ -192,11 +192,11 @@ def test_login_denied_persists_nothing(tmp_path: Path, monkeypatch) -> None:
 def test_login_expired_code_raises(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer(terminal="expired")
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     try:
-        with pytest.raises(account_login.SylliptorLoginError, match="expired"):
+        with pytest.raises(account_login.AlysisLoginError, match="expired"):
             account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
-        assert "sylliptor" not in load_persisted_profile_keys()
+        assert "alysis" not in load_persisted_profile_keys()
     finally:
         stub.close()
 
@@ -204,15 +204,15 @@ def test_login_expired_code_raises(tmp_path: Path, monkeypatch) -> None:
 def test_login_then_logout_clears_key(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer()
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     try:
         cfg = load_config()
         account_login.login(cfg, browser_opener=_noop_browser([]), timeout_s=10)
-        assert load_persisted_profile_keys().get("sylliptor") == _GATEWAY_KEY
+        assert load_persisted_profile_keys().get("alysis") == _GATEWAY_KEY
 
         reloaded = load_config()
         assert account_login.logout(reloaded) is True
-        assert "sylliptor" not in load_persisted_profile_keys()
+        assert "alysis" not in load_persisted_profile_keys()
     finally:
         stub.close()
 
@@ -220,12 +220,12 @@ def test_login_then_logout_clears_key(tmp_path: Path, monkeypatch) -> None:
 def test_login_preserves_user_chosen_model_across_relogin(tmp_path: Path, monkeypatch) -> None:
     from dataclasses import replace
 
-    from sylliptor_agent_cli.config import save_config
-    from sylliptor_agent_cli.profiles import add_profile, get_profile
+    from alysis_code.config import save_config
+    from alysis_code.profiles import add_profile, get_profile
 
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer()
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     try:
         # Fresh connect defaults to the Pro flagship-for-volume model.
         first = account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
@@ -233,7 +233,7 @@ def test_login_preserves_user_chosen_model_across_relogin(tmp_path: Path, monkey
 
         # Simulate the user picking another model in `/config`.
         cfg = load_config()
-        add_profile(cfg, replace(get_profile(cfg, "sylliptor"), default_model="deepseek-v4-pro"))
+        add_profile(cfg, replace(get_profile(cfg, "alysis"), default_model="deepseek-v4-pro"))
         save_config(cfg)
 
         # Re-login must keep that choice instead of clobbering it back.
@@ -250,16 +250,16 @@ def test_login_migrates_legacy_mimo_selection(tmp_path: Path, monkeypatch) -> No
     # load, so re-login lands them on a model the gateway actually serves.
     from dataclasses import replace
 
-    from sylliptor_agent_cli.config import save_config
-    from sylliptor_agent_cli.profiles import add_profile, get_profile
+    from alysis_code.config import save_config
+    from alysis_code.profiles import add_profile, get_profile
 
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer()
-    monkeypatch.setenv("SYLLIPTOR_SUPABASE_URL", stub.base_url)
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
     try:
         account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
         cfg = load_config()
-        add_profile(cfg, replace(get_profile(cfg, "sylliptor"), default_model="mimo"))
+        add_profile(cfg, replace(get_profile(cfg, "alysis"), default_model="mimo"))
         save_config(cfg)
 
         again = account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
@@ -335,7 +335,7 @@ class _StubModelsServer:
 def test_list_trial_models_parses_gateway_allowlist(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubModelsServer(["deepseek-v4-flash", "deepseek-v4-pro"])
-    monkeypatch.setenv("SYLLIPTOR_GATEWAY_URL", f"{stub.base_url}/v1")
+    monkeypatch.setenv("ALYSIS_GATEWAY_URL", f"{stub.base_url}/v1")
     try:
         models = account_login.list_trial_models(load_config())
         assert models == ["deepseek-v4-flash", "deepseek-v4-pro"]
@@ -348,5 +348,5 @@ def test_list_trial_models_empty_when_unreachable(tmp_path: Path, monkeypatch) -
     stub = _StubModelsServer(["deepseek-v4-flash"])
     base_url = stub.base_url
     stub.close()  # nothing is listening now -> connection refused
-    monkeypatch.setenv("SYLLIPTOR_GATEWAY_URL", f"{base_url}/v1")
+    monkeypatch.setenv("ALYSIS_GATEWAY_URL", f"{base_url}/v1")
     assert account_login.list_trial_models(load_config()) == []

@@ -19,10 +19,10 @@ dist
 build
 *.egg-info
 reports/
-.sylliptor/
-.sylliptor_images/
+.alysis/
+.alysis_images/
 .claude/
-sylliptor-feedback/
+alysis-feedback/
 node_modules/
 .DS_Store
 .env

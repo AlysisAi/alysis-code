@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.background_runner import BackgroundProcessSpawn, HostBackgroundRunner
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings
-from sylliptor_agent_cli.terminal_manager import TerminalManager
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.background_runner import BackgroundProcessSpawn, HostBackgroundRunner
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.sandbox_settings import ShellSandboxSettings
+from alysis_code.terminal_manager import TerminalManager
 
 
 class _FakeBackgroundPopen:

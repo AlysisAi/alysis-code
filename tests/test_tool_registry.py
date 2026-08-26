@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.tools_assembly import _BUILTIN_MODEL_DESCRIPTIONS
-from sylliptor_agent_cli.agent_loop import build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.metadata import endpoint_descriptor
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
-from sylliptor_agent_cli.subagents import built_in_subagents
-from sylliptor_agent_cli.tools.availability import (
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.tools_assembly import _BUILTIN_MODEL_DESCRIPTIONS
+from alysis_code.agent_loop import build_tools
+from alysis_code.config import AppConfig
+from alysis_code.llm.metadata import endpoint_descriptor
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import SessionStore, read_session_events
+from alysis_code.subagents import built_in_subagents
+from alysis_code.tools.availability import (
     ToolSetupError,
     _reset_tool_availability_for_tests,
     get_tool_availability,
@@ -27,7 +27,7 @@ from sylliptor_agent_cli.tools.availability import (
     register_tool_availability,
     unavailable_tool_result,
 )
-from sylliptor_agent_cli.tools.registry import (
+from alysis_code.tools.registry import (
     REPORT_BLOCKER_MAX_MESSAGE_CHARS,
     built_in_subagent_tool_names,
     builtin_tool_names_with_category,
@@ -35,12 +35,12 @@ from sylliptor_agent_cli.tools.registry import (
     iter_builtin_tool_metadata,
     summarize_tool_output_chunk,
 )
-from sylliptor_agent_cli.web_research import build_web_research_artifact_from_events
+from alysis_code.web_research import build_web_research_artifact_from_events
 
 
 @pytest.fixture(autouse=True)
 def _clear_generic_web_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
 
 
 def _store(root: Path, *, enabled: bool = False) -> SessionStore:
@@ -176,6 +176,43 @@ def test_shell_background_family_metadata_present() -> None:
         assert metadata.rich.display_name.strip()
 
 
+def test_background_subagent_tool_metadata_and_spawn_schema() -> None:
+    metadata_by_name = {spec.name: spec for spec in iter_builtin_tool_metadata()}
+    background_names = {
+        "subagent_spawn",
+        "subagent_send",
+        "subagent_resume",
+        "subagent_status",
+        "subagent_wait",
+        "subagent_cancel",
+    }
+
+    assert background_names.issubset(metadata_by_name)
+    spawn_properties = metadata_by_name["subagent_spawn"].parameters["properties"]
+    run_properties = metadata_by_name["subagent_run"].parameters["properties"]
+    assert set(run_properties).issubset(spawn_properties)
+    expected_modes = ["readonly", "review", "auto", "fullaccess"]
+    assert run_properties["mode"]["enum"] == expected_modes
+    assert spawn_properties["mode"]["enum"] == expected_modes
+    assert spawn_properties["run_id"]["maxLength"] == 64
+    assert spawn_properties["depends_on"]["uniqueItems"] is True
+    assert "workspace_from_run" in metadata_by_name["subagent_run"].parameters["properties"]
+    assert metadata_by_name["subagent_wait"].parameters["properties"]["run_id"]["default"] == "all"
+    assert (
+        metadata_by_name["subagent_send"].parameters["properties"]["message"]["maxLength"] == 4000
+    )
+    assert metadata_by_name["subagent_resume"].parameters["required"] == ["run_id"]
+    assert (
+        metadata_by_name["subagent_resume"].parameters["properties"]["reattach_workspace"][
+            "default"
+        ]
+        is True
+    )
+    assert (
+        metadata_by_name["subagent_cancel"].parameters["properties"]["run_id"]["default"] == "all"
+    )
+
+
 def test_shell_background_family_in_shell_category() -> None:
     shell_tools = set(builtin_tool_names_with_category("shell"))
 
@@ -242,7 +279,7 @@ def test_build_tools_registers_all_non_optional_catalogued_builtin_tools(tmp_pat
 def test_optional_unavailable_tool_returns_structured_non_error_result_and_logs_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="sylliptor_agent_cli.tools.availability")
+    caplog.set_level(logging.INFO, logger="alysis_code.tools.availability")
     reason = "module not importable: fake_optional_dependency"
 
     register_tool_availability("fake_optional_tool", optional=True)
@@ -263,7 +300,7 @@ def test_optional_unavailable_tool_returns_structured_non_error_result_and_logs_
     records = [
         record
         for record in caplog.records
-        if record.name == "sylliptor_agent_cli.tools.availability"
+        if record.name == "alysis_code.tools.availability"
         and record.getMessage().startswith("optional_tool_unavailable")
         and "fake_optional_tool" in record.getMessage()
     ]
@@ -274,7 +311,7 @@ def test_optional_unavailable_tool_returns_structured_non_error_result_and_logs_
 def test_optional_available_tool_has_no_unavailable_result(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="sylliptor_agent_cli.tools.availability")
+    caplog.set_level(logging.INFO, logger="alysis_code.tools.availability")
 
     register_tool_availability("fake_optional_tool", optional=True)
     mark_available("fake_optional_tool")
@@ -325,7 +362,7 @@ def test_generic_unavailable_reason_rejects_placeholder() -> None:
 
 def test_availability_policy_module_has_no_knowledge_capture_literal() -> None:
     source = (
-        Path(__file__).parents[1] / "src" / "sylliptor_agent_cli" / "tools" / "availability.py"
+        Path(__file__).parents[1] / "src" / "alysis_code" / "tools" / "availability.py"
     ).read_text(encoding="utf-8")
 
     assert "knowledge_capture_json" not in source
@@ -392,6 +429,7 @@ def test_build_tools_omits_history_search_without_artifact_persistence(
     )
 
     assert "history_search" not in tools
+    assert "session_artifact_read" not in tools
 
 
 def test_build_tools_keeps_history_search_with_explicit_artifact_root_even_without_logging(
@@ -412,6 +450,7 @@ def test_build_tools_keeps_history_search_with_explicit_artifact_root_even_witho
     )
 
     assert "history_search" in tools
+    assert "session_artifact_read" in tools
 
 
 def test_build_tools_omits_git_history_in_plain_directory(tmp_path: Path) -> None:
@@ -447,12 +486,12 @@ def test_build_tools_registers_skill_read_when_skills_are_available(tmp_path: Pa
                 {
                     "name": "python",
                     "bundle_name": "python",
-                    "source_path": tmp_path / ".sylliptor_skills" / "python",
-                    "bundle_path": tmp_path / ".sylliptor_skills" / "python",
-                    "entry_path": tmp_path / ".sylliptor_skills" / "python" / "SKILL.md",
+                    "source_path": tmp_path / ".alysis_skills" / "python",
+                    "bundle_path": tmp_path / ".alysis_skills" / "python",
+                    "entry_path": tmp_path / ".alysis_skills" / "python" / "SKILL.md",
                     "source_scope": "project",
                     "source_kind": "native",
-                    "source_family": ".sylliptor_skills",
+                    "source_family": ".alysis_skills",
                     "trust_level": "untrusted",
                 },
             )()
@@ -535,11 +574,13 @@ def test_built_in_subagent_exposure_matches_catalog_policy() -> None:
     assert "image_generate" not in expected
     assert "subagent_run" not in expected
     assert "history_search" in expected
+    assert "session_artifact_read" in expected
     assert "web_fetch" not in expected
     assert "web_search" not in expected
     assert registry["explorer"].allow_tools == expected
-    assert registry["code-reviewer"].allow_tools == expected
-    assert registry["test-strategist"].allow_tools == expected
+    assert registry["code-reviewer"].allow_tools == tuple(
+        name for name in expected if name not in {"fs_read", "git_history"}
+    )
     assert registry["debugger"].allow_tools == (*expected, "shell_run", "verify_run")
     assert registry["implementer"].allow_tools == ()
     assert registry["implementer"].deny_tools == ("image_generate",)
@@ -559,7 +600,7 @@ def test_image_generate_metadata_is_billable_optional_write_tool() -> None:
     assert "never overwritten" in metadata.description
 
 
-def test_image_generate_tool_is_opt_in_and_protects_metadata(
+def test_image_generate_tool_is_opt_in(
     tmp_path: Path,
 ) -> None:
     disabled = build_tools(
@@ -1559,8 +1600,8 @@ def test_build_tools_does_not_register_web_search_in_auto_mode_when_runtime_is_n
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     unconfigured_tools = build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
@@ -1586,8 +1627,8 @@ def test_build_tools_registers_web_search_via_keyless_ddgs_without_any_search_ke
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_KEYLESS", raising=False)
     tools = build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
@@ -1614,7 +1655,7 @@ def test_build_tools_registers_web_search_in_auto_mode_when_openai_runtime_is_re
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     tools = build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
@@ -1641,7 +1682,7 @@ def test_build_tools_registers_web_search_in_auto_mode_when_dashscope_runtime_is
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     tools = build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
@@ -1667,7 +1708,7 @@ def test_build_tools_registers_web_search_in_auto_mode_when_tavily_runtime_is_re
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     tools = build_tools(
@@ -1695,7 +1736,7 @@ def test_build_tools_registers_external_web_search_for_deepseek_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     tools = build_tools(
@@ -1724,7 +1765,7 @@ def test_build_tools_registers_web_tools_in_top_level_readonly_when_search_ready
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     tools = build_tools(
@@ -1756,7 +1797,7 @@ def test_build_tools_keeps_web_tools_hidden_in_nested_readonly_subagents(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
 
     tools = build_tools(
@@ -1789,8 +1830,8 @@ def test_build_tools_emits_web_search_runtime_unavailable_event_for_auto_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     store = _store(tmp_path, enabled=True)
     secret_base_url = (
         "https://search-user:search-password@example-proxy.invalid/private/search-token"
@@ -1845,8 +1886,8 @@ def test_build_tools_does_not_emit_web_search_runtime_unavailable_event_by_defau
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     store = _store(tmp_path, enabled=True)
 
     tools = build_tools(

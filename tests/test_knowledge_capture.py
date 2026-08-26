@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.knowledge_base import rebuild_knowledge_index
-from sylliptor_agent_cli.knowledge_capture import (
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.knowledge_base import rebuild_knowledge_index
+from alysis_code.knowledge_capture import (
     KNOWLEDGE_CAPTURE_FENCE,
     KNOWLEDGE_CAPTURE_SCHEMA_VERSION,
     extract_knowledge_capture_block,

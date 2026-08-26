@@ -8,8 +8,8 @@ import httpx
 import pytest
 from PIL import Image
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.tools.image_generation import (
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.tools.image_generation import (
     ImageGenerationError,
     _bounded_response,
     generate_images,

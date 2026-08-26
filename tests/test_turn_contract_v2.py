@@ -13,16 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     AcceptanceContract,
     build_acceptance_contract,
 )
-from sylliptor_agent_cli.agent.completion_certificate import (
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     CompletionCertificateStatus,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent.turn_contract import (
+from alysis_code.agent.turn_contract import (
     MAX_EXPECTATIONS,
     AdvisoryCompletion,
     AdvisoryCompletionReason,
@@ -39,13 +39,13 @@ from sylliptor_agent_cli.agent.turn_contract import (
     match_expectation_evidence,
     resolve_advisory_completion,
 )
-from sylliptor_agent_cli.agent.verification import (
+from alysis_code.agent.verification import (
     HONEST_UNVERIFIED_FINALIZATION_MARKER,
     TurnExecutionState,
     _completion_gate_problems,
     _completion_gate_repair_stage,
 )
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
+from alysis_code.config import AppConfig, ConfigError, set_config_value
 
 # ---------------------------------------------------------------------------
 # Test 1: contract v2 schema — expectation extraction
@@ -445,12 +445,12 @@ def test_coerce_expectation_disposition_valid_and_invalid() -> None:
 
 
 def test_kill_switch_env_and_config(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_TURN_CONTRACT_V2", raising=False)
+    monkeypatch.delenv("ALYSIS_TURN_CONTRACT_V2", raising=False)
     assert _turn_contract_v2_enabled(AppConfig(model="x", turn_contract_v2_enabled=True)) is True
     assert _turn_contract_v2_enabled(AppConfig(model="x", turn_contract_v2_enabled=False)) is False
-    monkeypatch.setenv("SYLLIPTOR_TURN_CONTRACT_V2", "off")
+    monkeypatch.setenv("ALYSIS_TURN_CONTRACT_V2", "off")
     assert _turn_contract_v2_enabled(AppConfig(model="x", turn_contract_v2_enabled=True)) is False
-    monkeypatch.setenv("SYLLIPTOR_TURN_CONTRACT_V2", "on")
+    monkeypatch.setenv("ALYSIS_TURN_CONTRACT_V2", "on")
     assert _turn_contract_v2_enabled(AppConfig(model="x", turn_contract_v2_enabled=False)) is True
 
 
@@ -478,8 +478,8 @@ _PROMPT_ANCHORS = (
 
 
 def _compose(*, one_shot: bool) -> str:
-    from sylliptor_agent_cli.agent.prompt_context import _compose_session_system_prompt
-    from sylliptor_agent_cli.agent_loop import SYSTEM_PROMPT
+    from alysis_code.agent.prompt_context import _compose_session_system_prompt
+    from alysis_code.agent_loop import SYSTEM_PROMPT
 
     return _compose_session_system_prompt(
         base_prompt=SYSTEM_PROMPT,
@@ -493,22 +493,22 @@ def _compose(*, one_shot: bool) -> str:
 
 
 def test_turn_contract_prompt_norms_present_in_base_prompt() -> None:
-    from sylliptor_agent_cli.agent_loop import SYSTEM_PROMPT
+    from alysis_code.agent_loop import SYSTEM_PROMPT
 
     for anchor in _PROMPT_ANCHORS:
         assert anchor in SYSTEM_PROMPT
 
 
 def test_prompt_bytes_identical_regardless_of_kill_switch(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_TURN_CONTRACT_V2", "on")
+    monkeypatch.setenv("ALYSIS_TURN_CONTRACT_V2", "on")
     prompt_on = _compose(one_shot=True)
-    monkeypatch.setenv("SYLLIPTOR_TURN_CONTRACT_V2", "off")
+    monkeypatch.setenv("ALYSIS_TURN_CONTRACT_V2", "off")
     prompt_off = _compose(one_shot=True)
 
     assert prompt_on.encode("utf-8") == prompt_off.encode("utf-8")
     assert "TURN_CONTRACT_V2" not in prompt_on
     assert "turn_contract_v2" not in prompt_on
-    assert "SYLLIPTOR_TURN_CONTRACT_V2" not in prompt_on
+    assert "ALYSIS_TURN_CONTRACT_V2" not in prompt_on
 
 
 def test_prompt_norms_identical_across_runtime_kinds(monkeypatch) -> None:
@@ -516,7 +516,7 @@ def test_prompt_norms_identical_across_runtime_kinds(monkeypatch) -> None:
     # section differs (and it strips the clarification rule, which is nowhere near
     # the turn-contract norms). Each norm bullet must appear byte-for-byte in the
     # composed prompt whether or not the one-shot section is included.
-    monkeypatch.delenv("SYLLIPTOR_TURN_CONTRACT_V2", raising=False)
+    monkeypatch.delenv("ALYSIS_TURN_CONTRACT_V2", raising=False)
     interactive = _compose(one_shot=False)
     one_shot = _compose(one_shot=True)
     for anchor in _PROMPT_ANCHORS:

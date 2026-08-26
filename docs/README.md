@@ -1,4 +1,4 @@
-# Sylliptor Docs
+# Alysis Code Docs
 
 Public documentation for setup, operation, extension points, and security.
 
@@ -7,19 +7,20 @@ Start with the [root README](../README.md) for installation and first use. Use t
 ## Start Here
 
 - [Quickstart](quickstart.md): configure a provider, bind a workspace, and run the first task.
-- [Providers and models](providers.md): connect API-key or subscription-backed models.
+- [AI subscription connections](account-runtimes.md): use provider sign-in with Alysis Code's native agent and `/config` model/effort selection.
 - [Credentials](credentials.md): understand API-key precedence and persisted credential storage.
 - [Reference](reference.md): review commands, modes, configuration, updates, sessions, and troubleshooting.
+- [Web search](web-search.md): review model-led search behavior, provider coverage, and fallback configuration.
 
 ## Core Guides
 
 - [Architecture](architecture.md): understand the session loop, provider layer, tools, verification, and trust boundaries.
 - [Shell sandbox](shell_sandbox.md): configure Docker or Bubblewrap isolation for shell and verification commands.
-- [Background terminals](terminals.md): manage background commands and explicit durable services.
 - [Security model](security_model.md): review trust boundaries, HTTP protections, MCP boundaries, hooks, plugins, and fullaccess mode.
 - [Server mode](server.md): start the HTTP API and configure authentication, uploads, job queues, and workers.
 - [Forge](forge.md): plan, execute, verify, and review larger coding tasks.
-- [Subagents](subagents.md): delegate focused exploration, implementation, debugging, review, and test planning.
+- [Subagents](subagents.md): delegate focused read-only exploration, review, and testing strategy work.
+- [Release checklist](release_checklist.md): regression gates for one-shot completion safety, deadlines, diagnostics, and compatibility.
 
 ## Extension Guides
 

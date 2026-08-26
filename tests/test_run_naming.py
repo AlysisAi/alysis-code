@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.forge import (
+from alysis_code.forge import (
     RUN_NAME_WORDS,
     create_plan_run,
     format_run_id,
     make_run_id,
 )
-from sylliptor_agent_cli.swarm_orchestrator import _candidate_branch_name
+from alysis_code.swarm_orchestrator import _candidate_branch_name
 
 _WINDOWS_RESERVED = {
     "con",
@@ -26,7 +26,7 @@ _LEGACY_RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z_[0-9a-f]{8}$")
 
 
 def _runs_dir(root: Path) -> Path:
-    return root / ".sylliptor" / "runs"
+    return root / ".alysis" / "runs"
 
 
 def test_run_name_words_are_clean() -> None:
@@ -61,7 +61,7 @@ def test_make_run_id_retries_on_claim_conflict(
 ) -> None:
     first = format_run_id(1)
     (_runs_dir(tmp_path) / first).mkdir(parents=True)
-    monkeypatch.setattr("sylliptor_agent_cli.forge._next_run_counter", lambda runs_dir: 1)
+    monkeypatch.setattr("alysis_code.forge._next_run_counter", lambda runs_dir: 1)
     run_id = make_run_id(tmp_path)
     assert run_id == format_run_id(2)
     assert (_runs_dir(tmp_path) / run_id).is_dir()
@@ -102,8 +102,8 @@ def test_candidate_branch_name_keeps_legacy_tail_rule() -> None:
 
 
 def test_make_run_id_stray_runs_file_falls_back_to_legacy_id(tmp_path: Path) -> None:
-    (tmp_path / ".sylliptor").mkdir()
-    (tmp_path / ".sylliptor" / "runs").write_text("stray", encoding="utf-8")
+    (tmp_path / ".alysis").mkdir()
+    (tmp_path / ".alysis" / "runs").write_text("stray", encoding="utf-8")
     run_id = make_run_id(tmp_path)
     assert _LEGACY_RUN_ID_RE.fullmatch(run_id)
 

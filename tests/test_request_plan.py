@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sylliptor_agent_cli.llm.request_plan import LLMRequestPlan, RequestCachePlan
+from alysis_code.llm.request_plan import LLMRequestPlan, RequestCachePlan
 
 
 def test_request_plan_metadata_is_count_hash_and_estimate_only() -> None:
@@ -12,7 +12,7 @@ def test_request_plan_metadata_is_count_hash_and_estimate_only() -> None:
             {
                 "role": "assistant",
                 "content": "prior",
-                "_sylliptor_provider_metadata": {"openai_responses": {"response_id": "rsp_1"}},
+                "_alysis_provider_metadata": {"openai_responses": {"response_id": "rsp_1"}},
             },
             {"role": "user", "content": "secret user text"},
         ],

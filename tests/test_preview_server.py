@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-import sylliptor_agent_cli.preview_server as preview_server
+import alysis_code.preview_server as preview_server
 
 
 def test_runtime_environment_detects_wsl_from_interop(

@@ -7,15 +7,15 @@ from typing import Any
 
 from rich.console import Console
 
-import sylliptor_agent_cli.cli_impl.chat as chat_mod
-from sylliptor_agent_cli.agent_loop import AgentSession
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.hooks.models import HookDispatchResult
-from sylliptor_agent_cli.knowledge_capture import RecordingSurface as KnowledgeRecordingSurface
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.usage_tracker import UsageSummary
+import alysis_code.cli_impl.chat as chat_mod
+from alysis_code.agent_loop import AgentSession
+from alysis_code.config import AppConfig
+from alysis_code.hooks.models import HookDispatchResult
+from alysis_code.knowledge_capture import RecordingSurface as KnowledgeRecordingSurface
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.model_registry import ModelMeta
+from alysis_code.session_store import SessionStore
+from alysis_code.usage_tracker import UsageSummary
 
 
 class _RecordingEventSurface:

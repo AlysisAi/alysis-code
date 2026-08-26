@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -7,17 +8,17 @@ from typing import Any
 import httpx
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig, save_config
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
-from sylliptor_agent_cli.llm.openai_responses import (
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig, save_config
+from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.openai_responses import (
     WebSearchCitation,
     WebSearchResponse,
     WebSearchSource,
 )
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.llm.types import LLMResponse, LLMUsage
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.types import LLMResponse, LLMUsage
+from alysis_code.provider_telemetry import (
     ProviderCallTelemetryRecorder,
     last_provider_call_summary,
     last_web_search_summary,
@@ -27,13 +28,13 @@ from sylliptor_agent_cli.provider_telemetry import (
     record_web_search_call,
     reset_provider_telemetry_for_tests,
 )
-from sylliptor_agent_cli.tools.web_search import web_search
+from alysis_code.tools.web_search import web_search
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": str(tmp_path),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": str(tmp_path),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
         "GEMINI_API_KEY": "",
@@ -194,6 +195,7 @@ def test_provider_call_telemetry_records_safe_cache_policy_metadata() -> None:
             "emitted_fields": ["prompt_cache_key"],
             "trusted_usage_fields": ["cache_read_input_tokens"],
             "warnings": ["custom profile declared prompt cache support"],
+            "prompt_cache_key_hash": hashlib.sha256(b"repo-main").hexdigest(),
             "prompt_cache_key": "repo-main-should-not-be-recorded",
         },
         operation="responses_chat",
@@ -215,6 +217,7 @@ def test_provider_call_telemetry_records_safe_cache_policy_metadata() -> None:
         "emitted_fields": ["prompt_cache_key"],
         "trusted_usage_fields": ["cache_read_input_tokens"],
         "warnings": ["custom profile declared prompt cache support"],
+        "prompt_cache_key_hash": hashlib.sha256(b"repo-main").hexdigest(),
     }
     assert "repo-main-should-not-be-recorded" not in json.dumps(summary, sort_keys=True)
 
@@ -725,7 +728,7 @@ def test_streaming_telemetry_counts_events_deltas_and_first_token_latency(monkey
     reset_provider_telemetry_for_tests()
     timestamps = iter([1000.0, 1012.0, 1050.0])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_telemetry.telemetry_clock_ms",
+        "alysis_code.provider_telemetry.telemetry_clock_ms",
         lambda: next(timestamps),
     )
     deltas: list[str] = []
@@ -778,7 +781,7 @@ def test_streaming_telemetry_counts_reasoning_without_storing_content(monkeypatc
     reset_provider_telemetry_for_tests()
     timestamps = iter([1000.0, 1015.0, 1060.0])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_telemetry.telemetry_clock_ms",
+        "alysis_code.provider_telemetry.telemetry_clock_ms",
         lambda: next(timestamps),
     )
     received: list[str] = []
@@ -903,7 +906,7 @@ def test_provider_retry_telemetry_uses_fake_clock_without_sleep(monkeypatch) -> 
     reset_provider_telemetry_for_tests()
     timestamps = iter([2000.0, 2033.0])
     monkeypatch.setattr(
-        "sylliptor_agent_cli.provider_telemetry.telemetry_clock_ms",
+        "alysis_code.provider_telemetry.telemetry_clock_ms",
         lambda: next(timestamps),
     )
     attempts = 0
@@ -944,7 +947,7 @@ def test_provider_retry_telemetry_uses_fake_clock_without_sleep(monkeypatch) -> 
 
 def test_web_search_telemetry_records_native_and_external_labels(monkeypatch) -> None:
     reset_provider_telemetry_for_tests()
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
 
     class _FakeClient:
         def __init__(self, **_kwargs: object) -> None:
@@ -1009,7 +1012,7 @@ def test_doctor_bundle_is_redacted_and_excludes_hidden_values(
     tmp_path: Path,
 ) -> None:
     reset_provider_telemetry_for_tests()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path))
     cfg = AppConfig(
         model="gpt-test",
         base_url="https://api.openai.com/v1",
@@ -1031,7 +1034,7 @@ def test_doctor_bundle_is_redacted_and_excludes_hidden_values(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["doctor", "bundle", "--redacted"],
         env={**_env(tmp_path), "OPENAI_API_KEY": "sk-openai-secret-value"},
     )

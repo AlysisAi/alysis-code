@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli import agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.turn_contract import TurnEffect, TurnOutcome, TurnSemantics
+from alysis_code import agent_loop as agent_loop_mod
+from alysis_code.agent.turn_contract import TurnEffect, TurnOutcome, TurnSemantics
 
 
 @pytest.mark.parametrize(

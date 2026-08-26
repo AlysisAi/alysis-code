@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.cli_impl import forge as forge_impl
+from alysis_code.cli_impl import forge as forge_impl
 
 
 def test_path_binding_source_works_without_runtime_injection() -> None:

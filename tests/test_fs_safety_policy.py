@@ -10,13 +10,16 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.tools.fs as fs_module
-from sylliptor_agent_cli.agent.errors import AgentRuntimeError
-from sylliptor_agent_cli.agent_loop import build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.surface import ApprovalDecision, ApprovalRequest, NoopSurface
-from sylliptor_agent_cli.tools.fs import (
+import alysis_code.agent_loop as agent_loop_mod
+import alysis_code.tools.fs as fs_module
+from alysis_code.agent.errors import AgentRuntimeError
+from alysis_code.agent_loop import AgentSession, build_tools, create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import SessionStore
+from alysis_code.surface import ApprovalDecision, ApprovalRequest, NoopSurface
+from alysis_code.tools.fs import (
+    FsError,
     StaleFileError,
     capture_file_precondition,
     classify_sensitive_path,
@@ -61,6 +64,62 @@ class _RecordingSurface(NoopSurface):
 
     def on_patch_generated(self, event: object) -> None:
         self.patch_events.append(event)
+
+
+class _RuntimeReadClient:
+    model = "test-model"
+    temperature = 0.2
+
+    def __init__(self, *, tool_name: str, arguments: dict[str, object]) -> None:
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.calls: list[list[dict[str, object]]] = []
+
+    def chat(self, *, messages: list[dict[str, object]], **_kwargs: object) -> LLMResponse:
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="runtime-sensitive-read",
+                        name=self.tool_name,
+                        arguments=self.arguments,
+                    )
+                ],
+                raw={},
+            )
+        return LLMResponse(content="Stopped after the terminal read result.", tool_calls=[], raw={})
+
+
+def _runtime_read_session(
+    tmp_path: Path,
+    *,
+    surface: NoopSurface,
+    session_id: str,
+) -> AgentSession:
+    cfg = AppConfig(model="test-model", routing_mode="code_only", stream=False, max_steps=3)
+    cfg.extra_fields = {
+        "model_metadata_overrides": {
+            "models": {
+                "test-model": {"context_window_tokens": 4096, "max_output_tokens": 512},
+            },
+            "default": {"context_window_tokens": 4096, "max_output_tokens": 512},
+        }
+    }
+    return create_session(
+        cfg=cfg,
+        root=tmp_path,
+        mode="fullaccess",
+        yes=True,
+        max_steps=3,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        session_id_override=session_id,
+        surface=surface,
+        enable_compaction=False,
+    )
 
 
 def _tools(
@@ -423,12 +482,82 @@ def test_sensitive_read_requires_one_time_approval_even_in_fullaccess(tmp_path: 
     result = tools["fs_read"].run({"path": ".env"})  # type: ignore[attr-defined]
 
     assert result["content"] == secret
-    assert result["_sylliptor_output_policy"]["persist"] == "redact"
+    assert result["_alysis_output_policy"]["persist"] == "redact"
     [request] = surface.requests
     assert request.kind == "fs_read"
     assert request.allow_for_session_scope is None
     assert request.metadata["mandatory_explicit_approval"] is True
     assert secret not in request.preview
+
+
+def test_runtime_sensitive_missing_path_reports_terminal_nonexistence(tmp_path: Path) -> None:
+    (tmp_path / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    surface = _RecordingSurface()
+    session = _runtime_read_session(
+        tmp_path,
+        surface=surface,
+        session_id="sensitive-missing-runtime",
+    )
+    client = _RuntimeReadClient(
+        tool_name="fs_read_lines",
+        arguments={"path": ".git/logs/HEAD", "start_line": 1, "end_line": 10},
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Read the worktree reflog.") == 0
+    finally:
+        session.close()
+
+    tool_message = next(message for message in client.calls[1] if message.get("role") == "tool")
+    result = json.loads(str(tool_message["content"]))
+    assert result["error"] == (
+        "Path does not exist: .git/logs/HEAD. This result is terminal; do not retry this path."
+    )
+    assert result["error_code"] == "fs_path_not_found"
+    assert result["terminal"] is True
+    assert result["retryable"] is False
+    assert surface.requests == []
+
+
+def test_runtime_sensitive_existing_read_failure_is_terminal_and_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sensitive-read-failure-canary"
+    (tmp_path / ".env").write_text(secret, encoding="utf-8")
+
+    def _failed_read(**_kwargs: object) -> dict[str, object]:
+        raise FsError(f"simulated protected read failure: {secret}")
+
+    monkeypatch.setattr(agent_loop_mod, "fs_read", _failed_read)
+    surface = _RecordingSurface()
+    session = _runtime_read_session(
+        tmp_path,
+        surface=surface,
+        session_id="sensitive-existing-runtime",
+    )
+    client = _RuntimeReadClient(tool_name="fs_read", arguments={"path": ".env"})
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Read the protected file.") == 0
+        serialized_messages = json.dumps(client.calls, ensure_ascii=True)
+    finally:
+        session.close()
+
+    tool_message = next(message for message in client.calls[1] if message.get("role") == "tool")
+    result = json.loads(str(tool_message["content"]))
+    assert result["error"] == (
+        "Sensitive path is protected and will not be readable after this failure. "
+        "No content was returned. This failure is terminal; do not retry."
+    )
+    assert result["error_code"] == "sensitive_read_terminal"
+    assert result["terminal"] is True
+    assert result["retryable"] is False
+    assert "content" not in result
+    assert secret not in serialized_messages
+    assert len(surface.requests) == 1
 
 
 @pytest.mark.parametrize("path", ["keys/deploy.ppk", ".kube/config", ".ssh/custom-key"])
@@ -480,7 +609,7 @@ def test_sensitive_write_never_persists_or_emits_content_preview(tmp_path: Path)
     )
 
     assert (tmp_path / ".env.production").read_text(encoding="utf-8") == secret
-    assert result["_sylliptor_output_policy"]["display"] == "redact"
+    assert result["_alysis_output_policy"]["display"] == "redact"
     serialized_events = json.dumps(store.events_snapshot(), ensure_ascii=True)
     assert secret not in serialized_events
     assert "sensitive_change_preview" in serialized_events
@@ -607,5 +736,5 @@ def test_env_example_remains_readable_without_approval(tmp_path: Path) -> None:
     result = tools["fs_read"].run({"path": ".env.example"})  # type: ignore[attr-defined]
 
     assert result["content"].splitlines() == ["TOKEN=placeholder"]
-    assert "_sylliptor_output_policy" not in result
+    assert "_alysis_output_policy" not in result
     assert surface.requests == []

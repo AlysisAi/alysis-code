@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import httpx
 
-from sylliptor_agent_cli.cli_impl.tui.app import _activity_rows, _reasoning_rows
-from sylliptor_agent_cli.cli_impl.tui.surface import TuiSurface
-from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.types import ReasoningOutputKind
-from sylliptor_agent_cli.surface import ToolEndEvent, ToolStartEvent
+from alysis_code.cli_impl.tui.app import _activity_rows, _reasoning_rows
+from alysis_code.cli_impl.tui.surface import TuiSurface
+from alysis_code.cli_impl.tui.transcript import TuiTranscript
+from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.types import ReasoningOutputKind
+from alysis_code.surface import ToolEndEvent, ToolStartEvent
 
 
 def _row_text(row: list[tuple[str, str]]) -> str:
@@ -97,8 +97,8 @@ def test_openai_compat_streams_structured_summary_but_not_raw_reasoning():
 def test_non_repo_chat_falls_back_when_client_lacks_reasoning_param():
     # A narrow client without on_reasoning_delta still streams content (the
     # responder must not crash on older/test-double signatures).
-    from sylliptor_agent_cli.agent.llm_calls import _non_repo_chat
-    from sylliptor_agent_cli.llm.types import LLMResponse
+    from alysis_code.agent.llm_calls import _non_repo_chat
+    from alysis_code.llm.types import LLMResponse
 
     class _NarrowClient:
         base_url = "x"
@@ -179,7 +179,7 @@ def test_responses_reasoning_summary_and_answer_reach_tui_transcript():
 
     transcript = TuiTranscript()
     transcript.begin_turn()
-    surface = TuiSurface(transcript, auto_approve=lambda: True)
+    surface = TuiSurface(transcript)
     client = OpenAIResponsesClient(
         base_url="https://api.openai.com/v1",
         api_key="test",
@@ -294,7 +294,7 @@ def test_clear_resets_reasoning():
 
 def test_surface_routes_reasoning_token():
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
     surface.on_reasoning_token("hmm, let me see")
     idx, _secs = t.reasoning_snapshot()
     assert idx is not None
@@ -303,7 +303,7 @@ def test_surface_routes_reasoning_token():
 
 def test_surface_routes_reasoning_lifecycle():
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
 
     surface.on_reasoning_start("provider-call")
     surface.on_reasoning_token("safe summary")
@@ -316,14 +316,14 @@ def test_surface_routes_reasoning_lifecycle():
 
 def test_surface_trace_off_suppresses_reasoning_without_changing_other_levels():
     off_transcript = TuiTranscript()
-    off_surface = TuiSurface(off_transcript, auto_approve=lambda: True)
+    off_surface = TuiSurface(off_transcript)
     assert off_surface.set_trace_level("off") == "off"
     off_surface.on_reasoning_token("hidden reasoning")
     assert not any(role == "reasoning" for role, _text in off_transcript.entries)
 
     for level in ("compact", "full"):
         transcript = TuiTranscript()
-        surface = TuiSurface(transcript, auto_approve=lambda: True)
+        surface = TuiSurface(transcript)
         assert surface.set_trace_level(level) == level
         surface.on_reasoning_token(f"{level} reasoning")
         assert ("reasoning", f"{level} reasoning") in transcript.entries
@@ -331,7 +331,7 @@ def test_surface_trace_off_suppresses_reasoning_without_changing_other_levels():
 
 def test_switching_trace_off_closes_live_reasoning_and_status():
     transcript = TuiTranscript()
-    surface = TuiSurface(transcript, auto_approve=lambda: True)
+    surface = TuiSurface(transcript)
     surface.on_reasoning_token("active reasoning")
     surface.on_progress_update("active status")
 
@@ -344,7 +344,7 @@ def test_switching_trace_off_closes_live_reasoning_and_status():
 
 def test_trace_off_hides_successful_tool_trace_but_keeps_failures_visible():
     transcript = TuiTranscript()
-    surface = TuiSurface(transcript, auto_approve=lambda: True)
+    surface = TuiSurface(transcript)
     surface.set_trace_level("off")
 
     surface.on_tool_end(ToolEndEvent("ok", "fs_read", "done", 5))
@@ -356,7 +356,7 @@ def test_trace_off_hides_successful_tool_trace_but_keeps_failures_visible():
 
 def test_full_trace_adds_tool_start_detail_while_compact_keeps_milestones_only():
     compact_transcript = TuiTranscript()
-    compact = TuiSurface(compact_transcript, auto_approve=lambda: True)
+    compact = TuiSurface(compact_transcript)
     compact.set_trace_level("compact")
     compact.on_tool_start(
         ToolStartEvent(
@@ -371,7 +371,7 @@ def test_full_trace_adds_tool_start_detail_while_compact_keeps_milestones_only()
     )
 
     full_transcript = TuiTranscript()
-    full = TuiSurface(full_transcript, auto_approve=lambda: True)
+    full = TuiSurface(full_transcript)
     full.set_trace_level("full")
     full.on_tool_start(
         ToolStartEvent(
@@ -468,8 +468,8 @@ def test_headless_reasoning_then_answer_renders():
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from sylliptor_agent_cli.cli_impl.tui import run_tui
-    from sylliptor_agent_cli.cli_impl.tui.state import TuiState
+    from alysis_code.cli_impl.tui import run_tui
+    from alysis_code.cli_impl.tui.state import TuiState
 
     state = TuiState(model_name="deepseek-reasoner", username="t")
     with create_pipe_input() as pipe:

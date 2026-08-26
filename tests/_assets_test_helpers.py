@@ -3,10 +3,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from sylliptor_agent_cli.assets import ComprehensionData, ComprehensionRecord
-from sylliptor_agent_cli.assets.index import AssetIndex
-from sylliptor_agent_cli.assets.models import AssetRecord
-from sylliptor_agent_cli.forge import RunPaths
+from alysis_code.assets import ComprehensionData, ComprehensionRecord
+from alysis_code.assets.index import AssetIndex
+from alysis_code.assets.models import AssetRecord
+from alysis_code.forge import RunPaths
 
 
 class FakeAssetComprehender:

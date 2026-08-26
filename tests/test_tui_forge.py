@@ -14,16 +14,16 @@ from types import SimpleNamespace
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from sylliptor_agent_cli.cli_impl.commands import chat_tui_panels as panels
-from sylliptor_agent_cli.cli_impl.tui import run_tui
-from sylliptor_agent_cli.cli_impl.tui.app import (
+from alysis_code.cli_impl.commands import chat_tui_panels as panels
+from alysis_code.cli_impl.tui import run_tui
+from alysis_code.cli_impl.tui.app import (
     _forge_task_visual,
     _forge_view_rows,
     _render_doc_panel_rows,
 )
-from sylliptor_agent_cli.cli_impl.tui.state import TuiState
-from sylliptor_agent_cli.cli_impl.tui.surface import TuiSurface
-from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
+from alysis_code.cli_impl.tui.state import TuiState
+from alysis_code.cli_impl.tui.surface import TuiSurface
+from alysis_code.cli_impl.tui.transcript import TuiTranscript
 
 # --------------------------------------------------------------- helpers
 
@@ -95,7 +95,7 @@ def test_forge_markdown_panel_spec_reads_plan_md(tmp_path, monkeypatch):
     paths = SimpleNamespace(run_id="run-9z", plan_md_path=plan_md)
     # save_plan would rewrite PLAN.md from the in-memory plan; stub it so the test
     # controls the file content directly.
-    monkeypatch.setattr("sylliptor_agent_cli.forge.save_plan", lambda *a, **k: None)
+    monkeypatch.setattr("alysis_code.forge.save_plan", lambda *a, **k: None)
     spec = panels._chat_forge_markdown_panel_spec(paths=paths, plan=_plan())
     assert "body" in spec
     assert "# Plan" in spec["body"]
@@ -105,7 +105,7 @@ def test_forge_markdown_panel_spec_reads_plan_md(tmp_path, monkeypatch):
 def test_forge_markdown_panel_spec_missing_file(tmp_path, monkeypatch):
     missing = tmp_path / "nope" / "PLAN.md"
     paths = SimpleNamespace(run_id="run-0", plan_md_path=missing)
-    monkeypatch.setattr("sylliptor_agent_cli.forge.save_plan", lambda *a, **k: None)
+    monkeypatch.setattr("alysis_code.forge.save_plan", lambda *a, **k: None)
     spec = panels._chat_forge_markdown_panel_spec(paths=paths, plan=_plan())
     # Falls back to an error section rather than crashing.
     assert "Failed to read" in _values(spec)
@@ -505,7 +505,7 @@ def test_surface_on_swarm_event_drives_view(tmp_path):
         ],
     )
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
     paths = SimpleNamespace(run_id="run-x", plan_json_path=plan_path)
     surface.begin_forge(paths)
     assert t.forge_snapshot() is not None
@@ -553,7 +553,7 @@ def test_surface_interrupt_forge_marks_running_tasks_and_finishes_view(tmp_path)
         ],
     )
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
     surface.begin_forge(SimpleNamespace(run_id="run-stop", plan_json_path=plan_path))
     t.forge_set_active("T02", phase="worker.lifecycle", message="running")
 
@@ -595,7 +595,7 @@ def test_transcript_forge_sync_adds_new_tasks():
 def test_surface_on_swarm_event_drops_stale_and_cancelled(tmp_path):
     plan_path = _write_plan_json(tmp_path, [{"id": "T01", "title": "x", "status": "planned"}])
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
 
     class _Tok:
         is_cancelled = False
@@ -626,7 +626,7 @@ def test_surface_on_swarm_event_drops_stale_and_cancelled(tmp_path):
 def test_surface_on_swarm_event_dropped_after_view_cleared(tmp_path):
     plan_path = _write_plan_json(tmp_path, [{"id": "T01", "title": "x", "status": "planned"}])
     t = TuiTranscript()
-    surface = TuiSurface(t, auto_approve=lambda: True)
+    surface = TuiSurface(t)
     surface.begin_forge(SimpleNamespace(run_id="r", plan_json_path=plan_path), None)
     t.append_user("a new turn")  # clears the forge view
     # Even an error-phase event is dropped once the view is gone (a new turn started).
@@ -669,7 +669,7 @@ def test_forge_view_rows_narrow_width_within_bound():
 
 
 def test_serialized_sink_prefers_on_swarm_event(tmp_path):
-    from sylliptor_agent_cli.swarm_trace import (
+    from alysis_code.swarm_trace import (
         SerializedSwarmTraceSink,
         build_swarm_trace_event,
     )
@@ -789,7 +789,7 @@ def test_deferred_command_keeps_tui_responsive_to_interrupt_and_exit():
 
 
 def test_only_planner_backed_plain_forge_messages_are_deferred():
-    from sylliptor_agent_cli.cli_impl.chat.loop import (
+    from alysis_code.cli_impl.chat.loop import (
         _should_defer_forge_planner_submission,
     )
 
@@ -845,7 +845,7 @@ class _FakeAssetSurface:
                     versions=[1],
                     extracted_text_preview="",
                 )
-        from sylliptor_agent_cli.assets import AssetError
+        from alysis_code.assets import AssetError
 
         raise AssetError(f"Asset not found: {asset_id}")
 
@@ -853,10 +853,10 @@ class _FakeAssetSurface:
 def _patch_asset_surface(monkeypatch, entries):
     surface = _FakeAssetSurface(entries)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.surface.build_asset_surface",
+        "alysis_code.assets.surface.build_asset_surface",
         lambda *a, **k: surface,
     )
-    monkeypatch.setattr("sylliptor_agent_cli.forge.load_plan", lambda *a, **k: {})
+    monkeypatch.setattr("alysis_code.forge.load_plan", lambda *a, **k: {})
 
 
 def test_assets_picker_spec_lists_assets(monkeypatch):
@@ -1046,7 +1046,7 @@ def test_forge_view_rows_no_timers_without_active_map():
 def test_forge_status_glyph_matches_task_visual():
     # The shared glyph helper must reproduce _forge_task_visual's glyph exactly, so
     # the /show panel and the live table can never disagree.
-    from sylliptor_agent_cli.cli_impl.tui.forge_status import forge_status_glyph
+    from alysis_code.cli_impl.tui.forge_status import forge_status_glyph
 
     for status in (
         "done",
@@ -1161,7 +1161,7 @@ def test_picker_on_select_can_reopen_picker():
 
 
 def test_forge_chat_state_swarm_knobs_default_empty():
-    from sylliptor_agent_cli.cli_impl.chat.state import _ForgeChatState
+    from alysis_code.cli_impl.chat.state import _ForgeChatState
 
     assert _ForgeChatState().swarm_knobs == {}
 
@@ -1178,7 +1178,7 @@ def test_planner_reply_sink_param_threaded_to_forge_handler():
     # so a signature check is the isolation-safe way to pin this contract.)
     import inspect
 
-    from sylliptor_agent_cli.cli_impl.chat import commands as cmd
+    from alysis_code.cli_impl.chat import commands as cmd
 
     for fn in (cmd._handle_chat_command, cmd._handle_forge_chat_command):
         params = inspect.signature(fn).parameters
@@ -1186,7 +1186,7 @@ def test_planner_reply_sink_param_threaded_to_forge_handler():
 
 
 def test_plan_meta_rows_collapse_and_expand():
-    from sylliptor_agent_cli.cli_impl.tui.app import _plan_meta_rows
+    from alysis_code.cli_impl.tui.app import _plan_meta_rows
 
     notes = "\n".join(
         [

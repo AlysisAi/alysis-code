@@ -8,7 +8,7 @@ import pytest
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 from PIL import Image
 
-from sylliptor_agent_cli.assets import (
+from alysis_code.assets import (
     AssetError,
     AssetReadinessPolicy,
     AssetSurface,
@@ -16,8 +16,8 @@ from sylliptor_agent_cli.assets import (
     build_planner_assets_block,
     ensure_planner_asset_readiness,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
 
 
 def _surface(tmp_path: Path, *, delay_seconds: float = 0.0) -> AssetSurface:

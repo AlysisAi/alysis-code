@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.forge import make_run_paths
-from sylliptor_agent_cli.git_ops import (
+import alysis_code.swarm_backend as swarm_backend
+import alysis_code.workspace_isolation as workspace_isolation
+from alysis_code.forge import make_run_paths
+from alysis_code.git_ops import (
     GitOpsError,
     branch_exists,
     current_branch,
@@ -15,16 +17,31 @@ from sylliptor_agent_cli.git_ops import (
     has_head_commit,
     merge_no_ff,
 )
-from sylliptor_agent_cli.git_worktrees import (
+from alysis_code.git_worktrees import (
     ensure_task_worktree,
     prune_worktrees,
     remove_task_worktree,
 )
-from sylliptor_agent_cli.swarm_backend import (
+from alysis_code.swarm_backend import (
     GitWorktreeSwarmBackend,
     SnapshotSwarmBackend,
     select_swarm_backend,
 )
+
+
+@pytest.mark.parametrize(
+    "helper_name",
+    (
+        "_run_git_checked",
+        "_inspect_existing_git_workspace",
+        "_sanitize_existing_git_workspace",
+        "_reset_git_workspace_to_target",
+        "_cleanup_workspace_path",
+        "_retry_readonly_removal",
+    ),
+)
+def test_workspace_isolation_helpers_remain_reexported(helper_name: str) -> None:
+    assert getattr(swarm_backend, helper_name) is getattr(workspace_isolation, helper_name)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -219,7 +236,7 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
     root.mkdir()
     run_dir.mkdir()
     calls: dict[str, object] = {}
-    branch_exists_state = {"feat/t01-demo": True, "sylliptor-candidate/run-1/batch_001": True}
+    branch_exists_state = {"feat/t01-demo": True, "alysis-candidate/run-1/batch_001": True}
 
     def fake_ensure_worktree(**kwargs: object) -> None:
         calls.setdefault("ensure_worktree", []).append(kwargs)
@@ -255,11 +272,11 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
         calls["validated_candidate"] = (worktree_path, expected_branch)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_backend._reset_git_workspace_to_target",
+        "alysis_code.swarm_backend._reset_git_workspace_to_target",
         fake_reset_git_workspace_to_target,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.swarm_backend._require_materialized_candidate_workspace",
+        "alysis_code.swarm_backend._require_materialized_candidate_workspace",
         fake_require_materialized_candidate_workspace,
     )
 
@@ -285,7 +302,7 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
         root=root,
         run_dir=run_dir,
         batch_label="batch_001",
-        branch="sylliptor-candidate/run-1/batch_001",
+        branch="alysis-candidate/run-1/batch_001",
         base_branch="main",
     )
 
@@ -295,7 +312,7 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
     assert candidate_workspace.control_root == candidate_workspace.worktree_path
     assert calls["validated_candidate"] == (
         candidate_workspace.worktree_path,
-        "sylliptor-candidate/run-1/batch_001",
+        "alysis-candidate/run-1/batch_001",
     )
     assert calls["reset_candidate"] == (candidate_workspace.worktree_path, "main")
 
@@ -309,7 +326,7 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
 
     assert calls["merge_runner"] == (
         candidate_workspace.worktree_path,
-        "sylliptor-candidate/run-1/batch_001",
+        "alysis-candidate/run-1/batch_001",
         "feat/t01-demo",
         "Merge T01: Demo task",
     )
@@ -327,7 +344,7 @@ def test_git_worktree_backend_prepares_candidate_workspace_and_merges_into_candi
         "worktree_repo_path": candidate_workspace.worktree_path,
         "force": True,
     }
-    assert calls["delete_branch"] == (root, "sylliptor-candidate/run-1/batch_001")
+    assert calls["delete_branch"] == (root, "alysis-candidate/run-1/batch_001")
 
 
 def test_git_worktree_backend_reuses_candidate_path_but_resets_branch_to_base(
@@ -375,7 +392,7 @@ def test_git_worktree_backend_reuses_candidate_path_but_resets_branch_to_base(
         root=root,
         run_dir=run_dir,
         batch_label="batch_001",
-        branch="sylliptor-candidate/run-1/batch_001",
+        branch="alysis-candidate/run-1/batch_001",
         base_branch="main",
     )
     base_head = _git(candidate_workspace.worktree_path, "rev-parse", "HEAD").stdout.strip()
@@ -395,7 +412,7 @@ def test_git_worktree_backend_reuses_candidate_path_but_resets_branch_to_base(
         root=root,
         run_dir=run_dir,
         batch_label="batch_001",
-        branch="sylliptor-candidate/run-1/batch_001",
+        branch="alysis-candidate/run-1/batch_001",
         base_branch="main",
     )
     reused_head = _git(reused_candidate_workspace.worktree_path, "rev-parse", "HEAD").stdout.strip()
@@ -430,7 +447,7 @@ def test_git_worktree_backend_requires_materialized_candidate_workspace(tmp_path
             root=root,
             run_dir=run_dir,
             batch_label="batch_001",
-            branch="sylliptor-candidate/run-1/batch_001",
+            branch="alysis-candidate/run-1/batch_001",
             base_branch="main",
         )
 
@@ -726,9 +743,9 @@ def test_snapshot_backend_initializes_repo_and_applies_changes_back(tmp_path: Pa
             "-C",
             prepared.worktree_path,
             "-c",
-            "user.name=sylliptor-agent",
+            "user.name=alysis-agent",
             "-c",
-            "user.email=sylliptor-agent@local",
+            "user.email=alysis-agent@local",
             "commit",
             "-m",
             "task update",
@@ -838,9 +855,9 @@ def test_snapshot_backend_rebuilds_reusable_workspace_with_tracked_runtime_artif
     _git(
         first.worktree_path,
         "-c",
-        "user.name=sylliptor-agent",
+        "user.name=alysis-agent",
         "-c",
-        "user.email=sylliptor-agent@local",
+        "user.email=alysis-agent@local",
         "commit",
         "-m",
         "progress",
@@ -851,9 +868,9 @@ def test_snapshot_backend_rebuilds_reusable_workspace_with_tracked_runtime_artif
     _git(
         first.worktree_path,
         "-c",
-        "user.name=sylliptor-agent",
+        "user.name=alysis-agent",
         "-c",
-        "user.email=sylliptor-agent@local",
+        "user.email=alysis-agent@local",
         "commit",
         "-m",
         "track runtime artifact",
@@ -907,9 +924,9 @@ def test_snapshot_backend_prepare_reuses_dirty_workspace_after_sanitizing(tmp_pa
     _git(
         first.worktree_path,
         "-c",
-        "user.name=sylliptor-agent",
+        "user.name=alysis-agent",
         "-c",
-        "user.email=sylliptor-agent@local",
+        "user.email=alysis-agent@local",
         "commit",
         "-m",
         "progress",
@@ -962,9 +979,9 @@ def test_snapshot_backend_failure_cleanup_sanitizes_to_branch_head(tmp_path: Pat
     _git(
         prepared.worktree_path,
         "-c",
-        "user.name=sylliptor-agent",
+        "user.name=alysis-agent",
         "-c",
-        "user.email=sylliptor-agent@local",
+        "user.email=alysis-agent@local",
         "commit",
         "-m",
         "progress",

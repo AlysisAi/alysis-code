@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.assets import OcrError, ScriptToLanguagesMapper, TesseractOcrProvider
+from alysis_code.assets import OcrError, ScriptToLanguagesMapper, TesseractOcrProvider
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tesseract_osd"
 
 
 def test_tesseract_is_unavailable_when_binary_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.shutil.which", lambda _binary: None)
+    monkeypatch.setattr("alysis_code.assets.ocr.shutil.which", lambda _binary: None)
 
     assert TesseractOcrProvider().is_available() is False
 
@@ -20,9 +20,7 @@ def test_tesseract_is_unavailable_when_binary_missing(monkeypatch: pytest.Monkey
 def test_script_detection_parses_osd_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract"
-    )
+    monkeypatch.setattr("alysis_code.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract")
 
     def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -32,7 +30,7 @@ def test_script_detection_parses_osd_output(
             stderr="",
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.assets.ocr.subprocess.run", fake_run)
 
     detection = TesseractOcrProvider().detect_script(tmp_path / "image.png")
     assert detection is not None
@@ -54,9 +52,7 @@ def test_extract_text_builds_multilanguage_command(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract"
-    )
+    monkeypatch.setattr("alysis_code.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract")
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -82,7 +78,7 @@ def test_extract_text_builds_multilanguage_command(
             )
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="γειά\n", stderr="")
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.assets.ocr.subprocess.run", fake_run)
 
     result = TesseractOcrProvider().extract_text(tmp_path / "image.png")
 
@@ -96,9 +92,7 @@ def test_extract_text_falls_back_to_installed_languages_when_osd_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract"
-    )
+    monkeypatch.setattr("alysis_code.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract")
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -127,7 +121,7 @@ def test_extract_text_falls_back_to_installed_languages_when_osd_fails(
             )
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="hello\n", stderr="")
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.subprocess.run", fake_run)
+    monkeypatch.setattr("alysis_code.assets.ocr.subprocess.run", fake_run)
 
     result = TesseractOcrProvider().extract_text(tmp_path / "image.png")
 
@@ -141,14 +135,12 @@ def test_tesseract_timeout_and_nonzero_raise(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract"
-    )
+    monkeypatch.setattr("alysis_code.assets.ocr.shutil.which", lambda _binary: "/bin/tesseract")
 
     def timeout_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(args, timeout=1)
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.subprocess.run", timeout_run)
+    monkeypatch.setattr("alysis_code.assets.ocr.subprocess.run", timeout_run)
     provider = TesseractOcrProvider(timeout_seconds=1)
     with pytest.raises(OcrError, match="timed out"):
         provider.installed_languages()
@@ -156,6 +148,6 @@ def test_tesseract_timeout_and_nonzero_raise(
     def nonzero_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args=args, returncode=2, stdout="", stderr="bad image")
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.ocr.subprocess.run", nonzero_run)
+    monkeypatch.setattr("alysis_code.assets.ocr.subprocess.run", nonzero_run)
     with pytest.raises(OcrError, match="bad image"):
         provider.installed_languages()

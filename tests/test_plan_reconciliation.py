@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.plan_reconciliation import reconcile_plan_with_workspace
-from sylliptor_agent_cli.repo_scan import scan_workspace
-from sylliptor_agent_cli.workspace_context import resolve_workspace_context
+from alysis_code.plan_reconciliation import reconcile_plan_with_workspace
+from alysis_code.repo_scan import scan_workspace
+from alysis_code.workspace_context import resolve_workspace_context
 
 
 def _workspace_context_payload(root: Path) -> dict[str, object]:
@@ -122,7 +122,7 @@ def test_reconciliation_seeds_write_scope_and_drops_internal_paths(tmp_path: Pat
                 "title": "Update app",
                 "description": "Touch src/app.py and internal state.",
                 "acceptance_criteria": [],
-                "estimated_files": [".sylliptor/runs/run_1/plan/plan.json", "src/app.py"],
+                "estimated_files": [".alysis/runs/run_1/plan/plan.json", "src/app.py"],
                 "write_scope": [],
             }
         ]
@@ -794,8 +794,8 @@ def test_reconciliation_keeps_explicit_new_file_when_named_scan_finds_existing_s
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "repo"
-    (root / "src" / "sylliptor_agent_cli").mkdir(parents=True)
-    (root / "src" / "sylliptor_agent_cli" / "cli.py").write_text(
+    (root / "src" / "alysis_code").mkdir(parents=True)
+    (root / "src" / "alysis_code" / "cli.py").write_text(
         "def main():\n    return None\n",
         encoding="utf-8",
     )
@@ -825,7 +825,7 @@ def test_reconciliation_keeps_explicit_new_file_when_named_scan_finds_existing_s
     joined = " | ".join(result.warnings)
     assert "kept explicit missing estimated_files path(s)" in joined
     assert "kept explicit missing write_scope path(s)" in joined
-    assert "src/sylliptor_agent_cli/cli.py" in joined
+    assert "src/alysis_code/cli.py" in joined
 
 
 def test_reconciliation_adds_unique_named_code_file_for_behavior_task_with_tests_only_scope(
@@ -969,13 +969,13 @@ def test_reconciliation_does_not_replace_broad_globs_from_planner_boilerplate(
     root = tmp_path / "repo"
     for dirname in ("qa_reports", "sandbox", "scripts"):
         (root / dirname).mkdir(parents=True)
-    (root / "src" / "sylliptor_agent_cli" / "tools").mkdir(parents=True)
-    (root / "src" / "sylliptor_agent_cli" / "tools" / "search.py").write_text(
+    (root / "src" / "alysis_code" / "tools").mkdir(parents=True)
+    (root / "src" / "alysis_code" / "tools" / "search.py").write_text(
         "def search(query):\n    return []\n",
         encoding="utf-8",
     )
-    (root / "src" / "sylliptor_agent_cli" / "cli_impl" / "commands").mkdir(parents=True)
-    (root / "src" / "sylliptor_agent_cli" / "cli_impl" / "commands" / "tools.py").write_text(
+    (root / "src" / "alysis_code" / "cli_impl" / "commands").mkdir(parents=True)
+    (root / "src" / "alysis_code" / "cli_impl" / "commands" / "tools.py").write_text(
         "def tools():\n    return None\n",
         encoding="utf-8",
     )

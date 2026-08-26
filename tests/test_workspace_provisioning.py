@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.workspace_provisioning import (
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.workspace_provisioning import (
     PACKAGE_MISSING_EXIT_CODE,
     DeclaredTestRunner,
     ProvisioningAction,
@@ -414,7 +414,7 @@ def test_env_provisioned_payload_shape() -> None:
 
 
 def test_kill_switch_env_and_config(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WORKSPACE_PROVISIONING", raising=False)
+    monkeypatch.delenv("ALYSIS_WORKSPACE_PROVISIONING", raising=False)
     assert (
         _workspace_provisioning_enabled(AppConfig(model="x", workspace_provisioning_enabled=True))
         is True
@@ -423,12 +423,12 @@ def test_kill_switch_env_and_config(monkeypatch) -> None:
         _workspace_provisioning_enabled(AppConfig(model="x", workspace_provisioning_enabled=False))
         is False
     )
-    monkeypatch.setenv("SYLLIPTOR_WORKSPACE_PROVISIONING", "off")
+    monkeypatch.setenv("ALYSIS_WORKSPACE_PROVISIONING", "off")
     assert (
         _workspace_provisioning_enabled(AppConfig(model="x", workspace_provisioning_enabled=True))
         is False
     )
-    monkeypatch.setenv("SYLLIPTOR_WORKSPACE_PROVISIONING", "on")
+    monkeypatch.setenv("ALYSIS_WORKSPACE_PROVISIONING", "on")
     assert (
         _workspace_provisioning_enabled(AppConfig(model="x", workspace_provisioning_enabled=False))
         is True
@@ -452,7 +452,7 @@ def test_kill_switch_config_key_roundtrip() -> None:
 
 
 def _session_events(sessions_dir: Path, session_id: str, event_type: str) -> list[dict[str, Any]]:
-    from sylliptor_agent_cli.session_store import read_session_events
+    from alysis_code.session_store import read_session_events
 
     return [
         event.get("payload") or {}
@@ -483,8 +483,8 @@ def _warm_up_session(
     shell_runner: Any,
     monkeypatch,
 ):
-    import sylliptor_agent_cli.agent_loop as agent_loop_mod
-    from sylliptor_agent_cli.agent_loop import create_session
+    import alysis_code.agent_loop as agent_loop_mod
+    from alysis_code.agent_loop import create_session
 
     # create_session resolves the runner builder through the agent_loop module,
     # which is the established patch seam for shell backends in this suite.
@@ -590,7 +590,7 @@ def test_session_warmup_does_nothing_without_a_declaration(tmp_path: Path, monke
 
 
 def test_session_warmup_kill_switch_suppresses_everything(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WORKSPACE_PROVISIONING", "off")
+    monkeypatch.setenv("ALYSIS_WORKSPACE_PROVISIONING", "off")
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     shell = _StubShellRunner(import_exit_code=PACKAGE_MISSING_EXIT_CODE)
 
@@ -611,8 +611,8 @@ def test_readonly_session_provisions_nothing(tmp_path: Path, monkeypatch) -> Non
     # A session denied shell execution must not mutate the environment during
     # its own construction.
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    import sylliptor_agent_cli.agent.session as session_mod
-    from sylliptor_agent_cli.agent_loop import create_session
+    import alysis_code.agent.session as session_mod
+    from alysis_code.agent_loop import create_session
 
     def _must_not_install(_decision, **_kwargs):
         raise AssertionError("a readonly session must never install")
@@ -640,7 +640,7 @@ def test_readonly_session_provisions_nothing(tmp_path: Path, monkeypatch) -> Non
 
 def test_session_warmup_survives_a_broken_installer(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    import sylliptor_agent_cli.agent.session as session_mod
+    import alysis_code.agent.session as session_mod
 
     def _explode(_decision, **_kwargs):
         raise RuntimeError("pip subsystem is broken")

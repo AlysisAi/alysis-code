@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.swarm_scheduler import Batch, Schedule, compute_schedule
+from alysis_code.swarm_scheduler import Batch, Schedule, compute_schedule
 
 
 def _task(

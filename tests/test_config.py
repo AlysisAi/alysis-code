@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import (
+from alysis_code.config import (
     DEFAULT_SUBAGENT_TIMEOUT_S,
     DEFAULT_VERIFY_COMMANDS,
     AppConfig,
@@ -48,7 +48,7 @@ from sylliptor_agent_cli.config import (
     save_persisted_profile_key,
     set_config_value,
 )
-from sylliptor_agent_cli.profiles import (
+from alysis_code.profiles import (
     ProfileSpec,
     add_profile,
     get_active_profile,
@@ -56,7 +56,7 @@ from sylliptor_agent_cli.profiles import (
     resolve_effective_base_url,
     set_active_profile,
 )
-from sylliptor_agent_cli.step_budget import (
+from alysis_code.step_budget import (
     DEFAULT_CHAT_MAX_STEPS,
     DEFAULT_SUBAGENT_MAX_STEPS,
     DEFAULT_TASK_MAX_STEPS,
@@ -64,8 +64,8 @@ from sylliptor_agent_cli.step_budget import (
 
 
 def test_get_api_key_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ConfigError):
         get_api_key()
@@ -74,8 +74,8 @@ def test_get_api_key_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_get_api_key_uses_persisted_key_when_env_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     save_persisted_api_key("stored-key")
@@ -88,25 +88,25 @@ def test_get_api_key_uses_persisted_key_when_env_is_missing(
     assert credentials_path().name == "credentials.json"
 
 
-def test_get_api_key_prefers_sylliptor_env_over_persisted_key(
+def test_get_api_key_prefers_alysis_env_over_persisted_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "env-key")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "env-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     save_persisted_api_key("stored-key")
 
     resolved = resolve_api_key()
     assert resolved.key == "env-key"
-    assert resolved.source == "env:SYLLIPTOR_API_KEY"
+    assert resolved.source == "env:ALYSIS_API_KEY"
     assert get_api_key() == "env-key"
 
 
 def test_get_api_key_prefers_persisted_key_over_openai_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
     save_persisted_api_key("stored-key")
 
@@ -116,11 +116,11 @@ def test_get_api_key_prefers_persisted_key_over_openai_env(
     assert get_api_key() == "stored-key"
 
 
-def test_non_openai_profile_prefers_profile_env_over_sylliptor_env(
+def test_non_openai_profile_prefers_profile_env_over_alysis_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-openai")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-openai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
     cfg = AppConfig(model="claude-sonnet-4-6")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
@@ -141,11 +141,11 @@ def test_non_openai_profile_prefers_profile_env_over_sylliptor_env(
     assert resolved.source == "env:ANTHROPIC_API_KEY"
 
 
-def test_non_openai_profile_prefers_stored_profile_key_over_sylliptor_env(
+def test_non_openai_profile_prefers_stored_profile_key_over_alysis_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-openai")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-openai")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     cfg = AppConfig(model="claude-sonnet-4-6")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
@@ -170,7 +170,7 @@ def test_non_openai_profile_prefers_stored_profile_key_over_sylliptor_env(
 def test_stored_profile_key_overrides_provider_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-env")
     cfg = AppConfig(model="deepseek-v4-flash")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
@@ -192,11 +192,11 @@ def test_stored_profile_key_overrides_provider_env(
     assert resolved.source == "stored:profile=deepseek"
 
 
-def test_non_openai_profile_does_not_use_generic_sylliptor_env_without_profile_key(
+def test_non_openai_profile_does_not_use_generic_alysis_env_without_profile_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-openai-generic")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-openai-generic")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     cfg = AppConfig(model="deepseek-v4-flash")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
@@ -217,11 +217,11 @@ def test_non_openai_profile_does_not_use_generic_sylliptor_env_without_profile_k
     assert resolved.source == "missing"
 
 
-def test_stored_openai_profile_key_overrides_generic_sylliptor_env(
+def test_stored_openai_profile_key_overrides_generic_alysis_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-generic")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-generic")
     cfg = load_config()
     save_config(cfg)
     save_persisted_profile_key("default", "sk-openai-config")
@@ -235,8 +235,8 @@ def test_stored_openai_profile_key_overrides_generic_sylliptor_env(
 def test_default_profile_custom_base_url_prefers_stored_profile_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "sk-generic")
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_API_KEY", "sk-generic")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     cfg = load_config()
     set_config_value(cfg, "base_url", "https://custom.example/v1")
@@ -252,8 +252,8 @@ def test_default_profile_custom_base_url_prefers_stored_profile_key(
 def test_default_profile_custom_base_url_does_not_fall_back_to_openai_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     cfg = load_config()
     set_config_value(cfg, "base_url", "https://custom.example/v1")
@@ -271,7 +271,7 @@ def test_default_profile_custom_base_url_does_not_fall_back_to_openai_env(
 def test_set_model_and_base_url_syncs_active_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
 
     set_config_value(cfg, "base_url", "https://api.anthropic.com/v1")
@@ -289,7 +289,7 @@ def test_set_model_and_base_url_syncs_active_profile(
 def test_set_model_alias_switches_to_matching_provider_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     add_profile(
         cfg,
@@ -314,7 +314,7 @@ def test_set_model_alias_switches_to_matching_provider_profile(
 def test_set_model_alias_keeps_active_gateway_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     set_config_value(cfg, "base_url", "https://openrouter.ai/api/v1")
 
@@ -330,7 +330,7 @@ def test_set_model_alias_keeps_active_gateway_profile(
 def test_set_model_canonicalizes_active_provider_numeric_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     add_profile(
         cfg,
@@ -353,7 +353,7 @@ def test_set_model_canonicalizes_active_provider_numeric_alias(
 def test_set_model_canonicalizes_legacy_numeric_separator_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     set_config_value(cfg, "base_url", "https://api.mistral.ai/v1")
 
@@ -376,7 +376,7 @@ def test_set_model_canonicalizes_legacy_numeric_separator_alias(
 def test_set_model_canonicalizes_gemini_stale_preview_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str, expected: str
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     set_config_value(cfg, "base_url", "https://generativelanguage.googleapis.com/v1beta/openai/")
 
@@ -392,7 +392,7 @@ def test_set_model_canonicalizes_gemini_stale_preview_aliases(
 def test_set_known_base_url_switches_provider_profile_and_default_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     add_profile(
         cfg,
@@ -418,7 +418,7 @@ def test_set_known_base_url_switches_provider_profile_and_default_model(
 def test_set_base_url_rejects_malformed_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
 
     with pytest.raises(ConfigError):
@@ -429,7 +429,7 @@ def test_load_config_syncs_active_profile_over_stale_top_level_base_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps(
@@ -466,7 +466,7 @@ def test_load_config_repairs_known_model_provider_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps(
@@ -505,7 +505,7 @@ def test_load_config_keeps_explicit_custom_profile_with_preset_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     direct_base_url = "https://token-plan-ams.xiaomimimo.com/v1"
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
@@ -515,7 +515,7 @@ def test_load_config_keeps_explicit_custom_profile_with_preset_model(
                 "model": "mimo-v2.5-pro",
                 "active_profile": "mimo",
                 "profiles": {
-                    "sylliptor": {
+                    "alysis": {
                         "protocol": "openai_compat",
                         "base_url": (
                             "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1"
@@ -554,7 +554,7 @@ def test_load_config_preset_active_profile_model_autoalign_preserved(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         json.dumps(
@@ -601,7 +601,7 @@ def test_load_config_preset_active_profile_model_autoalign_preserved(
 def test_clear_persisted_api_key_removes_credentials_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     save_persisted_api_key("stored-key")
 
     assert credentials_path().exists()
@@ -611,7 +611,7 @@ def test_clear_persisted_api_key_removes_credentials_file(
 
 
 def test_config_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     cfg.model = "test-model"
     cfg.llm_reasoning_effort = "high"
@@ -621,6 +621,10 @@ def test_config_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     cfg.task_max_steps = 144
     cfg.subagent_max_steps = 12
     cfg.subagent_timeout_s = 321.5
+    cfg.subagent_orchestration.max_background_children = 5
+    cfg.subagent_orchestration.turn_end_policy = "cancel"
+    cfg.subagent_orchestration.workspace_isolation_enabled = False
+    cfg.subagent_orchestration.parallel_nonwriting_shared = True
     cfg.web_search_mode = "auto"
     cfg.web_search_adapter = "openrouter_web"
     cfg.web_search_base_url = "https://api.openai.com/v1"
@@ -650,6 +654,10 @@ def test_config_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert cfg2.task_max_steps == 144
     assert cfg2.subagent_max_steps == 12
     assert cfg2.subagent_timeout_s == 321.5
+    assert cfg2.subagent_orchestration.max_background_children == 5
+    assert cfg2.subagent_orchestration.turn_end_policy == "cancel"
+    assert cfg2.subagent_orchestration.workspace_isolation_enabled is False
+    assert cfg2.subagent_orchestration.parallel_nonwriting_shared is True
     assert cfg2.web_search_mode == "auto"
     assert cfg2.web_search_adapter == "openrouter_web"
     assert cfg2.web_search_base_url == "https://api.openai.com/v1"
@@ -679,6 +687,23 @@ def test_app_config_uses_shared_step_budget_defaults() -> None:
     assert cfg.task_max_steps == DEFAULT_TASK_MAX_STEPS
     assert cfg.subagent_max_steps == DEFAULT_SUBAGENT_MAX_STEPS
     assert cfg.subagent_timeout_s == DEFAULT_SUBAGENT_TIMEOUT_S
+    assert cfg.subagent_orchestration.max_background_children == 3
+    assert cfg.subagent_orchestration.turn_end_policy == "wait"
+    assert cfg.subagent_orchestration.workspace_isolation_enabled is True
+    assert cfg.subagent_orchestration.parallel_nonwriting_shared is False
+    assert cfg.subagent_orchestration.helpers_enabled is True
+    assert cfg.subagent_orchestration.helper_max_total_per_child == 2
+    assert cfg.subagent_orchestration.helper_timeout_s == 120.0
+    assert cfg.subagent_orchestration.helper_max_steps == 20
+    assert cfg.subagent_orchestration.repetition_signal_threshold == 3
+    assert cfg.subagent_orchestration.repetition_nudge_occurrence_threshold == 2
+    assert cfg.subagent_orchestration.repetition_occurrence_threshold == 5
+    assert cfg.subagent_orchestration.repetition_backstop_threshold == 30
+    assert cfg.subagent_orchestration.model_response_activity_after_s == 15.0
+    assert cfg.subagent_orchestration.inactivity_signal_after_s == 180.0
+    assert cfg.subagent_orchestration.inflight_deadline_grace_s == 10.0
+    assert cfg.llm_stream_no_progress_timeout_s == 240.0
+    assert cfg.provider_retry_max_retries == 1
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), float("-inf")])
@@ -695,6 +720,142 @@ def test_set_subagent_timeout_value_validation() -> None:
     for value in ("0", "-1", "nan", "inf", "-inf", "not-a-number"):
         with pytest.raises(ConfigError):
             set_config_value(cfg, "subagent_timeout_s", value)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_app_config_rejects_invalid_background_child_limit(value: int) -> None:
+    with pytest.raises(ValueError):
+        AppConfig(subagent_orchestration={"max_background_children": value})
+
+
+def test_app_config_rejects_invalid_subagent_turn_end_policy() -> None:
+    with pytest.raises(ValueError):
+        AppConfig(subagent_orchestration={"turn_end_policy": "detach"})
+
+
+def test_set_subagent_orchestration_values() -> None:
+    cfg = AppConfig()
+
+    cfg = set_config_value(cfg, "subagent_orchestration.max_background_children", "7")
+    cfg = set_config_value(cfg, "subagent_orchestration.turn_end_policy", "cancel")
+    cfg = set_config_value(cfg, "subagent_orchestration.workspace_isolation_enabled", "false")
+    cfg = set_config_value(cfg, "subagent_orchestration.parallel_nonwriting_shared", "true")
+    cfg = set_config_value(cfg, "subagent_orchestration.helpers_enabled", "false")
+    cfg = set_config_value(cfg, "subagent_orchestration.helper_max_total_per_child", "4")
+    cfg = set_config_value(cfg, "subagent_orchestration.helper_timeout_s", "45.5")
+    cfg = set_config_value(cfg, "subagent_orchestration.helper_max_steps", "12")
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.repetition_signal_threshold",
+        "4",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.repetition_nudge_occurrence_threshold",
+        "3",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.repetition_occurrence_threshold",
+        "8",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.repetition_backstop_threshold",
+        "40",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.model_response_activity_after_s",
+        "2.5",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.inactivity_signal_after_s",
+        "7.5",
+    )
+    cfg = set_config_value(
+        cfg,
+        "subagent_orchestration.inflight_deadline_grace_s",
+        "0.25",
+    )
+    assert cfg.subagent_orchestration.max_background_children == 7
+    assert cfg.subagent_orchestration.turn_end_policy == "cancel"
+    assert cfg.subagent_orchestration.workspace_isolation_enabled is False
+    assert cfg.subagent_orchestration.parallel_nonwriting_shared is True
+    assert cfg.subagent_orchestration.helpers_enabled is False
+    assert cfg.subagent_orchestration.helper_max_total_per_child == 4
+    assert cfg.subagent_orchestration.helper_timeout_s == 45.5
+    assert cfg.subagent_orchestration.helper_max_steps == 12
+    assert cfg.subagent_orchestration.repetition_signal_threshold == 4
+    assert cfg.subagent_orchestration.repetition_nudge_occurrence_threshold == 3
+    assert cfg.subagent_orchestration.repetition_occurrence_threshold == 8
+    assert cfg.subagent_orchestration.repetition_backstop_threshold == 40
+    assert cfg.subagent_orchestration.model_response_activity_after_s == 2.5
+    assert cfg.subagent_orchestration.inactivity_signal_after_s == 7.5
+    assert cfg.subagent_orchestration.inflight_deadline_grace_s == 0.25
+
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.max_background_children", "0")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.turn_end_policy", "detach")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.workspace_isolation_enabled", "maybe")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.parallel_nonwriting_shared", "maybe")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.helpers_enabled", "maybe")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.helper_max_total_per_child", "-1")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.helper_timeout_s", "0")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.helper_max_steps", "0")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.repetition_signal_threshold", "1")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.repetition_signal_threshold", "40")
+    with pytest.raises(ConfigError):
+        set_config_value(
+            cfg,
+            "subagent_orchestration.repetition_nudge_occurrence_threshold",
+            "8",
+        )
+    with pytest.raises(ConfigError):
+        set_config_value(
+            cfg,
+            "subagent_orchestration.repetition_occurrence_threshold",
+            "3",
+        )
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "subagent_orchestration.repetition_backstop_threshold", "4")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "subagent_orchestration.model_response_activity_after_s",
+        "subagent_orchestration.inactivity_signal_after_s",
+        "llm_stream_no_progress_timeout_s",
+    ],
+)
+def test_set_progress_watchdog_thresholds_reject_non_positive_values(key: str) -> None:
+    configured = set_config_value(AppConfig(), key, "2.5")
+    if key.startswith("subagent_orchestration."):
+        assert getattr(configured.subagent_orchestration, key.rsplit(".", 1)[1]) == 2.5
+    else:
+        assert getattr(configured, key) == 2.5
+    for value in ("0", "-1", "nan", "inf"):
+        with pytest.raises(ConfigError):
+            set_config_value(AppConfig(), key, value)
+
+
+def test_set_inflight_deadline_grace_accepts_zero_and_rejects_invalid_values() -> None:
+    key = "subagent_orchestration.inflight_deadline_grace_s"
+    assert set_config_value(AppConfig(), key, "0").subagent_orchestration.inflight_deadline_grace_s == 0
+    for value in ("-1", "nan", "inf", "not-a-number"):
+        with pytest.raises(ConfigError):
+            set_config_value(AppConfig(), key, value)
 
 
 def test_stream_defaults_on() -> None:
@@ -794,7 +955,7 @@ def test_load_config_defaults_missing_skills_auto_invoke_to_true_and_preserves_f
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -873,7 +1034,7 @@ def test_default_web_search_mode_is_auto() -> None:
 def test_set_and_resolve_web_search_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_POLICY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_POLICY", raising=False)
     cfg = AppConfig()
 
     cfg = set_config_value(cfg, "web_search_policy", "always")
@@ -882,7 +1043,7 @@ def test_set_and_resolve_web_search_policy(
 
     cfg = set_config_value(cfg, "web_search_policy", "off")
     assert cfg.web_search_policy == "off"
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_POLICY", "auto")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_POLICY", "auto")
     assert resolve_web_search_policy(cfg) == "auto"
 
     with pytest.raises(ConfigError, match="web_search_policy"):
@@ -892,7 +1053,7 @@ def test_set_and_resolve_web_search_policy(
 def test_default_web_search_timeout_allows_slower_search_backends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_TIMEOUT_S", raising=False)
     assert AppConfig().web_search_timeout_s == 45.0
     assert resolve_web_search_timeout_s(AppConfig()) == 45.0
 
@@ -956,10 +1117,13 @@ def test_set_web_search_model_and_base_url_supports_round_trip() -> None:
 
 def test_set_prompt_cache_knobs_support_round_trip_and_clear() -> None:
     cfg = AppConfig()
+    assert cfg.cache.prompt_cache_key_enabled is True
+    cfg = set_config_value(cfg, "cache.prompt_cache_key_enabled", "false")
     cfg = set_config_value(cfg, "prompt_cache_mode", "auto")
     cfg = set_config_value(cfg, "prompt_cache_key", "repo-main")
     cfg = set_config_value(cfg, "prompt_cache_retention", "24h")
 
+    assert cfg.cache.prompt_cache_key_enabled is False
     assert cfg.prompt_cache_mode == "auto"
     assert cfg.prompt_cache_key == "repo-main"
     assert cfg.prompt_cache_retention == "24h"
@@ -973,6 +1137,8 @@ def test_set_prompt_cache_knobs_support_round_trip_and_clear() -> None:
 
     with pytest.raises(ConfigError, match="prompt_cache_mode"):
         set_config_value(cfg, "prompt_cache_mode", "always")
+    with pytest.raises(ConfigError, match="cache.prompt_cache_key_enabled"):
+        set_config_value(cfg, "cache.prompt_cache_key_enabled", "maybe")
 
 
 def test_set_anthropic_prompt_cache_knobs_validate_and_round_trip() -> None:
@@ -1264,14 +1430,14 @@ def test_set_feedback_github_settings_validation() -> None:
     cfg = AppConfig()
     cfg = set_config_value(cfg, "feedback_github_enabled", "false")
     cfg = set_config_value(cfg, "feedback_open_browser", "false")
-    cfg = set_config_value(cfg, "feedback_github_repo", "https://github.com/acme/sylliptor.git")
+    cfg = set_config_value(cfg, "feedback_github_repo", "https://github.com/acme/alysis.git")
 
     assert cfg.feedback_github_enabled is False
     assert cfg.feedback_open_browser is False
-    assert cfg.feedback_github_repo == "acme/sylliptor"
+    assert cfg.feedback_github_repo == "acme/alysis"
 
     with pytest.raises(ConfigError):
-        set_config_value(cfg, "feedback_github_repo", "https://example.com/acme/sylliptor")
+        set_config_value(cfg, "feedback_github_repo", "https://example.com/acme/alysis")
     with pytest.raises(ConfigError):
         set_config_value(cfg, "feedback_github_enabled", "maybe")
 
@@ -1303,7 +1469,7 @@ def test_set_provider_limit_settings_validation() -> None:
 def test_resolve_llm_enable_thinking_defaults_off_for_dashscope_qwen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_LLM_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("ALYSIS_LLM_ENABLE_THINKING", raising=False)
 
     assert (
         resolve_llm_enable_thinking(
@@ -1332,14 +1498,14 @@ def test_resolve_llm_enable_thinking_defaults_off_for_dashscope_qwen(
     )
     assert resolve_llm_enable_thinking(cfg) is True
 
-    monkeypatch.setenv("SYLLIPTOR_LLM_ENABLE_THINKING", "false")
+    monkeypatch.setenv("ALYSIS_LLM_ENABLE_THINKING", "false")
     assert resolve_llm_enable_thinking(cfg) is False
 
 
 def test_resolve_llm_reasoning_effort_prefers_env_config_then_legacy_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_LLM_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("ALYSIS_LLM_REASONING_EFFORT", raising=False)
 
     cfg = AppConfig(llm_reasoning_effort="low")
     cfg.extra_fields["llm_thinking_label"] = "high"
@@ -1348,13 +1514,13 @@ def test_resolve_llm_reasoning_effort_prefers_env_config_then_legacy_hint(
     cfg.llm_reasoning_effort = None
     assert resolve_llm_reasoning_effort(cfg) == "high"
 
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "minimal")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "minimal")
     assert resolve_llm_reasoning_effort(cfg) == "minimal"
 
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "auto")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "auto")
     assert resolve_llm_reasoning_effort(cfg) is None
 
-    monkeypatch.setenv("SYLLIPTOR_LLM_REASONING_EFFORT", "extreme")
+    monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", "extreme")
     with pytest.raises(ConfigError):
         resolve_llm_reasoning_effort(cfg)
 
@@ -1456,7 +1622,7 @@ def test_load_config_migrates_legacy_temperature_to_role_temperatures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     raw = {
         "model": "test-model",
         "temperature": 0.9,
@@ -1486,7 +1652,7 @@ def test_load_config_maps_legacy_web_search_enabled_to_web_search_mode(
     legacy_value: bool,
     expected_mode: str,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     (tmp_path / "config.json").write_text(
         json.dumps({"web_search_enabled": legacy_value}),
         encoding="utf-8",
@@ -1505,7 +1671,7 @@ def test_load_config_maps_legacy_web_search_mode_on_to_auto(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     (tmp_path / "config.json").write_text(
         json.dumps({"web_search_mode": "on"}),
         encoding="utf-8",
@@ -1520,26 +1686,26 @@ def test_load_config_maps_legacy_web_search_mode_on_to_auto(
 
 
 def test_resolve_llm_timeout_defaults_to_sixty_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_LLM_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("ALYSIS_LLM_TIMEOUT_S", raising=False)
     assert resolve_llm_timeout_s(AppConfig()) == 60.0
 
 
 def test_resolve_llm_timeout_prefers_config_when_env_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_LLM_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("ALYSIS_LLM_TIMEOUT_S", raising=False)
     assert resolve_llm_timeout_s(AppConfig(llm_timeout_s=17.5)) == 17.5
 
 
 def test_resolve_llm_timeout_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_LLM_TIMEOUT_S", "42.0")
+    monkeypatch.setenv("ALYSIS_LLM_TIMEOUT_S", "42.0")
     assert resolve_llm_timeout_s(AppConfig(llm_timeout_s=17.5)) == 42.0
 
 
 def test_run_deadline_config_env_and_cli_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
     cfg = AppConfig(run_deadline_seconds=17.5)
 
     assert resolve_run_deadline_seconds(AppConfig()) is None
@@ -1547,13 +1713,13 @@ def test_run_deadline_config_env_and_cli_precedence(
     assert resolve_run_deadline_seconds(cfg) == 17.5
     assert resolve_run_deadline(cfg).source == "config"
 
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", "42.0")
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", "42.0")
     assert resolve_run_deadline_seconds(cfg) == 42.0
     assert resolve_run_deadline(cfg).source == "environment"
     assert resolve_run_deadline_seconds(cfg, cli_deadline_seconds=8.0) == 8.0
     assert resolve_run_deadline(cfg, cli_deadline_seconds=8.0).source == "explicit_cli"
 
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", "0")
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", "0")
     with pytest.raises(ConfigError):
         resolve_run_deadline_seconds(cfg)
 
@@ -1574,13 +1740,13 @@ def test_set_run_deadline_validation() -> None:
 def test_crash_diagnostic_log_path_config_env_and_cli_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_CRASH_DIAGNOSTIC_LOG_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_CRASH_DIAGNOSTIC_LOG_PATH", raising=False)
     cfg = AppConfig(crash_diagnostic_log_path="/tmp/config-diag.jsonl")
 
     assert resolve_crash_diagnostic_log_path(AppConfig()) is None
     assert resolve_crash_diagnostic_log_path(cfg) == "/tmp/config-diag.jsonl"
 
-    monkeypatch.setenv("SYLLIPTOR_CRASH_DIAGNOSTIC_LOG_PATH", "/tmp/env-diag.jsonl")
+    monkeypatch.setenv("ALYSIS_CRASH_DIAGNOSTIC_LOG_PATH", "/tmp/env-diag.jsonl")
     assert resolve_crash_diagnostic_log_path(cfg) == "/tmp/env-diag.jsonl"
     assert (
         resolve_crash_diagnostic_log_path(
@@ -1597,13 +1763,13 @@ def test_crash_diagnostic_log_path_config_env_and_cli_precedence(
 def test_resolve_web_search_timeout_prefers_env_then_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_TIMEOUT_S", raising=False)
     assert resolve_web_search_timeout_s(AppConfig(web_search_timeout_s=17.5)) == 17.5
 
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_TIMEOUT_S", "42.0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_TIMEOUT_S", "42.0")
     assert resolve_web_search_timeout_s(AppConfig(web_search_timeout_s=17.5)) == 42.0
 
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_TIMEOUT_S", "0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_TIMEOUT_S", "0")
     with pytest.raises(ConfigError):
         resolve_web_search_timeout_s(AppConfig(web_search_timeout_s=17.5))
 
@@ -1611,22 +1777,22 @@ def test_resolve_web_search_timeout_prefers_env_then_config(
 def test_resolve_feedback_github_settings_use_config_and_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_FEEDBACK_GITHUB_ENABLED", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_FEEDBACK_GITHUB_REPO", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_FEEDBACK_OPEN_BROWSER", raising=False)
+    monkeypatch.delenv("ALYSIS_FEEDBACK_GITHUB_ENABLED", raising=False)
+    monkeypatch.delenv("ALYSIS_FEEDBACK_GITHUB_REPO", raising=False)
+    monkeypatch.delenv("ALYSIS_FEEDBACK_OPEN_BROWSER", raising=False)
 
     cfg = AppConfig(
         feedback_github_enabled=False,
-        feedback_github_repo="acme/sylliptor",
+        feedback_github_repo="acme/alysis",
         feedback_open_browser=False,
     )
     assert resolve_feedback_github_enabled(cfg) is False
-    assert resolve_feedback_github_repo(cfg) == "acme/sylliptor"
+    assert resolve_feedback_github_repo(cfg) == "acme/alysis"
     assert resolve_feedback_open_browser(cfg) is False
 
-    monkeypatch.setenv("SYLLIPTOR_FEEDBACK_GITHUB_ENABLED", "true")
-    monkeypatch.setenv("SYLLIPTOR_FEEDBACK_GITHUB_REPO", "https://github.com/org/repo")
-    monkeypatch.setenv("SYLLIPTOR_FEEDBACK_OPEN_BROWSER", "true")
+    monkeypatch.setenv("ALYSIS_FEEDBACK_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("ALYSIS_FEEDBACK_GITHUB_REPO", "https://github.com/org/repo")
+    monkeypatch.setenv("ALYSIS_FEEDBACK_OPEN_BROWSER", "true")
     assert resolve_feedback_github_enabled(cfg) is True
     assert resolve_feedback_github_repo(cfg) == "org/repo"
     assert resolve_feedback_open_browser(cfg) is True
@@ -1635,31 +1801,31 @@ def test_resolve_feedback_github_settings_use_config_and_env(
 def test_resolve_model_metadata_policy_defaults_to_warn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_MODEL_METADATA_POLICY", raising=False)
+    monkeypatch.delenv("ALYSIS_MODEL_METADATA_POLICY", raising=False)
     assert resolve_model_metadata_policy(AppConfig()) == "warn"
 
 
 def test_resolve_model_metadata_policy_prefers_config_when_env_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_MODEL_METADATA_POLICY", raising=False)
+    monkeypatch.delenv("ALYSIS_MODEL_METADATA_POLICY", raising=False)
     assert resolve_model_metadata_policy(AppConfig(model_metadata_policy="strict")) == "strict"
 
 
 def test_resolve_model_metadata_policy_env_override_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_METADATA_POLICY", "strict")
+    monkeypatch.setenv("ALYSIS_MODEL_METADATA_POLICY", "strict")
     assert resolve_model_metadata_policy(AppConfig(model_metadata_policy="warn")) == "strict"
 
 
 def test_resolve_model_metadata_policy_rejects_invalid_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_MODEL_METADATA_POLICY", raising=False)
+    monkeypatch.delenv("ALYSIS_MODEL_METADATA_POLICY", raising=False)
     with pytest.raises(ConfigError):
         resolve_model_metadata_policy(AppConfig(model_metadata_policy="maybe"))
-    monkeypatch.setenv("SYLLIPTOR_MODEL_METADATA_POLICY", "invalid")
+    monkeypatch.setenv("ALYSIS_MODEL_METADATA_POLICY", "invalid")
     with pytest.raises(ConfigError):
         resolve_model_metadata_policy(AppConfig(model_metadata_policy="warn"))
 
@@ -1667,7 +1833,7 @@ def test_resolve_model_metadata_policy_rejects_invalid_values(
 def test_resolve_web_search_base_url_falls_back_to_main_base_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_BASE_URL", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_BASE_URL", raising=False)
     assert (
         resolve_web_search_base_url(AppConfig(base_url="https://api.openai.com/v1"))
         == "https://api.openai.com/v1"
@@ -1681,9 +1847,9 @@ def test_resolve_web_search_base_url_falls_back_to_main_base_url(
 def test_resolve_web_search_model_and_base_url_env_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_BASE_URL", "https://search.example.com/v1")
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_MODEL", "web-model")
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", "openrouter_web")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_BASE_URL", "https://search.example.com/v1")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_MODEL", "web-model")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_ADAPTER", "openrouter_web")
     cfg = AppConfig(
         model="main-model",
         base_url="https://api.openai.com/v1",
@@ -1700,8 +1866,8 @@ def test_resolve_web_search_model_and_base_url_env_overrides(
 def test_resolve_web_search_adapter_and_model_can_come_from_active_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_ADAPTER", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_MODEL", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_ADAPTER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_MODEL", raising=False)
     cfg = AppConfig(model="chat-model")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
@@ -1722,7 +1888,7 @@ def test_resolve_web_search_adapter_and_model_can_come_from_active_profile(
 def test_resolve_web_search_base_url_can_come_from_active_profile_without_copied_cfg_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_BASE_URL", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_BASE_URL", raising=False)
     cfg = AppConfig(base_url="https://api.openai.com/v1")
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
@@ -1740,9 +1906,9 @@ def test_resolve_web_search_base_url_can_come_from_active_profile_without_copied
 
 
 def test_resolve_prompt_cache_knobs_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PROMPT_CACHE_MODE", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_PROMPT_CACHE_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_PROMPT_CACHE_RETENTION", raising=False)
+    monkeypatch.delenv("ALYSIS_PROMPT_CACHE_MODE", raising=False)
+    monkeypatch.delenv("ALYSIS_PROMPT_CACHE_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_PROMPT_CACHE_RETENTION", raising=False)
 
     cfg = AppConfig()
     assert resolve_prompt_cache_mode(cfg) == "manual"
@@ -1751,9 +1917,9 @@ def test_resolve_prompt_cache_knobs_default_to_none(monkeypatch: pytest.MonkeyPa
 
 
 def test_resolve_prompt_cache_knobs_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PROMPT_CACHE_MODE", "auto")
-    monkeypatch.setenv("SYLLIPTOR_PROMPT_CACHE_KEY", "env-cache-key")
-    monkeypatch.setenv("SYLLIPTOR_PROMPT_CACHE_RETENTION", "8h")
+    monkeypatch.setenv("ALYSIS_PROMPT_CACHE_MODE", "auto")
+    monkeypatch.setenv("ALYSIS_PROMPT_CACHE_KEY", "env-cache-key")
+    monkeypatch.setenv("ALYSIS_PROMPT_CACHE_RETENTION", "8h")
 
     cfg = AppConfig(
         prompt_cache_mode="manual",
@@ -1768,17 +1934,17 @@ def test_resolve_prompt_cache_knobs_env_override_wins(monkeypatch: pytest.Monkey
 def test_resolve_prompt_cache_mode_rejects_invalid_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PROMPT_CACHE_MODE", "always")
+    monkeypatch.setenv("ALYSIS_PROMPT_CACHE_MODE", "always")
 
-    with pytest.raises(ConfigError, match="SYLLIPTOR_PROMPT_CACHE_MODE"):
+    with pytest.raises(ConfigError, match="ALYSIS_PROMPT_CACHE_MODE"):
         resolve_prompt_cache_mode(AppConfig())
 
 
 def test_resolve_anthropic_prompt_cache_knobs_env_override_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_ANTHROPIC_PROMPT_CACHE_ENABLED", "true")
-    monkeypatch.setenv("SYLLIPTOR_ANTHROPIC_PROMPT_CACHE_TTL", "1h")
+    monkeypatch.setenv("ALYSIS_ANTHROPIC_PROMPT_CACHE_ENABLED", "true")
+    monkeypatch.setenv("ALYSIS_ANTHROPIC_PROMPT_CACHE_TTL", "1h")
 
     cfg = AppConfig(anthropic_prompt_cache_enabled=False, anthropic_prompt_cache_ttl="5m")
 
@@ -1789,9 +1955,9 @@ def test_resolve_anthropic_prompt_cache_knobs_env_override_wins(
 def test_resolve_anthropic_prompt_cache_ttl_rejects_invalid_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_ANTHROPIC_PROMPT_CACHE_TTL", "24h")
+    monkeypatch.setenv("ALYSIS_ANTHROPIC_PROMPT_CACHE_TTL", "24h")
 
-    with pytest.raises(ConfigError, match="SYLLIPTOR_ANTHROPIC_PROMPT_CACHE_TTL"):
+    with pytest.raises(ConfigError, match="ALYSIS_ANTHROPIC_PROMPT_CACHE_TTL"):
         resolve_anthropic_prompt_cache_ttl(AppConfig())
 
 

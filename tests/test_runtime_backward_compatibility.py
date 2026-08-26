@@ -3,19 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli import agent_loop
-from sylliptor_agent_cli.agent import _patchable
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code import agent_loop
+from alysis_code.agent import _patchable
+from alysis_code.agent_loop import (
     ToolDef,
     TurnExecutionState,
     build_tools,
     create_session,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.subagents import SubagentDefinition
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.subagents import SubagentDefinition
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 class _Store:
@@ -113,6 +113,46 @@ def test_run_agent_uses_patchable_create_session_and_returns_int(
     assert calls["cancellation_token"] is None
     assert calls["closed"] is True
     assert calls["create_session_kwargs"]["crash_diagnostic_log_path"] is None
+
+
+def test_run_agent_omits_empty_ephemeral_messages_for_legacy_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: dict[str, Any] = {}
+
+    class _LegacySession:
+        def run_turn(
+            self,
+            instruction: str,
+            *,
+            image_paths: list[str] | None = None,
+            cancellation_token: Any | None = None,
+        ) -> int:
+            calls["turn"] = (instruction, image_paths, cancellation_token)
+            return 0
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    monkeypatch.setattr(agent_loop, "create_session", lambda **_kwargs: _LegacySession())
+
+    code = agent_loop.run_agent(
+        cfg=AppConfig(model="test-model"),
+        root=tmp_path,
+        instruction="Do the task.",
+        mode="auto",
+        yes=True,
+        max_steps=1,
+        no_log=True,
+        api_key_override="override-key",
+        ephemeral_system_messages=[],
+        ephemeral_user_messages=(),
+    )
+
+    assert code == 0
+    assert calls["turn"] == ("Do the task.", None, None)
+    assert calls["closed"] is True
 
 
 def test_shell_run_tool_uses_agent_loop_monkeypatch_and_keeps_legacy_keys(

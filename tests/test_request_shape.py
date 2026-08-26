@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from sylliptor_agent_cli.llm.cache_capabilities import CACHE_CONTROL_FIELD
-from sylliptor_agent_cli.llm.request_shape import build_request_shape_report
+from alysis_code.llm.cache_capabilities import CACHE_CONTROL_FIELD
+from alysis_code.llm.request_shape import build_request_shape_report
 
 
 def test_request_shape_reports_safe_cacheable_prefix_metrics() -> None:

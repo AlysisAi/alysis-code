@@ -8,17 +8,18 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import agent_loop
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig, ConfigError
+from alysis_code import agent_loop
+from alysis_code import cli as cli_mod
+from alysis_code.budget_policy import BudgetCancellationToken
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig, ConfigError
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_API_KEY": "",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_API_KEY": "",
         "OPENAI_API_KEY": "",
     }
 
@@ -114,9 +115,9 @@ def test_require_deadline_accepts_environment_and_config_deadlines(
         return _FakeRunSession()
 
     if env_value is None:
-        monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+        monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
     else:
-        monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", env_value)
+        monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", env_value)
     monkeypatch.setattr(agent_loop, "create_session", fake_create_session)
 
     code = agent_loop.run_agent(
@@ -140,7 +141,7 @@ def test_require_deadline_fails_before_session_when_deadline_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     diagnostic_log = tmp_path / "diagnostics.jsonl"
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     def fail_create_session(**_kwargs: Any) -> _FakeRunSession:
         raise AssertionError("create_session should not be called")
@@ -172,7 +173,7 @@ def test_default_local_run_gets_the_generous_default_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     def fake_create_session(**kwargs: Any) -> _FakeRunSession:
         captured.update(kwargs)
@@ -196,7 +197,7 @@ def test_default_local_run_can_opt_out_of_the_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     def fake_create_session(**kwargs: Any) -> _FakeRunSession:
         captured.update(kwargs)
@@ -232,7 +233,14 @@ def test_run_agent_return_type_and_create_session_monkeypatch_remain_compatible(
 
     assert code == 7
     assert fake_session.turns == [("return-code probe", None)]
-    assert fake_session.cancellation_tokens == [None]
+    # A run with a finite budget is now handed a budget cancellation token, so
+    # the watchdog has a way to stop a run that is blocked somewhere no
+    # cooperative checkpoint can reach. It starts un-cancelled and is only
+    # tripped at deadline + grace.
+    assert len(fake_session.cancellation_tokens) == 1
+    token = fake_session.cancellation_tokens[0]
+    assert isinstance(token, BudgetCancellationToken)
+    assert token.is_cancelled is False
     assert fake_session.closed is True
 
 
@@ -254,7 +262,7 @@ def test_run_cli_preserves_dash_leading_instruction_after_separator(
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
 
     result = runner.invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",

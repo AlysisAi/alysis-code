@@ -5,23 +5,23 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     attach_provider_metadata_to_assistant_message,
     stamp_provider_metadata_for_route,
     strip_provider_metadata_from_message,
 )
-from sylliptor_agent_cli.llm.openai_responses import (
+from alysis_code.llm.openai_responses import (
     OpenAIResponsesClient,
     ResponsesError,
 )
-from sylliptor_agent_cli.llm.protocols import (
+from alysis_code.llm.protocols import (
     OPENAI_RESPONSES_PROTOCOL,
     resolve_reasoning_trace_capability,
 )
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.llm.types import LLMError, ReasoningOutputKind
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.types import LLMError, ReasoningOutputKind
+from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     reset_provider_telemetry_for_tests,
 )
@@ -520,6 +520,37 @@ def test_chat_maps_messages_tools_response_format_and_reasoning() -> None:
     assert response.usage.input_tokens_uncached == 6
 
 
+def test_chat_clamps_max_output_tokens_to_responses_minimum(caplog) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_minimum",
+                "model": "search-model",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+            },
+        )
+
+    caplog.set_level("WARNING", logger="alysis_code.llm.openai_responses")
+    response = _client(httpx.MockTransport(handler)).chat(
+        messages=[{"role": "user", "content": "ping"}],
+        max_tokens=1,
+    )
+
+    assert response.content == "ok"
+    assert captured["max_output_tokens"] == 16
+    assert "max_output_tokens adjusted from 1 to documented minimum 16" in caplog.text
+
+
 def test_chat_normalizes_provider_declared_final_answer_phase() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -800,7 +831,7 @@ def _web_search_function_tool() -> dict[str, object]:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         },
     }
@@ -825,9 +856,9 @@ def test_chat_native_mode_uses_only_openai_hosted_web_search() -> None:
                         "status": "completed",
                         "action": {
                             "type": "search",
-                            "query": "Sylliptor docs",
+                            "query": "Alysis Code docs",
                             "sources": [
-                                {"title": "Docs", "url": "https://docs.example.com/sylliptor"}
+                                {"title": "Docs", "url": "https://docs.example.com/alysis"}
                             ],
                         },
                     },
@@ -842,7 +873,7 @@ def test_chat_native_mode_uses_only_openai_hosted_web_search() -> None:
                                     {
                                         "type": "url_citation",
                                         "title": "Docs",
-                                        "url": "https://docs.example.com/sylliptor",
+                                        "url": "https://docs.example.com/alysis",
                                         "start_index": 8,
                                         "end_index": 18,
                                     }
@@ -875,9 +906,9 @@ def test_chat_native_mode_uses_only_openai_hosted_web_search() -> None:
     assert response.content == "Use the cited docs."
     assert response.provider_metadata is not None
     metadata = response.provider_metadata["openai_responses"]
-    assert metadata["citations"][0]["url"] == "https://docs.example.com/sylliptor"
-    assert metadata["sources"][0]["url"] == "https://docs.example.com/sylliptor"
-    assert metadata["queries"] == ["Sylliptor docs"]
+    assert metadata["citations"][0]["url"] == "https://docs.example.com/alysis"
+    assert metadata["sources"][0]["url"] == "https://docs.example.com/alysis"
+    assert metadata["queries"] == ["Alysis Code docs"]
 
 
 def test_chat_auto_mode_prefers_openai_hosted_web_search_for_auto_adapter() -> None:
@@ -910,7 +941,7 @@ def test_chat_auto_mode_prefers_openai_hosted_web_search_for_auto_adapter() -> N
     assert response.content == "ok"
 
 
-def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
+def test_chat_external_mode_uses_only_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -939,7 +970,7 @@ def test_chat_external_mode_uses_only_sylliptor_web_search_function() -> None:
         {
             "type": "function",
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         }
     ]
@@ -980,7 +1011,7 @@ def test_chat_off_mode_removes_all_web_search_tools() -> None:
     assert response.content == "ok"
 
 
-def test_chat_auto_mode_with_external_adapter_uses_sylliptor_web_search_function() -> None:
+def test_chat_auto_mode_with_external_adapter_uses_alysis_web_search_function() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1009,7 +1040,7 @@ def test_chat_auto_mode_with_external_adapter_uses_sylliptor_web_search_function
         {
             "type": "function",
             "name": "web_search",
-            "description": "Standalone Sylliptor web search.",
+            "description": "Standalone Alysis Code web search.",
             "parameters": {"type": "object"},
         }
     ]
@@ -1044,7 +1075,7 @@ def test_chat_rejects_forced_removed_web_search_tool_choice() -> None:
         transport=httpx.MockTransport(lambda _request: httpx.Response(500)),
     )
 
-    with pytest.raises(LLMError, match="removed the Sylliptor web_search function"):
+    with pytest.raises(LLMError, match="removed the Alysis Code web_search function"):
         client.chat(
             messages=[{"role": "user", "content": "hello"}],
             tools=[_web_search_function_tool()],
@@ -2553,7 +2584,7 @@ def test_web_search_rejects_unsupported_response_shape() -> None:
 @pytest.fixture
 def _include_capability_isolation() -> object:
     """Keep the module-level include capability cache isolated per test."""
-    from sylliptor_agent_cli.llm.openai_responses import _RESPONSES_OMIT_INCLUDE_ENDPOINTS
+    from alysis_code.llm.openai_responses import _RESPONSES_OMIT_INCLUDE_ENDPOINTS
 
     saved = set(_RESPONSES_OMIT_INCLUDE_ENDPOINTS)
     _RESPONSES_OMIT_INCLUDE_ENDPOINTS.clear()
@@ -2801,7 +2832,7 @@ def test_chat_retries_without_include_when_gateway_rejects_it(
 def test_chat_drops_temperature_when_model_rejects_it() -> None:
     """GPT-5-class models reject a non-default temperature; the client must omit
     it and retry (and remember the model), so validation + chat both succeed."""
-    from sylliptor_agent_cli.llm.openai_responses import (
+    from alysis_code.llm.openai_responses import (
         _RESPONSES_OMIT_TEMPERATURE_MODELS,
         _responses_temperature_omit_key,
     )
@@ -2941,7 +2972,7 @@ def test_responses_extra_headers_override_defaults_case_insensitively() -> None:
 
 
 def test_responses_usage_keeps_cost_only_and_cache_write_only_payloads() -> None:
-    from sylliptor_agent_cli.llm.openai_responses import _parse_usage
+    from alysis_code.llm.openai_responses import _parse_usage
 
     cost_only = _parse_usage({"cost": {"currency": "USD", "total_cost": 0.0125}})
     cache_write_only = _parse_usage(

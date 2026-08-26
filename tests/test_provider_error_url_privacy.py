@@ -8,17 +8,17 @@ from typing import Any
 import httpx
 import pytest
 
-from sylliptor_agent_cli.error_text import sanitize_error_text_for_output
-from sylliptor_agent_cli.llm.anthropic_messages import AnthropicMessagesClient
-from sylliptor_agent_cli.llm.gemini_generate_content import GeminiGenerateContentClient
-from sylliptor_agent_cli.llm.gemini_interactions import GeminiInteractionsClient
-from sylliptor_agent_cli.llm.openai_compat import OpenAICompatClient
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.llm.types import LLMError
-from sylliptor_agent_cli.llm_error_display import friendly_llm_error_message
-from sylliptor_agent_cli.profiles import validate_base_url
-from sylliptor_agent_cli.session_store import SessionStore
+from alysis_code.error_text import sanitize_error_text_for_output
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
+from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.gemini_interactions import GeminiInteractionsClient
+from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.types import LLMError
+from alysis_code.llm_error_display import friendly_llm_error_message
+from alysis_code.profiles import validate_base_url
+from alysis_code.session_store import SessionStore
 
 ClientFactory = Callable[[str, httpx.BaseTransport], Any]
 

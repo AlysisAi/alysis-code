@@ -4,16 +4,16 @@ import warnings
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_context import (
+from alysis_code.config import AppConfig
+from alysis_code.execution_context import (
     build_task_context_pack,
     build_task_context_pack_result,
     compact_plan_for_execution,
     select_relevant_assets,
     select_relevant_image_paths,
 )
-from sylliptor_agent_cli.model_registry import ModelRegistry
-from sylliptor_agent_cli.token_budget import compute_input_budget, estimate_tokens
+from alysis_code.model_registry import ModelRegistry
+from alysis_code.token_budget import compute_input_budget, estimate_tokens
 
 
 def _large_plan() -> dict:
@@ -31,8 +31,8 @@ def _large_plan() -> dict:
         ],
         "assets": [
             {
-                "stored_path": f".sylliptor/runs/r/plan/assets/spec_{i:03d}.md",
-                "text_copy_path": f".sylliptor/runs/r/plan/assets_text/spec_{i:03d}.txt",
+                "stored_path": f".alysis/runs/r/plan/assets/spec_{i:03d}.md",
+                "text_copy_path": f".alysis/runs/r/plan/assets_text/spec_{i:03d}.txt",
             }
             for i in range(90)
         ],
@@ -231,8 +231,8 @@ def test_build_task_context_pack_prioritizes_assets_task_and_rules_when_budget_i
 
     assert result.instruction_token_estimate <= 900
     assert "## Selected Assets" in result.content
-    assert ".sylliptor/runs/r/plan/assets/spec_042.md" in result.content
-    assert ".sylliptor/runs/r/plan/assets_text/spec_042.txt" in result.content
+    assert ".alysis/runs/r/plan/assets/spec_042.md" in result.content
+    assert ".alysis/runs/r/plan/assets_text/spec_042.txt" in result.content
     assert "## Task Specification" in result.content
     assert "## Execution Rules" in result.content
     assert "You may read attached plan assets as needed" in result.content

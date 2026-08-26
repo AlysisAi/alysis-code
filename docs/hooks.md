@@ -1,6 +1,6 @@
 # Lifecycle Hooks
 
-Lifecycle hooks let users and teams run deterministic command-based policy around Sylliptor sessions and tool calls.
+Lifecycle hooks let users and teams run deterministic command-based policy around Alysis Code sessions and tool calls.
 
 Hooks are separate from other extension surfaces:
 
@@ -15,9 +15,9 @@ Only trust hook configuration you have reviewed.
 
 Hooks load from three locations, in order:
 
-1. `~/.config/sylliptor/hooks.json`
-2. `<workspace>/.sylliptor/hooks.json`
-3. `<workspace>/.sylliptor/hooks.local.json`
+1. `~/.config/alysis/hooks.json`
+2. `<workspace>/.alysis/hooks.json`
+3. `<workspace>/.alysis/hooks.local.json`
 
 More specific layers override earlier hooks with the same `id`. Hooks without an `id` accumulate.
 
@@ -30,13 +30,13 @@ Trust rules:
 Trust or untrust a project hook config with:
 
 ```bash
-sylliptor hooks trust --path .
-sylliptor hooks untrust --path .
+alysis hooks trust --path .
+alysis hooks untrust --path .
 ```
 
 Trust is keyed to the workspace, config path, and file hash. Editing the project hook file invalidates trust and requires review again.
 
-`sylliptor hooks init --path .` writes a starter local config and adds `.sylliptor/hooks.local.json` to `.gitignore` when needed.
+`alysis hooks init --path .` writes a starter local config and adds `.alysis/hooks.local.json` to `.gitignore` when needed.
 
 ## Events
 
@@ -151,37 +151,37 @@ Use `envAllow` to pass specific variables and `env` to set explicit values. `env
 Inspect hooks:
 
 ```bash
-sylliptor hooks list --path .
-sylliptor hooks doctor --path .
-sylliptor hooks effective --event PreToolUse --tool shell_run --path .
+alysis hooks list --path .
+alysis hooks doctor --path .
+alysis hooks effective --event PreToolUse --tool shell_run --path .
 ```
 
 Trust project hooks:
 
 ```bash
-sylliptor hooks trust --path .
-sylliptor hooks untrust --path .
+alysis hooks trust --path .
+alysis hooks untrust --path .
 ```
 
 Dry-run matching without executing hook commands:
 
 ```bash
-sylliptor hooks test --path . --event SessionStart --session-source startup
-sylliptor hooks test --path . --event PreToolUse --tool shell_run
+alysis hooks test --path . --event SessionStart --session-source startup
+alysis hooks test --path . --event PreToolUse --tool shell_run
 ```
 
 Enable or disable hooks by id:
 
 ```bash
-sylliptor hooks enable policy.block-dangerous-shell --layer local
-sylliptor hooks disable policy.block-dangerous-shell --layer local
+alysis hooks enable policy.block-dangerous-shell --layer local
+alysis hooks disable policy.block-dangerous-shell --layer local
 ```
 
 Inspect per-session hook audit records:
 
 ```bash
-sylliptor hooks trace <session_id>
-sylliptor hooks watch <session_id>
+alysis hooks trace <session_id>
+alysis hooks watch <session_id>
 ```
 
 ## Recipes
@@ -197,7 +197,7 @@ Example hook scripts live under `docs/examples/hooks/`:
 - `secret_scanner.py`: block writes that look like secrets
 - `sample_hooks.json`: compact starter configuration
 
-Sylliptor also includes `sylliptor_agent_cli.builtin_hooks.notify_done_windows`, which can be referenced as:
+Alysis Code also includes `alysis_code.builtin_hooks.notify_done_windows`, which can be referenced as:
 
 ```json
 {
@@ -208,7 +208,7 @@ Sylliptor also includes `sylliptor_agent_cli.builtin_hooks.notify_done_windows`,
           {
             "type": "command",
             "id": "personal.notify",
-            "command": "python -m sylliptor_agent_cli.builtin_hooks.notify_done_windows",
+            "command": "python -m alysis_code.builtin_hooks.notify_done_windows",
             "timeout": 2
           }
         ]

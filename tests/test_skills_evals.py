@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-import sylliptor_agent_cli.skills.eval_runner as eval_runner_module
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.skills.eval_models import (
+import alysis_code.skills.eval_runner as eval_runner_module
+from alysis_code.config import AppConfig
+from alysis_code.skills.eval_models import (
     SkillsEvalCase,
     SkillsEvalExecutionRequest,
     SkillsEvalExecutionResult,
@@ -14,12 +14,12 @@ from sylliptor_agent_cli.skills.eval_models import (
     SkillsEvalRecord,
     SkillsEvalVerificationResult,
 )
-from sylliptor_agent_cli.skills.eval_runner import (
+from alysis_code.skills.eval_runner import (
     OneShotSkillsEvalExecutor,
     classify_skills_eval_failure,
     run_skills_eval_auth_preflight,
 )
-from sylliptor_agent_cli.skills.evals import (
+from alysis_code.skills.evals import (
     aggregate_skills_eval_records,
     evaluate_skills_launch_readiness,
     extract_skills_eval_metrics,
@@ -30,8 +30,8 @@ from sylliptor_agent_cli.skills.evals import (
     run_skills_eval_suite,
     summarize_skills_launch_candidate_metrics,
 )
-from sylliptor_agent_cli.skills.models import SkillBundle
-from sylliptor_agent_cli.skills.prompting import EXPLICIT_SKILL_CONTEXT_TOTAL_MAX_CHARS
+from alysis_code.skills.models import SkillBundle
+from alysis_code.skills.prompting import EXPLICIT_SKILL_CONTEXT_TOTAL_MAX_CHARS
 
 
 class _FakeExecutor:
@@ -48,7 +48,7 @@ class _FakeExecutor:
             (request.workspace / filename).exists()
             for filename in ("AGENTS.md", "CLAUDE.md", "CONVENTIONS.md")
         )
-        skills_root_exists = (request.workspace / ".sylliptor_skills").exists()
+        skills_root_exists = (request.workspace / ".alysis_skills").exists()
         matched_skill_names: tuple[str, ...] = ()
         skill_read_names: tuple[str, ...] = ()
         explicit_used = False
@@ -193,7 +193,7 @@ def test_prepared_eval_workspace_masks_conventions_when_mode_disables_them(
     (source / "nested").mkdir(parents=True)
     (source / "src").mkdir()
     (source / ".git").mkdir()
-    (source / ".sylliptor_skills" / "pytest").mkdir(parents=True)
+    (source / ".alysis_skills" / "pytest").mkdir(parents=True)
     (source / ".agents" / "skills" / "lint").mkdir(parents=True)
     (source / ".claude" / "skills" / "docs").mkdir(parents=True)
     (source / ".github" / "skills" / "review").mkdir(parents=True)
@@ -201,7 +201,7 @@ def test_prepared_eval_workspace_masks_conventions_when_mode_disables_them(
     (source / "nested" / "CLAUDE.md").write_text("nested conventions\n", encoding="utf-8")
     (source / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
     (source / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (source / ".sylliptor_skills" / "pytest" / "SKILL.md").write_text(
+    (source / ".alysis_skills" / "pytest" / "SKILL.md").write_text(
         "pytest skill\n",
         encoding="utf-8",
     )
@@ -244,7 +244,7 @@ def test_prepared_eval_workspace_masks_conventions_when_mode_disables_them(
         assert not (workspace / "AGENTS.md").exists()
         assert not (workspace / "nested" / "CLAUDE.md").exists()
         assert not (workspace / ".git").exists()
-        assert not (workspace / ".sylliptor_skills").exists()
+        assert not (workspace / ".alysis_skills").exists()
         assert not (workspace / ".agents" / "skills").exists()
         assert not (workspace / ".claude" / "skills").exists()
         assert not (workspace / ".github" / "skills").exists()
@@ -263,7 +263,7 @@ def test_prepared_eval_workspace_masks_conventions_when_mode_disables_them(
         assert (workspace / "AGENTS.md").exists()
         assert (workspace / "nested" / "CLAUDE.md").exists()
         assert not (workspace / ".git").exists()
-        assert not (workspace / ".sylliptor_skills").exists()
+        assert not (workspace / ".alysis_skills").exists()
         assert not (workspace / ".agents" / "skills").exists()
         assert not (workspace / ".claude" / "skills").exists()
         assert not (workspace / ".github" / "skills").exists()
@@ -275,7 +275,7 @@ def test_prepared_eval_workspace_masks_conventions_when_mode_disables_them(
         mode=combined_manual,
     ) as workspace:
         assert (workspace / "AGENTS.md").exists()
-        assert (workspace / ".sylliptor_skills" / "pytest" / "SKILL.md").exists()
+        assert (workspace / ".alysis_skills" / "pytest" / "SKILL.md").exists()
         assert (workspace / ".agents" / "skills" / "lint" / "SKILL.md").exists()
         assert (workspace / ".claude" / "skills" / "docs" / "SKILL.md").exists()
         assert (workspace / ".github" / "skills" / "review" / "SKILL.md").exists()
@@ -359,7 +359,7 @@ def test_extract_skills_eval_metrics_tracks_skill_lifecycle_cli_usage() -> None:
             "type": "tool_call",
             "payload": {
                 "name": "shell_run",
-                "arguments": {"cmd": "sylliptor skill init pytest-debug"},
+                "arguments": {"cmd": "alysis skill init pytest-debug"},
             },
         },
         {
@@ -368,7 +368,7 @@ def test_extract_skills_eval_metrics_tracks_skill_lifecycle_cli_usage() -> None:
                 "name": "verify_run",
                 "arguments": {
                     "commands": [
-                        "sylliptor skill validate ./.sylliptor_skills/pytest-debug",
+                        "alysis skill validate ./.alysis_skills/pytest-debug",
                         "pytest -q",
                     ]
                 },
@@ -386,7 +386,7 @@ def test_extract_skills_eval_metrics_tracks_skill_lifecycle_cli_usage() -> None:
 
 def test_extract_skills_eval_metrics_tracks_direct_manual_skill_access(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    (workspace / ".sylliptor_skills" / "pytest").mkdir(parents=True)
+    (workspace / ".alysis_skills" / "pytest").mkdir(parents=True)
     (workspace / ".agents" / "skills" / "lint").mkdir(parents=True)
     (workspace / ".claude" / "skills" / "docs").mkdir(parents=True)
     (workspace / ".github" / "skills" / "review").mkdir(parents=True)
@@ -396,7 +396,7 @@ def test_extract_skills_eval_metrics_tracks_direct_manual_skill_access(tmp_path:
             "type": "tool_call",
             "payload": {
                 "name": "fs_read",
-                "arguments": {"path": ".sylliptor_skills/pytest/SKILL.md"},
+                "arguments": {"path": ".alysis_skills/pytest/SKILL.md"},
             },
         },
         {
@@ -1092,12 +1092,12 @@ def test_one_shot_skills_eval_executor_uses_explicit_skill_context(
         description="Debug pytest failures.",
         instructions='Read "$ARGUMENTS" starting with $1 and $2.',
         bundle_name="pytest",
-        bundle_path=tmp_path / ".sylliptor_skills" / "pytest",
-        entry_path=tmp_path / ".sylliptor_skills" / "pytest" / "SKILL.md",
+        bundle_path=tmp_path / ".alysis_skills" / "pytest",
+        entry_path=tmp_path / ".alysis_skills" / "pytest" / "SKILL.md",
         source_scope="project",
         source_kind="native",
-        source_family=".sylliptor_skills",
-        source_path=tmp_path / ".sylliptor_skills" / "pytest",
+        source_family=".alysis_skills",
+        source_path=tmp_path / ".alysis_skills" / "pytest",
         trust_level="untrusted",
     )
     fake_session = _ExecutorFakeSession(tmp_path, skill)
@@ -1107,7 +1107,7 @@ def test_one_shot_skills_eval_executor_uses_explicit_skill_context(
         return fake_session
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.skills.eval_runner.create_session",
+        "alysis_code.skills.eval_runner.create_session",
         _fake_create_session,
     )
     executor = OneShotSkillsEvalExecutor(
@@ -1293,7 +1293,7 @@ def test_one_shot_eval_executor_passes_case_verification_as_authoritative(
 
 def test_classify_skills_eval_failure_treats_missing_model_as_provider_misconfiguration() -> None:
     classification = classify_skills_eval_failure(
-        "Model is not set. Run: sylliptor config set model <MODEL>",
+        "Model is not set. Run: alysis config set model <MODEL>",
         agent_exit_code=1,
     )
 

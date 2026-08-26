@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, build_tools
-from sylliptor_agent_cli.session_store import SessionStore
+from alysis_code.agent_loop import AgentRuntimeError, build_tools
+from alysis_code.session_store import SessionStore
 
 
 def _store(root: Path) -> SessionStore:
@@ -95,8 +95,8 @@ def test_fs_write_blocks_git_dir_case_insensitive(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        ".Sylliptor/runs/x",
-        ".SyLlIpToR_ImAgEs/x.png",
+        ".Alysis/runs/x",
+        ".AlYsIs_ImAgEs/x.png",
     ],
 )
 def test_fs_write_blocks_all_protected_prefixes_case_insensitive(

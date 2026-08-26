@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl import config_menu as config_menu_mod
-from sylliptor_agent_cli.cli_impl.config_menu import ConfigMenuResult
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl import config_menu as config_menu_mod
+from alysis_code.cli_impl.config_menu import ConfigMenuResult
 
 
 def test_config_menu_command_reports_saved_changes(monkeypatch) -> None:
@@ -18,7 +18,7 @@ def test_config_menu_command_reports_saved_changes(monkeypatch) -> None:
         ),
     )
 
-    result = CliRunner().invoke(sylliptor_app, ["config", "menu"])
+    result = CliRunner().invoke(alysis_app, ["config", "menu"])
 
     assert result.exit_code == 0
     assert "Saved 3 change(s)." in result.output
@@ -31,7 +31,7 @@ def test_config_menu_command_reports_cancel(monkeypatch) -> None:
         lambda: ConfigMenuResult(saved=False, changes={}, api_key_changed=False),
     )
 
-    result = CliRunner().invoke(sylliptor_app, ["config", "menu"])
+    result = CliRunner().invoke(alysis_app, ["config", "menu"])
 
     assert result.exit_code == 0
     assert "Cancelled — no changes saved." in result.output

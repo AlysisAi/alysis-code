@@ -5,17 +5,17 @@ from typing import Any
 
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.usage_logger import AssetUsageLogger
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.integration_gate import IntegrationGateResult
-from sylliptor_agent_cli.plan_assistant import PlannerTurnResult, apply_plan_update
-from sylliptor_agent_cli.replanning import (
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.usage_logger import AssetUsageLogger
+from alysis_code.config import AppConfig
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.integration_gate import IntegrationGateResult
+from alysis_code.plan_assistant import PlannerTurnResult, apply_plan_update
+from alysis_code.replanning import (
     ReplanningTrigger,
     run_replanning_attempt,
 )
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 def _integration_result(paths) -> IntegrationGateResult:

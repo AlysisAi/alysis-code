@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sylliptor_agent_cli.task_dependencies import infer_ordered_predecessor_dependency
+from alysis_code.task_dependencies import infer_ordered_predecessor_dependency
 
 
 def test_nextjs_task_name_does_not_infer_ordered_dependency() -> None:

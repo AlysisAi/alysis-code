@@ -7,21 +7,21 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-import sylliptor_agent_cli.sandbox_runner as sandbox_runner_mod
-import sylliptor_agent_cli.tools.shell as shell_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.sandbox_runner import (
+import alysis_code.agent_loop as agent_loop_mod
+import alysis_code.sandbox_runner as sandbox_runner_mod
+import alysis_code.tools.shell as shell_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.sandbox_runner import (
     BwrapShellRunner,
     DisabledShellRunner,
     DockerShellRunner,
     HostShellRunner,
     build_shell_runner,
 )
-from sylliptor_agent_cli.sandbox_settings import resolve_shell_sandbox_settings
+from alysis_code.sandbox_settings import resolve_shell_sandbox_settings
 
-TEST_DOCKER_IMAGE = "test/sylliptor-sandbox:dev"
+TEST_DOCKER_IMAGE = "test/alysis-sandbox:dev"
 
 
 def _cfg(
@@ -238,18 +238,18 @@ def test_resolve_shell_sandbox_settings_env_overrides_config(
         docker_read_only=False,
         docker_env_allowlist=["LANG"],
     )
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_MODE", "strict")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_BACKEND", "bwrap")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_NETWORK", "off")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_PREVIEW_ACCESS", "lan")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_IMAGE", "sandbox:test")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_CLEAR_ENV", "1")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_PIDS_LIMIT", "256")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_MEMORY", "1g")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_CPUS", "1.5")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_READ_ONLY", "1")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_PROTECT_REPO_META", "1")
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_DOCKER_ENV_ALLOWLIST", "LANG,GIT_AUTHOR_NAME")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_MODE", "strict")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "bwrap")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_NETWORK", "off")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_PREVIEW_ACCESS", "lan")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE", "sandbox:test")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_CLEAR_ENV", "1")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_PIDS_LIMIT", "256")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_MEMORY", "1g")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_CPUS", "1.5")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_READ_ONLY", "1")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_PROTECT_REPO_META", "1")
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_DOCKER_ENV_ALLOWLIST", "LANG,GIT_AUTHOR_NAME")
 
     settings = resolve_shell_sandbox_settings(cfg)
     assert settings.mode == "strict"
@@ -293,8 +293,8 @@ def test_resolve_shell_sandbox_settings_invalid_env_value_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _cfg()
-    monkeypatch.setenv("SYLLIPTOR_SHELL_SANDBOX_NETWORK", "invalid")
-    with pytest.raises(ConfigError, match="SYLLIPTOR_SHELL_SANDBOX_NETWORK"):
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_NETWORK", "invalid")
+    with pytest.raises(ConfigError, match="ALYSIS_SHELL_SANDBOX_NETWORK"):
         resolve_shell_sandbox_settings(cfg)
 
 
@@ -432,7 +432,7 @@ def test_create_session_defers_strict_shell_runner_construction_until_shell_run(
         raise ConfigError(
             "Shell sandbox strict mode is enabled, but no usable backend is available: "
             "auto backend could not find bwrap or docker. Install bubblewrap (Linux) or "
-            "Docker, or set SYLLIPTOR_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
+            "Docker, or set ALYSIS_SHELL_SANDBOX_MODE=off for explicit unsafe host execution."
         )
 
     monkeypatch.setattr(agent_loop_mod, "build_shell_runner", fail_build_shell_runner)
@@ -566,7 +566,7 @@ def test_bwrap_hardened_runner_adds_read_only_repo_metadata_overlays(
 ) -> None:
     captured: dict[str, object] = {}
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".sylliptor").mkdir()
+    (tmp_path / ".alysis").mkdir()
 
     def fake_run(*args, **_kwargs):  # type: ignore[no-untyped-def]
         captured["args"] = args
@@ -580,9 +580,9 @@ def test_bwrap_hardened_runner_adds_read_only_repo_metadata_overlays(
 
     argv = list(captured["args"][0])  # type: ignore[index]
     git_host = os.fspath((tmp_path / ".git").resolve())
-    sylliptor_host = os.fspath((tmp_path / ".sylliptor").resolve())
+    alysis_host = os.fspath((tmp_path / ".alysis").resolve())
     assert _has_argv_triple(argv, "--ro-bind", git_host, "/workspace/.git")
-    assert _has_argv_triple(argv, "--ro-bind", sylliptor_host, "/workspace/.sylliptor")
+    assert _has_argv_triple(argv, "--ro-bind", alysis_host, "/workspace/.alysis")
 
 
 def test_bwrap_hardened_runner_skips_symlinked_repo_metadata(
@@ -832,7 +832,7 @@ def test_shell_run_with_docker_runner_wraps_command(
     assert TEST_DOCKER_IMAGE in argv
     assert "--init" in argv
     name_idx = argv.index("--name")
-    assert re.fullmatch(r"sylliptor-sbx-[0-9a-f]{12}", argv[name_idx + 1])
+    assert re.fullmatch(r"alysis-sbx-[0-9a-f]{12}", argv[name_idx + 1])
     mount = f"{os.fspath(tmp_path.resolve())}:/workspace:rw"
     assert "-v" in argv
     assert mount in argv
@@ -858,7 +858,7 @@ def test_docker_runner_uses_init_and_unique_container_name(
     argv = list(captured["args"][0])  # type: ignore[index]
     assert "--init" in argv
     name_idx = argv.index("--name")
-    assert re.fullmatch(r"sylliptor-sbx-[0-9a-f]{12}", argv[name_idx + 1])
+    assert re.fullmatch(r"alysis-sbx-[0-9a-f]{12}", argv[name_idx + 1])
 
 
 def test_docker_runner_timeout_kills_and_removes_container(
@@ -1037,7 +1037,7 @@ def test_docker_runner_allowlist_filters_env(
 
     _patch_successful_docker_popen(monkeypatch, captured)
     monkeypatch.setenv("LANG", "en_US.UTF-8")
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "Sylliptor")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Alysis Code")
     monkeypatch.setenv("SHOULD_DROP_ME", "1")
     runner = DockerShellRunner(
         network="off",
@@ -1069,7 +1069,7 @@ def test_bwrap_runner_strips_sensitive_env_vars(
         return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_runner_mod.subprocess, "run", fake_run)
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "secret-sylliptor")
+    monkeypatch.setenv("ALYSIS_API_KEY", "secret-alysis")
     monkeypatch.setenv("OPENAI_API_KEY", "secret-openai")
     monkeypatch.setenv("KEEP_ME", "1")
 
@@ -1080,7 +1080,7 @@ def test_bwrap_runner_strips_sensitive_env_vars(
     assert isinstance(kwargs, dict)
     env = kwargs["env"]
     assert isinstance(env, dict)
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert env["KEEP_ME"] == "1"
 
@@ -1096,7 +1096,7 @@ def test_bwrap_runner_clear_env_uses_minimal_env(
         return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sandbox_runner_mod.subprocess, "run", fake_run)
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "secret-sylliptor")
+    monkeypatch.setenv("ALYSIS_API_KEY", "secret-alysis")
     monkeypatch.setenv("OPENAI_API_KEY", "secret-openai")
     monkeypatch.setenv("EXTRA_KEY", "value")
 
@@ -1109,6 +1109,6 @@ def test_bwrap_runner_clear_env_uses_minimal_env(
     assert isinstance(env, dict)
     assert env["HOME"] == "/tmp/home"
     assert set(env).issubset({"HOME", "PATH", "LANG"})
-    assert "SYLLIPTOR_API_KEY" not in env
+    assert "ALYSIS_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert "EXTRA_KEY" not in env

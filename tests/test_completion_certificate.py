@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     AcceptanceCriterionKind,
     AcceptanceCriterionStatus,
     build_acceptance_contract,
     finalize_acceptance_contract,
     record_acceptance_tool_effect,
 )
-from sylliptor_agent_cli.agent.completion_certificate import (
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     CompletionCertificateStatus,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     CompletionGateControllerState,
     CompletionGateDecisionKind,
     TurnExecutionState,

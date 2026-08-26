@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.approval_scope import (
+from alysis_code.approval_scope import (
     approval_session_scope_for_request,
     exact_command_scope,
     exact_file_set_scope,
 )
-from sylliptor_agent_cli.permission_policy import (
+from alysis_code.permission_policy import (
     InMemorySessionGrantAdapter,
     PermissionPolicy,
     PermissionPolicyCorruptError,

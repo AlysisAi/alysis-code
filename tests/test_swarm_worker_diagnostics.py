@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.swarm_worker import _persist_agent_exception_traceback
+from alysis_code.swarm_worker import _persist_agent_exception_traceback
 
 
 def test_persist_agent_exception_traceback_redacts_and_writes(tmp_path: Path) -> None:

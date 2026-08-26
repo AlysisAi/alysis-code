@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent_runtimes import host as host_mod
-from sylliptor_agent_cli.agent_runtimes.base import RuntimeTurnResult
-from sylliptor_agent_cli.cli import app
-from sylliptor_agent_cli.config import AppConfig, load_config, save_config
+from alysis_code import cli as cli_mod
+from alysis_code.agent_runtimes import host as host_mod
+from alysis_code.agent_runtimes.base import RuntimeTurnResult
+from alysis_code.cli import app
+from alysis_code.config import AppConfig, load_config, save_config
 
 
 def _seed_delegated_config(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
     cfg = AppConfig(
         execution={"backend": "delegated", "runtime": "openai-codex"},
         agent_runtimes={
@@ -190,7 +190,7 @@ def test_delegated_run_resolves_required_deadline_from_environment(
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
     _seed_delegated_config(tmp_path, monkeypatch)
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", "17.5")
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", "17.5")
     captured: dict[str, object] = {}
     monkeypatch.setattr(
         host_mod,

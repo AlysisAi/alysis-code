@@ -4,14 +4,15 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
-import sylliptor_agent_cli.agent.turn.core as turn_core
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent.empty_response_stall import (
+import alysis_code.agent.turn.core as turn_core
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent.empty_response_stall import (
     DEFAULT_HANDLING_BUDGET_SECONDS,
     DEFAULT_MAX_RECOVERY_CYCLES,
     DEFAULT_STALL_SECONDS,
@@ -22,13 +23,13 @@ from sylliptor_agent_cli.agent.empty_response_stall import (
     resolve_empty_response_stall_policy,
     response_is_contentless,
 )
-from sylliptor_agent_cli.agent.turn.core import _salvage_summary
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.openai_responses import OpenAIResponsesClient
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.agent.turn.core import _salvage_summary
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.session_store import read_session_events
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 _VERIFY_OK_COMMAND = "pytest tests/test_cli.py -q"
 
@@ -106,6 +107,14 @@ class _ScriptedClient:
         response = self._responses[self.calls]
         self.calls += 1
         return response
+
+
+class _FakeTerminalManager:
+    def list(self) -> tuple[SimpleNamespace, ...]:
+        return (SimpleNamespace(status="running"),)
+
+    def shutdown_all(self) -> None:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +195,7 @@ def _run_stalling_turn(
     prefix: list[LLMResponse],
     cfg: AppConfig | None = None,
     max_steps: int = 12,
+    terminal_manager: Any | None = None,
 ) -> tuple[int, list[dict[str, Any]], _StallingClient]:
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -200,6 +210,8 @@ def _run_stalling_turn(
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
     )
+    if terminal_manager is not None:
+        session.terminal_manager = terminal_manager
     client = _StallingClient(prefix)
     session.client = client  # type: ignore[assignment]
     try:
@@ -365,10 +377,10 @@ def test_policy_reads_configured_thresholds() -> None:
 
 
 def test_env_kill_switch_disables_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_EMPTY_RESPONSE_STALL", "off")
+    monkeypatch.setenv("ALYSIS_EMPTY_RESPONSE_STALL", "off")
     assert resolve_empty_response_stall_policy(AppConfig(model="test-model")).enabled is False
 
-    monkeypatch.setenv("SYLLIPTOR_EMPTY_RESPONSE_STALL", "on")
+    monkeypatch.setenv("ALYSIS_EMPTY_RESPONSE_STALL", "on")
     disabled_cfg = AppConfig(model="test-model", empty_response_stall_guard_enabled=False)
     assert resolve_empty_response_stall_policy(disabled_cfg).enabled is True
 
@@ -786,6 +798,7 @@ def test_stall_after_optional_check_preserves_the_gate_clear_answer(
             ),
             LLMResponse(content=final_text, tool_calls=[], raw={}),
         ],
+        terminal_manager=_FakeTerminalManager(),
     )
 
     assert exit_code == 0
@@ -885,7 +898,7 @@ def test_kill_switch_restores_the_legacy_terminate_on_empty_behaviour(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_EMPTY_RESPONSE_STALL", "off")
+    monkeypatch.setenv("ALYSIS_EMPTY_RESPONSE_STALL", "off")
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
     (repo / "data.txt").write_text("alpha\nbeta\n", encoding="utf-8")

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli_impl.chat_slash_completer import get_chat_specs
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run, load_plan
+from alysis_code import cli as cli_mod
+from alysis_code.cli_impl.chat_slash_completer import get_chat_specs
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run, load_plan
 
 
 def _session(root: Path) -> SimpleNamespace:
@@ -78,7 +78,7 @@ def test_assets_with_active_run_launches_modal(
     def fake_modal(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("sylliptor_agent_cli.cli_impl.assets_modal.run_assets_modal", fake_modal)
+    monkeypatch.setattr("alysis_code.cli_impl.assets_modal.run_assets_modal", fake_modal)
 
     result = cli_mod._handle_chat_command(
         input_text="/assets",
@@ -107,7 +107,7 @@ def test_assets_in_forge_planning_chat_launches_modal(
     def fake_modal(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("sylliptor_agent_cli.cli_impl.assets_modal.run_assets_modal", fake_modal)
+    monkeypatch.setattr("alysis_code.cli_impl.assets_modal.run_assets_modal", fake_modal)
 
     result = cli_mod._handle_forge_chat_command(
         input_text="/assets",

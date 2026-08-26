@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_ROOT = PROJECT_ROOT / "src" / "sylliptor_agent_cli"
+SOURCE_ROOT = PROJECT_ROOT / "src" / "alysis_code"
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
-LOCAL_TOP_LEVEL = "sylliptor_agent_cli"
+LOCAL_TOP_LEVEL = "alysis_code"
 DEPENDENCY_GROUPS = ("dependencies",)
 OPTIONAL_DEPENDENCY_GROUPS = ("server",)
 

@@ -9,7 +9,7 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
+from alysis_code import cli as cli_mod
 
 
 def _binding_key_values(binding: Any) -> tuple[str, ...]:
@@ -44,7 +44,7 @@ def test_chat_prompt_ctrl_alt_v_pastes_clipboard_image(tmp_path: Path, monkeypat
     monkeypatch.setattr(prompt_toolkit.application, "run_in_terminal", fake_run_in_terminal)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
     monkeypatch.setattr(cli_mod, "paste_clipboard_image", fake_paste_clipboard_image)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
 
     buffer = io.StringIO()
     session = cli_mod._maybe_make_chat_prompt_session(
@@ -98,7 +98,7 @@ def test_chat_prompt_session_skips_history_when_data_dir_is_read_only(
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _PromptSessionStub)
     monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
     monkeypatch.setattr(Path, "mkdir", fail_data_dir_mkdir)
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", os.fspath(data_dir))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(data_dir))
 
     session = cli_mod._maybe_make_chat_prompt_session(
         console=Console(file=io.StringIO(), force_terminal=False),

@@ -5,12 +5,12 @@ from typing import Any
 
 import pytest
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
+import alysis_code.agent_loop as agent_loop_mod
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 
 class _ScriptedClient:
@@ -173,7 +173,6 @@ def test_one_shot_python_repo_keeps_existing_repo_native_pytest(
                 raw={},
             ),
             LLMResponse(content="Updated src/app.py and pytest passes.", tool_calls=[], raw={}),
-            LLMResponse(content="Updated src/app.py and pytest passes.", tool_calls=[], raw={}),
         ]
     )  # type: ignore[assignment]
 
@@ -184,6 +183,13 @@ def test_one_shot_python_repo_keeps_existing_repo_native_pytest(
 
     assert exit_code == 0
     assert calls == [["pytest -q"]]
+    assert session.client.calls == 3
+    assert not [
+        event
+        for event in _events(sessions_dir, session_id)
+        if event.get("type") == "completion_gate_nudge"
+        and (event.get("payload") or {}).get("stage") == "adversarial_finalize_review"
+    ]
 
 
 def test_exact_black_box_command_satisfies_one_shot_acceptance(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent_loop import (
+from alysis_code.agent_loop import (
     _FINAL_TOOL_ENABLED_STEP_SYSTEM_PROMPT,
     _LOW_STEP_BUDGET_SYSTEM_PROMPT_TEMPLATE,
     _PHASE_BUDGET_EXPLORATION_SYSTEM_PROMPT_TEMPLATE,
@@ -11,9 +11,9 @@ from sylliptor_agent_cli.agent_loop import (
     _request_messages_with_ephemeral_system_prompts,
     create_session,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
 
 SMOKE_MODEL = "gpt-4o-mini"
 

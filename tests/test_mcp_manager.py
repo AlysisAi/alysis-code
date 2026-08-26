@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import agent_loop
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.mcp.config import load_resolved_mcp_config, user_mcp_config_path
-from sylliptor_agent_cli.mcp.errors import McpConfigError
-from sylliptor_agent_cli.mcp.forge_scope import ForgeAllowedMcpTool, ForgeTaskMcpScope
-from sylliptor_agent_cli.mcp.manager import McpManager, create_forge_task_scoped_mcp_manager
-from sylliptor_agent_cli.mcp.untrusted_content import (
+from alysis_code import agent_loop
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.mcp.config import load_resolved_mcp_config, user_mcp_config_path
+from alysis_code.mcp.errors import McpConfigError
+from alysis_code.mcp.forge_scope import ForgeAllowedMcpTool, ForgeTaskMcpScope
+from alysis_code.mcp.manager import McpManager, create_forge_task_scoped_mcp_manager
+from alysis_code.mcp.untrusted_content import (
     MCP_UNTRUSTED_TEXT_CHAR_LIMIT,
     build_host_owned_mcp_tool_description,
     build_untrusted_mcp_text_block,
 )
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import read_session_events
 
 _FIXTURE_SERVER = (
     Path(__file__).resolve().parent / "fixtures" / "mcp_servers" / "minimal_stdio_server.py"
@@ -72,7 +72,7 @@ def _write_user_stdio_config(
     server_overrides: dict[str, object] | None = None,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     server_payload = {
         "transport": "stdio",
         "command": sys.executable,
@@ -82,7 +82,7 @@ def _write_user_stdio_config(
         fixture_path = tmp_path / "fixture-server.json"
         _write_json(fixture_path, fixture_payload)
         server_payload["env"] = {
-            "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+            "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
         }
     if server_overrides:
         server_payload.update(server_overrides)
@@ -96,7 +96,7 @@ def _write_multi_server_stdio_config(
     servers: dict[str, dict[str, object]],
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     config_servers: dict[str, dict[str, object]] = {}
     for server_id, spec in servers.items():
         fixture_payload = spec.get("fixture_payload")
@@ -109,7 +109,7 @@ def _write_multi_server_stdio_config(
             _write_json(fixture_path, fixture_payload)
             server_payload["args"] = [os.fspath(_FIXTURE_SERVER)]
             server_payload["env"] = {
-                "SYLLIPTOR_TEST_MCP_CONFIG": os.fspath(fixture_path),
+                "ALYSIS_TEST_MCP_CONFIG": os.fspath(fixture_path),
             }
         elif "args" in spec:
             server_payload["args"] = list(spec["args"])
@@ -180,7 +180,7 @@ def test_mcp_manager_filters_active_servers_by_runtime_kind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -1261,7 +1261,7 @@ def test_mcp_manager_marks_empty_prompt_snapshot_as_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     resolved = load_resolved_mcp_config(workspace_root=tmp_path)
     manager = McpManager(
         resolved_config=resolved,
@@ -1309,7 +1309,7 @@ def test_mcp_manager_prompt_fetch_uses_frozen_snapshot_and_blocks_unknown_prompt
                             "role": "user",
                             "content": {
                                 "type": "text",
-                                "text": "Review repo owner/sylliptor.",
+                                "text": "Review repo owner/alysis.",
                             },
                         }
                     ],
@@ -1324,7 +1324,7 @@ def test_mcp_manager_prompt_fetch_uses_frozen_snapshot_and_blocks_unknown_prompt
         prompt = manager.get_prompt(
             server_id="alpha",
             prompt_name="review_pr",
-            arguments={"repo": "owner/sylliptor"},
+            arguments={"repo": "owner/alysis"},
         )
         assert prompt["server_id"] == "alpha"
         assert prompt["name"] == "review_pr"
@@ -1332,12 +1332,12 @@ def test_mcp_manager_prompt_fetch_uses_frozen_snapshot_and_blocks_unknown_prompt
             source_type="prompt_get",
             server_id="alpha",
             source_name="review_pr",
-            text="Review repo owner/sylliptor.",
+            text="Review repo owner/alysis.",
         )
         assert prompt["text"] == expected_text
         assert prompt["messages"][0]["text"] == expected_text
         assert prompt["messages"][0]["content"][0]["text"] == expected_text
-        assert prompt["applied_arguments"] == {"repo": "owner/sylliptor"}
+        assert prompt["applied_arguments"] == {"repo": "owner/alysis"}
 
         with pytest.raises(RuntimeError) as exc_info:
             manager.get_prompt(server_id="alpha", prompt_name="missing_prompt")
@@ -1349,7 +1349,7 @@ def test_mcp_manager_prompt_fetch_uses_frozen_snapshot_and_blocks_unknown_prompt
         assert methods.count("prompts/get") == 1
 
         snapshot_text = json.dumps(manager.catalog_snapshot_metadata(), sort_keys=True)
-        assert "Review repo owner/sylliptor." not in snapshot_text
+        assert "Review repo owner/alysis." not in snapshot_text
     finally:
         manager.close()
 
@@ -1889,7 +1889,7 @@ def test_create_forge_task_scoped_mcp_manager_without_scope_ignores_malformed_co
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         user_mcp_config_path(),
         {
@@ -2354,7 +2354,7 @@ def test_mcp_manager_restart_rejects_catalog_change_notification_during_fence(
 def test_agent_session_close_closes_mcp_manager_before_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     order: list[str] = []
 
     class _DummyManager:
@@ -2411,7 +2411,7 @@ def test_agent_session_close_closes_mcp_manager_before_store(
 def test_create_session_no_mcp_config_keeps_builtin_tools_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
 
     session = create_session(
         cfg=_basic_cfg(),
@@ -2589,7 +2589,7 @@ def test_create_session_logs_mcp_catalog_snapshot_after_tool_build(
 def test_create_session_persists_runtime_kind_and_mcp_startup_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
     sessions_dir = tmp_path / "sessions"
     cfg = _basic_cfg()
     cfg.step_budget_policy = "fixed"

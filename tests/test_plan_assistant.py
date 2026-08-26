@@ -5,11 +5,11 @@ import json
 
 import httpx
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.llm.metadata import PROVIDER_METADATA_KEY
-from sylliptor_agent_cli.llm.types import LLMError, LLMResponse, ToolCall
-from sylliptor_agent_cli.plan_assistant import (
+from alysis_code.config import AppConfig
+from alysis_code.failure_category import FailureCategory
+from alysis_code.llm.metadata import PROVIDER_METADATA_KEY
+from alysis_code.llm.types import LLMError, LLMResponse, ToolCall
+from alysis_code.plan_assistant import (
     PLANNER_SYSTEM_PROMPT,
     _assistant_tool_call_message,
     _extract_balanced_json_object,
@@ -75,9 +75,9 @@ def _planner_no_update_payload(message: str = "Planner ran.") -> dict:
 def test_planner_usage_payload_backfills_cache_creation_from_api_usage() -> None:
     from types import SimpleNamespace
 
-    from sylliptor_agent_cli.llm.types import BillingMode, LLMUsage, UsageContract
-    from sylliptor_agent_cli.model_registry import ModelMeta
-    from sylliptor_agent_cli.plan_assistant import _planner_usage_event_payload
+    from alysis_code.llm.types import BillingMode, LLMUsage, UsageContract
+    from alysis_code.model_registry import ModelMeta
+    from alysis_code.plan_assistant import _planner_usage_event_payload
 
     class _Reg:
         def get(self, model_name: str) -> ModelMeta:
@@ -180,8 +180,8 @@ def _mock_transport_for_payloads(*payloads: dict | str | tuple[int, dict | str])
 
 
 def test_run_planner_turn_valid_json_parses_and_applies(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
-    monkeypatch.delenv("SYLLIPTOR_MODEL_PLANNER", raising=False)
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
+    monkeypatch.delenv("ALYSIS_MODEL_PLANNER", raising=False)
 
     reply_obj = {
         "assistant_message": "Captured updates.",
@@ -196,8 +196,8 @@ def test_run_planner_turn_valid_json_parses_and_applies(monkeypatch) -> None:
                     "description": "Wire planner into plan command",
                     "acceptance_criteria": ["Assistant can be toggled"],
                     "dependencies": ["T01", "T99"],
-                    "estimated_files": ["src/sylliptor_agent_cli/cli.py"],
-                    "write_scope": [".sylliptor/runs"],
+                    "estimated_files": ["src/alysis_code/cli.py"],
+                    "write_scope": [".alysis/runs"],
                     "parallel_group": "planning",
                 }
             ],
@@ -251,7 +251,7 @@ def test_run_planner_turn_valid_json_parses_and_applies(monkeypatch) -> None:
 
 
 def test_run_planner_turn_uses_resolved_llm_timeout(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     captured: dict[str, float] = {}
 
     class FakeClient:
@@ -266,7 +266,7 @@ def test_run_planner_turn_uses_resolved_llm_timeout(monkeypatch) -> None:
             }
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model", llm_timeout_s=17.5),
@@ -281,7 +281,7 @@ def test_run_planner_turn_uses_resolved_llm_timeout(monkeypatch) -> None:
 
 
 def test_run_planner_turn_retries_transient_request_failure_once(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
 
     class FakeClient:
@@ -299,7 +299,7 @@ def test_run_planner_turn_retries_transient_request_failure_once(monkeypatch) ->
             }
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -316,7 +316,7 @@ def test_run_planner_turn_retries_transient_request_failure_once(monkeypatch) ->
 
 
 def test_run_planner_turn_preserves_retry_count_on_empty_response_after_retry(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
 
     class FakeClient:
@@ -329,7 +329,7 @@ def test_run_planner_turn_preserves_retry_count_on_empty_response_after_retry(mo
                 raise LLMError("LLM request failed: ReadTimeout")
             return type("Resp", (), {"content": ""})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -346,7 +346,7 @@ def test_run_planner_turn_preserves_retry_count_on_empty_response_after_retry(mo
 
 
 def test_run_planner_turn_retry_exhaustion_returns_safe_error(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
 
     class FakeClient:
@@ -357,7 +357,7 @@ def test_run_planner_turn_retry_exhaustion_returns_safe_error(monkeypatch) -> No
             calls["count"] += 1
             raise LLMError("LLM request failed: ReadTimeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -377,7 +377,7 @@ def test_run_planner_turn_retry_exhaustion_returns_safe_error(monkeypatch) -> No
 
 
 def test_run_planner_turn_provider_429_exhaustion_is_provider_throttled(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
 
     class FakeClient:
@@ -388,7 +388,7 @@ def test_run_planner_turn_provider_429_exhaustion_is_provider_throttled(monkeypa
             calls["count"] += 1
             raise LLMError("LLM error 429: rate limit quota exceeded")
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -405,7 +405,7 @@ def test_run_planner_turn_provider_429_exhaustion_is_provider_throttled(monkeypa
 
 
 def test_run_planner_turn_does_not_retry_nontransient_request_error(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
 
     class FakeClient:
@@ -416,7 +416,7 @@ def test_run_planner_turn_does_not_retry_nontransient_request_error(monkeypatch)
             calls["count"] += 1
             raise LLMError("LLM error 401: invalid_api_key")
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -433,7 +433,7 @@ def test_run_planner_turn_does_not_retry_nontransient_request_error(monkeypatch)
 
 
 def test_run_planner_turn_warns_for_fallback_model_metadata(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     warnings_seen: list[str] = []
 
     def _warn(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -453,7 +453,7 @@ def test_run_planner_turn_warns_for_fallback_model_metadata(monkeypatch) -> None
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr("warnings.warn", _warn)
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="unknown-model-xyz"),
@@ -469,13 +469,13 @@ def test_run_planner_turn_warns_for_fallback_model_metadata(monkeypatch) -> None
 
 
 def test_run_planner_turn_strict_model_metadata_policy_fails_before_client(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     class FakeClient:
         def __init__(self, **_kwargs) -> None:  # type: ignore[no-untyped-def]
             raise AssertionError("OpenAICompatClient should not be constructed in strict mode")
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(
@@ -494,7 +494,7 @@ def test_run_planner_turn_strict_model_metadata_policy_fails_before_client(monke
 
 
 def test_run_planner_turn_invalid_json_does_not_modify_plan(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     def handler(_request: httpx.Request) -> httpx.Response:
         data = {"choices": [{"message": {"content": "not-json"}}]}
@@ -520,7 +520,7 @@ def test_run_planner_turn_invalid_json_does_not_modify_plan(monkeypatch) -> None
 
 
 def test_run_planner_turn_normalizes_content_array_response(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Captured planner response.",
@@ -562,7 +562,7 @@ def test_run_planner_turn_normalizes_content_array_response(monkeypatch) -> None
 
 
 def test_run_planner_turn_retries_invalid_json_once_with_higher_temperature(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     temperatures: list[float] = []
     role_sequences: list[list[str]] = []
 
@@ -604,7 +604,7 @@ def test_run_planner_turn_retries_invalid_json_once_with_higher_temperature(monk
 def test_run_planner_turn_retry_for_nonrepairable_schema_mismatch_keeps_two_message_shape(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     role_sequences: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -683,7 +683,7 @@ def test_planner_user_prompt_includes_relevant_knowledge_section() -> None:
         workspace_context=None,
         relevant_knowledge_section=(
             "## Relevant Knowledge\n\n"
-            "- Manifest: `.sylliptor/runs/x/plan/selected_knowledge/planner/manifest.json`\n"
+            "- Manifest: `.alysis/runs/x/plan/selected_knowledge/planner/manifest.json`\n"
             "- `decision` `K01`: Keep bounded parser retry backoff"
         ),
     )
@@ -1481,7 +1481,7 @@ def test_apply_plan_update_drops_protected_file_scopes() -> None:
                 "description": "Do not actually do this.",
                 "acceptance_criteria": [],
                 "dependencies": [],
-                "estimated_files": [".sylliptor/runs/run_1/plan/plan.json", "src/app.py"],
+                "estimated_files": [".alysis/runs/run_1/plan/plan.json", "src/app.py"],
                 "write_scope": [".git/index", "src/app.py"],
             }
         ]
@@ -3502,7 +3502,7 @@ def test_planner_user_prompt_requires_file_scope_for_mutating_tasks() -> None:
 
 
 def test_planner_metadata_missing_stays_hard_fail(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     transport, requests = _mock_transport_for_payloads()
 
     result = run_planner_turn(
@@ -3535,7 +3535,7 @@ def test_plan_is_thin_is_false_when_meaningful_asset_is_attached() -> None:
     plan = _base_plan()
     plan["requirements"] = []
     plan["tasks"] = []
-    plan["assets"] = [{"stored_path": ".sylliptor/assets/spec.pdf"}]
+    plan["assets"] = [{"stored_path": ".alysis/assets/spec.pdf"}]
 
     assert _plan_is_thin(plan) is False
 
@@ -3624,7 +3624,7 @@ def test_planner_user_prompt_includes_execution_safe_task_guidance() -> None:
 def test_run_planner_turn_falls_back_to_repo_grounded_task_for_locator_questions(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Which file contains the customer helper?",
@@ -3676,7 +3676,7 @@ def test_run_planner_turn_falls_back_to_repo_grounded_task_for_locator_questions
 def test_run_planner_turn_falls_back_for_thin_repo_locator_question(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Which file contains the parser?",
@@ -3721,7 +3721,7 @@ def test_run_planner_turn_falls_back_for_thin_repo_locator_question(
 def test_run_planner_turn_falls_back_to_read_only_locator_when_update_is_unspecified(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "What specific change should the calculator make?",
@@ -3771,7 +3771,7 @@ def test_run_planner_turn_conversational_turn_does_not_synthesize_locator_task(
 ) -> None:
     # A conversational message must not be turned into a repository task just
     # because the planner's clarifying question mentions repo/codebase terms.
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Sure - what would you like to change in your repository?",
@@ -3812,7 +3812,7 @@ def test_run_planner_turn_conversational_turn_does_not_synthesize_locator_task(
 def test_run_planner_turn_greenfield_locator_question_becomes_scaffold_task(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Which existing implementation file should I edit?",
@@ -3855,7 +3855,7 @@ def test_run_planner_turn_greenfield_locator_question_becomes_scaffold_task(
 def test_run_planner_turn_greenfield_no_update_proactively_scaffolds(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "I can plan that.",
@@ -3894,7 +3894,7 @@ def test_run_planner_turn_greenfield_no_update_proactively_scaffolds(
 def test_run_planner_turn_keeps_mutating_locator_request_executable(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "I need more detail.",
@@ -3942,7 +3942,7 @@ def test_run_planner_turn_keeps_mutating_locator_request_executable(
 def test_run_planner_turn_preserves_greenfield_clarifying_questions(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "I need a few details before planning the website.",
@@ -3985,7 +3985,7 @@ def test_run_planner_turn_preserves_greenfield_clarifying_questions(
 
 
 def test_run_planner_turn_repairs_common_schema_mismatches(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     broken_but_repairable = """
     Here is the planner result:
@@ -4003,7 +4003,7 @@ def test_run_planner_turn_repairs_common_schema_mismatches(monkeypatch) -> None:
           "title": "Harden planner flow",
           "description": "Improve parser and fallback behavior",
           "acceptance_criteria": "planner handles fenced JSON",
-          "estimated_files": "src/sylliptor_agent_cli/plan_assistant.py",
+          "estimated_files": "src/alysis_code/plan_assistant.py",
           "dependencies": "T01"
         }
       }
@@ -4041,13 +4041,13 @@ def test_run_planner_turn_repairs_common_schema_mismatches(monkeypatch) -> None:
     assert "status" not in task
     assert task["dependencies"] == ["T01"]
     assert task["acceptance_criteria"] == ["planner handles fenced JSON"]
-    assert task["estimated_files"] == ["src/sylliptor_agent_cli/plan_assistant.py"]
+    assert task["estimated_files"] == ["src/alysis_code/plan_assistant.py"]
 
 
 def test_run_planner_turn_vague_greenfield_request_uses_llm_question_repair(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated with initial website tasks.",
@@ -4110,7 +4110,7 @@ def test_run_planner_turn_vague_greenfield_request_uses_llm_question_repair(
 def test_run_planner_turn_mixed_script_question_repair_preserves_llm_reply(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated with initial website tasks.",
@@ -4165,7 +4165,7 @@ def test_run_planner_turn_mixed_script_question_repair_preserves_llm_reply(
 def test_run_planner_turn_question_repair_preserves_non_latin_reply(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated with initial website tasks.",
@@ -4218,7 +4218,7 @@ def test_run_planner_turn_question_repair_preserves_non_latin_reply(
 
 
 def test_run_planner_turn_detailed_greenfield_request_keeps_plan_update(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated with a minimal static site.",
@@ -4272,7 +4272,7 @@ def test_run_planner_turn_detailed_greenfield_request_keeps_plan_update(monkeypa
 def test_run_planner_turn_greenfield_request_with_attached_spec_keeps_plan_update(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated from the attached spec.",
@@ -4299,7 +4299,7 @@ def test_run_planner_turn_greenfield_request_with_attached_spec_keeps_plan_updat
     plan = _base_plan()
     plan["requirements"] = []
     plan["tasks"] = []
-    plan["assets"] = [{"stored_path": ".sylliptor/assets/spec.pdf"}]
+    plan["assets"] = [{"stored_path": ".alysis/assets/spec.pdf"}]
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -4319,7 +4319,7 @@ def test_run_planner_turn_greenfield_request_with_attached_spec_keeps_plan_updat
 def test_run_planner_turn_plan_update_uses_stock_ready_message_only_for_low_info_reply(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan updated.",
@@ -4371,7 +4371,7 @@ def test_run_planner_turn_plan_update_uses_stock_ready_message_only_for_low_info
 
 
 def test_run_planner_turn_keeps_custom_follow_up_questions_with_plan_update(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
 
     planner_payload = {
         "assistant_message": "Plan drafted. Need one last detail.",
@@ -4426,7 +4426,7 @@ def test_run_planner_turn_keeps_custom_follow_up_questions_with_plan_update(monk
 def test_run_planner_turn_retries_with_default_temperature_when_model_rejects_custom(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     temperatures: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4483,7 +4483,7 @@ def test_run_planner_turn_retries_with_default_temperature_when_model_rejects_cu
 
 
 def test_run_planner_turn_streaming_retry_allowed_before_any_delta(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
     seen_deltas: list[str] = []
 
@@ -4506,7 +4506,7 @@ def test_run_planner_turn_streaming_retry_allowed_before_any_delta(monkeypatch) 
             }
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),
@@ -4525,7 +4525,7 @@ def test_run_planner_turn_streaming_retry_allowed_before_any_delta(monkeypatch) 
 
 
 def test_run_planner_turn_streaming_does_not_retry_after_visible_delta(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "k")
+    monkeypatch.setenv("ALYSIS_API_KEY", "k")
     calls = {"count": 0}
     seen_deltas: list[str] = []
 
@@ -4540,7 +4540,7 @@ def test_run_planner_turn_streaming_does_not_retry_after_visible_delta(monkeypat
                 on_text_delta("partial")
             raise LLMError("LLM request failed: ReadTimeout")
 
-    monkeypatch.setattr("sylliptor_agent_cli.plan_assistant.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.plan_assistant.OpenAICompatClient", FakeClient)
 
     result = run_planner_turn(
         cfg=AppConfig(base_url="https://example.com/v1", model="planner-model"),

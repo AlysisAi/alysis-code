@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.hooks.dispatcher as hooks_dispatcher_mod
-from sylliptor_agent_cli.agent_loop import AgentSession, ToolDef, create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.hooks import (
+import alysis_code.hooks.dispatcher as hooks_dispatcher_mod
+from alysis_code.agent_loop import AgentSession, ToolDef, create_session
+from alysis_code.config import AppConfig
+from alysis_code.hooks import (
     HOOK_AUDIT_ARTIFACT_PARTS,
     HookDispatcher,
     load_resolved_hooks_config,
@@ -24,11 +24,11 @@ from sylliptor_agent_cli.hooks import (
     read_hook_audit_events,
     trust_project_hooks_config,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.model_registry import ModelMeta
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.usage_tracker import UsageSummary
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.model_registry import ModelMeta
+from alysis_code.session_store import SessionStore, read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.usage_tracker import UsageSummary
 
 
 class _RecordingSurface:
@@ -190,7 +190,7 @@ def test_create_session_applies_session_start_hook_context(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -254,7 +254,7 @@ def test_create_session_passes_resume_session_source_to_session_start_hook(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -309,7 +309,7 @@ def test_create_session_fires_session_end_hook_on_close(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -358,7 +358,7 @@ def test_close_fires_session_end_hook(
     cfg_dir = tmp_path / "cfg"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(workspace),
         {
@@ -405,7 +405,7 @@ def test_run_turn_prompt_hook_rewrites_prompt_and_fires_stop(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -475,7 +475,7 @@ def test_run_turn_pre_and_post_tool_hooks_modify_tool_flow(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -578,7 +578,7 @@ def test_run_turn_pre_tool_hook_can_block_execution(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -652,7 +652,7 @@ def test_pre_tool_hook_runtime_kinds_filter_skips_mismatched_hook(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -721,7 +721,7 @@ def test_matching_hooks_execute_in_priority_order(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -795,7 +795,7 @@ def test_failure_policy_block_turns_hook_runtime_failure_into_block(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -874,7 +874,7 @@ def test_run_turn_writes_redacted_hook_audit_log(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -965,7 +965,7 @@ def test_pre_tool_hook_decision_allow_short_circuits_remaining(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1045,7 +1045,7 @@ def test_user_prompt_submit_hook_continue_false_blocks_with_stop_reason(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "halt-hook"}]}]}},
@@ -1086,7 +1086,7 @@ def test_pre_tool_hook_system_message_routes_to_surface(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1151,7 +1151,7 @@ def test_pre_tool_hook_permission_decision_deny_blocks_with_reason(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1232,7 +1232,7 @@ def test_pre_tool_block_fires_notification_event(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1310,7 +1310,7 @@ def test_subagent_tool_result_fires_subagent_stop_event(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1386,7 +1386,7 @@ def _env_probe_command() -> str:
         "'has_path': 'PATH' in os.environ, "
         "'has_home': 'HOME' in os.environ, "
         "'has_random': 'RANDOM_VAR' in os.environ, "
-        "'has_sylliptor': 'SYLLIPTOR_SESSION_ID' in os.environ}))\""
+        "'has_alysis': 'ALYSIS_SESSION_ID' in os.environ}))\""
     )
 
 
@@ -1395,7 +1395,7 @@ def test_env_sandbox_safe_mode_strips_secrets(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-xxx")
     _write_json(
         project_hooks_config_path(tmp_path),
@@ -1432,7 +1432,7 @@ def test_env_sandbox_safe_mode_strips_secrets(
     assert captured
     assert captured[0]["has_openai"] is False
     assert captured[0]["has_path"] is True
-    assert captured[0]["has_sylliptor"] is True
+    assert captured[0]["has_alysis"] is True
 
 
 def test_env_sandbox_env_allow_restores_key(
@@ -1440,7 +1440,7 @@ def test_env_sandbox_env_allow_restores_key(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-xxx")
     _write_json(
         project_hooks_config_path(tmp_path),
@@ -1491,7 +1491,7 @@ def test_env_sandbox_explicit_mode_keeps_only_baseline(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-xxx")
     monkeypatch.setenv("RANDOM_VAR", "noise")
     _write_json(
@@ -1538,7 +1538,7 @@ def test_env_sandbox_explicit_mode_keeps_only_baseline(
     assert captured[0]["has_openai"] is False
     assert captured[0]["has_random"] is False
     assert captured[0]["has_path"] is True
-    assert captured[0]["has_sylliptor"] is True
+    assert captured[0]["has_alysis"] is True
 
 
 def test_env_sandbox_env_dict_overrides(
@@ -1546,7 +1546,7 @@ def test_env_sandbox_env_dict_overrides(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1596,7 +1596,7 @@ def test_env_sandbox_all_mode_unchanged(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret-xxx")
     _write_json(
         project_hooks_config_path(tmp_path),
@@ -1670,7 +1670,7 @@ def test_payload_truncation_oversized_content(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1725,7 +1725,7 @@ def test_payload_truncation_respects_opt_out(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1781,7 +1781,7 @@ def test_payload_truncation_marker_shape(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1837,7 +1837,7 @@ def test_payload_truncation_audit_flag(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -1908,7 +1908,7 @@ def test_parallel_execution_non_blocking_speedup(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -2000,7 +2000,7 @@ def test_parallel_execution_disabled_is_serial(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -2075,7 +2075,7 @@ def test_parallel_execution_preserves_merge_order(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     # Hook priorities 30/20/10 force deterministic config order: msg-0, msg-1, msg-2.
     _write_json(
         project_hooks_config_path(tmp_path),
@@ -2178,7 +2178,7 @@ def test_blocking_events_remain_serial(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     counter_path = tmp_path / "hook_counter.txt"
     # hook2 appends 'x' to counter_path whenever it runs. If PreToolUse went parallel,
     # hook2 would execute alongside hook1 even after hook1 denies, and the file would
@@ -2255,7 +2255,7 @@ def test_ask_decision_pretooluse_propagates_fields(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {
@@ -2309,7 +2309,7 @@ def test_ask_decision_short_circuits_remaining_pretooluse_hooks(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     sentinel_path = tmp_path / "sentinel.txt"
     # hook2 writes "RAN" to the sentinel whenever it executes. If the ask
     # short-circuit works, hook2 never runs and the sentinel stays absent.
@@ -2390,7 +2390,7 @@ def test_ask_decision_ignored_on_non_blocking_events(
     tmp_path: Path,
 ) -> None:
     cfg_dir = tmp_path / "cfg"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(cfg_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(cfg_dir))
     _write_json(
         project_hooks_config_path(tmp_path),
         {

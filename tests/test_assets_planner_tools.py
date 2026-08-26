@@ -5,13 +5,13 @@ from typing import Any
 
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface
-from sylliptor_agent_cli.assets.models import AssetRecord
-from sylliptor_agent_cli.assets.planner_tools import PlannerAssetToolRunner
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.model_registry import ModelRegistry
+from alysis_code.assets import AssetSurface
+from alysis_code.assets.models import AssetRecord
+from alysis_code.assets.planner_tools import PlannerAssetToolRunner
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.model_registry import ModelRegistry
 
 
 class _FakeClient:
@@ -80,7 +80,7 @@ def test_asset_read_focus_uses_llm_and_cache(tmp_path: Path, monkeypatch) -> Non
     fake_client = _FakeClient()
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.planner_tools.make_llm_client",
+        "alysis_code.assets.planner_tools.make_llm_client",
         lambda **_kwargs: fake_client,
     )
     runner = _runner(surface)

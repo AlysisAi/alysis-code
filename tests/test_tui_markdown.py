@@ -7,13 +7,13 @@ left untouched so a half-open code fence never flickers mid-stream.
 
 from __future__ import annotations
 
-from sylliptor_agent_cli.cli_impl.tui.app import _assistant_rows
-from sylliptor_agent_cli.cli_impl.tui.markdown import (
+from alysis_code.cli_impl.tui.app import _assistant_rows
+from alysis_code.cli_impl.tui.markdown import (
     _render_ansi,
     looks_like_markdown,
     render_markdown_rows,
 )
-from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
+from alysis_code.cli_impl.tui.transcript import TuiTranscript
 
 _CODE_REPLY = "Here you go:\n\n```python\ndef f(x):\n    return x + 1\n```"
 _LIST_REPLY = "Steps:\n\n- first\n- second\n\n## Heading\n\nmore text"
@@ -137,7 +137,7 @@ def test_doc_panel_copies_rows_so_it_cannot_corrupt_the_cache():
     # render_markdown_rows is memoized (shared objects), so a caller that aliases
     # its rows must copy them. The doc panel does; a later transcript render of the
     # same (text, width) must be unaffected even if the panel's rows are mutated.
-    from sylliptor_agent_cli.cli_impl.tui.app import _render_doc_panel_rows
+    from alysis_code.cli_impl.tui.app import _render_doc_panel_rows
 
     panel_rows = _render_doc_panel_rows(_LIST_REPLY, 58)
     for row in panel_rows:  # hostile in-place mutation of the panel's own rows
@@ -229,8 +229,8 @@ def test_headless_markdown_reply_renders_without_crashing():
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from sylliptor_agent_cli.cli_impl.tui import run_tui
-    from sylliptor_agent_cli.cli_impl.tui.state import TuiState
+    from alysis_code.cli_impl.tui import run_tui
+    from alysis_code.cli_impl.tui.state import TuiState
 
     state = TuiState(model_name="deepseek-chat", username="t")
     # No command_runner: the first line runs a turn, "/exit" is an exit word that

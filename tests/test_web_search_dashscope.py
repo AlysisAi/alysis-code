@@ -5,8 +5,8 @@ import json
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.tools.web_search_dashscope import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.tools.web_search_dashscope import (
     DashScopeChatSearchError,
     _sources_from_urls,
     dashscope_chat_search,

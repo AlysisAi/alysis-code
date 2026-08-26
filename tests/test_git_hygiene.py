@@ -4,34 +4,34 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.tools.fs import fs_list
+from alysis_code.tools.fs import fs_list
 
 
-def test_gitignore_includes_sylliptor_artifacts() -> None:
+def test_gitignore_includes_alysis_artifacts() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
     lines = {line.strip() for line in gitignore.splitlines()}
-    assert ".sylliptor/" in lines
-    assert ".sylliptor_images/" in lines
-    assert "sylliptor-feedback/" in lines
+    assert ".alysis/" in lines
+    assert ".alysis_images/" in lines
+    assert "alysis-feedback/" in lines
 
 
-def test_fs_list_ignores_sylliptor_dirs_by_default(tmp_path: Path) -> None:
-    (tmp_path / ".sylliptor").mkdir()
-    (tmp_path / ".sylliptor_images").mkdir()
-    (tmp_path / "sylliptor-feedback").mkdir()
-    (tmp_path / ".sylliptor" / "plan.json").write_text("{}", encoding="utf-8")
-    (tmp_path / ".sylliptor_images" / "img.png").write_bytes(b"\x89PNG")
-    (tmp_path / "sylliptor-feedback" / "bundle.zip").write_bytes(b"zip")
+def test_fs_list_ignores_alysis_dirs_by_default(tmp_path: Path) -> None:
+    (tmp_path / ".alysis").mkdir()
+    (tmp_path / ".alysis_images").mkdir()
+    (tmp_path / "alysis-feedback").mkdir()
+    (tmp_path / ".alysis" / "plan.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".alysis_images" / "img.png").write_bytes(b"\x89PNG")
+    (tmp_path / "alysis-feedback" / "bundle.zip").write_bytes(b"zip")
     (tmp_path / "visible.txt").write_text("ok\n", encoding="utf-8")
 
     result = fs_list(root=tmp_path)
     paths = {entry["path"] for entry in result["entries"]}
 
     assert "visible.txt" in paths
-    assert ".sylliptor/plan.json" not in paths
-    assert ".sylliptor_images/img.png" not in paths
-    assert "sylliptor-feedback/bundle.zip" not in paths
+    assert ".alysis/plan.json" not in paths
+    assert ".alysis_images/img.png" not in paths
+    assert "alysis-feedback/bundle.zip" not in paths
     assert result["truncated"] is False
 
 

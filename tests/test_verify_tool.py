@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-import sylliptor_agent_cli.agent_loop as agent_loop_mod
-import sylliptor_agent_cli.verify_gate as verify_gate_mod
-from sylliptor_agent_cli.agent_loop import AgentRuntimeError, build_tools, create_session
-from sylliptor_agent_cli.config import AppConfig, clone_cfg
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import SessionStore, read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.verify_gate import ResolvedVerifyCommands, VerifyRunResult
+import alysis_code.agent_loop as agent_loop_mod
+import alysis_code.verify_gate as verify_gate_mod
+from alysis_code.agent_loop import AgentRuntimeError, build_tools, create_session
+from alysis_code.config import AppConfig, clone_cfg
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import SessionStore, read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.verify_gate import ResolvedVerifyCommands, VerifyRunResult
 
 
 def _store(root: Path, *, session_id: str = "verify-test") -> SessionStore:
@@ -1041,6 +1041,48 @@ def test_interactive_pathless_js_repo_with_repo_native_tests_keeps_authoritative
 
     assert [call for call in calls if call == "npm test"] == ["npm test"]
     assert result["commands"] == ["npm test"]
+    assert result["all_passed"] is True
+
+
+def test_interactive_unittest_repo_authorizes_declared_native_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(str(cmd))
+        return _cp(returncode=0, stderr="Ran 1 test in 0.001s\n\nOK\n")
+
+    _patch_host_execution(monkeypatch, fake_run)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_repo_files(
+        repo,
+        {
+            "pyproject.toml": "[project]\nname = 'demo'\nversion = '0.1.0'\n",
+            "tests/test_app.py": (
+                "import unittest\n\n"
+                "class AppTest(unittest.TestCase):\n"
+                "    def test_ok(self) -> None:\n"
+                "        self.assertTrue(True)\n"
+            ),
+        },
+    )
+    session = _create_interactive_session(
+        repo,
+        sessions_dir=tmp_path / "sessions",
+        session_id="interactive-unittest-repo-native-verify",
+    )
+    try:
+        assert session.effective_verification_commands == ["python -m unittest discover"]
+        result = session.tools["verify_run"].run({"commands": ["python -m unittest discover"]})
+    finally:
+        session.close()
+
+    assert [call for call in calls if call == "python -m unittest discover"] == [
+        "python -m unittest discover"
+    ]
     assert result["all_passed"] is True
 
 
@@ -2095,7 +2137,7 @@ def test_host_runner_with_closed_stdin_fails_a_prompting_command(tmp_path: Path)
     Regression: `npm run lint` opened an interactive ESLint prompt during
     verification, inherited the terminal's stdin, and sat there for 13m41s.
     """
-    from sylliptor_agent_cli.sandbox_runner import HostShellRunner
+    from alysis_code.sandbox_runner import HostShellRunner
 
     result = HostShellRunner(close_stdin=True).run(
         root=tmp_path,
@@ -2111,7 +2153,7 @@ def test_verification_builds_its_runner_with_stdin_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli.sandbox_runner import HostShellRunner
+    from alysis_code.sandbox_runner import HostShellRunner
 
     captured: dict[str, object] = {}
 
@@ -2119,7 +2161,7 @@ def test_verification_builds_its_runner_with_stdin_closed(
         captured.update(kwargs)
         return HostShellRunner(**kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setenv("SYLLIPTOR_VERIFY_SANDBOX_MODE", "off")
+    monkeypatch.setenv("ALYSIS_VERIFY_SANDBOX_MODE", "off")
     monkeypatch.setattr(verify_gate_mod, "HostShellRunner", _recording_host_runner)
 
     verify_gate_mod.run_task_verification(
@@ -2135,7 +2177,7 @@ def test_verification_builds_its_runner_with_stdin_closed(
 
 def test_interactive_shell_execution_keeps_inherited_stdin() -> None:
     """Normal shell work must be unaffected: only verification closes stdin."""
-    from sylliptor_agent_cli.sandbox_runner import HostShellRunner
+    from alysis_code.sandbox_runner import HostShellRunner
 
     assert HostShellRunner().close_stdin is False
 
@@ -2151,7 +2193,7 @@ def test_verify_run_reports_workspace_services_without_stopping_them(
     code failure. The host cannot tell a real conflict from a deliberate setup,
     so it reports and lets the agent decide through the normal approval path.
     """
-    from sylliptor_agent_cli.terminal_manager import ProcessSummary
+    from alysis_code.terminal_manager import ProcessSummary
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         _ = cmd

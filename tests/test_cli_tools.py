@@ -6,10 +6,10 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.tools.availability import (
+from alysis_code import cli as cli_mod
+from alysis_code.cli import app as alysis_app
+from alysis_code.config import AppConfig
+from alysis_code.tools.availability import (
     _reset_tool_availability_for_tests,
     mark_unavailable,
     register_tool_availability,
@@ -18,7 +18,7 @@ from sylliptor_agent_cli.tools.availability import (
 
 @pytest.fixture(autouse=True)
 def _clear_generic_web_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
 
 
 def _row_map(cfg: AppConfig) -> dict[str, cli_mod._ToolAvailabilityRow]:
@@ -28,10 +28,10 @@ def _row_map(cfg: AppConfig) -> dict[str, cli_mod._ToolAvailabilityRow]:
 def test_tools_command_lists_core_built_in_tools(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "load_config", lambda: AppConfig())
 
-    result = CliRunner().invoke(sylliptor_app, ["tools"])
+    result = CliRunner().invoke(alysis_app, ["tools"])
 
     assert result.exit_code == 0
-    assert "sylliptor tools" in result.output
+    assert "alysis tools" in result.output
     assert "web_fetch" in result.output
     assert "symbol_search" in result.output
     assert "fs_mkdir" in result.output
@@ -40,8 +40,8 @@ def test_tools_command_lists_core_built_in_tools(monkeypatch) -> None:
 
 
 def test_tool_rows_show_web_search_disabled_when_config_off(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     rows = _row_map(AppConfig(web_search_mode="off"))
 
@@ -69,12 +69,12 @@ def test_tool_rows_show_web_search_auto_unavailable_when_runtime_is_not_ready(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     rows = _row_map(
         AppConfig(
             model="gpt-5-mini",
@@ -93,12 +93,12 @@ def test_tool_rows_show_web_search_auto_unavailable_when_runtime_is_not_ready(
 
 
 def test_doctor_table_surfaces_web_search_setup_hint(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
 
     table = cli_mod._doctor_table(
         AppConfig(
@@ -121,9 +121,9 @@ def test_doctor_table_surfaces_web_search_setup_hint(tmp_path, monkeypatch) -> N
 def test_tool_rows_show_web_search_available_when_auto_mode_is_ready(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "main-key")
+    monkeypatch.setenv("ALYSIS_API_KEY", "main-key")
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     rows = _row_map(
         AppConfig(
             model="gpt-5-mini",
@@ -140,7 +140,7 @@ def test_tool_rows_show_web_search_available_when_auto_mode_is_ready(
 
 
 def test_tool_rows_show_ready_backend_disabled_by_search_policy(monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "main-key")
+    monkeypatch.setenv("ALYSIS_API_KEY", "main-key")
     rows = _row_map(
         AppConfig(
             model="gpt-5-mini",
@@ -159,9 +159,9 @@ def test_tool_rows_show_ready_backend_disabled_by_search_policy(monkeypatch) -> 
 def test_tool_rows_show_web_search_available_via_dashscope_chat(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "main-key")
+    monkeypatch.setenv("ALYSIS_API_KEY", "main-key")
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     rows = _row_map(
         AppConfig(
             model="qwen3.5-plus",
@@ -180,9 +180,9 @@ def test_tool_rows_show_web_search_available_via_dashscope_chat(
 def test_tool_rows_show_web_search_available_via_native_chinese_provider_adapter(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "main-key")
+    monkeypatch.setenv("ALYSIS_API_KEY", "main-key")
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     rows = _row_map(
         AppConfig(
             model="kimi-k2.6",
@@ -202,10 +202,10 @@ def test_tool_rows_show_web_search_available_via_tavily_fallback(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
     rows = _row_map(
         AppConfig(
@@ -226,12 +226,12 @@ def test_tool_rows_treat_legacy_on_mode_as_auto_unavailable(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
-    monkeypatch.delenv("SYLLIPTOR_API_KEY", raising=False)
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.delenv("ALYSIS_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_PROVIDER", raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     rows = _row_map(
         AppConfig(
             base_url="",
@@ -267,19 +267,19 @@ def test_tools_command_output_is_concise_and_user_readable(monkeypatch) -> None:
             web_search_mode="auto",
         ),
     )
-    monkeypatch.setenv("SYLLIPTOR_API_KEY", "main-key")
+    monkeypatch.setenv("ALYSIS_API_KEY", "main-key")
 
-    result = CliRunner().invoke(sylliptor_app, ["tools"])
+    result = CliRunner().invoke(alysis_app, ["tools"])
 
     assert result.exit_code == 0
-    assert "`sylliptor tools` shows the built-in catalog" in result.output
+    assert "`alysis tools` shows the built-in catalog" in result.output
     assert "config-dependent" in result.output
     assert "availability" in result.output
     assert "`web_search` discovers candidate sources" in result.output
     assert "`web_fetch` retrieves a specific" in result.output
     assert "chosen URL" in result.output
     assert "Top-level readonly/Plan sessions can use ready web tools" in result.output
-    assert "Custom tools are managed separately via `sylliptor tool" in result.output
+    assert "Custom tools are managed separately via `alysis tool" in result.output
     assert "trust|untrust`" in result.output
     assert "web_search_mode=off|auto|native|external" in result.output
     assert "OpenAI Responses" in result.output

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.agent.acceptance_contract import (
+from alysis_code.agent.acceptance_contract import (
     AcceptanceCriterionKind,
     build_acceptance_contract,
 )
-from sylliptor_agent_cli.planning_constraints import (
+from alysis_code.planning_constraints import (
     extract_planning_scope_constraints,
     filter_scope_entries_for_planning_constraints,
     planning_constraints_from_payload,

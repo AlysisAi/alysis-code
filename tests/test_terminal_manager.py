@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.terminal_manager as terminal_manager_mod
-from sylliptor_agent_cli.background_runner import (
+import alysis_code.terminal_manager as terminal_manager_mod
+from alysis_code.background_runner import (
     BackgroundProcessSpawn,
     DisabledBackgroundRunner,
     HostBackgroundRunner,
 )
-from sylliptor_agent_cli.sandbox_settings import ShellSandboxSettings
-from sylliptor_agent_cli.terminal_manager import (
+from alysis_code.sandbox_settings import ShellSandboxSettings
+from alysis_code.terminal_manager import (
     BackgroundProcess,
     TerminalLimitError,
     TerminalManager,

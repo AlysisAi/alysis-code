@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sylliptor_agent_cli.assets.replanner_context import summarize_prior_asset_usage
-from sylliptor_agent_cli.assets.usage_logger import AssetUsageLogger
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.assets.replanner_context import summarize_prior_asset_usage
+from alysis_code.assets.usage_logger import AssetUsageLogger
+from alysis_code.forge import create_plan_run
 
 
 def test_prior_usage_summary_reads_jsonl(tmp_path: Path) -> None:

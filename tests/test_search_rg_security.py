@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.tools.search as search_mod
+import alysis_code.tools.search as search_mod
 
 
 class _FakeStream:

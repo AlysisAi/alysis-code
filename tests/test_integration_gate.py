@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.failure_category import FailureCategory
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.integration_gate import (
+from alysis_code.config import AppConfig
+from alysis_code.failure_category import FailureCategory
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.integration_gate import (
     integration_issue_signature_for_commands,
     normalize_integration_verify_mode,
     record_integration_failure_knowledge,
@@ -15,14 +15,14 @@ from sylliptor_agent_cli.integration_gate import (
     resolve_integration_verify_mode,
     run_integration_gate,
 )
-from sylliptor_agent_cli.knowledge_base import (
+from alysis_code.knowledge_base import (
     load_knowledge_entry,
     load_knowledge_index,
     write_issue_entry_for_task_id,
 )
-from sylliptor_agent_cli.repo_scan import scan_workspace
-from sylliptor_agent_cli.verify_gate import VerifyCommandResult, VerifyRunResult
-from sylliptor_agent_cli.workspace_context import resolve_workspace_context
+from alysis_code.repo_scan import scan_workspace
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
+from alysis_code.workspace_context import resolve_workspace_context
 
 
 def test_resolve_integration_verify_mode_uses_cli_or_config() -> None:
@@ -360,7 +360,7 @@ def test_run_integration_gate_writes_artifacts_and_payloads(tmp_path: Path, monk
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.integration_gate.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", fake_verify)
 
     result = run_integration_gate(
         paths=paths,
@@ -426,7 +426,7 @@ def test_run_integration_gate_uses_repo_inferred_commands_when_config_is_default
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.integration_gate.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", fake_verify)
 
     result = run_integration_gate(
         paths=paths,
@@ -474,7 +474,7 @@ def test_record_integration_failure_writes_issue_and_summary(tmp_path: Path, mon
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr("sylliptor_agent_cli.integration_gate.run_task_verification", fake_verify)
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", fake_verify)
 
     result = run_integration_gate(
         paths=first_run,
@@ -536,9 +536,7 @@ def test_record_integration_resolution_closes_matching_open_issues(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.integration_gate.run_task_verification", failing_verify
-    )
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", failing_verify)
     failed_result = run_integration_gate(
         paths=first_run,
         cfg=AppConfig(model="test-model", verify_commands=["python -m pytest tests/unit -q"]),
@@ -568,9 +566,7 @@ def test_record_integration_resolution_closes_matching_open_issues(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.integration_gate.run_task_verification", passing_verify
-    )
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", passing_verify)
     passed_result = run_integration_gate(
         paths=second_run,
         cfg=AppConfig(model="test-model", verify_commands=["python -m pytest tests/unit -q"]),
@@ -630,9 +626,7 @@ def test_successful_gate_does_not_resolve_legacy_issue_without_signature(
             artifact_path=artifact_path,
         )
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.integration_gate.run_task_verification", passing_verify
-    )
+    monkeypatch.setattr("alysis_code.integration_gate.run_task_verification", passing_verify)
     passed_result = run_integration_gate(
         paths=second_run,
         cfg=AppConfig(model="test-model", verify_commands=["python -m pytest tests/unit -q"]),

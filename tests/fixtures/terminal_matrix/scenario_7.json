@@ -9,7 +9,7 @@
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
     "KONSOLE_VERSION": "240800",
-    "SYLLIPTOR_ENABLE_OSC11": "1"
+    "ALYSIS_ENABLE_OSC11": "1"
   },
   "is_wsl": false,
   "osc11_result": "light",

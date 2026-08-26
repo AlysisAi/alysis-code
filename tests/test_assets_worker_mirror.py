@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from _assets_test_helpers import FakeAssetComprehender, write_text_asset_source
 
-from sylliptor_agent_cli.assets import AssetSurface, mirror_task_assets
-from sylliptor_agent_cli.assets.models import AssetError
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
+from alysis_code.assets import AssetSurface, mirror_task_assets
+from alysis_code.assets.models import AssetError
+from alysis_code.config import AppConfig
+from alysis_code.forge import create_plan_run
 
 
 def _surface(tmp_path: Path) -> AssetSurface:
@@ -198,7 +198,7 @@ def test_mirror_cleans_staging_on_copy_failure(
     def fail_copy(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise OSError("copy failed")
 
-    monkeypatch.setattr("sylliptor_agent_cli.assets.worker_mirror.shutil.copy2", fail_copy)
+    monkeypatch.setattr("alysis_code.assets.worker_mirror.shutil.copy2", fail_copy)
 
     with pytest.raises(AssetError):
         mirror_task_assets(
@@ -208,5 +208,5 @@ def test_mirror_cleans_staging_on_copy_failure(
             workspace_path=workspace,
         )
 
-    assert not (workspace / ".sylliptor" / "task_assets").exists()
-    assert not list((workspace / ".sylliptor").glob("task_assets.staging.*"))
+    assert not (workspace / ".alysis" / "task_assets").exists()
+    assert not list((workspace / ".alysis").glob("task_assets.staging.*"))

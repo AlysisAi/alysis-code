@@ -8,18 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.conflict_auto_resolver import (
+from alysis_code.config import AppConfig
+from alysis_code.conflict_auto_resolver import (
     CONFLICT_RESOLVER_SYSTEM_PROMPT,
     ConflictAutoResolveSettings,
     attempt_auto_resolve_conflict,
     load_conflict_auto_resolve_settings,
 )
-from sylliptor_agent_cli.execution_shared import build_task_execution_instruction_bundle
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.knowledge_base import write_task_attempt_entry
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.verify_gate import ResolvedVerifyCommands
+from alysis_code.execution_shared import build_task_execution_instruction_bundle
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.knowledge_base import write_task_attempt_entry
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.verify_gate import ResolvedVerifyCommands
 
 _ORIGINAL_SUBPROCESS_RUN = subprocess.run
 
@@ -56,9 +56,9 @@ def test_load_conflict_auto_resolve_settings_env_overrides_config() -> None:
     settings = load_conflict_auto_resolve_settings(
         cfg=cfg,
         env={
-            "SYLLIPTOR_CONFLICT_AUTO_RESOLVE": "0",
-            "SYLLIPTOR_CONFLICT_AUTO_RESOLVE_VERIFY": "strict",
-            "SYLLIPTOR_CONFLICT_AUTO_RESOLVE_MAX_ATTEMPTS": "2",
+            "ALYSIS_CONFLICT_AUTO_RESOLVE": "0",
+            "ALYSIS_CONFLICT_AUTO_RESOLVE_VERIFY": "strict",
+            "ALYSIS_CONFLICT_AUTO_RESOLVE_MAX_ATTEMPTS": "2",
         },
     )
     assert settings.enabled is False
@@ -159,26 +159,26 @@ def _path_exists(path: Path) -> bool:
 
 def _stub_clean_conflict_run_state(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: [],
     )
 
 
 def _stub_conflict_knowledge_mirror(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.prepare_task_execution_knowledge",
+        "alysis_code.conflict_auto_resolver.prepare_task_execution_knowledge",
         lambda **_kwargs: SimpleNamespace(prompt_section=""),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_selected_knowledge_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_selected_knowledge_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -231,11 +231,11 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -246,7 +246,7 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
         return ["src/x.py"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -259,7 +259,7 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
         return real_build_bundle(**kwargs)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.build_task_execution_instruction_bundle",
+        "alysis_code.conflict_auto_resolver.build_task_execution_instruction_bundle",
         capture_build_bundle,
     )
 
@@ -287,17 +287,17 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
         kwargs["surface"].on_assistant_message_done(_structured_capture_text())
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
@@ -306,7 +306,7 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
         summary = "verification passed (1/1)"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification",
+        "alysis_code.conflict_auto_resolver.run_task_verification",
         lambda **_kwargs: _VerifyPass(),
     )
 
@@ -385,7 +385,7 @@ def test_attempt_auto_resolve_conflict_success_writes_artifacts(
     assert (outcome.result_json_path.parent / "auto_resolve_budget.json").exists()
     mirrored_manifest = (
         worktree_repo
-        / ".sylliptor"
+        / ".alysis"
         / "runs"
         / paths.run_id
         / "knowledge"
@@ -453,16 +453,16 @@ def test_attempt_auto_resolve_conflict_preserves_warning_visibility_for_recordin
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"], []]),
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -472,17 +472,17 @@ def test_attempt_auto_resolve_conflict_preserves_warning_visibility_for_recordin
         kwargs["surface"].on_assistant_message_done("Resolved the merge conflict.")
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
@@ -491,7 +491,7 @@ def test_attempt_auto_resolve_conflict_preserves_warning_visibility_for_recordin
         summary = "verification passed (1/1)"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification",
+        "alysis_code.conflict_auto_resolver.run_task_verification",
         lambda **_kwargs: _VerifyPass(),
     )
 
@@ -568,24 +568,24 @@ def test_attempt_auto_resolve_conflict_rejects_nonzero_exit_with_material_change
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"], []]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner(
             [
                 {"src/x.py": "before"},
@@ -597,7 +597,7 @@ def test_attempt_auto_resolve_conflict_rejects_nonzero_exit_with_material_change
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py", "notes/conflict-resolution.md"],
     )
 
@@ -605,31 +605,29 @@ def test_attempt_auto_resolve_conflict_rejects_nonzero_exit_with_material_change
         kwargs["surface"].on_assistant_message_done(_structured_capture_text())
         return 1
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.stage_all",
+        "alysis_code.conflict_auto_resolver.stage_all",
         lambda _root: (_ for _ in ()).throw(
             AssertionError("stage_all should not run after a non-zero agent exit")
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
     def fail_verify(**_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("run_task_verification should not be called when verify_mode=off")
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification", fail_verify
-    )
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_task_verification", fail_verify)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -720,28 +718,28 @@ def test_attempt_auto_resolve_conflict_rejects_nonzero_exit_before_strict_verify
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"], []]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "before"}, {"src/x.py": "after"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
 
@@ -749,23 +747,23 @@ def test_attempt_auto_resolve_conflict_rejects_nonzero_exit_before_strict_verify
         kwargs["surface"].on_assistant_message_done(_structured_capture_text())
         return 1
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.stage_all",
+        "alysis_code.conflict_auto_resolver.stage_all",
         lambda _root: (_ for _ in ()).throw(
             AssertionError("stage_all should not run after a non-zero agent exit")
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification",
+        "alysis_code.conflict_auto_resolver.run_task_verification",
         lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("verification should not run after a non-zero agent exit")
         ),
@@ -849,11 +847,11 @@ def test_attempt_auto_resolve_conflict_refines_generic_fallback_to_node_test(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -864,7 +862,7 @@ def test_attempt_auto_resolve_conflict_refines_generic_fallback_to_node_test(
         return ["test/app.test.js"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -876,17 +874,17 @@ def test_attempt_auto_resolve_conflict_refines_generic_fallback_to_node_test(
         captured["cfg_verify_commands"] = list(kwargs["cfg"].verify_commands)
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\n",
     )
 
@@ -899,9 +897,7 @@ def test_attempt_auto_resolve_conflict_refines_generic_fallback_to_node_test(
 
         return _VerifyPass()
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification", fake_verify
-    )
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_task_verification", fake_verify)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -982,11 +978,11 @@ def test_attempt_auto_resolve_conflict_uses_structured_node_text_refinement(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -997,7 +993,7 @@ def test_attempt_auto_resolve_conflict_uses_structured_node_text_refinement(
         return ["src/app.js"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -1009,17 +1005,17 @@ def test_attempt_auto_resolve_conflict_uses_structured_node_text_refinement(
         captured["cfg_verify_commands"] = list(kwargs["cfg"].verify_commands)
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\n",
     )
 
@@ -1032,9 +1028,7 @@ def test_attempt_auto_resolve_conflict_uses_structured_node_text_refinement(
 
         return _VerifyPass()
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification", fake_verify
-    )
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_task_verification", fake_verify)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1107,8 +1101,8 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
         ],
         "assets": [
             {
-                "stored_path": f".sylliptor/runs/r/plan/assets/spec_{i:03d}.md",
-                "text_copy_path": f".sylliptor/runs/r/plan/assets_text/spec_{i:03d}.txt",
+                "stored_path": f".alysis/runs/r/plan/assets/spec_{i:03d}.md",
+                "text_copy_path": f".alysis/runs/r/plan/assets_text/spec_{i:03d}.txt",
             }
             for i in range(90)
         ],
@@ -1151,7 +1145,7 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
         role_model="resolver-model",
         mode="auto",
         yes=True,
-        deny_write_prefixes=[".sylliptor"],
+        deny_write_prefixes=[".alysis"],
         allow_write_globs=["src/parser.py", "tests/test_parser.py"],
         non_interactive=True,
         verification_enabled=True,
@@ -1179,8 +1173,8 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
     assert "- `tests/test_parser.py`" in bundle.instruction
     assert "## Task Specification" in bundle.instruction
     assert "## Execution Rules" in bundle.instruction
-    assert ".sylliptor/runs/r/plan/assets/spec_042.md" in bundle.instruction
-    assert ".sylliptor/runs/r/plan/assets_text/spec_042.txt" in bundle.instruction
+    assert ".alysis/runs/r/plan/assets/spec_042.md" in bundle.instruction
+    assert ".alysis/runs/r/plan/assets_text/spec_042.txt" in bundle.instruction
     assert (
         "additional tasks omitted" in bundle.instruction
         or "earlier requirements omitted" in bundle.instruction
@@ -1212,11 +1206,11 @@ def test_attempt_auto_resolve_conflict_invalid_attempt_count_falls_back_to_one(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -1227,33 +1221,31 @@ def test_attempt_auto_resolve_conflict_invalid_attempt_count_falls_back_to_one(
         return ["src/x.py"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 0,
     )
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
     def fail_verify(**_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("run_task_verification should not be called when verify_mode=off")
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification", fail_verify
-    )
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_task_verification", fail_verify)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1331,11 +1323,11 @@ def test_attempt_auto_resolve_conflict_verify_off_disables_tool_exposure_and_out
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -1346,7 +1338,7 @@ def test_attempt_auto_resolve_conflict_verify_off_disables_tool_exposure_and_out
         return ["src/x.py"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -1358,26 +1350,24 @@ def test_attempt_auto_resolve_conflict_verify_off_disables_tool_exposure_and_out
         )
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
     def fail_verify(**_kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("run_task_verification should not be called when verify_mode=off")
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification", fail_verify
-    )
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_task_verification", fail_verify)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1454,39 +1444,39 @@ def test_attempt_auto_resolve_conflict_nonzero_exit_without_material_changes_fai
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"]]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "same"}, {"src/x.py": "same"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 1,
     )
 
     def fail_stage_all(_root: Path) -> None:
         raise AssertionError("stage_all should not run when non-zero salvage is blocked")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", fail_stage_all)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", fail_stage_all)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1550,39 +1540,39 @@ def test_attempt_auto_resolve_conflict_runtime_artifact_drift_blocks_nonzero_sal
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"]]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
-        _sequence_returner([{}, {".sylliptor/state.json": "sha256:changed"}]),
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
+        _sequence_returner([{}, {".alysis/state.json": "sha256:changed"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "before"}, {"src/x.py": "after"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 1,
     )
 
     def fail_stage_all(_root: Path) -> None:
         raise AssertionError("stage_all should not run when runtime drift blocks salvage")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", fail_stage_all)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", fail_stage_all)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1619,7 +1609,7 @@ def test_attempt_auto_resolve_conflict_runtime_artifact_drift_blocks_nonzero_sal
     assert outcome.success is False
     assert outcome.salvaged_nonzero_exit is False
     assert outcome.agent_exit_code == 1
-    assert "protected runtime artifacts under .sylliptor changed" in (outcome.error or "")
+    assert "protected runtime artifacts under .alysis changed" in (outcome.error or "")
 
 
 def test_attempt_auto_resolve_conflict_nonzero_exit_with_unresolved_markers_stays_failure(
@@ -1652,39 +1642,39 @@ def test_attempt_auto_resolve_conflict_nonzero_exit_with_unresolved_markers_stay
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     _stub_conflict_knowledge_mirror(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"], ["src/x.py"]]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "before"}, {"src/x.py": "after"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 1,
     )
 
     def fail_stage_all(_root: Path) -> None:
         raise AssertionError("stage_all should not run while conflicts remain unresolved")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", fail_stage_all)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", fail_stage_all)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1754,47 +1744,47 @@ def test_attempt_auto_resolve_conflict_stages_resolved_unmerged_paths_before_che
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"], []]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "before"}, {"src/x.py": "after"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 0,
     )
 
     def fake_stage_all(_root: Path) -> None:
         calls.append("stage_all")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", fake_stage_all)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", fake_stage_all)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\n",
     )
 
@@ -1868,39 +1858,39 @@ def test_attempt_auto_resolve_conflict_run_agent_exception_is_not_salvaged(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         _sequence_returner([["src/x.py"]]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_runtime_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_runtime_tree",
         _sequence_returner([{}, {}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.snapshot_workspace_tree",
+        "alysis_code.conflict_auto_resolver.snapshot_workspace_tree",
         _sequence_returner([{"src/x.py": "before"}, {"src/x.py": "after"}]),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_changed_files_including_untracked",
+        "alysis_code.conflict_auto_resolver.list_changed_files_including_untracked",
         lambda _root: ["src/x.py"],
     )
 
     def fake_run_agent(**_kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("transport failed")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
 
     def fail_stage_all(_root: Path) -> None:
         raise AssertionError("stage_all should not run after a wrapper exception")
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", fail_stage_all)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", fail_stage_all)
 
     @_delegate_non_git_subprocess_calls
     def fake_subprocess_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
@@ -1966,11 +1956,11 @@ def test_attempt_auto_resolve_conflict_strict_verify_failure_keeps_worktree(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -1981,7 +1971,7 @@ def test_attempt_auto_resolve_conflict_strict_verify_failure_keeps_worktree(
         return ["src/x.py"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
@@ -1992,13 +1982,13 @@ def test_attempt_auto_resolve_conflict_strict_verify_failure_keeps_worktree(
         kwargs["surface"].on_assistant_message_done(_structured_capture_text())
         return 0
 
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.run_agent", fake_run_agent)
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.run_agent", fake_run_agent)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
 
@@ -2007,7 +1997,7 @@ def test_attempt_auto_resolve_conflict_strict_verify_failure_keeps_worktree(
         summary = "verification failed (0/1)"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification",
+        "alysis_code.conflict_auto_resolver.run_task_verification",
         lambda **_kwargs: _VerifyFail(),
     )
 
@@ -2096,11 +2086,11 @@ def test_attempt_auto_resolve_conflict_warn_verify_failure_is_warning(
         return None
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_task_worktree",
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
         fake_ensure_task_worktree,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.mirror_plan_into_worktree",
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree",
         lambda **_kwargs: None,
     )
 
@@ -2111,24 +2101,24 @@ def test_attempt_auto_resolve_conflict_warn_verify_failure_is_warning(
         return ["src/x.py"] if list_calls["n"] == 1 else []
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.list_unmerged_files",
+        "alysis_code.conflict_auto_resolver.list_unmerged_files",
         fake_list_unmerged,
     )
     _stub_clean_conflict_run_state(monkeypatch)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_agent",
+        "alysis_code.conflict_auto_resolver.run_agent",
         lambda **_kwargs: 0,
     )
-    monkeypatch.setattr("sylliptor_agent_cli.conflict_auto_resolver.stage_all", lambda _root: None)
+    monkeypatch.setattr("alysis_code.conflict_auto_resolver.stage_all", lambda _root: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
+        "alysis_code.conflict_auto_resolver.unstage_staged_prefixes", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.ensure_not_staged_prefixes",
+        "alysis_code.conflict_auto_resolver.ensure_not_staged_prefixes",
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.format_patch_stdout",
+        "alysis_code.conflict_auto_resolver.format_patch_stdout",
         lambda *_a, **_k: "From deadbeef\nnew file mode 100644\n",
     )
 
@@ -2137,7 +2127,7 @@ def test_attempt_auto_resolve_conflict_warn_verify_failure_is_warning(
         summary = "verification failed (0/1)"
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.conflict_auto_resolver.run_task_verification",
+        "alysis_code.conflict_auto_resolver.run_task_verification",
         lambda **_kwargs: _VerifyFail(),
     )
 

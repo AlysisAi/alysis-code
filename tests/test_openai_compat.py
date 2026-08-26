@@ -7,20 +7,20 @@ import ssl
 import httpx
 import pytest
 
-from sylliptor_agent_cli.llm import openai_compat as openai_compat_mod
-from sylliptor_agent_cli.llm import types as shared_types
-from sylliptor_agent_cli.llm.base import effective_tools_for_client
-from sylliptor_agent_cli.llm.cache_capabilities import (
+from alysis_code.llm import openai_compat as openai_compat_mod
+from alysis_code.llm import types as shared_types
+from alysis_code.llm.base import effective_tools_for_client
+from alysis_code.llm.cache_capabilities import (
     CACHE_CONTROL_FIELD,
     OPENROUTER_SESSION_ID_FIELD,
     XAI_CONVERSATION_ID_HEADER_FIELD,
 )
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.llm.metadata import (
     endpoint_descriptor,
     endpoint_label,
     stamp_provider_metadata_for_route,
 )
-from sylliptor_agent_cli.llm.openai_compat import (
+from alysis_code.llm.openai_compat import (
     PROVIDER_METADATA_KEY,
     LLMError,
     LLMResponse,
@@ -29,20 +29,18 @@ from sylliptor_agent_cli.llm.openai_compat import (
     ToolCall,
     _httpx_request_timeout,
     _provider_key_from_base_url,
+    alysis_trial_error_message,
     attach_provider_metadata_to_assistant_message,
-    sylliptor_trial_error_message,
 )
-from sylliptor_agent_cli.llm.provider_limits import ProviderRetrySettings
-from sylliptor_agent_cli.provider_telemetry import (
+from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     reset_provider_telemetry_for_tests,
 )
-from sylliptor_agent_cli.request_estimation import estimate_provider_payload_tokens
-from sylliptor_agent_cli.session_store import SessionStore
+from alysis_code.request_estimation import estimate_provider_payload_tokens
+from alysis_code.session_store import SessionStore
 
-_SYLLIPTOR_TRIAL_BASE_URL = "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1"
-
-_SYLLIPTOR_TRIAL_BASE_URL = "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1"
+_ALYSIS_TRIAL_BASE_URL = "https://vzigujbcjjmpntxhmyvr.supabase.co/functions/v1/llm/v1"
 
 
 def test_openai_compat_reexports_shared_llm_types() -> None:
@@ -119,21 +117,25 @@ def test_count_input_tokens_measures_provider_shaped_multilingual_payload() -> N
     }
 
 
-def test_sylliptor_trial_error_message_maps_known_codes() -> None:
+def test_alysis_trial_error_message_maps_known_codes() -> None:
     err = LLMError(
         "LLM error 402: "
         + json.dumps({"error": {"message": "Trial window passed.", "code": "trial_expired"}})
     )
-    msg = sylliptor_trial_error_message(err)
+    msg = alysis_trial_error_message(err)
     assert msg is not None
     assert "trial has ended" in msg
-    assert "sylliptor.alysisai.com/account" in msg
+    # Derived, so moving the product site does not require editing this test.
+    from alysis_code.alysis_cloud import account_url
+
+    assert account_url() in msg
+    assert "{account_url}" not in msg, "placeholder was not substituted"
 
 
-def test_sylliptor_trial_error_message_handles_each_proxy_code() -> None:
+def test_alysis_trial_error_message_handles_each_proxy_code() -> None:
     cases = {
-        "invalid_key": "sylliptor login",
-        "quota_exhausted": "available allowance",
+        "invalid_key": "alysis login",
+        "quota_exhausted": "trial tokens",
         "email_not_verified": "confirm your email",
         "plan_inactive": "not active",
         "rate_limit_exceeded": "wait a moment",
@@ -142,25 +144,25 @@ def test_sylliptor_trial_error_message_handles_each_proxy_code() -> None:
     }
     for code, needle in cases.items():
         err = LLMError("LLM error 400: " + json.dumps({"error": {"code": code}}))
-        msg = sylliptor_trial_error_message(err)
+        msg = alysis_trial_error_message(err)
         assert msg is not None, code
         assert needle in msg, code
 
 
-def test_sylliptor_trial_error_message_ignores_non_proxy_errors() -> None:
+def test_alysis_trial_error_message_ignores_non_proxy_errors() -> None:
     # Upstream OpenRouter error: numeric code, not one of ours.
     upstream = LLMError(
         "LLM error 401: " + json.dumps({"error": {"message": "User not found.", "code": 401}})
     )
-    assert sylliptor_trial_error_message(upstream) is None
+    assert alysis_trial_error_message(upstream) is None
 
     # Unknown string code.
     unknown = LLMError("LLM error 500: " + json.dumps({"error": {"code": "kaboom"}}))
-    assert sylliptor_trial_error_message(unknown) is None
+    assert alysis_trial_error_message(unknown) is None
 
     # Non-JSON body (e.g. a plain-text 500 from an edge/CDN layer).
     plain = LLMError("LLM error 500: Internal Server Error")
-    assert sylliptor_trial_error_message(plain) is None
+    assert alysis_trial_error_message(plain) is None
 
 
 def _surrogate_escaped_text(text: str) -> str:
@@ -961,6 +963,7 @@ def test_retries_without_tool_choice_when_provider_rejects_param() -> None:
         base_url="https://api.deepseek.com/v1",
         api_key="test",
         model="deepseek-v4-pro",
+        enable_thinking=False,
         transport=httpx.MockTransport(handler),
     )
 
@@ -984,11 +987,6 @@ def test_retries_without_tool_choice_when_provider_rejects_param() -> None:
     assert first.provider_metadata is not None
     assert set(first.provider_metadata) <= {"transport", "openai_compat", "_route_identity"}
     assert first.provider_metadata["transport"] == {
-        "temperature_adjusted": True,
-        "temperature_adjustment": "omit_temperature",
-        "temperature_adjustment_reason": "documented_model_policy",
-        "temperature_omitted": True,
-        "temperature_omit_reason": "deepseek_thinking_temperature_unsupported",
         "tool_choice_omitted": True,
         "tool_choice_omit_reason": "provider_rejected_parameter",
         "tool_choice_retry_used": True,
@@ -996,11 +994,6 @@ def test_retries_without_tool_choice_when_provider_rejects_param() -> None:
     assert second.provider_metadata is not None
     assert set(second.provider_metadata) <= {"transport", "openai_compat", "_route_identity"}
     assert second.provider_metadata["transport"] == {
-        "temperature_adjusted": True,
-        "temperature_adjustment": "omit_temperature",
-        "temperature_adjustment_reason": "documented_model_policy",
-        "temperature_omitted": True,
-        "temperature_omit_reason": "deepseek_thinking_temperature_unsupported",
         "tool_choice_omitted": True,
         "tool_choice_omit_reason": "cached_provider_rejection",
     }
@@ -1198,6 +1191,85 @@ def test_required_tool_choice_omitted_in_deepseek_thinking_mode() -> None:
     assert "tool_choice" not in captured
 
 
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "auto",
+        "none",
+        "required",
+        {"type": "function", "function": {"name": "fs_read"}},
+    ],
+    ids=("auto", "none", "required", "forced-function"),
+)
+def test_deepseek_default_thinking_omits_every_tool_choice(tool_choice: object) -> None:
+    captured: dict[str, object] = {}
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "fs_read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.deepseek.com",
+        api_key="test",
+        model="deepseek-v4-pro",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.reasoning_active is True
+    client.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+
+    assert "thinking" not in captured
+    assert "reasoning_effort" not in captured
+    assert "tool_choice" not in captured
+    assert captured["tools"] == tools
+
+
+def test_deepseek_explicitly_disabled_thinking_preserves_tool_choice() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.deepseek.com",
+        api_key="test",
+        model="deepseek-v4-pro",
+        enable_thinking=False,
+        transport=httpx.MockTransport(handler),
+    )
+    client.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "fs_read",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        tool_choice="required",
+    )
+
+    assert client.reasoning_active is False
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["tool_choice"] == "required"
+
+
 def test_tool_call_arguments_non_json() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         data = {
@@ -1385,6 +1457,209 @@ def test_deepseek_reasoning_content_round_trips_for_tool_calls() -> None:
             {"role": "user", "content": "read"},
             assistant_message,
             {"role": "tool", "tool_call_id": "call_1", "content": '{"content":"x"}'},
+        ],
+        tools=[],
+    )
+    assert second.content == "ok"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("base_url", "provider_key"),
+    [
+        ("https://api.deepseek.com", None),
+        (_ALYSIS_TRIAL_BASE_URL, "alysis"),
+    ],
+    ids=("first-party", "hosted-proxy"),
+)
+def test_deepseek_reasoning_round_trips_for_normal_assistant_turns(
+    stream: bool,
+    base_url: str,
+    provider_key: str | None,
+) -> None:
+    calls: list[dict[str, object]] = []
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        calls.append(body)
+        if len(calls) == 1:
+            if stream:
+                events = [
+                    {"choices": [{"delta": {"reasoning_content": "private deepseek state"}}]},
+                    {"choices": [{"delta": {"content": "Public answer."}}]},
+                ]
+                body_sse = "".join(f"data: {json.dumps(event)}\n" for event in events)
+                return httpx.Response(200, text=body_sse + "data: [DONE]\n")
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "reasoning_content": "private deepseek state",
+                                "content": "Public answer.",
+                            }
+                        }
+                    ]
+                },
+            )
+
+        assistant_wire = body["messages"][1]
+        assert PROVIDER_METADATA_KEY not in assistant_wire
+        assert assistant_wire["content"] == "Public answer."
+        assert assistant_wire["reasoning_content"] == "private deepseek state"
+        assert body["tools"] == tools
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url=base_url,
+        api_key="test",
+        model="deepseek-v4-pro",
+        provider_key=provider_key,
+        transport=httpx.MockTransport(handler),
+    )
+
+    first = client.chat(
+        messages=[{"role": "user", "content": "reason"}],
+        tools=tools,
+        stream=stream,
+    )
+    assert first.content == "Public answer."
+    assert first.provider_metadata is not None
+    assert first.provider_metadata["deepseek"] == {"reasoning_content": "private deepseek state"}
+    assistant_message = attach_provider_metadata_to_assistant_message(
+        {"role": "assistant", "content": first.content},
+        first,
+    )
+    assert PROVIDER_METADATA_KEY in assistant_message
+    assert "reasoning_content" not in assistant_message
+
+    second = client.chat(
+        messages=[
+            {"role": "user", "content": "reason"},
+            assistant_message,
+            {"role": "user", "content": "continue"},
+        ],
+        tools=tools,
+    )
+    assert second.content == "ok"
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_together_deepseek_reasoning_round_trips_for_tool_calls(stream: bool) -> None:
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        calls.append(body)
+        assert body["reasoning_effort"] == "max"
+        assert "thinking" not in body
+        assert "enable_thinking" not in body
+        assert "reasoning" not in body
+        if len(calls) == 1:
+            if stream:
+                event = {
+                    "choices": [
+                        {
+                            "delta": {
+                                "reasoning": "opaque together state",
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "fs_read",
+                                            "arguments": json.dumps({"path": "README.md"}),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+                return httpx.Response(
+                    200,
+                    text=f"data: {json.dumps(event)}\ndata: [DONE]\n",
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "",
+                                "reasoning": "opaque together state",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "fs_read",
+                                            "arguments": json.dumps({"path": "README.md"}),
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+
+        assistant_message = body["messages"][1]
+        assert PROVIDER_METADATA_KEY not in assistant_message
+        assert assistant_message["reasoning"] == "opaque together state"
+        assert "reasoning_content" not in assistant_message
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.together.ai/v1",
+        api_key="test",
+        model="deepseek-ai/DeepSeek-V4-Pro-0813",
+        provider_key="together",
+        reasoning_effort="max",
+        transport=httpx.MockTransport(handler),
+    )
+
+    first = client.chat(
+        messages=[{"role": "user", "content": "read"}],
+        tools=[],
+        stream=stream,
+    )
+    assert first.provider_metadata is not None
+    assert first.provider_metadata["deepseek"] == {"reasoning_content": "opaque together state"}
+    assistant_message = attach_provider_metadata_to_assistant_message(
+        {
+            "role": "assistant",
+            "content": first.content,
+            "tool_calls": [
+                {
+                    "id": first.tool_calls[0].id,
+                    "type": "function",
+                    "function": {
+                        "name": first.tool_calls[0].name,
+                        "arguments": json.dumps(first.tool_calls[0].arguments),
+                    },
+                }
+            ],
+        },
+        first,
+    )
+
+    second = client.chat(
+        messages=[
+            {"role": "user", "content": "read"},
+            assistant_message,
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
         ],
         tools=[],
     )
@@ -3560,7 +3835,7 @@ def test_qwen38_emits_only_documented_reasoning_efforts(effort: str) -> None:
     assert captured["reasoning_effort"] == effort
 
 
-@pytest.mark.parametrize("effort", ["high", "max"])
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
 def test_deepseek_v4_emits_only_documented_reasoning_efforts(effort: str) -> None:
     captured: dict[str, object] = {}
 
@@ -3582,6 +3857,79 @@ def test_deepseek_v4_emits_only_documented_reasoning_efforts(effort: str) -> Non
     assert captured["reasoning_effort"] == effort
 
 
+@pytest.mark.parametrize("effort", ["high", "max"])
+def test_together_deepseek_v4_pro_emits_only_documented_reasoning_efforts(
+    effort: str,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.together.ai/v1",
+        api_key="test",
+        model="deepseek-ai/DeepSeek-V4-Pro-0813",
+        provider_key="together",
+        reasoning_effort=effort,
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.chat(messages=[{"role": "user", "content": "hi"}], tools=[])
+
+    assert captured["reasoning_effort"] == effort
+    assert "reasoning" not in captured
+    assert "thinking" not in captured
+
+
+def test_together_deepseek_v4_flash_omits_unverified_reasoning_controls() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.together.ai/v1",
+        api_key="test",
+        model="deepseek-ai/DeepSeek-V4-Flash-0731",
+        provider_key="together",
+        enable_thinking=False,
+        reasoning_effort="max",
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.chat(messages=[{"role": "user", "content": "hi"}], tools=[])
+
+    assert "reasoning_effort" not in captured
+    assert "reasoning" not in captured
+    assert "thinking" not in captured
+
+
+def test_together_deepseek_v4_uses_its_documented_reasoning_disable_object() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url="https://api.together.ai/v1",
+        api_key="test",
+        model="deepseek-ai/DeepSeek-V4-Pro-0813",
+        provider_key="together",
+        enable_thinking=False,
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.chat(messages=[{"role": "user", "content": "hi"}], tools=[])
+
+    assert captured["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in captured
+    assert "thinking" not in captured
+
+
 @pytest.mark.parametrize(
     ("base_url", "model", "effort", "toggle_field"),
     [
@@ -3591,7 +3939,6 @@ def test_deepseek_v4_emits_only_documented_reasoning_efforts(effort: str) -> Non
             "high",
             "enable_thinking",
         ),
-        ("https://api.deepseek.com", "deepseek-v4-pro", "low", "thinking"),
         ("https://api.deepseek.com", "deepseek-v4-pro", "medium", "thinking"),
         ("https://api.deepseek.com", "deepseek-v4-pro", "xhigh", "thinking"),
     ],
@@ -3634,6 +3981,12 @@ def test_provider_reasoning_contract_omits_undocumented_effort_values(
             "command-a-reasoning-08-2025",
             "high",
         ),
+        (
+            "https://api.fireworks.ai/inference/v1",
+            "fireworks",
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            "max",
+        ),
     ],
 )
 def test_contract_opted_in_providers_emit_exact_flat_reasoning_effort(
@@ -3673,6 +4026,11 @@ def test_contract_opted_in_providers_emit_exact_flat_reasoning_effort(
             "https://api.cohere.ai/compatibility/v1",
             "cohere",
             "command-a-reasoning-08-2025",
+        ),
+        (
+            "https://api.fireworks.ai/inference/v1",
+            "fireworks",
+            "accounts/fireworks/models/deepseek-v4-flash-0731",
         ),
     ],
 )
@@ -4363,6 +4721,87 @@ class _TruncatedSseStream(httpx.SyncByteStream):
         )
 
 
+class _KeepaliveOnlySseStream(httpx.SyncByteStream):
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        while True:
+            yield b": keepalive\n\n"
+
+
+def test_stream_meaningful_progress_watchdog_retries_then_fails_at_cap() -> None:
+    attempts = 0
+    events: list[dict[str, object]] = []
+    now = 0.0
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.1
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, stream=_KeepaliveOnlySseStream())
+
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(max_retries=1),
+        provider_sleep_fn=lambda _seconds: None,
+        provider_random_fn=lambda: 0.5,
+        stream_no_progress_timeout_s=2.0,
+        stream_progress_clock=clock,
+    )
+    client._provider_retry_event_observer = events.append
+
+    with pytest.raises(LLMError, match="meaningful payload"):
+        client.chat(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            stream=True,
+        )
+
+    assert attempts == 2
+    assert events[0]["attempt"] == 2
+    assert events[0]["reason"] == "provider_no_progress"
+
+
+def test_stream_meaningful_progress_watchdog_accepts_slow_payloads() -> None:
+    now = 0.0
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.0
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        body = (
+            ': keepalive\n\n'
+            'data: {"choices":[{"delta":{"content":"o"}}]}\n\n'
+            ': keepalive\n\n'
+            'data: {"choices":[{"delta":{"content":"k"}}]}\n\n'
+            'data: [DONE]\n\n'
+        )
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+        stream_no_progress_timeout_s=4.5,
+        stream_progress_clock=clock,
+    )
+
+    response = client.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        stream=True,
+    )
+    assert response.content == "ok"
+
+
 def test_stream_transport_truncation_does_not_replay_after_public_output() -> None:
     attempts = 0
     chunks: list[str] = []
@@ -4436,10 +4875,10 @@ def _content_handler(message: dict[str, object]):  # type: ignore[no-untyped-def
 
 def _trial_client(handler) -> OpenAICompatClient:  # type: ignore[no-untyped-def]
     return OpenAICompatClient(
-        base_url=_SYLLIPTOR_TRIAL_BASE_URL,
+        base_url=_ALYSIS_TRIAL_BASE_URL,
         api_key="test",
         model="mimo-v2.5-pro",
-        provider_key="sylliptor",
+        provider_key="alysis",
         transport=httpx.MockTransport(handler),
     )
 
@@ -4517,10 +4956,10 @@ def test_stream_keeps_content_over_reasoning() -> None:
     assert resp.content == "real answer"
 
 
-def test_sylliptor_hosted_proxy_resolves_to_deepseek_provider_key() -> None:
+def test_alysis_hosted_proxy_resolves_to_deepseek_provider_key() -> None:
     # The proxy forwarded to OpenRouter only during the retired MiMo trial; it
     # now forwards to DeepSeek.
-    assert _provider_key_from_base_url(_SYLLIPTOR_TRIAL_BASE_URL) == "deepseek"
+    assert _provider_key_from_base_url(_ALYSIS_TRIAL_BASE_URL) == "deepseek"
     # A plain supabase host without the LLM proxy path must NOT be captured.
     assert _provider_key_from_base_url("https://other.supabase.co/rest/v1") != "deepseek"
 

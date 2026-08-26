@@ -13,18 +13,18 @@ from typing import Any
 
 from rich.console import Console
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli.agent.turn_path import CHAT_ONLY_SYSTEM_PROMPT
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.cli_impl.chat import loop as chat_loop_mod
-from sylliptor_agent_cli.cli_impl.chat.state import (
+from alysis_code import cli as cli_mod
+from alysis_code.agent.turn_path import CHAT_ONLY_SYSTEM_PROMPT
+from alysis_code.agent_loop import create_session
+from alysis_code.cli_impl.chat import loop as chat_loop_mod
+from alysis_code.cli_impl.chat.state import (
     _ChatExecutionRequest,
     _ChatPlanModeState,
     _ForgeChatState,
 )
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.session_store import read_session_events
 
 
 def _dispatch(input_text: str, *, session: Any, tmp_path: Path) -> Any:

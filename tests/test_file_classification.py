@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from sylliptor_agent_cli.file_classification import (
+from alysis_code.file_classification import (
     derived_artifact_reason,
     describe_path_kinds,
     is_code_implementation_path,
@@ -103,6 +103,7 @@ def test_path_kind_descriptions_include_known_and_unknown_kinds() -> None:
     ("path", "reason"),
     [
         ("package-lock.json", "dependency lockfile"),
+        ("frontend/package-lock.json", "dependency lockfile"),
         ("uv.lock", "dependency lockfile"),
         ("Cargo.lock", "dependency lockfile"),
         ("go.sum", "dependency lockfile"),

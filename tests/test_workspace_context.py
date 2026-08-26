@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import workspace_context as workspace_context_mod
-from sylliptor_agent_cli.workspace_context import WorkspaceContextError, resolve_workspace_context
+from alysis_code import workspace_context as workspace_context_mod
+from alysis_code.workspace_context import WorkspaceContextError, resolve_workspace_context
 
 
 def _git_env() -> dict[str, str]:

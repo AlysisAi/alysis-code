@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError, load_config, save_config
-from sylliptor_agent_cli.llm.cache_capabilities import (
+from alysis_code.config import AppConfig, ConfigError, load_config, save_config
+from alysis_code.llm.cache_capabilities import (
     CACHE_STRATEGY_OPENAI_PROMPT_CACHE,
     OPENROUTER_SESSION_ID_FIELD,
     CacheCapabilitySpec,
 )
-from sylliptor_agent_cli.llm.protocols import SUPPORTED_LLM_PROTOCOLS
-from sylliptor_agent_cli.profile_presets import get_preset, make_profile_from_preset
-from sylliptor_agent_cli.profiles import (
+from alysis_code.llm.protocols import SUPPORTED_LLM_PROTOCOLS
+from alysis_code.profile_presets import get_preset, make_profile_from_preset
+from alysis_code.profiles import (
     ProfileSpec,
     add_profile,
     connection_fingerprint,
@@ -215,7 +215,7 @@ def test_web_search_adapter_validation_rejects_unknown() -> None:
 
 
 def test_add_profile_persists_in_extra_fields(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(tmp_path))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()
     add_profile(cfg, ProfileSpec(name="test", base_url="https://example.com/v1"))
     save_config(cfg)

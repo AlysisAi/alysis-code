@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sylliptor_agent_cli.serialized_paths import (
+from alysis_code.serialized_paths import (
     redacted_host_path_label,
     safe_serialized_path,
     safe_serialized_path_field,

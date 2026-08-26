@@ -21,7 +21,7 @@ if __package__ in {None, ""}:
             sys.path.insert(0, _path)
     __package__ = "scripts.qa"
 
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.session_store import read_session_events
 
 from .mock_llm import MockLLMServer
 
@@ -393,7 +393,7 @@ def _raw_agent_command(
     command = cli_command or (
         sys.executable,
         "-m",
-        "sylliptor_agent_cli.cli",
+        "alysis_code.cli",
     )
     args = [
         *command,
@@ -431,17 +431,17 @@ def _raw_agent_env(
     env = {
         "NO_COLOR": "1",
         "PYTHONPATH": pythonpath,
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_DATA_DIR": os.fspath(data_dir),
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "4096",
-        "SYLLIPTOR_RUN_PROFILE": "raw-benchmark",
-        "SYLLIPTOR_SHELL_SANDBOX_MODE": "off",
-        "SYLLIPTOR_VERIFY_SANDBOX_MODE": "off",
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_DATA_DIR": os.fspath(data_dir),
+        "ALYSIS_MAX_OUTPUT_TOKENS": "4096",
+        "ALYSIS_RUN_PROFILE": "raw-benchmark",
+        "ALYSIS_SHELL_SANDBOX_MODE": "off",
+        "ALYSIS_VERIFY_SANDBOX_MODE": "off",
     }
     if use_mock_provider:
         env["OPENAI_API_KEY"] = "mock-key"
-        env["SYLLIPTOR_CONFIG_DIR"] = os.fspath(config_dir)
-        env["SYLLIPTOR_API_KEY"] = "mock-key"
+        env["ALYSIS_CONFIG_DIR"] = os.fspath(config_dir)
+        env["ALYSIS_API_KEY"] = "mock-key"
     return env
 
 
@@ -457,7 +457,7 @@ def _write_raw_agent_config(*, config_dir: Path, base_url: str | None) -> None:
                 "name": "mock",
                 "protocol": "openai_compat",
                 "base_url": base_url,
-                "api_key_env": "SYLLIPTOR_API_KEY",
+                "api_key_env": "ALYSIS_API_KEY",
                 "default_model": QA_MODEL,
                 "extra_headers": {},
                 "notes": "Raw agent proxy mock provider",
@@ -677,7 +677,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cli-command",
         nargs="+",
-        help="Override the CLI command prefix, for example: sylliptor",
+        help="Override the CLI command prefix, for example: alysis",
     )
     parser.add_argument(
         "--no-mock-provider",

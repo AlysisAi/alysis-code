@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.tools import fs as fs_mod
-from sylliptor_agent_cli.tools.fs import FsError, fs_list, fs_read, fs_read_lines
+from alysis_code.tools import fs as fs_mod
+from alysis_code.tools.fs import FsError, fs_list, fs_read, fs_read_lines
 
 
 def _init_git_repo(path: Path) -> None:
@@ -26,6 +26,17 @@ def test_fs_read_large_file_respects_max_bytes(tmp_path: Path) -> None:
 
     assert result["truncated"] is True
     assert len(result["content"].encode("utf-8")) <= 4096
+
+
+def test_fs_read_truncation_reports_exact_line_continuation(tmp_path: Path) -> None:
+    path = tmp_path / "continued.txt"
+    path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+    result = fs_read(root=tmp_path, path="continued.txt", max_bytes=8)
+
+    assert result["total_lines"] == 5
+    assert result["returned_range"] == {"start_line": 1, "end_line": 2}
+    assert result["next_range"] == {"start_line": 3, "end_line": 5}
 
 
 def test_fs_read_default_is_bounded_and_reports_limit_metadata(tmp_path: Path) -> None:
@@ -116,10 +127,28 @@ def test_fs_read_lines_marks_truncated_when_max_lines_caps_output(tmp_path: Path
         "path": "demo.txt",
         "start_line": 2,
         "end_line": 3,
-        "total_lines": None,
+        "total_lines": 5,
         "content": "2: two\n3: three\n",
         "truncated": True,
+        "returned_range": {"start_line": 2, "end_line": 3},
+        "next_range": {"start_line": 4, "end_line": 5},
     }
+
+
+def test_fs_read_lines_truncation_reports_exact_line_continuation(tmp_path: Path) -> None:
+    path = tmp_path / "continued-lines.txt"
+    path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+    result = fs_read_lines(
+        root=tmp_path,
+        path="continued-lines.txt",
+        start_line=2,
+        max_lines=2,
+    )
+
+    assert result["total_lines"] == 5
+    assert result["returned_range"] == {"start_line": 2, "end_line": 3}
+    assert result["next_range"] == {"start_line": 4, "end_line": 5}
 
 
 def test_fs_read_lines_reports_missing_file_and_directory_errors(tmp_path: Path) -> None:
@@ -355,7 +384,9 @@ def test_fs_read_lines_byte_ceiling_stops_between_lines(tmp_path: Path) -> None:
     assert "line_clipped" not in result
     assert result["truncated"] is True
     assert result["end_line"] == 2
-    assert result["total_lines"] is None
+    assert result["total_lines"] == 10
+    assert result["returned_range"] == {"start_line": 1, "end_line": 2}
+    assert result["next_range"] == {"start_line": 3, "end_line": 10}
     assert len(result["content"].encode("utf-8")) <= 65_000
 
 

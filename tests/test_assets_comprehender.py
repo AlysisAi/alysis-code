@@ -6,13 +6,13 @@ from typing import Any
 
 from PIL import Image
 
-from sylliptor_agent_cli.assets import AssetComprehender, AssetIndex, ingest_asset
-from sylliptor_agent_cli.assets.ocr import OcrResult
-from sylliptor_agent_cli.config import ApiKeyResolution, AppConfig
-from sylliptor_agent_cli.forge import create_plan_run
-from sylliptor_agent_cli.llm.openai_compat import LLMError, LLMResponse, LLMUsage
-from sylliptor_agent_cli.model_registry import ModelRegistry
-from sylliptor_agent_cli.profiles import ProfileSpec, add_profile
+from alysis_code.assets import AssetComprehender, AssetIndex, ingest_asset
+from alysis_code.assets.ocr import OcrResult
+from alysis_code.config import ApiKeyResolution, AppConfig
+from alysis_code.forge import create_plan_run
+from alysis_code.llm.openai_compat import LLMError, LLMResponse, LLMUsage
+from alysis_code.model_registry import ModelRegistry
+from alysis_code.profiles import ProfileSpec, add_profile
 
 
 def _cfg(*, primary_vision: bool = False, fallback_vision: bool = False) -> AppConfig:
@@ -125,15 +125,13 @@ def _patch_llm(
 ) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     queued = list(responses or [json.dumps(_payload())])
-    monkeypatch.setattr("sylliptor_agent_cli.assets.comprehender.get_api_key", lambda: "k")
+    monkeypatch.setattr("alysis_code.assets.comprehender.get_api_key", lambda: "k")
 
     def fake_make_llm_client(**kwargs: Any) -> _FakeClient:
         calls.append({"make_client": kwargs})
         return _FakeClient(calls, queued)
 
-    monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.comprehender.make_llm_client", fake_make_llm_client
-    )
+    monkeypatch.setattr("alysis_code.assets.comprehender.make_llm_client", fake_make_llm_client)
     return calls
 
 
@@ -210,7 +208,7 @@ def test_image_uses_configured_vision_fallback_profile(tmp_path: Path, monkeypat
         ),
     )
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.comprehender.resolve_profile_api_key",
+        "alysis_code.assets.comprehender.resolve_profile_api_key",
         lambda _cfg, _name: ApiKeyResolution(key="profile-key", source="test"),
     )
 
@@ -346,14 +344,14 @@ def test_structured_tool_rejection_falls_back_to_json_mode(
     paths, asset = _text_asset(tmp_path)
     calls: list[dict[str, Any]] = []
     cfg = _cfg()
-    monkeypatch.setattr("sylliptor_agent_cli.assets.comprehender.get_api_key", lambda: "k")
+    monkeypatch.setattr("alysis_code.assets.comprehender.get_api_key", lambda: "k")
 
     def fake_make_llm_client(**kwargs: Any) -> _ToolRejectingClient:
         calls.append({"make_client": kwargs})
         return _ToolRejectingClient(calls)
 
     monkeypatch.setattr(
-        "sylliptor_agent_cli.assets.comprehender.make_llm_client",
+        "alysis_code.assets.comprehender.make_llm_client",
         fake_make_llm_client,
     )
 

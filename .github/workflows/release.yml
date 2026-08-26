@@ -29,7 +29,7 @@ jobs:
       - name: Validate tag matches package version and official source
         shell: bash
         env:
-          EXPECTED_REPOSITORY: AlysisAi/Sylliptor
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
           REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
@@ -97,8 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-          export SOURCE_DATE_EPOCH
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           uv build --clear --no-create-gitignore --no-build-isolation --no-sources --out-dir dist/python
 
       - name: Validate archive identity, inventory, and clean installation
@@ -109,7 +108,7 @@ jobs:
       - name: Export the locked runtime dependency SBOM
         run: >-
           uv export --frozen --no-dev --format cyclonedx1.5
-          --output-file dist/sylliptor-agent-cli.cdx.json
+          --output-file dist/alysis-code.cdx.json
 
       - name: Attest build provenance
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
@@ -120,7 +119,7 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4
         with:
           subject-path: dist/python/*
-          sbom-path: dist/sylliptor-agent-cli.cdx.json
+          sbom-path: dist/alysis-code.cdx.json
 
       - name: Upload validated release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -187,7 +186,7 @@ jobs:
             python scripts/release/validate_github_attestation_receipt.py \
               "$sbom_receipt" "$artifact" \
               --predicate-type "https://cyclonedx.org/bom" \
-              --expected-predicate dist/sylliptor-agent-cli.cdx.json
+              --expected-predicate dist/alysis-code.cdx.json
           done
         env:
           GH_TOKEN: ${{ github.token }}
@@ -217,5 +216,5 @@ jobs:
         with:
           files: |
             dist/python/*
-            dist/sylliptor-agent-cli.cdx.json
+            dist/alysis-code.cdx.json
           generate_release_notes: true

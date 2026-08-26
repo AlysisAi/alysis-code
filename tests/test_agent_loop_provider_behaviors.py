@@ -82,30 +82,30 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent.llm_calls import _is_fatal_non_repo_llm_error
-from sylliptor_agent_cli.agent.prompt_context import (
+from alysis_code.agent.llm_calls import _is_fatal_non_repo_llm_error
+from alysis_code.agent.prompt_context import (
     _NON_REPO_MAX_RECENT_VISIBLE_HISTORY_CHARS,
     _NON_REPO_MAX_RECENT_VISIBLE_HISTORY_TOTAL_CHARS,
 )
-from sylliptor_agent_cli.agent_loop import ToolDef, create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.metadata import (
+from alysis_code.agent_loop import ToolDef, create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.metadata import (
     GEMINI_GENERATE_CONTENT_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
     endpoint_descriptor,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMError, LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.protocols import ReasoningTraceCapability
-from sylliptor_agent_cli.llm.types import ReasoningOutputKind
-from sylliptor_agent_cli.llm_error_display import friendly_llm_error_message
-from sylliptor_agent_cli.request_estimation import (
+from alysis_code.llm.openai_compat import LLMError, LLMResponse, ToolCall
+from alysis_code.llm.protocols import ReasoningTraceCapability
+from alysis_code.llm.types import ReasoningOutputKind
+from alysis_code.llm_error_display import friendly_llm_error_message
+from alysis_code.request_estimation import (
     estimate_message_tokens,
     estimate_request_token_breakdown,
 )
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.tools.availability import WEB_UNAVAILABLE_OBSERVATION
-from sylliptor_agent_cli.tools.web_search import WebSearchError
+from alysis_code.session_store import read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.tools.availability import WEB_UNAVAILABLE_OBSERVATION
+from alysis_code.tools.web_search import WebSearchError
 
 
 @pytest.fixture(autouse=True)
@@ -113,12 +113,12 @@ def _unified_turn_path_default(monkeypatch: pytest.MonkeyPatch) -> None:
     # The unified (router-free) path is the config default; drop any ambient
     # env override so a developer shell pinned to the legacy path cannot flip
     # this suite onto machinery that no longer exists.
-    monkeypatch.delenv("SYLLIPTOR_UNIFIED_TURN_PATH", raising=False)
+    monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
 
 
 @pytest.fixture(autouse=True)
 def _clear_generic_web_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_WEB_SEARCH_API_KEY", raising=False)
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_API_KEY", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +409,7 @@ def test_final_text_reply_preserves_native_provider_metadata(tmp_path: Path) -> 
             ],
         },
         "groundingMetadata": {
-            "webSearchQueries": ["Sylliptor native providers"],
+            "webSearchQueries": ["Alysis Code native providers"],
         },
     }
     session = _session(tmp_path)
@@ -483,8 +483,8 @@ def test_streaming_turn_emits_live_deltas_and_bracketed_reasoning(tmp_path: Path
 
 # Salvages: test_raw_only_provider_capability_never_receives_display_callback
 def test_raw_only_provider_capability_never_receives_display_callback(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.cli_impl.tui.surface import TuiSurface
-    from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
+    from alysis_code.cli_impl.tui.surface import TuiSurface
+    from alysis_code.cli_impl.tui.transcript import TuiTranscript
 
     class _RawOnlyClient(_StreamingReplyClient):
         reasoning_trace_capability = ReasoningTraceCapability(
@@ -495,7 +495,7 @@ def test_raw_only_provider_capability_never_receives_display_callback(tmp_path: 
         )
 
     transcript = TuiTranscript()
-    surface = TuiSurface(transcript, auto_approve=lambda: True)
+    surface = TuiSurface(transcript)
     surface.set_trace_level("full")
     session = _session(
         tmp_path,
@@ -528,12 +528,12 @@ def test_trace_level_does_not_change_normal_agent_requests_or_usage(
     trace_level: str,
     stream: bool,
 ) -> None:
-    from sylliptor_agent_cli.cli_impl.tui.surface import TuiSurface
-    from sylliptor_agent_cli.cli_impl.tui.transcript import TuiTranscript
-    from sylliptor_agent_cli.llm.types import LLMUsage
+    from alysis_code.cli_impl.tui.surface import TuiSurface
+    from alysis_code.cli_impl.tui.transcript import TuiTranscript
+    from alysis_code.llm.types import LLMUsage
 
     transcript = TuiTranscript()
-    surface = TuiSurface(transcript, auto_approve=lambda: True)
+    surface = TuiSurface(transcript)
     surface.set_trace_level(trace_level)
     session = _session(
         tmp_path,
@@ -581,7 +581,7 @@ def test_trace_level_does_not_change_normal_agent_requests_or_usage(
 # Salvages: test_streaming_non_repo_turn_records_llm_usage (the metering-leak
 # guard: a streamed pure-chat turn must emit llm_usage and fold into totals)
 def test_streaming_chat_only_turn_records_llm_usage(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.llm.types import LLMUsage
+    from alysis_code.llm.types import LLMUsage
 
     surface = _DeltaCaptureSurface()
     session = _session(
@@ -622,7 +622,7 @@ def test_streaming_chat_only_turn_records_llm_usage(tmp_path: Path) -> None:
 def test_usage_record_uses_provider_count_when_response_omits_input_usage(
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli.llm.types import (
+    from alysis_code.llm.types import (
         InputTokenCount,
         LLMUsage,
         UsageConfidence,
@@ -671,7 +671,7 @@ def test_usage_record_uses_provider_count_when_response_omits_input_usage(
 
 # Salvages: test_main_hud_keeps_local_preflight_prompt_provenance
 def test_main_hud_keeps_local_preflight_prompt_provenance(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.llm.types import (
+    from alysis_code.llm.types import (
         InputTokenCount,
         LLMUsage,
         UsageConfidence,
@@ -736,7 +736,7 @@ def test_main_hud_keeps_local_preflight_prompt_provenance(tmp_path: Path) -> Non
 
 # Salvages: test_context_left_omits_tool_schemas_for_unsupported_protocol
 def test_context_left_omits_tool_schemas_for_unsupported_protocol(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.llm.types import UsageConfidence, UsageContract
+    from alysis_code.llm.types import UsageConfidence, UsageContract
 
     class _NoToolClient:
         model = "test-model"
@@ -821,7 +821,7 @@ def test_context_left_rebases_startup_tools_after_runtime_tool_disable(tmp_path:
 
 # Salvages: test_main_usage_anchors_hud_to_provider_visible_request
 def test_main_usage_anchors_hud_to_provider_visible_request(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.llm.types import LLMUsage, UsageConfidence, UsageContract
+    from alysis_code.llm.types import LLMUsage, UsageConfidence, UsageContract
 
     session = _session(tmp_path)
     try:
@@ -883,7 +883,7 @@ def test_main_usage_anchors_hud_to_provider_visible_request(tmp_path: Path) -> N
 
 
 # Salvages: test_is_fatal_non_repo_llm_error_classifies_trial_proxy_errors
-# (the helper now lives in sylliptor_agent_cli.agent.llm_calls)
+# (the helper now lives in alysis_code.agent.llm_calls)
 def test_is_fatal_non_repo_llm_error_classifies_trial_proxy_errors() -> None:
     for code in ("trial_expired", "quota_exhausted", "rate_limit_exceeded", "plan_inactive"):
         err = LLMError("LLM error 402: " + json.dumps({"error": {"code": code}}))
@@ -1068,14 +1068,14 @@ def test_missing_search_backend_does_not_fail_before_model_execution(
 ) -> None:
     for name in (
         "TAVILY_API_KEY",
-        "SYLLIPTOR_WEB_SEARCH_API_KEY",
-        "SYLLIPTOR_WEB_SEARCH_ADAPTER",
-        "SYLLIPTOR_WEB_SEARCH_BASE_URL",
-        "SYLLIPTOR_WEB_SEARCH_MODEL",
-        "SYLLIPTOR_WEB_SEARCH_PROVIDER",
+        "ALYSIS_WEB_SEARCH_API_KEY",
+        "ALYSIS_WEB_SEARCH_ADAPTER",
+        "ALYSIS_WEB_SEARCH_BASE_URL",
+        "ALYSIS_WEB_SEARCH_MODEL",
+        "ALYSIS_WEB_SEARCH_PROVIDER",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("SYLLIPTOR_WEB_SEARCH_KEYLESS", "0")
+    monkeypatch.setenv("ALYSIS_WEB_SEARCH_KEYLESS", "0")
     cfg = AppConfig(
         model="deepseek-v4-flash",
         base_url="https://api.deepseek.com",

@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli import agent_loop
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig, ConfigError, resolve_run_deadline
-from sylliptor_agent_cli.execution_deadline import (
+from alysis_code import agent_loop
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig, ConfigError, resolve_run_deadline
+from alysis_code.execution_deadline import (
     DEFAULT_RUN_DEADLINE_SECONDS,
     DeadlineDegradationPolicy,
     DeadlineOperation,
@@ -22,8 +22,8 @@ from sylliptor_agent_cli.execution_deadline import (
     ExecutionDeadline,
     resolve_deadline_degradation_policy,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.session_store import read_session_events
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.session_store import read_session_events
 
 
 class _FakeClock:
@@ -250,7 +250,7 @@ def test_disabled_degradation_keeps_the_budget_but_drops_the_stages() -> None:
 
 
 def test_kill_switch_disables_degradation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SYLLIPTOR_RUN_BUDGET_DEGRADATION", "off")
+    monkeypatch.setenv("ALYSIS_RUN_BUDGET_DEGRADATION", "off")
 
     policy = resolve_deadline_degradation_policy(AppConfig(model="test-model"))
 
@@ -284,7 +284,7 @@ def test_invalid_thresholds_fall_back_to_defaults(bad: Any) -> None:
 
 
 def test_budget_defaults_when_nothing_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model"),
@@ -301,7 +301,7 @@ def test_environment_can_select_unlimited_explicitly(
     monkeypatch: pytest.MonkeyPatch,
     token: str,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", token)
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", token)
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model"),
@@ -315,7 +315,7 @@ def test_environment_can_select_unlimited_explicitly(
 
 
 def test_no_deadline_flag_selects_unlimited(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model"),
@@ -330,7 +330,7 @@ def test_no_deadline_flag_selects_unlimited(monkeypatch: pytest.MonkeyPatch) -> 
 def test_no_deadline_flag_outranks_a_configured_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", "300")
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", "300")
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model", run_deadline_seconds=120.0),
@@ -342,7 +342,7 @@ def test_no_deadline_flag_outranks_a_configured_budget(
 
 
 def test_config_can_select_unlimited_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model", run_deadline_unlimited=True),
@@ -354,7 +354,7 @@ def test_config_can_select_unlimited_explicitly(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_setting_run_deadline_to_a_word_records_the_unlimited_choice() -> None:
-    from sylliptor_agent_cli.config import set_config_value
+    from alysis_code.config import set_config_value
 
     cfg = set_config_value(AppConfig(model="test-model"), "run_deadline_seconds", "unlimited")
 
@@ -374,7 +374,7 @@ def test_zero_and_negative_budgets_remain_invalid(
 ) -> None:
     # A zero-second budget is exhausted before it starts, so it stays an error
     # rather than becoming a spelling of "unlimited".
-    monkeypatch.setenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", bad)
+    monkeypatch.setenv("ALYSIS_RUN_DEADLINE_SECONDS", bad)
 
     with pytest.raises(ConfigError):
         resolve_run_deadline(
@@ -384,7 +384,7 @@ def test_zero_and_negative_budgets_remain_invalid(
 
 
 def test_explicit_budget_still_wins_over_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     resolved = resolve_run_deadline(
         AppConfig(model="test-model"),
@@ -397,7 +397,7 @@ def test_explicit_budget_still_wins_over_the_default(monkeypatch: pytest.MonkeyP
 
 
 def test_negative_cli_budget_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     with pytest.raises(ConfigError):
         resolve_run_deadline(AppConfig(model="test-model"), cli_deadline_seconds=-5.0)
@@ -408,26 +408,26 @@ def test_run_cli_forwards_the_budget_flags(tmp_path: Path, monkeypatch: pytest.M
 
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli import app as sylliptor_app
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli import app as alysis_app
 
     captured: dict[str, Any] = {}
 
     def fake_run_impl(_cli_mod: Any, *args: Any, **_kwargs: Any) -> int:
         # Positional order in the root wrapper: ..., deadline_seconds,
         # no_deadline, require_deadline, diagnostic_log.
-        captured["deadline_seconds"] = args[20]
-        captured["no_deadline"] = args[21]
-        captured["require_deadline"] = args[22]
+        captured["deadline_seconds"] = args[21]
+        captured["no_deadline"] = args[22]
+        captured["require_deadline"] = args[23]
         return 0
 
     monkeypatch.setattr(cli_mod, "run_impl", fake_run_impl, raising=False)
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
+    from alysis_code.cli_impl import chat as chat_facade
 
     monkeypatch.setattr(chat_facade, "run_impl", fake_run_impl)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "hello",
@@ -440,8 +440,8 @@ def test_run_cli_forwards_the_budget_flags(tmp_path: Path, monkeypatch: pytest.M
             "--no-deadline",
         ],
         env={
-            "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-            "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
+            "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+            "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
         },
     )
 
@@ -456,7 +456,7 @@ def test_interactive_runs_are_not_given_a_default_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    monkeypatch.delenv("SYLLIPTOR_RUN_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("ALYSIS_RUN_DEADLINE_SECONDS", raising=False)
 
     class _FakeSession:
         def run_turn(self, *_args: Any, **_kwargs: Any) -> int:
@@ -604,7 +604,7 @@ class _NeverEditsClient:
         return LLMResponse(content="Thinking about it.", tool_calls=[], raw={})
 
 
-def test_expiry_without_persisted_work_exits_nonzero(tmp_path: Path) -> None:
+def test_expiry_without_persisted_work_still_exits_zero(tmp_path: Path) -> None:
     clock = _FakeClock()
     session = _session_with_budget(tmp_path, clock, budget_seconds=600.0)
     session.client = _NeverEditsClient(clock, budget_seconds=600.0)
@@ -615,10 +615,22 @@ def test_expiry_without_persisted_work_exits_nonzero(tmp_path: Path) -> None:
     finally:
         session.close()
 
-    assert exit_code == 1
+    # Running out of budget is an outcome, not a crash, even when the run has
+    # nothing to show for itself: it stopped itself on purpose and said so.
+    # Exiting non-zero here is what made harnesses record the stop as
+    # NonZeroAgentExitCodeError.
+    assert exit_code == 0
     salvage = _event_payloads(log_path, "run_budget_salvage")
+    # The salvage record's own exit_code still reports whether material work
+    # persisted -- it is shared with the empty-response-stall path, where it is
+    # still the process exit code. It no longer decides the budget stop's.
     assert salvage[-1]["material_work_persisted"] is False
     assert salvage[-1]["exit_code"] == 1
+    # The stop is machine-identifiable without parsing prose.
+    assert _event_payloads(log_path, "deadline_exhausted")[-1]["stop_reason"] == (
+        "run_budget_exhausted"
+    )
+    assert _event_payloads(log_path, "final")[-1]["stop_reason"] == "run_budget_exhausted"
 
 
 def test_expiry_before_the_turn_starts_exits_cleanly(tmp_path: Path) -> None:
@@ -648,9 +660,9 @@ def test_expiry_before_the_turn_starts_exits_cleanly(tmp_path: Path) -> None:
     finally:
         session.close()
 
-    # Nothing ran, so there is nothing to salvage and the stop is a plain
-    # failure - but it must be a clean one, not a crash.
-    assert exit_code == 1
+    # Nothing ran, so there is nothing to salvage - but the budget still ran
+    # out, which is a normal outcome and exits clean.
+    assert exit_code == 0
     assert _event_payloads(log_path, "deadline_exhausted")
     assert not _event_payloads(log_path, "run_budget_salvage")
 
@@ -788,7 +800,7 @@ def test_max_steps_still_ends_a_run_inside_its_budget(tmp_path: Path) -> None:
 
 
 def test_shell_run_is_not_classified_as_a_file_mutation() -> None:
-    from sylliptor_agent_cli.agent.turn.core import _deadline_operation_for_tool_name
+    from alysis_code.agent.turn.core import _deadline_operation_for_tool_name
 
     # Wrap-up closes file mutation; a foreground shell command is how most runs
     # execute their tests, so it must not be swept up by that.
@@ -817,7 +829,7 @@ def test_budget_state_is_visible_in_deadline_telemetry() -> None:
 
 
 def test_subagent_budget_inherits_the_parent_degradation_policy() -> None:
-    from sylliptor_agent_cli.execution_deadline import derive_subagent_deadline
+    from alysis_code.execution_deadline import derive_subagent_deadline
 
     clock = _FakeClock()
     parent = _budget(1000.0, clock, convergence_fraction=0.5, wrap_up_fraction=0.6)

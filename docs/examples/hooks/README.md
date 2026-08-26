@@ -15,7 +15,7 @@ They demonstrate common policy patterns and are not installed automatically.
 ## Notes
 
 Project hook config is executable policy and is not trusted by default. Review
-copied hooks before running `sylliptor hooks trust --path .`.
+copied hooks before running `alysis hooks trust --path .`.
 
 ## See Also
 

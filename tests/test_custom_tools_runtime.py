@@ -10,15 +10,15 @@ from pathlib import Path
 
 import pytest
 
-import sylliptor_agent_cli.custom_tools.runtime as runtime_module
-from sylliptor_agent_cli.custom_tools.discovery import CustomToolSpec, discover_custom_tools
-from sylliptor_agent_cli.custom_tools.runtime import _worker_command, run_custom_tool
-from sylliptor_agent_cli.custom_tools.trust import (
+import alysis_code.custom_tools.runtime as runtime_module
+from alysis_code.custom_tools.discovery import CustomToolSpec, discover_custom_tools
+from alysis_code.custom_tools.runtime import _worker_command, run_custom_tool
+from alysis_code.custom_tools.trust import (
     ProjectToolTrustState,
     save_trust_state,
     trust_project_tool,
 )
-from sylliptor_agent_cli.tools.registry import iter_builtin_tool_metadata
+from alysis_code.tools.registry import iter_builtin_tool_metadata
 
 
 def _built_in_tool_names() -> set[str]:
@@ -34,7 +34,7 @@ def _write_tool(
     extra_manifest_lines: list[str] | None = None,
 ) -> Path:
     extra_manifest_lines = list(extra_manifest_lines or [])
-    path = workspace / ".sylliptor/tools" / filename
+    path = workspace / ".alysis/tools" / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     manifest_lines = [
         "TOOL = {",
@@ -95,7 +95,7 @@ def _write_global_tool(
 
 def _configure_trust_dir(workspace: Path, monkeypatch) -> Path:
     config_dir = workspace.parent / "config"
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", os.fspath(config_dir))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(config_dir))
     return config_dir
 
 
@@ -219,7 +219,7 @@ def _symlink_to_or_skip(
 def test_runtime_worker_command_does_not_use_dash_m_runtime_module() -> None:
     command = _worker_command()
 
-    assert ["-m", "sylliptor_agent_cli.custom_tools.runtime"] not in [
+    assert ["-m", "alysis_code.custom_tools.runtime"] not in [
         command[index : index + 2] for index in range(len(command) - 1)
     ]
 
@@ -229,7 +229,7 @@ def test_runtime_worker_command_uses_isolated_startup() -> None:
     source_root = os.fspath(Path(runtime_module.__file__).resolve().parents[2])
 
     assert "-I" in command
-    assert ["-m", "sylliptor_agent_cli.custom_tools.runtime"] not in [
+    assert ["-m", "alysis_code.custom_tools.runtime"] not in [
         command[index : index + 2] for index in range(len(command) - 1)
     ]
     assert "-c" in command
@@ -249,11 +249,11 @@ def test_runtime_worker_bootstrap_env_does_not_include_host_pythonpath(
     env = runtime_module._build_worker_bootstrap_env(
         {
             "PATH": "/usr/bin",
-            "SYLLIPTOR_WORKSPACE_ROOT": "/workspace",
-            "SYLLIPTOR_SESSION_ID": "session-1",
-            "SYLLIPTOR_TOOL_PATH": "/workspace/.sylliptor/tools/tool.py",
-            "SYLLIPTOR_TOOL_SCOPE": "project",
-            "SYLLIPTOR_TOOL_NAME": "tool",
+            "ALYSIS_WORKSPACE_ROOT": "/workspace",
+            "ALYSIS_SESSION_ID": "session-1",
+            "ALYSIS_TOOL_PATH": "/workspace/.alysis/tools/tool.py",
+            "ALYSIS_TOOL_SCOPE": "project",
+            "ALYSIS_TOOL_NAME": "tool",
         }
     )
 
@@ -271,7 +271,7 @@ def test_runtime_default_execution_uses_worker_subprocess(tmp_path: Path, monkey
             "import os\n"
             "return {"
             "'cwd': os.getcwd(), "
-            "'workspace': os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "'workspace': os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'pid': os.getpid()"
             "}"
         ),
@@ -306,7 +306,7 @@ def test_runtime_workspace_sitecustomize_does_not_run_before_tool_payload(
             "import sys\n"
             "from pathlib import Path\n"
             f"print({sentinel!r}, file=sys.stderr)\n"
-            "Path(os.environ.get('SYLLIPTOR_WORKSPACE_ROOT', '.'), "
+            "Path(os.environ.get('ALYSIS_WORKSPACE_ROOT', '.'), "
             "'sitecustomize-ran.txt').write_text('ran', encoding='utf-8')\n"
         ),
         encoding="utf-8",
@@ -350,7 +350,7 @@ def test_runtime_host_pythonpath_sitecustomize_does_not_run_before_tool_payload(
             "import sys\n"
             "from pathlib import Path\n"
             f"print({sentinel!r}, file=sys.stderr)\n"
-            "Path(os.environ.get('SYLLIPTOR_WORKSPACE_ROOT', '.'), "
+            "Path(os.environ.get('ALYSIS_WORKSPACE_ROOT', '.'), "
             "'host-pythonpath-sitecustomize-ran.txt').write_text('ran', encoding='utf-8')\n"
         ),
         encoding="utf-8",
@@ -465,7 +465,7 @@ def test_runtime_timeout_kills_descendant_process(tmp_path: Path, monkeypatch) -
             "import subprocess\n"
             "import sys\n"
             "from pathlib import Path\n"
-            "workspace = Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'])\n"
+            "workspace = Path(os.environ['ALYSIS_WORKSPACE_ROOT'])\n"
             "child = subprocess.Popen([sys.executable, '-c', "
             '"import time; time.sleep(3600)"])\n'
             "(workspace / 'child.pid').write_text(str(child.pid), encoding='utf-8')\n"
@@ -511,7 +511,7 @@ def test_runtime_successful_tool_background_child_is_cleaned_up(
             "import subprocess\n"
             "import sys\n"
             "from pathlib import Path\n"
-            "workspace = Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'])\n"
+            "workspace = Path(os.environ['ALYSIS_WORKSPACE_ROOT'])\n"
             "child = subprocess.Popen([sys.executable, '-c', "
             '"import time; time.sleep(3600)"])\n'
             "(workspace / 'background-child.pid').write_text(str(child.pid), encoding='utf-8')\n"
@@ -551,7 +551,7 @@ def test_runtime_process_tree_guard_failure_fails_before_user_code_runs(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
             "return {'ran': True}"
         ),
     )
@@ -643,7 +643,7 @@ def test_runtime_parent_interruption_cleans_up_process_tree(
             "import sys\n"
             "import time\n"
             "from pathlib import Path\n"
-            "workspace = Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'])\n"
+            "workspace = Path(os.environ['ALYSIS_WORKSPACE_ROOT'])\n"
             "child = subprocess.Popen([sys.executable, '-c', "
             '"import time; time.sleep(3600)"])\n'
             "(workspace / 'interrupted-child.pid').write_text(str(child.pid), encoding='utf-8')\n"
@@ -693,10 +693,10 @@ def test_runtime_blocks_host_package_import(tmp_path: Path, monkeypatch) -> None
         "host_import.py",
         name="host_import_tool",
         body=(
-            "import sylliptor_agent_cli.custom_tools.trust\n"
+            "import alysis_code.custom_tools.trust\n"
             "from pathlib import Path\n"
             "import os\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'host-import-ran.txt').write_text('ran', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -713,7 +713,7 @@ def test_runtime_blocks_host_package_import(tmp_path: Path, monkeypatch) -> None
     assert result["success"] is False
     assert result["timeout"] is False
     assert result["error_info"]["type"] == "HostImportBlocked"
-    assert "sylliptor_agent_cli" in result["error_info"]["message"]
+    assert "alysis_code" in result["error_info"]["message"]
     assert not side_effect.exists()
 
 
@@ -730,10 +730,10 @@ def test_runtime_blocks_host_package_import_via_importlib(
         name="host_importlib_tool",
         body=(
             "import importlib\n"
-            "importlib.import_module('sylliptor_agent_cli.custom_tools.trust')\n"
+            "importlib.import_module('alysis_code.custom_tools.trust')\n"
             "from pathlib import Path\n"
             "import os\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'host-importlib-ran.txt').write_text('ran', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -750,7 +750,7 @@ def test_runtime_blocks_host_package_import_via_importlib(
     assert result["success"] is False
     assert result["timeout"] is False
     assert result["error_info"]["type"] == "HostImportBlocked"
-    assert "sylliptor_agent_cli" in result["error_info"]["message"]
+    assert "alysis_code" in result["error_info"]["message"]
     assert not side_effect.exists()
 
 
@@ -794,7 +794,7 @@ def test_runtime_filesystem_write_none_blocks_workspace_write(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'blocked.txt').write_text('blocked', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -864,7 +864,7 @@ def test_runtime_filesystem_write_unspecified_blocks_workspace_write_by_default(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'blocked-default.txt').write_text('blocked', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -897,7 +897,7 @@ def test_runtime_filesystem_write_workspace_allows_workspace_write(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "target = Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'allowed.txt')\n"
+            "target = Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'allowed.txt')\n"
             "target.write_text('allowed', encoding='utf-8')\n"
             "return {'wrote': target.exists()}"
         ),
@@ -940,7 +940,7 @@ def test_runtime_filesystem_write_workspace_blocks_symlink_escape(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'escape', "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'escape', "
             "'outside.txt').write_text('escaped', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -968,7 +968,7 @@ def test_runtime_filesystem_write_tool_dir_allows_only_original_tool_dir(
 ) -> None:
     workspace = tmp_path / "workspace"
     _configure_trust_dir(workspace, monkeypatch)
-    tool_dir_file = workspace / ".sylliptor" / "tools" / "tool-dir-allowed.txt"
+    tool_dir_file = workspace / ".alysis" / "tools" / "tool-dir-allowed.txt"
     root_file = workspace / "tool-dir-blocked.txt"
     _write_tool(
         workspace,
@@ -977,9 +977,9 @@ def test_runtime_filesystem_write_tool_dir_allows_only_original_tool_dir(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "tool_dir = Path(os.environ['SYLLIPTOR_TOOL_PATH']).parent\n"
+            "tool_dir = Path(os.environ['ALYSIS_TOOL_PATH']).parent\n"
             "(tool_dir / 'tool-dir-allowed.txt').write_text('allowed', encoding='utf-8')\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'tool-dir-blocked.txt').write_text('blocked', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -1008,7 +1008,7 @@ def test_runtime_success_payload_reports_tool_dir_workspace_write_side_effect(
 ) -> None:
     workspace = tmp_path / "workspace"
     _configure_trust_dir(workspace, monkeypatch)
-    tool_dir_file = workspace / ".sylliptor" / "tools" / "tool-state.txt"
+    tool_dir_file = workspace / ".alysis" / "tools" / "tool-state.txt"
     _write_tool(
         workspace,
         "write_tool_dir.py",
@@ -1016,7 +1016,7 @@ def test_runtime_success_payload_reports_tool_dir_workspace_write_side_effect(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "tool_dir = Path(os.environ['SYLLIPTOR_TOOL_PATH']).parent\n"
+            "tool_dir = Path(os.environ['ALYSIS_TOOL_PATH']).parent\n"
             "(tool_dir / 'tool-state.txt').write_text('allowed', encoding='utf-8')\n"
             "return {'ran': True}"
         ),
@@ -1036,7 +1036,7 @@ def test_runtime_success_payload_reports_tool_dir_workspace_write_side_effect(
     assert result["success"] is True
     assert tool_dir_file.read_text(encoding="utf-8") == "allowed"
     assert result["side_effects"] == {
-        "workspace_writes": [{"path": ".sylliptor/tools/tool-state.txt", "scope": "tool_dir"}]
+        "workspace_writes": [{"path": ".alysis/tools/tool-state.txt", "scope": "tool_dir"}]
     }
 
 
@@ -1421,7 +1421,7 @@ def test_runtime_caught_policy_violation_still_fails_call(
             "import os\n"
             "from pathlib import Path\n"
             "try:\n"
-            "    Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], "
+            "    Path(os.environ['ALYSIS_WORKSPACE_ROOT'], "
             "'caught-policy.txt').write_text('blocked', encoding='utf-8')\n"
             "except Exception:\n"
             "    pass\n"
@@ -1506,7 +1506,7 @@ def test_runtime_can_spool_streams_to_external_artifact_dir(
     assert result["success"] is True
     assert result["stdout_artifact_path"].startswith("session_artifacts/tool_logs/")
     assert result["stderr_artifact_path"].startswith("session_artifacts/tool_logs/")
-    assert not (workspace / ".sylliptor" / "runs" / "session-1" / "tool_logs").exists()
+    assert not (workspace / ".alysis" / "runs" / "session-1" / "tool_logs").exists()
     stdout_artifacts = sorted(artifact_dir.glob("*.stdout.log"))
     stderr_artifacts = sorted(artifact_dir.glob("*.stderr.log"))
     assert len(stdout_artifacts) == 1
@@ -1553,7 +1553,7 @@ def test_docs_workspace_manifest_example_runs_under_subprocess_runtime(
     example = repo_root / "docs" / "examples" / "custom_tools" / "workspace_manifest.py"
     workspace = tmp_path / "workspace"
     _configure_trust_dir(workspace, monkeypatch)
-    tool_path = workspace / ".sylliptor" / "tools" / "workspace_manifest.py"
+    tool_path = workspace / ".alysis" / "tools" / "workspace_manifest.py"
     tool_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(example, tool_path)
     (workspace / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
@@ -1633,7 +1633,7 @@ def test_runtime_fails_closed_on_stale_project_tool_hash_before_user_code_runs(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
             "return {'ran': True}"
         ),
     )
@@ -1669,7 +1669,7 @@ def test_runtime_fails_closed_on_stale_global_tool_hash_before_user_code_runs(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
             "return {'ran': True}"
         ),
     )
@@ -1705,7 +1705,7 @@ def test_runtime_fails_closed_when_project_tool_trust_removed_after_discovery(
         body=(
             "import os\n"
             "from pathlib import Path\n"
-            "Path(os.environ['SYLLIPTOR_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
+            "Path(os.environ['ALYSIS_WORKSPACE_ROOT'], 'side-effect.txt').write_text('ran')\n"
             "return {'ran': True}"
         ),
     )
@@ -1736,7 +1736,7 @@ def test_runtime_executes_from_sealed_copy_and_preserves_original_tool_path_env(
         workspace,
         "sealed.py",
         name="sealed_tool",
-        body="import os\nreturn {'file': __file__, 'env_tool_path': os.environ['SYLLIPTOR_TOOL_PATH']}",
+        body="import os\nreturn {'file': __file__, 'env_tool_path': os.environ['ALYSIS_TOOL_PATH']}",
     )
     spec = _trust_project_spec(_discover_project_spec(workspace))
 
@@ -1767,11 +1767,11 @@ def test_runtime_scrubs_worker_env_to_declared_allowlist(
         "EXTRA_SECRET",
         "OPENAI_API_KEY",
         "AWS_SECRET_ACCESS_KEY",
-        "SYLLIPTOR_WORKSPACE_ROOT",
-        "SYLLIPTOR_SESSION_ID",
-        "SYLLIPTOR_TOOL_PATH",
-        "SYLLIPTOR_TOOL_SCOPE",
-        "SYLLIPTOR_TOOL_NAME",
+        "ALYSIS_WORKSPACE_ROOT",
+        "ALYSIS_SESSION_ID",
+        "ALYSIS_TOOL_PATH",
+        "ALYSIS_TOOL_SCOPE",
+        "ALYSIS_TOOL_NAME",
     ]
     _write_tool(
         workspace,
@@ -1804,11 +1804,11 @@ def test_runtime_scrubs_worker_env_to_declared_allowlist(
     assert values["JIRA_TOKEN"] == "jira-token"
     assert values["EXTRA_SECRET"] == "extra-secret"
     for key in [
-        "SYLLIPTOR_WORKSPACE_ROOT",
-        "SYLLIPTOR_SESSION_ID",
-        "SYLLIPTOR_TOOL_PATH",
-        "SYLLIPTOR_TOOL_SCOPE",
-        "SYLLIPTOR_TOOL_NAME",
+        "ALYSIS_WORKSPACE_ROOT",
+        "ALYSIS_SESSION_ID",
+        "ALYSIS_TOOL_PATH",
+        "ALYSIS_TOOL_SCOPE",
+        "ALYSIS_TOOL_NAME",
     ]:
         assert key in values
     assert "OPENAI_API_KEY" not in result["result"]["keys"]

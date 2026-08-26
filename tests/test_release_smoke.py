@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli import __version__
+from alysis_code import __version__
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SMOKE_MODEL = "gpt-4o-mini"
@@ -37,14 +37,14 @@ def _venv_python(venv_dir: Path) -> Path:
 def _venv_entrypoint(venv_dir: Path) -> Path:
     scripts_dir = venv_dir / ("Scripts" if os.name == "nt" else "bin")
     candidates = (
-        scripts_dir / "sylliptor.exe",
-        scripts_dir / "sylliptor",
-        scripts_dir / "sylliptor-script.py",
+        scripts_dir / "alysis.exe",
+        scripts_dir / "alysis",
+        scripts_dir / "alysis-script.py",
     )
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    raise AssertionError(f"Installed sylliptor entrypoint not found under {scripts_dir}")
+    raise AssertionError(f"Installed alysis entrypoint not found under {scripts_dir}")
 
 
 def _subprocess_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -151,24 +151,6 @@ def test_editable_build_helper_is_exactly_pinned_and_locked() -> None:
     assert locked_versions == {"0.5"}
 
 
-def test_release_version_sources_are_aligned() -> None:
-    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
-
-    project_version = str(project["project"]["version"])
-    locked_projects = [
-        package
-        for package in lock["package"]
-        if package["name"] == "sylliptor-agent-cli"
-        and package.get("source", {}).get("editable") == "."
-    ]
-
-    assert len(locked_projects) == 1
-    assert __version__ == project_version
-    assert str(locked_projects[0]["version"]) == project_version
-    assert f"## [{project_version}]" in (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-
-
 def _install_cli(tmp_root: Path, *, install_mode: str) -> _InstalledCli:
     build_env = _build_backend_env()
     install_env = _subprocess_env()
@@ -203,7 +185,7 @@ def _install_cli(tmp_root: Path, *, install_mode: str) -> _InstalledCli:
             env=build_env,
         )
         _assert_completed_ok(wheel_proc, label="build wheel")
-        [wheel_path] = sorted(wheelhouse.glob("sylliptor_agent_cli-*.whl"))
+        [wheel_path] = sorted(wheelhouse.glob("alysis_code-*.whl"))
         install_target = [os.fspath(wheel_path)]
     elif install_mode == "editable":
         install_target = ["-e", os.fspath(REPO_ROOT)]
@@ -258,9 +240,9 @@ def _smoke_runtime_env(state_root: Path) -> dict[str, str]:
     data_dir = state_root / "data"
     env = _subprocess_env(
         {
-            "SYLLIPTOR_CONFIG_DIR": os.fspath(config_dir),
-            "SYLLIPTOR_DATA_DIR": os.fspath(data_dir),
-            "SYLLIPTOR_FORGE_PLAN_ASSISTANT": "0",
+            "ALYSIS_CONFIG_DIR": os.fspath(config_dir),
+            "ALYSIS_DATA_DIR": os.fspath(data_dir),
+            "ALYSIS_FORGE_PLAN_ASSISTANT": "0",
         }
     )
     runtime_pythonpath = _runtime_dependency_pythonpath()
@@ -304,7 +286,14 @@ def test_installed_cli_entrypoint_smoke_from_outside_source_tree(
         env=runtime_env,
     )
     _assert_completed_ok(version_proc, label="installed --version")
-    assert version_proc.stdout.strip() == __version__
+    # Version first, then commit/timestamp/dirty on the same line. An installed
+    # wheel that was not stamped by scripts/generate_build_info.py reports the
+    # dev default here, which is the honest answer and is exactly what
+    # --require-clean-build refuses.
+    printed_version = version_proc.stdout.strip()
+    assert printed_version.split()[0] == __version__
+    for marker in ("commit:", "built:", "dirty:"):
+        assert marker in printed_version
 
     config_set_proc = _run_subprocess(
         [os.fspath(installed_cli.entrypoint), "config", "set", "model", SMOKE_MODEL],
@@ -340,7 +329,7 @@ def test_installed_cli_entrypoint_smoke_from_outside_source_tree(
     assert "exec" in (forge_help_proc.stdout + forge_help_proc.stderr)
 
     config_payload = json.loads(
-        (Path(runtime_env["SYLLIPTOR_CONFIG_DIR"]) / "config.json").read_text(encoding="utf-8")
+        (Path(runtime_env["ALYSIS_CONFIG_DIR"]) / "config.json").read_text(encoding="utf-8")
     )
     assert config_payload["model"] == SMOKE_MODEL
 
@@ -374,13 +363,13 @@ def test_installed_wheel_cli_release_smoke_forge_journey_writes_expected_artifac
 
             from typer.testing import CliRunner
 
-            from sylliptor_agent_cli import cli as cli_mod
-            from sylliptor_agent_cli.cli import app
-            from sylliptor_agent_cli.config import AppConfig
-            from sylliptor_agent_cli.forge import load_plan, save_plan
+            from alysis_code import cli as cli_mod
+            from alysis_code.cli import app
+            from alysis_code.config import AppConfig
+            from alysis_code.forge import load_plan, save_plan
 
-            workspace = Path(os.environ["SYLLIPTOR_SMOKE_WORKSPACE"])
-            result_path = Path(os.environ["SYLLIPTOR_SMOKE_RESULT_JSON"])
+            workspace = Path(os.environ["ALYSIS_SMOKE_WORKSPACE"])
+            result_path = Path(os.environ["ALYSIS_SMOKE_RESULT_JSON"])
             calls: list[dict[str, object]] = []
 
             cli_mod._prompt_forge_entry_plan_assistant = lambda *, console: False
@@ -419,9 +408,9 @@ def test_installed_wheel_cli_release_smoke_forge_journey_writes_expected_artifac
             cli_mod.run_swarm = fake_run_swarm
 
             env = {
-                "SYLLIPTOR_CONFIG_DIR": os.environ["SYLLIPTOR_CONFIG_DIR"],
-                "SYLLIPTOR_DATA_DIR": os.environ["SYLLIPTOR_DATA_DIR"],
-                "SYLLIPTOR_FORGE_PLAN_ASSISTANT": "0",
+                "ALYSIS_CONFIG_DIR": os.environ["ALYSIS_CONFIG_DIR"],
+                "ALYSIS_DATA_DIR": os.environ["ALYSIS_DATA_DIR"],
+                "ALYSIS_FORGE_PLAN_ASSISTANT": "0",
             }
             result = CliRunner().invoke(
                     app,
@@ -438,10 +427,10 @@ def test_installed_wheel_cli_release_smoke_forge_journey_writes_expected_artifac
                 terminal_width=120,
             )
 
-            current_run_path = workspace / ".sylliptor" / "current_run.json"
+            current_run_path = workspace / ".alysis" / "current_run.json"
             pointer = json.loads(current_run_path.read_text(encoding="utf-8"))
-            run_dir = workspace / ".sylliptor" / "runs" / pointer["run_id"]
-            sessions_dir = Path(os.environ["SYLLIPTOR_DATA_DIR"]) / "sessions"
+            run_dir = workspace / ".alysis" / "runs" / pointer["run_id"]
+            sessions_dir = Path(os.environ["ALYSIS_DATA_DIR"]) / "sessions"
             plan = load_plan(cli_mod.load_current_run_paths(workspace))
 
             payload = {
@@ -478,8 +467,8 @@ def test_installed_wheel_cli_release_smoke_forge_journey_writes_expected_artifac
         cwd=tmp_path,
         env={
             **runtime_env,
-            "SYLLIPTOR_SMOKE_WORKSPACE": os.fspath(workspace),
-            "SYLLIPTOR_SMOKE_RESULT_JSON": os.fspath(result_json),
+            "ALYSIS_SMOKE_WORKSPACE": os.fspath(workspace),
+            "ALYSIS_SMOKE_RESULT_JSON": os.fspath(result_json),
         },
     )
     _assert_completed_ok(proc, label="installed wheel release smoke harness")

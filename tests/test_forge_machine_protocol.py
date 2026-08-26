@@ -13,12 +13,12 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
-from sylliptor_agent_cli import swarm_orchestrator
-from sylliptor_agent_cli.cli import app as sylliptor_app
-from sylliptor_agent_cli.cli_impl.commands import forge as forge_commands
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.forge_events import (
+from alysis_code import cli as cli_mod
+from alysis_code import swarm_orchestrator
+from alysis_code.cli import app as alysis_app
+from alysis_code.cli_impl.commands import forge as forge_commands
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.forge_events import (
     EVENT_ERROR,
     EVENT_PLAN_INVALID,
     EVENT_PLAN_SAVED,
@@ -41,18 +41,18 @@ from sylliptor_agent_cli.forge_events import (
     machine_session,
     parse_event_line,
 )
-from sylliptor_agent_cli.plan_repair import PlannerRepairReport, record_plan_repair
-from sylliptor_agent_cli.review_gate import ReviewOutcome
+from alysis_code.plan_repair import PlannerRepairReport, record_plan_repair
+from alysis_code.review_gate import ReviewOutcome
 
 ALL_FORGE_COMMANDS = ("plan", "show", "status", "review", "exec", "swarm", "attach")
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
     return {
-        "SYLLIPTOR_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
-        "SYLLIPTOR_DATA_DIR": os.fspath(tmp_path / "data"),
-        "SYLLIPTOR_CONTEXT_WINDOW": "200000",
-        "SYLLIPTOR_MAX_OUTPUT_TOKENS": "8192",
+        "ALYSIS_CONFIG_DIR": os.fspath(tmp_path / "cfg"),
+        "ALYSIS_DATA_DIR": os.fspath(tmp_path / "data"),
+        "ALYSIS_CONTEXT_WINDOW": "200000",
+        "ALYSIS_MAX_OUTPUT_TOKENS": "8192",
     }
 
 
@@ -260,12 +260,9 @@ def test_session_restores_active_emitter_even_when_the_body_raises() -> None:
 def test_every_forge_command_accepts_machine_flag() -> None:
     runner = CliRunner()
     for command in ALL_FORGE_COMMANDS:
-        result = runner.invoke(
-            sylliptor_app,
-            ["forge", command, "--machine", "--help"],
-            env={"COLUMNS": "30"},
-        )
-        assert result.exit_code == 0, f"forge {command} does not accept --machine"
+        result = runner.invoke(alysis_app, ["forge", command, "--help"])
+        assert result.exit_code == 0, f"forge {command} --help failed"
+        assert "--machine" in result.stdout, f"forge {command} is missing --machine"
 
 
 def test_show_emits_ndjson_only_on_success(tmp_path: Path) -> None:
@@ -274,7 +271,7 @@ def test_show_emits_ndjson_only_on_success(tmp_path: Path) -> None:
     task_id, _ = _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -295,7 +292,7 @@ def test_show_reports_draft_status_and_the_blocking_reasons(tmp_path: Path) -> N
     _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -318,7 +315,7 @@ def test_show_reports_execution_ready_for_a_runnable_plan(tmp_path: Path) -> Non
     save_plan(paths, plan)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -345,7 +342,7 @@ def test_show_surfaces_host_repaired_fields_recorded_on_the_plan(tmp_path: Path)
     save_plan(paths, plan)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -372,7 +369,7 @@ def test_show_reports_repairs_in_human_mode(tmp_path: Path) -> None:
     save_plan(paths, plan)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -401,7 +398,7 @@ def test_swarm_plan_invalid_carries_plan_status_and_repair_fields(tmp_path: Path
     save_plan(paths, plan)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -434,7 +431,7 @@ def test_status_emits_ndjson_only_on_success(tmp_path: Path) -> None:
     _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "status", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -451,7 +448,7 @@ def test_group_level_machine_flag_is_equivalent(tmp_path: Path) -> None:
     _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "--machine", "status", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -466,7 +463,7 @@ def test_missing_run_emits_terminal_error(command: str, tmp_path: Path) -> None:
     repo.mkdir()
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", command, "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -487,7 +484,7 @@ def test_attach_emits_terminal_error_without_a_run(tmp_path: Path) -> None:
     source.write_text("hello\n", encoding="utf-8")
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -504,7 +501,7 @@ def test_attach_emits_ndjson_only_on_success(tmp_path: Path) -> None:
     source.write_text("hello\n", encoding="utf-8")
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "attach", os.fspath(source), "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -550,7 +547,7 @@ def test_review_exits_zero_and_reports_the_verdict_as_data(
     )
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "review",
@@ -585,7 +582,7 @@ def test_review_emits_terminal_error_for_unknown_task(tmp_path: Path) -> None:
     _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "review",
@@ -620,7 +617,7 @@ def _invoke_exec(repo: Path, task_id: str, tmp_path: Path, *, machine: bool = Tr
     ]
     if machine:
         argv.append("--machine")
-    return CliRunner().invoke(sylliptor_app, argv, env=_env(tmp_path))
+    return CliRunner().invoke(alysis_app, argv, env=_env(tmp_path))
 
 
 def test_exec_emits_task_lifecycle_and_terminal_event_on_success(
@@ -713,7 +710,7 @@ def test_terminal_event_is_emitted_when_an_exception_escapes_the_command(
     monkeypatch.setattr(forge_commands, "forge_asset_view_entries", explode)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "show", "--path", os.fspath(repo), "--machine"],
         env=_env(tmp_path),
     )
@@ -813,7 +810,7 @@ def test_swarm_dry_run_emits_ndjson_only(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "run_swarm", lambda **_kwargs: EXIT_OK)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -849,7 +846,7 @@ def test_swarm_unexpected_exception_is_a_command_error_not_a_failed_run(
     monkeypatch.setattr(cli_mod, "run_swarm", exploding_run_swarm)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -880,7 +877,7 @@ def test_swarm_reports_plan_invalid_when_no_tasks_are_execution_ready(tmp_path: 
     save_plan(paths, plan)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "forge",
             "swarm",
@@ -920,7 +917,7 @@ def test_human_mode_prints_prose_and_no_events(tmp_path: Path) -> None:
     _prepare_run(repo)
 
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         ["forge", "status", "--path", os.fspath(repo)],
         env=_env(tmp_path),
     )
@@ -945,7 +942,7 @@ def test_plan_stdout_is_pure_ndjson_in_a_real_process(tmp_path: Path) -> None:
         [
             sys.executable,
             "-m",
-            "sylliptor_agent_cli",
+            "alysis_code",
             "forge",
             "plan",
             "--path",

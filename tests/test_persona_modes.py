@@ -1,9 +1,11 @@
-"""Persona registry, configuration, prompt context, and surface behavior.
+"""Persona modes PR A: registry, config keys, env-context line, surface event.
 
-This suite pins the public persona surface: registry vocabulary and defaults,
-strict config-time validation vs lenient runtime normalization, the kill-switch
-pair, the ``persona_models.<persona>`` dotted keys, the environment-context
-``persona:`` line, and ``PersonaChanged`` surface event dispatch.
+Personas are conventions layered on the execution-mode gate (see
+``docs/persona_modes_design.md``). This suite pins the PR A surface: the
+registry vocabulary and defaults, strict config-time validation vs lenient
+runtime normalization, the kill-switch pair, the ``persona_models.<persona>``
+dotted keys, the environment-context ``persona:`` line (absent for the no-op
+Code persona), and the ``PersonaChanged`` surface event dispatch.
 """
 
 from __future__ import annotations
@@ -13,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.personas import (
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.personas import (
     BUILTIN_PERSONAS,
     DEFAULT_PERSONA,
     PERSONA_NAMES,
@@ -93,13 +95,13 @@ def test_get_persona_falls_back_to_code() -> None:
 
 
 def test_persona_modes_enabled_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     assert persona_modes_enabled(AppConfig()) is True
     assert persona_modes_enabled(None) is True
 
 
 def test_persona_modes_enabled_config_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     cfg = AppConfig()
     cfg.persona_modes_enabled = False
     assert persona_modes_enabled(cfg) is False
@@ -113,7 +115,7 @@ def test_persona_modes_env_wins_over_config(
 ) -> None:
     cfg = AppConfig()
     cfg.persona_modes_enabled = not expected
-    monkeypatch.setenv("SYLLIPTOR_PERSONA_MODES", env_value)
+    monkeypatch.setenv("ALYSIS_PERSONA_MODES", env_value)
     assert persona_modes_enabled(cfg) is expected
 
 
@@ -189,7 +191,7 @@ def test_resolve_persona_model_role_precedence() -> None:
 
 
 def _env_context(**overrides: object) -> str:
-    from sylliptor_agent_cli.agent.prompt_context import _environment_context_message
+    from alysis_code.agent.prompt_context import _environment_context_message
 
     kwargs: dict[str, object] = dict(
         mode="review",
@@ -233,7 +235,7 @@ def test_environment_context_keeps_user_and_persona_scopes_separate() -> None:
 
 
 def test_refresh_updates_persona_line_from_session_state() -> None:
-    from sylliptor_agent_cli.agent.prompt_context import (
+    from alysis_code.agent.prompt_context import (
         refresh_session_environment_context_message,
     )
 
@@ -266,14 +268,14 @@ def test_refresh_updates_persona_line_from_session_state() -> None:
 
 
 def test_agent_session_persona_field_defaults_to_code() -> None:
-    from sylliptor_agent_cli.agent.session import AgentSession
+    from alysis_code.agent.session import AgentSession
 
     fields = {f.name: f for f in dataclasses.fields(AgentSession)}
     assert fields["persona"].default == "code"
 
 
 def test_persona_changed_event_shape_and_registry() -> None:
-    from sylliptor_agent_cli.surface.events import EVENT_REGISTRY, PersonaChanged
+    from alysis_code.surface.events import EVENT_REGISTRY, PersonaChanged
 
     event = PersonaChanged(persona="ask", effective_mode="readonly", source="model")
     assert event.type == "persona_changed"
@@ -285,8 +287,8 @@ def test_persona_changed_event_shape_and_registry() -> None:
 
 
 def test_persona_changed_dispatches_through_surface_emit() -> None:
-    from sylliptor_agent_cli.surface.base import Surface
-    from sylliptor_agent_cli.surface.events import PersonaChanged
+    from alysis_code.surface.base import Surface
+    from alysis_code.surface.events import PersonaChanged
 
     recorded: list[tuple[str, str, str]] = []
 
@@ -327,7 +329,7 @@ def test_clamp_persona_exec_mode(persona_default: str, base: str, expected: str)
 
 
 def test_scoped_persona_cannot_leave_scope_unenforced_in_fullaccess() -> None:
-    from sylliptor_agent_cli.personas import PersonaDefinition
+    from alysis_code.personas import PersonaDefinition
 
     definition = PersonaDefinition(
         name="docs-writer",
@@ -379,7 +381,7 @@ class _FakeChatSession:
 
 @pytest.fixture()
 def loop_mod(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
-    from sylliptor_agent_cli.cli_impl.chat import loop as loop_module
+    from alysis_code.cli_impl.chat import loop as loop_module
 
     applied: list[str] = []
 
@@ -534,7 +536,7 @@ def test_startup_persona_applies_only_non_default(
 
     disabled = _FakeChatSession(persona="architect")
     disabled.cfg.persona_modes_enabled = False
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     loop_mod._apply_startup_persona(session=disabled)
     assert calls == []
 
@@ -555,8 +557,8 @@ def _run_chat_command(
 
     from rich.console import Console
 
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
 
     persona_calls: list[str] = []
 
@@ -574,7 +576,7 @@ def _run_chat_command(
     monkeypatch.setattr(chat_facade, "_apply_chat_persona", _fake_apply_persona, raising=False)
     monkeypatch.setattr(chat_facade, "_apply_chat_effective_mode", _fake_apply_mode, raising=False)
 
-    from sylliptor_agent_cli import cli as cli_mod
+    from alysis_code import cli as cli_mod
 
     chat_facade._sync_cli_globals(cli_mod)
 
@@ -598,7 +600,7 @@ def _run_chat_command(
 
 
 def test_persona_command_switches_persona(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     output, persona = _run_chat_command("/persona architect", session, monkeypatch)
     assert persona == "architect"
@@ -607,7 +609,7 @@ def test_persona_command_switches_persona(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_persona_command_refused_in_plan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     output, persona = _run_chat_command("/persona ask", session, monkeypatch, plan_mode_on=True)
     assert persona == "code"
@@ -616,7 +618,7 @@ def test_persona_command_refused_in_plan_mode(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_persona_command_disabled_by_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     session.cfg.persona_modes_enabled = False
     output, persona = _run_chat_command("/persona ask", session, monkeypatch)
@@ -626,7 +628,7 @@ def test_persona_command_disabled_by_kill_switch(monkeypatch: pytest.MonkeyPatch
 
 
 def test_persona_command_invalid_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     output, persona = _run_chat_command("/persona wizard", session, monkeypatch)
     assert persona == "code"
@@ -636,7 +638,7 @@ def test_persona_command_invalid_name(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_mode_command_points_persona_args_at_persona_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     output, persona = _run_chat_command("/mode architect", session, monkeypatch)
     assert persona == "code"
@@ -658,7 +660,7 @@ def test_mode_command_exec_mode_clears_persona_restore(monkeypatch: pytest.Monke
 
 
 def test_next_persona_cycle() -> None:
-    from sylliptor_agent_cli.personas import next_persona
+    from alysis_code.personas import next_persona
 
     assert next_persona("code") == "architect"
     assert next_persona("architect") == "ask"
@@ -672,7 +674,7 @@ def test_next_persona_cycle() -> None:
 def test_mode_picker_rows_contain_no_personas() -> None:
     # Personas moved out of the /mode picker (Tab cycles them in the TUI);
     # the picker surface is execution modes only.
-    from sylliptor_agent_cli.cli_impl.commands.chat_terminal import _chat_mode_rows
+    from alysis_code.cli_impl.commands.chat_terminal import _chat_mode_rows
 
     values = [value for value, _label, _desc in _chat_mode_rows()]
     assert values == ["review", "auto", "readonly", "fullaccess"]
@@ -684,7 +686,7 @@ def test_mode_picker_rows_contain_no_personas() -> None:
 
 
 def _interactive_session(tmp_path: Path, **kwargs: object):  # type: ignore[no-untyped-def]
-    from sylliptor_agent_cli.agent_loop import create_session
+    from alysis_code.agent_loop import create_session
 
     cfg = AppConfig(model="test-model")
     return create_session(
@@ -723,7 +725,7 @@ def test_switch_mode_survives_readonly_mode(tmp_path: Path) -> None:
 def test_switch_mode_absent_when_kill_switch_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PERSONA_MODES", "off")
+    monkeypatch.setenv("ALYSIS_PERSONA_MODES", "off")
     session = _interactive_session(tmp_path)
     try:
         assert "switch_mode" not in session.tools
@@ -733,7 +735,7 @@ def test_switch_mode_absent_when_kill_switch_off(
 
 
 def test_switch_mode_approval_decline_and_dedupe(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.surface.types import ApprovalDecision
+    from alysis_code.surface.types import ApprovalDecision
 
     session = _interactive_session(tmp_path)
     try:
@@ -780,9 +782,9 @@ def test_switch_mode_approval_decline_and_dedupe(tmp_path: Path) -> None:
 def test_persona_overlays_empty_for_code_and_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli.personas import persona_overlay_messages
+    from alysis_code.personas import persona_overlay_messages
 
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     cfg = AppConfig()
     assert persona_overlay_messages(cfg=cfg, persona="code") == []
     assert persona_overlay_messages(cfg=cfg, persona="unknown") == []
@@ -793,9 +795,9 @@ def test_persona_overlays_empty_for_code_and_disabled(
 def test_persona_overlays_present_and_gate_deferring(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sylliptor_agent_cli.personas import persona_overlay_messages
+    from alysis_code.personas import persona_overlay_messages
 
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     cfg = AppConfig()
     for persona in ("architect", "ask", "debug"):
         messages = persona_overlay_messages(cfg=cfg, persona=persona)
@@ -812,9 +814,9 @@ def test_chat_command_retired_with_pointer(monkeypatch: pytest.MonkeyPatch) -> N
 
     from rich.console import Console
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
 
     chat_facade._sync_cli_globals(cli_mod)
     buffer = io.StringIO()
@@ -835,8 +837,8 @@ def test_chat_command_retired_with_pointer(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_chat_removed_from_visible_surfaces() -> None:
-    from sylliptor_agent_cli.cli_impl.chat_slash_completer import get_chat_specs
-    from sylliptor_agent_cli.cli_impl.commands.cli_common import (
+    from alysis_code.cli_impl.chat_slash_completer import get_chat_specs
+    from alysis_code.cli_impl.commands.cli_common import (
         _CHAT_GLOBAL_VISIBLE_COMMANDS,
         _CHAT_RETIRED_COMMANDS,
     )
@@ -847,16 +849,32 @@ def test_chat_removed_from_visible_surfaces() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Persona switch application chain
+# IDE bridge degradation and switch_mode chain (P3)
 # ---------------------------------------------------------------------------
+
+
+def test_ide_bridge_rejects_persona_names_as_modes() -> None:
+    # The IDE bridge speaks execution modes only; persona vocabulary must be
+    # rejected cleanly (ProtocolError), never half-applied.
+    from alysis_code.ide.health import SUPPORTED_MODES, capabilities_payload
+    from alysis_code.ide.stdio_bridge import ProtocolError, _mode_param
+
+    assert set(SUPPORTED_MODES) == {"readonly", "review", "auto"}
+    assert not set(PERSONA_NAMES) & set(SUPPORTED_MODES)
+    assert set(capabilities_payload()["modes"]) == set(SUPPORTED_MODES)
+    for persona in PERSONA_NAMES:
+        if persona in SUPPORTED_MODES:
+            continue
+        with pytest.raises(ProtocolError):
+            _mode_param({"mode": persona}, request_id=1)
 
 
 def test_switch_mode_approval_to_application_chain(tmp_path: Path) -> None:
     # The full production path: tool proposal -> approval -> parked ->
     # turn-end application -> narrowed tool surface.
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.surface.types import ApprovalDecision
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.surface.types import ApprovalDecision
 
     chat_facade._sync_cli_globals(cli_mod)
     session = _interactive_session(tmp_path)
@@ -881,7 +899,7 @@ def test_switch_mode_approval_to_application_chain(tmp_path: Path) -> None:
 
 
 def test_tui_config_flow_persona_section_round_trip() -> None:
-    from sylliptor_agent_cli.cli_impl.tui.config_flow import ConfigFlow
+    from alysis_code.cli_impl.tui.config_flow import ConfigFlow
 
     flow = ConfigFlow(cfg=AppConfig(model="test-model"))
     flow._choose_menu("personas")
@@ -906,7 +924,7 @@ def test_system_prompt_persona_section_present_when_enabled(tmp_path: Path) -> N
 def test_system_prompt_persona_section_absent_when_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SYLLIPTOR_PERSONA_MODES", "off")
+    monkeypatch.setenv("ALYSIS_PERSONA_MODES", "off")
     session = _interactive_session(tmp_path)
     try:
         prompt = str(session.messages[0].get("content") or "")
@@ -916,7 +934,7 @@ def test_system_prompt_persona_section_absent_when_disabled(
 
 
 def test_chat_status_rows_include_persona(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.cli_impl.commands.chat_status import _chat_status_panel_spec
+    from alysis_code.cli_impl.commands.chat_status import _chat_status_panel_spec
 
     session = _interactive_session(tmp_path)
     try:
@@ -935,7 +953,7 @@ def test_chat_status_rows_include_persona(tmp_path: Path) -> None:
 
 
 def _write_custom_persona(root: Path, name: str, *, body: str = "Write docs only.") -> Path:
-    directory = root / ".sylliptor_personas"
+    directory = root / ".alysis_personas"
     directory.mkdir(exist_ok=True)
     path = directory / f"{name}.md"
     path.write_text(
@@ -954,11 +972,11 @@ def _write_custom_persona(root: Path, name: str, *, body: str = "Write docs only
 
 
 def test_load_custom_personas_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sylliptor_agent_cli.personas as personas_mod
+    import alysis_code.personas as personas_mod
 
     monkeypatch.setattr(personas_mod, "canonical_user_config_dir", lambda: tmp_path / "no-user-dir")
     _write_custom_persona(tmp_path, "docs-writer")
-    directory = tmp_path / ".sylliptor_personas"
+    directory = tmp_path / ".alysis_personas"
     (directory / "broken.md").write_text("no frontmatter here", encoding="utf-8")
     (directory / "shadow.md").write_text(
         "---\nname: architect\n---\nI try to shadow a builtin.\n", encoding="utf-8"
@@ -990,9 +1008,9 @@ def test_custom_persona_overlay_stays_at_user_priority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sylliptor_agent_cli.personas as personas_mod
+    import alysis_code.personas as personas_mod
 
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     monkeypatch.setattr(personas_mod, "canonical_user_config_dir", lambda: tmp_path / "no-user-dir")
     _write_custom_persona(tmp_path, "docs-writer", body="Treat source as documentation.")
     registry, warnings = personas_mod.load_custom_personas(tmp_path)
@@ -1016,10 +1034,10 @@ def test_custom_persona_loader_rejects_symlinked_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sylliptor_agent_cli.personas as personas_mod
+    import alysis_code.personas as personas_mod
 
     monkeypatch.setattr(personas_mod, "canonical_user_config_dir", lambda: tmp_path / "no-user-dir")
-    directory = tmp_path / ".sylliptor_personas"
+    directory = tmp_path / ".alysis_personas"
     directory.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text(
@@ -1041,7 +1059,7 @@ def test_custom_persona_collision_is_visible_and_project_wins(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sylliptor_agent_cli.personas as personas_mod
+    import alysis_code.personas as personas_mod
 
     project_path = _write_custom_persona(
         tmp_path,
@@ -1075,8 +1093,8 @@ def test_one_shot_custom_persona_uses_user_context_and_separate_scope(
 ) -> None:
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli import app as sylliptor_app
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli import app as alysis_app
 
     _write_custom_persona(tmp_path, "docs-writer", body="Write the requested guide.")
     captured: dict[str, object] = {}
@@ -1087,7 +1105,7 @@ def test_one_shot_custom_persona_uses_user_context_and_separate_scope(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -1102,8 +1120,8 @@ def test_one_shot_custom_persona_uses_user_context_and_separate_scope(
             "write docs/guide.md",
         ],
         env={
-            "SYLLIPTOR_CONFIG_DIR": str(tmp_path / "config"),
-            "SYLLIPTOR_DATA_DIR": str(tmp_path / "data"),
+            "ALYSIS_CONFIG_DIR": str(tmp_path / "config"),
+            "ALYSIS_DATA_DIR": str(tmp_path / "data"),
         },
     )
 
@@ -1123,8 +1141,8 @@ def test_one_shot_persona_preserves_zero_role_temperature(
 ) -> None:
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli import app as sylliptor_app
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli import app as alysis_app
 
     cfg = AppConfig(model="test-model", coding_temperature=0.4, review_temperature=0.0)
     cfg = set_config_value(cfg, "persona_models.ask", "review")
@@ -1138,7 +1156,7 @@ def test_one_shot_persona_preserves_zero_role_temperature(
 
     monkeypatch.setattr(cli_mod, "run_agent", fake_run_agent)
     result = CliRunner().invoke(
-        sylliptor_app,
+        alysis_app,
         [
             "run",
             "--path",
@@ -1151,8 +1169,8 @@ def test_one_shot_persona_preserves_zero_role_temperature(
             "explain the repository",
         ],
         env={
-            "SYLLIPTOR_CONFIG_DIR": str(tmp_path / "config"),
-            "SYLLIPTOR_DATA_DIR": str(tmp_path / "data"),
+            "ALYSIS_CONFIG_DIR": str(tmp_path / "config"),
+            "ALYSIS_DATA_DIR": str(tmp_path / "data"),
         },
     )
 
@@ -1163,7 +1181,7 @@ def test_one_shot_persona_preserves_zero_role_temperature(
 
 
 def test_custom_persona_applies_through_clamp_and_scope(loop_mod) -> None:  # type: ignore[no-untyped-def]
-    from sylliptor_agent_cli.personas import (
+    from alysis_code.personas import (
         PersonaDefinition,
         next_persona,
         persona_overlay_messages,
@@ -1205,7 +1223,7 @@ def test_custom_persona_applies_through_clamp_and_scope(loop_mod) -> None:  # ty
 def test_create_session_loads_custom_personas(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import sylliptor_agent_cli.personas as personas_mod
+    import alysis_code.personas as personas_mod
 
     monkeypatch.setattr(personas_mod, "canonical_user_config_dir", lambda: tmp_path / "no-user-dir")
     _write_custom_persona(tmp_path, "docs-writer")
@@ -1218,9 +1236,9 @@ def test_create_session_loads_custom_personas(
 
 
 def test_persona_command_accepts_custom_persona(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sylliptor_agent_cli.personas import PersonaDefinition
+    from alysis_code.personas import PersonaDefinition
 
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
     session.persona_registry = {
         "docs-writer": PersonaDefinition(
@@ -1238,7 +1256,7 @@ def test_persona_command_accepts_custom_persona(monkeypatch: pytest.MonkeyPatch)
 def test_persona_model_swap_skips_default_installs(loop_mod) -> None:  # type: ignore[no-untyped-def]
     from types import SimpleNamespace
 
-    from sylliptor_agent_cli.personas import get_persona
+    from alysis_code.personas import get_persona
 
     session = _FakeChatSession(mode="review")
     # No client at all: never swaps.
@@ -1260,9 +1278,9 @@ def test_persona_model_swap_skips_default_installs(loop_mod) -> None:  # type: i
 
 
 def test_sticky_persona_model_swaps_and_restores(tmp_path: Path) -> None:
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.agent_loop import create_session
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
+    from alysis_code import cli as cli_mod
+    from alysis_code.agent_loop import create_session
+    from alysis_code.cli_impl import chat as chat_facade
 
     chat_facade._sync_cli_globals(cli_mod)
     cfg = AppConfig(model="test-model")
@@ -1292,9 +1310,9 @@ def test_sticky_persona_model_swaps_and_restores(tmp_path: Path) -> None:
 
 
 def test_persona_client_cache_keys_same_model_by_role_temperature(tmp_path: Path) -> None:
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.agent_loop import create_session
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
+    from alysis_code import cli as cli_mod
+    from alysis_code.agent_loop import create_session
+    from alysis_code.cli_impl import chat as chat_facade
 
     chat_facade._sync_cli_globals(cli_mod)
     cfg = AppConfig(model="test-model", coding_temperature=0.4, review_temperature=0.0)
@@ -1333,10 +1351,10 @@ def test_persona_client_cache_keys_same_model_by_role_temperature(tmp_path: Path
 def test_strict_metadata_policy_rejects_persona_model_before_state_change(
     tmp_path: Path,
 ) -> None:
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.agent_loop import create_session
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.model_metadata_policy import ModelMetadataPolicyError
+    from alysis_code import cli as cli_mod
+    from alysis_code.agent_loop import create_session
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.model_metadata_policy import ModelMetadataPolicyError
 
     chat_facade._sync_cli_globals(cli_mod)
     cfg = AppConfig(model="known-model", model_metadata_policy="strict")
@@ -1385,9 +1403,9 @@ def test_resumed_persona_reapplies_from_session_log(tmp_path: Path) -> None:
     # persona_switch_applied event in the log carries the persona, and
     # re-applying it reproduces the narrowed mode + write scope + restore
     # point exactly as the clamp left them.
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.cli_impl.chat import loop as loop_module
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.cli_impl.chat import loop as loop_module
 
     chat_facade._sync_cli_globals(cli_mod)
     session = _interactive_session(tmp_path)
@@ -1413,7 +1431,7 @@ def test_resumed_persona_reapplies_from_session_log(tmp_path: Path) -> None:
 
 
 def test_load_resumed_persona_none_without_switches(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.cli_impl.chat import loop as loop_module
+    from alysis_code.cli_impl.chat import loop as loop_module
 
     session = _interactive_session(tmp_path)
     try:
@@ -1425,14 +1443,14 @@ def test_load_resumed_persona_none_without_switches(tmp_path: Path) -> None:
 def test_persona_command_ignored_in_forge_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     # Forge chat owns the command surface while active; /persona must not
     # half-apply a persona underneath a forge session.
-    monkeypatch.delenv("SYLLIPTOR_PERSONA_MODES", raising=False)
+    monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     import io
 
     from rich.console import Console
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
 
     chat_facade._sync_cli_globals(cli_mod)
     session = _FakeChatSession()
@@ -1455,9 +1473,9 @@ def test_persona_command_ignored_in_forge_mode(monkeypatch: pytest.MonkeyPatch) 
 def test_architect_intersects_user_and_persona_scopes_end_to_end(tmp_path: Path) -> None:
     # Through a real session and tool rebuild, both independently supplied
     # scopes must match. Neither side may replace or widen the other.
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.cli_impl import chat as chat_facade
-    from sylliptor_agent_cli.surface.types import ApprovalDecision
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl import chat as chat_facade
+    from alysis_code.surface.types import ApprovalDecision
 
     chat_facade._sync_cli_globals(cli_mod)
     session = _interactive_session(tmp_path)
@@ -1476,7 +1494,7 @@ def test_architect_intersects_user_and_persona_scopes_end_to_end(tmp_path: Path)
         assert (tmp_path / "src" / "plan.md").exists()
         assert not str(ok.get("error") or "")
 
-        from sylliptor_agent_cli.agent.errors import AgentRuntimeError
+        from alysis_code.agent.errors import AgentRuntimeError
 
         with pytest.raises(AgentRuntimeError, match="outside allowed scope"):
             session.tools["fs_write"].run({"path": "plan.md", "content": "# Outside user scope\n"})
@@ -1495,7 +1513,7 @@ def test_architect_intersects_user_and_persona_scopes_end_to_end(tmp_path: Path)
 
 
 def test_apply_pending_persona_switch(loop_mod) -> None:  # type: ignore[no-untyped-def]
-    from sylliptor_agent_cli.personas import PersonaSwitchState
+    from alysis_code.personas import PersonaSwitchState
 
     session = _FakeChatSession(mode="review")
     session.persona_switch_state = PersonaSwitchState(pending=("ask", "advice"))

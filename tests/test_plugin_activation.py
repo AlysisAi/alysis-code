@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.extensions.activation import resolve_active_plugins
-from sylliptor_agent_cli.extensions.workspace_trust import grant_workspace_trust
+from alysis_code.extensions.activation import resolve_active_plugins
+from alysis_code.extensions.workspace_trust import grant_workspace_trust
 
 
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("SYLLIPTOR_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("SYLLIPTOR_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
 
 
 def _write_global_state(tmp_path: Path) -> None:
@@ -35,7 +35,7 @@ def _write_global_state(tmp_path: Path) -> None:
 
 
 def _write_overrides(repo: Path, *, enabled: list[str], disabled: list[str]) -> str:
-    path = repo / ".sylliptor" / "extensions.json"
+    path = repo / ".alysis" / "extensions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(
         {"schema_version": 1, "enabled": enabled, "disabled": disabled},

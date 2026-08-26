@@ -4,9 +4,9 @@ import json
 import os
 from pathlib import Path
 
-import sylliptor_agent_cli.knowledge_base as kb
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.knowledge_base import (
+import alysis_code.knowledge_base as kb
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.knowledge_base import (
     _write_text_atomic,
     is_effectively_accepted_task_attempt,
     load_knowledge_entry,

@@ -3,21 +3,22 @@ from __future__ import annotations
 import errno
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.execution_deadline import ExecutionDeadline
-from sylliptor_agent_cli.session_store import (
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.execution_deadline import ExecutionDeadline
+from alysis_code.session_store import (
     SessionStore,
     list_sessions,
     make_session_id,
     read_session_events,
 )
-from sylliptor_agent_cli.web_research import (
+from alysis_code.web_research import (
     build_web_research_artifact_from_events,
     canonicalize_web_url_input,
     extract_public_web_urls,
@@ -83,6 +84,60 @@ def test_session_store_assigns_monotonic_event_ids(tmp_path: Path) -> None:
     assert [event["event_id"] for event in events] == ["event-id-test:1", "event-id-test:2"]
 
 
+def test_session_store_events_since_returns_only_new_events_and_advances_cursor(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(
+        enabled=False,
+        sessions_dir=tmp_path,
+        session_id="incremental-events",
+        cwd=".",
+        repo_root=".",
+    )
+    store.append("user_message", {"content": "one"})
+    first, cursor = store.events_since(0)
+    store.append("assistant_message", {"content": "two"})
+    second, cursor = store.events_since(cursor)
+
+    assert [event["type"] for event in first] == ["user_message"]
+    assert [event["type"] for event in second] == ["assistant_message"]
+    assert cursor == 2
+    assert store.events_since(99) == ([], 2)
+
+
+def test_session_store_events_since_concurrent_appends_are_conserved(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(
+        enabled=False,
+        sessions_dir=tmp_path,
+        session_id="concurrent-events",
+        cwd=".",
+        repo_root=".",
+    )
+    expected_count = 500
+    writer_done = threading.Event()
+
+    def append_events() -> None:
+        for index in range(expected_count):
+            store.append("event", {"index": index})
+        writer_done.set()
+
+    writer = threading.Thread(target=append_events)
+    writer.start()
+    cursor = 0
+    observed_ids: list[str] = []
+    while not writer_done.is_set() or cursor < expected_count:
+        events, cursor = store.events_since(cursor)
+        observed_ids.extend(str(event["event_id"]) for event in events)
+        if not events:
+            writer_done.wait(0.001)
+    writer.join(timeout=2.0)
+
+    assert not writer.is_alive()
+    assert observed_ids == [f"concurrent-events:{index}" for index in range(1, 501)]
+
+
 def test_session_store_disables_logging_when_sessions_dir_is_read_only(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -136,7 +191,8 @@ def test_no_log_keeps_session_log_disabled_but_allows_explicit_diagnostics(
     )
 
     try:
-        assert session.run_turn("Do the task.") == 1
+        # Budget stop: a normal outcome, so a clean exit.
+        assert session.run_turn("Do the task.") == 0
         session_log_path = session.store.path
     finally:
         session.close()
@@ -428,7 +484,7 @@ def test_list_sessions(tmp_path: Path) -> None:
 
 
 def test_read_session_last_event_ts_returns_latest(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_last_event_ts
+    from alysis_code.session_store import read_session_last_event_ts
 
     p = tmp_path / "s.jsonl"
     events = [
@@ -441,7 +497,7 @@ def test_read_session_last_event_ts_returns_latest(tmp_path: Path) -> None:
 
 
 def test_read_session_last_event_ts_handles_empty_corrupt_missing(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_last_event_ts
+    from alysis_code.session_store import read_session_last_event_ts
 
     empty = tmp_path / "empty.jsonl"
     empty.write_text("", encoding="utf-8")
@@ -455,7 +511,7 @@ def test_read_session_last_event_ts_handles_empty_corrupt_missing(tmp_path: Path
 
 
 def test_read_session_last_event_ts_skips_trailing_partial_line(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_last_event_ts
+    from alysis_code.session_store import read_session_last_event_ts
 
     p = tmp_path / "s.jsonl"
     good = json.dumps({"type": "final", "ts": "2026-01-01T10:09:00+00:00", "payload": {}})
@@ -466,7 +522,7 @@ def test_read_session_last_event_ts_skips_trailing_partial_line(tmp_path: Path) 
 
 
 def test_read_session_first_event_workspace_toplevel_and_payload(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_first_event_workspace
+    from alysis_code.session_store import read_session_first_event_workspace
 
     top = tmp_path / "top.jsonl"
     top.write_text(
@@ -504,7 +560,7 @@ def test_read_session_first_event_workspace_toplevel_and_payload(tmp_path: Path)
 
 
 def test_session_belongs_to_workspace_predicate(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import (
+    from alysis_code.session_store import (
         SessionInfo,
         canonical_workspace_path,
         session_belongs_to_workspace,
@@ -1628,7 +1684,7 @@ def test_session_store_reopen_rewrites_cumulative_artifact_when_newer_artifact_p
 
 
 def test_local_session_owner_is_deterministic_and_nonempty() -> None:
-    from sylliptor_agent_cli.session_store import local_session_owner
+    from alysis_code.session_store import local_session_owner
 
     owner = local_session_owner()
     assert owner is not None
@@ -1640,7 +1696,7 @@ def test_local_session_owner_is_deterministic_and_nonempty() -> None:
 def test_local_session_owner_uses_direct_nonshell_hostname(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sylliptor_agent_cli.session_store as session_store_module
+    import alysis_code.session_store as session_store_module
 
     monkeypatch.setattr(session_store_module.getpass, "getuser", lambda: "Alice")
     monkeypatch.setattr(session_store_module.socket, "gethostname", lambda: "Workstation")
@@ -1649,7 +1705,7 @@ def test_local_session_owner_uses_direct_nonshell_hostname(
 
 
 def test_session_store_stamps_owner_on_events(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import (
+    from alysis_code.session_store import (
         SessionStore,
         list_sessions,
         local_session_owner,
@@ -1676,7 +1732,7 @@ def test_session_store_stamps_owner_on_events(tmp_path: Path) -> None:
 
 
 def test_read_session_first_event_scope_reads_owner(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_first_event_scope
+    from alysis_code.session_store import read_session_first_event_scope
 
     log = tmp_path / "s.jsonl"
     log.write_text(
@@ -1712,7 +1768,7 @@ def test_read_session_first_event_scope_reads_owner(tmp_path: Path) -> None:
 
 
 def test_session_belongs_to_owner_predicate(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import SessionInfo, session_belongs_to_owner
+    from alysis_code.session_store import SessionInfo, session_belongs_to_owner
 
     def info(owner: str | None) -> SessionInfo:
         return SessionInfo(session_id="s", path=tmp_path / "s.jsonl", mtime=1.0, owner=owner)
@@ -1733,7 +1789,7 @@ def test_session_belongs_to_owner_predicate(tmp_path: Path) -> None:
 
 
 def test_filter_sessions_to_local_owner_drops_foreign_sessions(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import (
+    from alysis_code.session_store import (
         SessionInfo,
         filter_sessions_to_local_owner,
         local_session_owner,
@@ -1755,7 +1811,7 @@ def test_filter_sessions_to_local_owner_drops_foreign_sessions(tmp_path: Path) -
 
 
 def test_session_belongs_to_owner_last_owner_self_heal(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import SessionInfo, session_belongs_to_owner
+    from alysis_code.session_store import SessionInfo, session_belongs_to_owner
 
     # Identity drift (e.g. hostname rename): the creator stamp no longer
     # matches, but an explicit resume re-stamped the tail with the new
@@ -1791,7 +1847,7 @@ def test_list_sessions_reads_late_owner_stamp_and_last_owner(tmp_path: Path) -> 
     later events. The first-event scan must keep looking (within its bound)
     instead of classifying the log as legacy, and the tail read must surface
     the newest event's owner."""
-    from sylliptor_agent_cli.session_store import list_sessions
+    from alysis_code.session_store import list_sessions
 
     log = tmp_path / "mixed.jsonl"
     events = [
@@ -1837,7 +1893,7 @@ def test_list_sessions_reads_late_owner_stamp_and_last_owner(tmp_path: Path) -> 
 
 
 def test_read_session_last_event_fields_owner_from_newest_event(tmp_path: Path) -> None:
-    from sylliptor_agent_cli.session_store import read_session_last_event_fields
+    from alysis_code.session_store import read_session_last_event_fields
 
     log = tmp_path / "s.jsonl"
     log.write_text(
@@ -1863,8 +1919,8 @@ def test_sessions_list_cli_hides_foreign_sessions_unless_all(tmp_path: Path) -> 
 
     from typer.testing import CliRunner
 
-    from sylliptor_agent_cli import cli as cli_mod
-    from sylliptor_agent_cli.session_store import local_session_owner
+    from alysis_code import cli as cli_mod
+    from alysis_code.session_store import local_session_owner
 
     runner = CliRunner()
     cfg_dir = tmp_path / "config"
@@ -1893,8 +1949,8 @@ def test_sessions_list_cli_hides_foreign_sessions_unless_all(tmp_path: Path) -> 
     )
 
     env = {
-        "SYLLIPTOR_CONFIG_DIR": _os.fspath(cfg_dir),
-        "SYLLIPTOR_DATA_DIR": _os.fspath(data_dir),
+        "ALYSIS_CONFIG_DIR": _os.fspath(cfg_dir),
+        "ALYSIS_DATA_DIR": _os.fspath(data_dir),
     }
 
     scoped = runner.invoke(cli_mod.app, ["sessions", "list"], env=env, terminal_width=200)

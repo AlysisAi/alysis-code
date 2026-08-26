@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from sylliptor_agent_cli.llm import metadata, openai_compat
-from sylliptor_agent_cli.llm.types import LLMResponse, ToolCall
+from alysis_code.llm import metadata, openai_compat
+from alysis_code.llm.types import LLMResponse, ToolCall
 
 
 def test_openai_compat_reexports_shared_provider_metadata_helpers() -> None:
@@ -61,12 +61,32 @@ def test_shared_metadata_helpers_attach_and_strip_provider_state() -> None:
     }
 
 
+def test_deepseek_state_is_retained_for_normal_assistant_messages() -> None:
+    response = LLMResponse(
+        content="Public answer.",
+        tool_calls=[],
+        raw={},
+        provider_metadata={"deepseek": {"reasoning_content": "opaque continuation state"}},
+    )
+
+    message = metadata.assistant_message_from_response(response)
+
+    assert message[metadata.PROVIDER_METADATA_KEY]["deepseek"] == {
+        "reasoning_content": "opaque continuation state"
+    }
+    assert "reasoning_content" not in message
+    assert metadata.strip_provider_metadata_from_message(message) == {
+        "role": "assistant",
+        "content": "Public answer.",
+    }
+
+
 def test_shared_metadata_helpers_deep_copy_nested_provider_state() -> None:
     output_items = [
         {
             "type": "web_search_call",
             "id": "ws_1",
-            "action": {"type": "search", "query": "Sylliptor metadata"},
+            "action": {"type": "search", "query": "Alysis Code metadata"},
         }
     ]
     tool_extra_content = {

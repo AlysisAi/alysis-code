@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent.prompt_context import _WorkspaceGroundingDescriptor
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
+from alysis_code.agent.prompt_context import _WorkspaceGroundingDescriptor
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.session_store import read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
 
 SMOKE_MODEL = "gpt-4o-mini"
 

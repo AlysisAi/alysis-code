@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from sylliptor_agent_cli.git_worktrees import ensure_task_worktree, remove_task_worktree
+from alysis_code.git_worktrees import ensure_task_worktree, remove_task_worktree
 
 
 def _cp(
@@ -35,7 +35,7 @@ def test_ensure_task_worktree_creates_new_branch_when_missing(monkeypatch, tmp_p
     worktree = tmp_path / "wt" / "T01" / "repo"
     seen: list[list[str]] = []
     seen_cmds: list[list[str]] = []
-    monkeypatch.setenv("SYLLIPTOR_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
+    monkeypatch.setenv("ALYSIS_GIT_HOOKS_PATH", str(tmp_path / "hooks"))
 
     def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
         seen_cmds.append(list(cmd))
@@ -49,7 +49,7 @@ def test_ensure_task_worktree_creates_new_branch_when_missing(monkeypatch, tmp_p
             return _cp(returncode=0)
         raise AssertionError(f"unexpected git args: {args}")
 
-    monkeypatch.setattr("sylliptor_agent_cli.git_worktrees.ensure_git_available", lambda: None)
+    monkeypatch.setattr("alysis_code.git_worktrees.ensure_git_available", lambda: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     info = ensure_task_worktree(
@@ -79,7 +79,7 @@ def test_ensure_task_worktree_uses_existing_branch(monkeypatch, tmp_path: Path) 
             return _cp(returncode=0)
         raise AssertionError(f"unexpected git args: {args}")
 
-    monkeypatch.setattr("sylliptor_agent_cli.git_worktrees.ensure_git_available", lambda: None)
+    monkeypatch.setattr("alysis_code.git_worktrees.ensure_git_available", lambda: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     info = ensure_task_worktree(
@@ -135,9 +135,9 @@ def test_ensure_task_worktree_recreates_when_existing_path_is_not_git_repo(
             return _cp(returncode=0)
         raise AssertionError(f"unexpected git args: {args}")
 
-    monkeypatch.setattr("sylliptor_agent_cli.git_worktrees.ensure_git_available", lambda: None)
+    monkeypatch.setattr("alysis_code.git_worktrees.ensure_git_available", lambda: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.git_worktrees.ensure_runtime_artifact_excludes",
+        "alysis_code.git_worktrees.ensure_runtime_artifact_excludes",
         lambda _root: None,
     )
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -180,9 +180,9 @@ def test_ensure_task_worktree_recreates_when_existing_branch_mismatch(
             return _cp(returncode=0)
         raise AssertionError(f"unexpected git args: {args}")
 
-    monkeypatch.setattr("sylliptor_agent_cli.git_worktrees.ensure_git_available", lambda: None)
+    monkeypatch.setattr("alysis_code.git_worktrees.ensure_git_available", lambda: None)
     monkeypatch.setattr(
-        "sylliptor_agent_cli.git_worktrees.ensure_runtime_artifact_excludes",
+        "alysis_code.git_worktrees.ensure_runtime_artifact_excludes",
         lambda _root: None,
     )
     monkeypatch.setattr(subprocess, "run", fake_run)

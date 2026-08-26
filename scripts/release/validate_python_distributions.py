@@ -53,12 +53,7 @@ def validate_distributions(
     normalized = re.sub(r"[-_.]+", "_", name).lower()
     wheels = sorted(dist_dir.glob("*.whl"))
     sdists = sorted(dist_dir.glob("*.tar.gz"))
-    entries = list(dist_dir.iterdir())
-    uv_gitignore = dist_dir / ".gitignore"
-    allowed_entries = {*wheels, *sdists}
-    if uv_gitignore.is_file() and uv_gitignore.read_bytes() == b"*":
-        allowed_entries.add(uv_gitignore)
-    if len(wheels) != 1 or len(sdists) != 1 or set(entries) != allowed_entries:
+    if len(wheels) != 1 or len(sdists) != 1 or len(list(dist_dir.iterdir())) != 2:
         raise DistributionValidationError(
             "Release output must contain exactly one wheel and one sdist."
         )
@@ -73,7 +68,11 @@ def validate_distributions(
         if path.stat().st_size <= 0 or path.stat().st_size > _MAX_ARCHIVE_BYTES:
             raise DistributionValidationError("Distribution archive size is invalid.")
     _validate_wheel(wheel, name=name, version=version, normalized=normalized)
-    _validate_sdist(sdist, normalized=normalized, version=version)
+    _validate_sdist(
+        sdist,
+        normalized=normalized,
+        version=version,
+    )
     if smoke:
         _smoke_wheel(wheel, name=name, version=version)
     return wheel, sdist
@@ -104,7 +103,7 @@ def _validate_wheel(wheel: Path, *, name: str, version: str, normalized: str) ->
                 entry_points_name,
                 f"{dist_info}/RECORD",
                 f"{dist_info}/WHEEL",
-                "sylliptor_agent_cli/__init__.py",
+                "alysis_code/__init__.py",
             }
             missing = required - names
             if missing:
@@ -114,7 +113,7 @@ def _validate_wheel(wheel: Path, *, name: str, version: str, normalized: str) ->
             unexpected = sorted(
                 name
                 for name in names
-                if not name.startswith("sylliptor_agent_cli/")
+                if not name.startswith("alysis_code/")
                 and not name.startswith(f"{dist_info}/")
             )
             if unexpected:
@@ -127,7 +126,7 @@ def _validate_wheel(wheel: Path, *, name: str, version: str, normalized: str) ->
                     "Wheel metadata identity does not match pyproject.toml."
                 )
             entry_points = archive.read(entry_points_name).decode("utf-8")
-            if "sylliptor = sylliptor_agent_cli.cli:app" not in entry_points:
+            if "alysis = alysis_code.cli:app" not in entry_points:
                 raise DistributionValidationError("Wheel console entry point is missing.")
     except (BadZipFile, KeyError, UnicodeDecodeError) as exc:
         raise DistributionValidationError("Wheel archive is invalid.") from exc
@@ -171,7 +170,7 @@ def _validate_sdist(
                 )
             required = {
                 f"{prefix}pyproject.toml",
-                f"{prefix}src/sylliptor_agent_cli/__init__.py",
+                f"{prefix}src/alysis_code/__init__.py",
             }
             missing = required - names
             if missing:
@@ -183,8 +182,9 @@ def _validate_sdist(
 
 
 def _is_allowed_sdist_member(relative_name: str) -> bool:
-    return relative_name in _SDIST_ROOT_FILES or relative_name.startswith(
-        "src/sylliptor_agent_cli/"
+    return (
+        relative_name in _SDIST_ROOT_FILES
+        or relative_name.startswith("src/alysis_code/")
     )
 
 
@@ -251,7 +251,7 @@ def _smoke_wheel(wheel: Path, *, name: str, version: str) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise DistributionValidationError("uv is required for the isolated wheel smoke install.")
-    with tempfile.TemporaryDirectory(prefix="sylliptor-wheel-smoke-") as directory:
+    with tempfile.TemporaryDirectory(prefix="alysis-wheel-smoke-") as directory:
         target = Path(directory) / "site"
         subprocess.run(
             [
@@ -273,7 +273,7 @@ def _smoke_wheel(wheel: Path, *, name: str, version: str) -> None:
         ).rstrip(os.pathsep)
         for argument in ("--help", "--version"):
             completed = subprocess.run(
-                [sys.executable, "-m", "sylliptor_agent_cli", argument],
+                [sys.executable, "-m", "alysis_code", argument],
                 check=True,
                 capture_output=True,
                 text=True,

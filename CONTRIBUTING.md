@@ -1,4 +1,4 @@
-# Contributing to Sylliptor
+# Contributing to Alysis Code
 
 ## Development setup
 
@@ -6,8 +6,8 @@
 - Clone the repository:
 
 ```bash
-git clone https://github.com/AlysisAi/Sylliptor.git
-cd Sylliptor
+git clone https://github.com/AlysisAi/alysis-code.git
+cd Alysis Code
 ```
 
 - Install development dependencies:

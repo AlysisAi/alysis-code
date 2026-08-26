@@ -35,7 +35,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: sylliptor-sandbox
+  IMAGE_NAME: alysis-sandbox
   DEFAULT_VARIANT: ${{ github.event_name == 'workflow_dispatch' && inputs.default_variant || 'dev' }}
   DOCKER_METADATA_SHORT_SHA_LENGTH: "12"
 
@@ -67,7 +67,7 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
-          EXPECTED_REPOSITORY: AlysisAi/Sylliptor
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           REPOSITORY: ${{ github.repository }}
@@ -92,11 +92,9 @@ jobs:
             test "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}"
           fi
 
-          {
-            echo "release_tag=${release_tag}"
-            echo "sha12=${GITHUB_SHA::12}"
-            echo "source_date_epoch=$(git show -s --format=%ct HEAD)"
-          } >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "sha12=${GITHUB_SHA::12}" >> "${GITHUB_OUTPUT}"
+          echo "source_date_epoch=$(git show -s --format=%ct HEAD)" >> "${GITHUB_OUTPUT}"
 
   build-scan-pr:
     name: build, scan, and smoke dev (pr)
@@ -126,7 +124,7 @@ jobs:
           load: true
           provenance: false
           sbom: false
-          tags: sylliptor-sandbox-pr:${{ github.sha }}
+          tags: alysis-sandbox-pr:${{ github.sha }}
           cache-from: type=gha,scope=sandbox-pr-dev-amd64
           cache-to: type=gha,mode=max,scope=sandbox-pr-dev-amd64
           build-args: |
@@ -139,7 +137,7 @@ jobs:
         id: trivy
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: sylliptor-sandbox-pr:${{ github.sha }}
+          image-ref: alysis-sandbox-pr:${{ github.sha }}
           format: sarif
           output: trivy-pr-dev-amd64.sarif
           exit-code: "1"
@@ -155,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --platform linux/amd64 \
-            "sylliptor-sandbox-pr:${GITHUB_SHA}" \
+            alysis-sandbox-pr:${GITHUB_SHA} \
             sh -euc 'test "$(id -u)" = 1000; python --version; git --version; rg --version; node --version; npm --version; go version; rustc --version; cargo --version'
 
       - name: Upload Trivy SARIF artifact
@@ -260,12 +258,10 @@ jobs:
 
           amd64_digest="$(resolve_platform_digest amd64)"
           arm64_digest="$(resolve_platform_digest arm64)"
-          {
-            echo "amd64_digest=${amd64_digest}"
-            echo "arm64_digest=${arm64_digest}"
-            echo "amd64_ref=${IMAGE}@${amd64_digest}"
-            echo "arm64_ref=${IMAGE}@${arm64_digest}"
-          } >> "${GITHUB_OUTPUT}"
+          echo "amd64_digest=${amd64_digest}" >> "${GITHUB_OUTPUT}"
+          echo "arm64_digest=${arm64_digest}" >> "${GITHUB_OUTPUT}"
+          echo "amd64_ref=${IMAGE}@${amd64_digest}" >> "${GITHUB_OUTPUT}"
+          echo "arm64_ref=${IMAGE}@${arm64_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate and bind both platform SBOM predicates
         id: sbom
@@ -353,12 +349,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          smoke="test \"\$(id -u)\" = 1000; python --version; git --version; rg --version"
+          smoke='test "$(id -u)" = 1000; python --version; git --version; rg --version'
           if [[ "${VARIANT}" != "base" ]]; then
             smoke="${smoke}; node --version; npm --version; go version; rustc --version; cargo --version"
           fi
           if [[ "${VARIANT}" == "server" ]]; then
-            smoke="${smoke}; sylliptor --version"
+            smoke="${smoke}; alysis --version"
           fi
 
           docker pull --platform linux/amd64 "${AMD64_REF}"
@@ -380,21 +376,21 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: Install locked Sylliptor environment
+      - name: Install locked Alysis Code environment
         if: matrix.variant == 'dev'
         run: uv sync --locked --no-dev
 
       - name: Run end-to-end sandbox doctor against candidate digest
         if: matrix.variant == 'dev'
         env:
-          SYLLIPTOR_SHELL_SANDBOX_BACKEND: docker
-          SYLLIPTOR_SHELL_SANDBOX_CLEAR_ENV: "1"
-          SYLLIPTOR_SHELL_SANDBOX_DOCKER_IMAGE: ${{ steps.platforms.outputs.amd64_ref }}
-          SYLLIPTOR_SHELL_SANDBOX_MODE: strict
-          SYLLIPTOR_SHELL_SANDBOX_NETWORK: off
-          SYLLIPTOR_SERVER_DOCKER_IMAGE: ${{ steps.platforms.outputs.amd64_ref }}
-          SYLLIPTOR_SERVER_WORKER_BACKEND: docker
-        run: uv run --locked sylliptor sandbox doctor --smoke
+          ALYSIS_SHELL_SANDBOX_BACKEND: docker
+          ALYSIS_SHELL_SANDBOX_CLEAR_ENV: "1"
+          ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE: ${{ steps.platforms.outputs.amd64_ref }}
+          ALYSIS_SHELL_SANDBOX_MODE: strict
+          ALYSIS_SHELL_SANDBOX_NETWORK: off
+          ALYSIS_SERVER_DOCKER_IMAGE: ${{ steps.platforms.outputs.amd64_ref }}
+          ALYSIS_SERVER_WORKER_BACKEND: docker
+        run: uv run --locked alysis sandbox doctor --smoke
 
       - name: Upload linux/amd64 Trivy SARIF to code scanning
         uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07 # v3

@@ -5,27 +5,27 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.agent.completion_certificate import (
+from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
     evaluate_completion_certificate,
 )
-from sylliptor_agent_cli.agent.verification import (
+from alysis_code.agent.verification import (
     EVIDENCE_REPAIR_ROUND_BOUND,
     HONEST_UNVERIFIED_FINALIZATION_MARKER,
     TurnExecutionState,
     _completion_gate_nudge_message,
     _completion_gate_problems,
 )
-from sylliptor_agent_cli.agent.verification_evidence import (
+from alysis_code.agent.verification_evidence import (
     VerificationEvidenceCategory,
     _evidence_v2_enabled,
     classify_verification_evidence,
     command_is_qualifying_execution_evidence,
 )
-from sylliptor_agent_cli.config import AppConfig, ConfigError, set_config_value
-from sylliptor_agent_cli.pipeline_facts import PIPELINE_STATUS_SENTINEL
-from sylliptor_agent_cli.tools import shell as shell_mod
-from sylliptor_agent_cli.tools.shell import shell_run
+from alysis_code.config import AppConfig, ConfigError, set_config_value
+from alysis_code.pipeline_facts import PIPELINE_STATUS_SENTINEL
+from alysis_code.tools import shell as shell_mod
+from alysis_code.tools.shell import shell_run
 
 # ---------------------------------------------------------------------------
 # Change A: shell layer PIPESTATUS capture (fact capture; semantics unchanged)
@@ -235,12 +235,12 @@ def test_command_is_qualifying_execution_evidence(command: str, expected: bool) 
 
 
 def test_kill_switch_env_and_config(monkeypatch) -> None:
-    monkeypatch.delenv("SYLLIPTOR_EVIDENCE_V2", raising=False)
+    monkeypatch.delenv("ALYSIS_EVIDENCE_V2", raising=False)
     assert _evidence_v2_enabled(AppConfig(model="x", evidence_v2_enabled=True)) is True
     assert _evidence_v2_enabled(AppConfig(model="x", evidence_v2_enabled=False)) is False
-    monkeypatch.setenv("SYLLIPTOR_EVIDENCE_V2", "off")
+    monkeypatch.setenv("ALYSIS_EVIDENCE_V2", "off")
     assert _evidence_v2_enabled(AppConfig(model="x", evidence_v2_enabled=True)) is False
-    monkeypatch.setenv("SYLLIPTOR_EVIDENCE_V2", "on")
+    monkeypatch.setenv("ALYSIS_EVIDENCE_V2", "on")
     assert _evidence_v2_enabled(AppConfig(model="x", evidence_v2_enabled=False)) is True
 
 
@@ -443,8 +443,8 @@ def test_honest_unverified_marker_is_visible_and_labeled() -> None:
 
 
 def test_prompt_bytes_identical_regardless_of_kill_switch(monkeypatch) -> None:
-    from sylliptor_agent_cli.agent.prompt_context import _compose_session_system_prompt
-    from sylliptor_agent_cli.agent_loop import SYSTEM_PROMPT
+    from alysis_code.agent.prompt_context import _compose_session_system_prompt
+    from alysis_code.agent_loop import SYSTEM_PROMPT
 
     def compose() -> str:
         return _compose_session_system_prompt(
@@ -457,9 +457,9 @@ def test_prompt_bytes_identical_regardless_of_kill_switch(monkeypatch) -> None:
             include_one_shot_guidance=True,
         )
 
-    monkeypatch.setenv("SYLLIPTOR_EVIDENCE_V2", "on")
+    monkeypatch.setenv("ALYSIS_EVIDENCE_V2", "on")
     prompt_on = compose()
-    monkeypatch.setenv("SYLLIPTOR_EVIDENCE_V2", "off")
+    monkeypatch.setenv("ALYSIS_EVIDENCE_V2", "off")
     prompt_off = compose()
 
     assert prompt_on.encode("utf-8") == prompt_off.encode("utf-8")

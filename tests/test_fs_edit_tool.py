@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from sylliptor_agent_cli.agent_loop import build_tools
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.session_store import SessionStore
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.tools.fs import FsError, fs_edit
+from alysis_code.agent_loop import build_tools
+from alysis_code.config import AppConfig
+from alysis_code.session_store import SessionStore
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.tools.fs import FsError, fs_edit
 
 
 def _store(root: Path) -> SessionStore:

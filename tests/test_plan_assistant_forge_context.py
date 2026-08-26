@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sylliptor_agent_cli import plan_assistant
-from sylliptor_agent_cli.config import AppConfig, ConfigError
-from sylliptor_agent_cli.model_router import ROLE_PLANNER
+from alysis_code import plan_assistant
+from alysis_code.config import AppConfig, ConfigError
+from alysis_code.model_router import ROLE_PLANNER
 
 
 def _run_planner_until_model_resolution(*, prefer_context: str | None, monkeypatch: Any) -> str:

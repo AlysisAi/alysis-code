@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from sylliptor_agent_cli.agent.llm_calls import (
+from alysis_code.agent.llm_calls import (
     _main_agent_chat,
     _safe_forced_tool_choice_for_recovery,
 )
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse
+from alysis_code.llm.openai_compat import LLMResponse, OpenAICompatClient
 
 
 def _tool_schema(name: str = "diagnostic_echo") -> list[dict[str, object]]:
@@ -68,6 +68,32 @@ def test_forced_tool_choice_requires_tool_calling_and_no_active_reasoning() -> N
     )
 
     client.enable_thinking = False
+    assert _safe_forced_tool_choice_for_recovery(
+        client=client,
+        tools=_tool_schema(),
+        preferred_tool_names=("diagnostic_echo",),
+    ) == {"type": "function", "function": {"name": "diagnostic_echo"}}
+
+
+def test_deepseek_default_reasoning_suppresses_agent_recovery_tool_choice() -> None:
+    client = OpenAICompatClient(
+        base_url="https://api.deepseek.com",
+        api_key="test",
+        model="deepseek-v4-pro",
+    )
+
+    assert client.reasoning_active is True
+    assert (
+        _safe_forced_tool_choice_for_recovery(
+            client=client,
+            tools=_tool_schema(),
+            preferred_tool_names=("diagnostic_echo",),
+        )
+        is None
+    )
+
+    client.enable_thinking = False
+    assert client.reasoning_active is False
     assert _safe_forced_tool_choice_for_recovery(
         client=client,
         tools=_tool_schema(),

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.model_router import ROLE_PLANNER, resolve_model_for_role
+from alysis_code.config import AppConfig
+from alysis_code.model_router import ROLE_PLANNER, resolve_model_for_role
 
 
 def _cfg(*, extra_fields: dict[str, Any] | None = None) -> AppConfig:
@@ -51,7 +51,7 @@ def test_resolve_model_forge_context_falls_back_to_default_model() -> None:
 
 
 def test_resolve_model_env_var_still_wins_over_forge(monkeypatch: Any) -> None:
-    monkeypatch.setenv("SYLLIPTOR_MODEL_PLANNER", "env-planner")
+    monkeypatch.setenv("ALYSIS_MODEL_PLANNER", "env-planner")
     cfg = _cfg(extra_fields={"forge_role_models": {"planner": "forge-planner"}})
 
     assert (

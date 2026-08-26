@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sylliptor_agent_cli.agent_loop import create_session
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.llm.openai_compat import LLMResponse, ToolCall
-from sylliptor_agent_cli.llm.protocols import ReasoningTraceCapability
-from sylliptor_agent_cli.llm.types import ReasoningOutputKind
-from sylliptor_agent_cli.runtime_kind import RuntimeKind
-from sylliptor_agent_cli.session_store import read_session_events
-from sylliptor_agent_cli.surface.noop_surface import NoopSurface
-from sylliptor_agent_cli.tools.registry import build_unknown_tool_recovery_payload
+from alysis_code.agent_loop import create_session
+from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.llm.protocols import ReasoningTraceCapability
+from alysis_code.llm.types import ReasoningOutputKind
+from alysis_code.runtime_kind import RuntimeKind
+from alysis_code.session_store import read_session_events
+from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.tools.registry import build_unknown_tool_recovery_payload
 
 
 class _FakeClient:

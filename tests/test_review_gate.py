@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from sylliptor_agent_cli.config import AppConfig
-from sylliptor_agent_cli.forge import add_task, create_plan_run, load_plan, save_plan
-from sylliptor_agent_cli.review_gate import ReviewError, parse_patch_changed_files, review_task
+from alysis_code.config import AppConfig
+from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
+from alysis_code.review_gate import ReviewError, parse_patch_changed_files, review_task
 
 
 def _write_patch(path: Path) -> None:
@@ -108,7 +108,7 @@ def test_review_task_writes_json_and_markdown_artifacts(tmp_path: Path, monkeypa
         def chat(self, **_kwargs):  # type: ignore[no-untyped-def]
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,
@@ -167,7 +167,7 @@ def test_review_task_uses_role_model_override(tmp_path: Path, monkeypatch) -> No
             captured["messages"] = kwargs["messages"]
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,
@@ -224,7 +224,7 @@ def test_review_task_warns_for_fallback_model_metadata(tmp_path: Path, monkeypat
             return type("Resp", (), {"content": json.dumps(payload)})()
 
     monkeypatch.setattr("warnings.warn", _warn)
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,
@@ -261,7 +261,7 @@ def test_review_task_strict_model_metadata_policy_fails_before_client(
         def __init__(self, **_kwargs) -> None:  # type: ignore[no-untyped-def]
             raise AssertionError("OpenAICompatClient should not be constructed in strict mode")
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     with pytest.raises(ReviewError, match="model_metadata_policy=strict"):
         review_task(
@@ -311,7 +311,7 @@ def test_review_task_enforces_conservative_approval_policy(tmp_path: Path, monke
         def chat(self, **_kwargs):  # type: ignore[no-untyped-def]
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,
@@ -395,7 +395,7 @@ def test_review_task_includes_structured_verification_payload_in_prompt(
             captured["messages"] = kwargs["messages"]
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,
@@ -458,7 +458,7 @@ def test_review_task_falls_back_to_report_excerpt_for_older_artifacts(
             captured["messages"] = kwargs["messages"]
             return type("Resp", (), {"content": json.dumps(payload)})()
 
-    monkeypatch.setattr("sylliptor_agent_cli.review_gate.OpenAICompatClient", FakeClient)
+    monkeypatch.setattr("alysis_code.review_gate.OpenAICompatClient", FakeClient)
 
     outcome = review_task(
         paths=paths,

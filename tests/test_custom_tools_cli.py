@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner as ClickCliRunner
 from typer.testing import CliRunner
 
-from sylliptor_agent_cli import cli as cli_mod
+from alysis_code import cli as cli_mod
 
 
 def _init_git_repo(root: Path) -> None:
@@ -71,10 +71,10 @@ def test_tool_list_cli_shows_project_and_global_tools_and_path_handling(tmp_path
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
     (workspace / "subdir").mkdir()
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
     _write_tool(cfg_dir, "tools/global_echo.py", name="global_echo")
 
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
     result = runner.invoke(
         cli_mod.app,
         ["tool", "list", "--path", str(workspace / "subdir")],
@@ -89,8 +89,8 @@ def test_tool_list_cli_shows_project_and_global_tools_and_path_handling(tmp_path
     assert "global_echo.py" in normalized_output
     assert "project_echo.py" in normalized_output
     assert "tools/global_echo.py" in normalized_output
-    assert ".sylliptor/tools/project_echo.py" in normalized_output
-    assert f"Projectroot:{workspace.as_posix()}/.sylliptor/tools" in normalized_output
+    assert ".alysis/tools/project_echo.py" in normalized_output
+    assert f"Projectroot:{workspace.as_posix()}/.alysis/tools" in normalized_output
     assert f"Globalroot:{cfg_dir.as_posix()}/tools" in normalized_output
 
 
@@ -99,10 +99,10 @@ def test_tool_list_cli_preserves_exact_name_and_filename_on_narrow_width(tmp_pat
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
     _write_tool(cfg_dir, "tools/global_echo.py", name="global_echo")
 
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
     result = runner.invoke(
         cli_mod.app,
         ["tool", "list", "--path", str(workspace)],
@@ -117,7 +117,7 @@ def test_tool_list_cli_preserves_exact_name_and_filename_on_narrow_width(tmp_pat
     assert "global_echo.py" in normalized_output
     assert "project_echo.py" in normalized_output
     assert "tools/global_echo.py" in normalized_output
-    assert ".sylliptor/tools/project_echo.py" in normalized_output
+    assert ".alysis/tools/project_echo.py" in normalized_output
 
 
 def test_console_uses_click_terminal_width_when_available() -> None:
@@ -143,7 +143,7 @@ def test_console_defaults_to_stable_width_in_non_interactive_mode(
 def test_tool_info_cli_shows_manifest_details(tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
 
     result = runner.invoke(
         cli_mod.app,
@@ -157,7 +157,7 @@ def test_tool_info_cli_shows_manifest_details(tmp_path: Path) -> None:
     assert "input_schema" in result.output
     assert "project_echo" in result.output
     assert "source_path" in result.output
-    assert (workspace / ".sylliptor/tools/project_echo.py").as_posix() in normalized_output
+    assert (workspace / ".alysis/tools/project_echo.py").as_posix() in normalized_output
 
 
 def test_tool_list_cli_preserves_filename_contiguously_on_narrow_terminals(tmp_path: Path) -> None:
@@ -165,10 +165,10 @@ def test_tool_list_cli_preserves_filename_contiguously_on_narrow_terminals(tmp_p
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
     _init_git_repo(workspace)
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
     _write_tool(cfg_dir, "tools/global_echo.py", name="global_echo")
 
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
     result = runner.invoke(
         cli_mod.app,
         ["tool", "list", "--path", str(workspace)],
@@ -196,7 +196,7 @@ def test_tool_list_and_info_cli_do_not_mark_supported_runtime_specific_tools_dis
         extra_manifest_lines=['"enabled_in": ["forge_exec"],'],
     )
 
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
     list_result = runner.invoke(
         cli_mod.app,
         ["tool", "list", "--path", str(workspace)],
@@ -225,8 +225,8 @@ def test_tool_trust_and_untrust_cli_updates_project_tool_status(tmp_path: Path) 
     runner = CliRunner()
     workspace = tmp_path / "workspace"
     cfg_dir = tmp_path / "config"
-    _write_tool(workspace, ".sylliptor/tools/project_echo.py", name="project_echo")
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    _write_tool(workspace, ".alysis/tools/project_echo.py", name="project_echo")
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
 
     trust_result = runner.invoke(
         cli_mod.app,
@@ -259,7 +259,7 @@ def test_tool_trust_rejects_global_tools(tmp_path: Path) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     _write_tool(cfg_dir, "tools/global_echo.py", name="global_echo")
 
-    env = {"SYLLIPTOR_CONFIG_DIR": os.fspath(cfg_dir)}
+    env = {"ALYSIS_CONFIG_DIR": os.fspath(cfg_dir)}
     result = runner.invoke(
         cli_mod.app,
         ["tool", "trust", "global_echo", "--path", str(workspace)],
