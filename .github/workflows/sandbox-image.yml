@@ -353,7 +353,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2016 -- command substitution runs inside the container.
+          # The command substitution runs inside the container.
+          # shellcheck disable=SC2016
           smoke='test "$(id -u)" = 1000; python --version; git --version; rg --version'
           if [[ "${VARIANT}" != "base" ]]; then
             smoke="${smoke}; node --version; npm --version; go version; rustc --version; cargo --version"
