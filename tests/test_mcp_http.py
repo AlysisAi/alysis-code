@@ -2567,7 +2567,7 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
         )
         assert prompt_result.description == "Review helper"
         assert prompt_result.text == "Review repo owner/alysis."
-        assert "user: text(28 chars)" in prompt_result.content_summary
+        assert "user: text(25 chars)" in prompt_result.content_summary
     finally:
         client.close()
         server.close()

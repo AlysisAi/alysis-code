@@ -917,7 +917,9 @@ def test_config_reload_recomputes_auto_reasoning_trace_capability_for_model_rout
     )
 
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=cfg)
-    assert client.reasoning_trace_capability.adapter == "deepseek_reasoning"
+    # Unknown OpenAI-compatible gateways stay passive unless model metadata
+    # explicitly opts them into a reasoning adapter.
+    assert client.reasoning_trace_capability.adapter == "openai_compat_passive"
 
     session.cfg.extra_fields["model_metadata_overrides"] = {
         "models": {"deepseek-reasoner": {"supports_reasoning": False}}

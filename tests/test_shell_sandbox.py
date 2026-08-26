@@ -1108,7 +1108,12 @@ def test_bwrap_runner_clear_env_uses_minimal_env(
     env = kwargs["env"]
     assert isinstance(env, dict)
     assert env["HOME"] == "/tmp/home"
-    assert set(env).issubset({"HOME", "PATH", "LANG"})
+    assert set(env).issubset(
+        {"HOME", "PATH", "LANG", "DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT", "PIP_NO_INPUT"}
+    )
+    assert env["DEBIAN_FRONTEND"] == "noninteractive"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["PIP_NO_INPUT"] == "1"
     assert "ALYSIS_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert "EXTRA_KEY" not in env

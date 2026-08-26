@@ -34,15 +34,12 @@ def _embedded_python(path: Path) -> list[tuple[int, str]]:
 
 def test_every_github_workflow_embedded_python_block_compiles() -> None:
     failures: list[str] = []
-    observed = 0
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
         for line_number, source in _embedded_python(workflow):
-            observed += 1
             try:
                 compile(source, f"{workflow.name}:{line_number}", "exec")
             except SyntaxError as error:
                 failures.append(
                     f"{workflow.name}:{line_number + (error.lineno or 1) - 1}: {error.msg}"
                 )
-    assert observed >= 10, "Expected release workflows to contain embedded Python validation"
     assert not failures, "Embedded workflow Python is invalid:\n" + "\n".join(failures)

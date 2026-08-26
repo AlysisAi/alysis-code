@@ -252,7 +252,7 @@ def test_run_task_worker_mirrors_plan_assets_into_worktree(tmp_path: Path, monke
         assert "artifact_path" not in stub
         assert stub["artifact_readable_via_fs"] is False
         assert "fs_read_path" not in stub
-        assert "the rest is not readable via fs" in stub["full_output"]
+        assert "use session_artifact_read with that locator" in stub["full_output"]
         return 0
 
     monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)

@@ -2167,7 +2167,6 @@ def test_run_default_chat_action_defaults_unchanged(monkeypatch) -> None:
     assert captured["mode"] is None
     assert captured["no_log"] is False
     assert captured["verify_cmd"] is None
-    assert captured["apply"] is False
     assert captured["diagnostic_log"] is None
 
 
@@ -2181,7 +2180,6 @@ def test_run_default_run_action_passes_concrete_typer_defaults(monkeypatch) -> N
     startup_mod._run_default_run_action("inspect")
 
     assert captured["instruction"] == "inspect"
-    assert captured["apply"] is False
     assert captured["benchmark"] is False
     assert captured["deadline_seconds"] is None
     assert captured["require_deadline"] is False

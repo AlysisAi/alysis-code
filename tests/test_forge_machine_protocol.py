@@ -260,7 +260,7 @@ def test_session_restores_active_emitter_even_when_the_body_raises() -> None:
 def test_every_forge_command_accepts_machine_flag() -> None:
     runner = CliRunner()
     for command in ALL_FORGE_COMMANDS:
-        result = runner.invoke(alysis_app, ["forge", command, "--help"])
+        result = runner.invoke(alysis_app, ["forge", command, "--help"], color=False)
         assert result.exit_code == 0, f"forge {command} --help failed"
         assert "--machine" in result.stdout, f"forge {command} is missing --machine"
 

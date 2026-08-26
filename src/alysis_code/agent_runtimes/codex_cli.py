@@ -253,6 +253,9 @@ class CodexCliRuntimeAdapter:
                 exit_code=_INVALID_REQUEST_EXIT_CODE,
                 error=f"Delegated runtime cwd is not a directory: {cwd}",
             )
+        # Validate resume identifiers before probing the host executable. Invalid
+        # option-shaped input is a request error even on hosts without Codex.
+        _validated_session_id(request.session_id)
         executable = _resolve_executable(settings.executable)
         if executable is None:
             return RuntimeTurnResult(

@@ -416,9 +416,9 @@ def test_run_cli_forwards_the_budget_flags(tmp_path: Path, monkeypatch: pytest.M
     def fake_run_impl(_cli_mod: Any, *args: Any, **_kwargs: Any) -> int:
         # Positional order in the root wrapper: ..., deadline_seconds,
         # no_deadline, require_deadline, diagnostic_log.
-        captured["deadline_seconds"] = args[21]
-        captured["no_deadline"] = args[22]
-        captured["require_deadline"] = args[23]
+        captured["deadline_seconds"] = args[20]
+        captured["no_deadline"] = args[21]
+        captured["require_deadline"] = args[22]
         return 0
 
     monkeypatch.setattr(cli_mod, "run_impl", fake_run_impl, raising=False)
@@ -660,11 +660,13 @@ def test_expiry_before_the_turn_starts_exits_cleanly(tmp_path: Path) -> None:
     finally:
         session.close()
 
-    # Nothing ran, so there is nothing to salvage - but the budget still ran
-    # out, which is a normal outcome and exits clean.
+    # Nothing ran, so the initialized salvage path records that no material work
+    # persisted; the budget stop itself remains a clean outcome.
     assert exit_code == 0
     assert _event_payloads(log_path, "deadline_exhausted")
-    assert not _event_payloads(log_path, "run_budget_salvage")
+    salvage = _event_payloads(log_path, "run_budget_salvage")
+    assert salvage[-1]["material_work_persisted"] is False
+    assert salvage[-1]["exit_code"] == 1
 
 
 def test_phase_transitions_are_recorded_in_the_session_log(tmp_path: Path) -> None:

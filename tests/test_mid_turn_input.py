@@ -899,10 +899,15 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
     from prompt_toolkit.output import DummyOutput
 
     from alysis_code.cli_impl.tui import run_tui
-    from alysis_code.cli_impl.tui.state import TuiState
+    from alysis_code.cli_impl.tui.state import TuiState, next_exec_mode
 
-    state = TuiState(model_name="test-model", username="tester", auto_approve=True)
+    state = TuiState(model_name="test-model", username="tester", exec_mode="auto")
     state_holder["state"] = state
+
+    def mode_cycle() -> list[tuple[str, str]]:
+        state.exec_mode = next_exec_mode(state.exec_mode)
+        return []
+
     with create_pipe_input() as pipe:
         feeder = threading.Thread(target=lambda: feed(pipe), daemon=True)
         feeder.start()
@@ -913,6 +918,7 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
             output=DummyOutput(),
             session_builder=BlockingSession,
             persona_cycle=persona_cycle,
+            mode_cycle=mode_cycle,
             background_turns=True,
         )
         feeder.join(timeout=2)
@@ -920,5 +926,5 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
     assert result == "/exit"
     assert not feeder.is_alive()
     assert persona_calls == []
-    assert state_holder["state"].auto_approve is False
+    assert state_holder["state"].exec_mode == "fullaccess"
     assert any("/persona is unavailable" in text for role, text in transcript if role == "warn")

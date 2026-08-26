@@ -25,8 +25,11 @@ posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX process-group beh
 
 def _make_session(tmp_path: Path, *, runtime_kind: RuntimeKind, session_id: str):
     sessions_dir = tmp_path / "sessions"
+    cfg = AppConfig(model="test-model", routing_mode="code_only")
+    # These tests exercise host process-group ownership, not a container backend.
+    cfg.extra_fields = {"shell_sandbox": {"mode": "off"}}
     session = create_session(
-        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        cfg=cfg,
         root=tmp_path,
         mode="auto",
         yes=True,
