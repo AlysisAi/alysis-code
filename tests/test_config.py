@@ -852,7 +852,10 @@ def test_set_progress_watchdog_thresholds_reject_non_positive_values(key: str) -
 
 def test_set_inflight_deadline_grace_accepts_zero_and_rejects_invalid_values() -> None:
     key = "subagent_orchestration.inflight_deadline_grace_s"
-    assert set_config_value(AppConfig(), key, "0").subagent_orchestration.inflight_deadline_grace_s == 0
+    assert (
+        set_config_value(AppConfig(), key, "0").subagent_orchestration.inflight_deadline_grace_s
+        == 0
+    )
     for value in ("-1", "nan", "inf", "not-a-number"):
         with pytest.raises(ConfigError):
             set_config_value(AppConfig(), key, value)

@@ -148,9 +148,8 @@ def _raw_agent_proxy_response(
         if _has_tool_call(messages, "fs_read"):
             return _response("README.md contents: `# Smoke`")
         return _tool_response("fs_read", {"path": "README.md"})
-    if (
-        "read existing readme.md and report its contents." in lowered
-        and _has_tool_call(messages, "fs_read")
+    if "read existing readme.md and report its contents." in lowered and _has_tool_call(
+        messages, "fs_read"
     ):
         return _response("README.md contents: `# Smoke`")
     if "subagent_bench_m03" in lowered:
@@ -190,10 +189,7 @@ def _raw_agent_proxy_response(
                 ),
             )
         )
-    if (
-        "subagent_bench_m04_child_" in lowered
-        and not _has_tool_call(messages, "subagent_run")
-    ):
+    if "subagent_bench_m04_child_" in lowered and not _has_tool_call(messages, "subagent_run"):
         if _has_tool_call(messages, "fs_read_lines"):
             return _response("Readonly inspection completed with file-backed evidence.")
         path = "src/app.py" if "child_beta" in lowered else "README.md"

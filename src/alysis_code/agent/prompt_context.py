@@ -2468,9 +2468,8 @@ def prepare_session_prompt_context(
         )
         if subagent_context:
             messages.append({"role": "user", "content": subagent_context})
-    if (
-        subagent_depth == 0
-        and _workspace_kind_supports_task_brief(workspace_context.workspace_kind)
+    if subagent_depth == 0 and _workspace_kind_supports_task_brief(
+        workspace_context.workspace_kind
     ):
         messages.append({"role": "user", "content": _empty_task_brief_message()})
     messages.append({"role": "user", "content": environment_context})

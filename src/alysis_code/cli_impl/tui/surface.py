@@ -480,9 +480,7 @@ class TuiSurface:
             followed_label = self._current_subagent_follow_label(str(event.subagent_name))
             activity = _truncate(f"{label}{detail}", limit=64)
             self._subagent_activity[display_name] = activity
-            self._t.set_status(
-                _truncate(f"↪ {followed_label} ▸ {activity}…", limit=80)
-            )
+            self._t.set_status(_truncate(f"↪ {followed_label} ▸ {activity}…", limit=80))
             return
         if self._trace_level == "full":
             detail = f" · {arg_detail}" if arg_detail else ""
@@ -593,9 +591,7 @@ class TuiSurface:
 
     def _current_subagent_display_name(self, name: str) -> str:
         thread_id = threading.get_ident()
-        for owner_thread, candidate, label, workspace_view in reversed(
-            self._subagent_stack
-        ):
+        for owner_thread, candidate, label, workspace_view in reversed(self._subagent_stack):
             if owner_thread == thread_id and candidate == name:
                 return self._subagent_display_name(candidate, label, workspace_view)
         return name
@@ -609,9 +605,7 @@ class TuiSurface:
 
     def _current_subagent_follow_label(self, name: str) -> str:
         thread_id = threading.get_ident()
-        for owner_thread, candidate, label, workspace_view in reversed(
-            self._subagent_stack
-        ):
+        for owner_thread, candidate, label, workspace_view in reversed(self._subagent_stack):
             if owner_thread == thread_id and candidate == name:
                 return self._subagent_follow_label(candidate, label, workspace_view)
         return name
@@ -641,9 +635,7 @@ class TuiSurface:
         name = str(event.name)
         label = str(event.label or "")
         workspace_view = str(event.workspace_view or "shared")
-        self._subagent_stack.append(
-            (threading.get_ident(), name, label, workspace_view)
-        )
+        self._subagent_stack.append((threading.get_ident(), name, label, workspace_view))
         self._sync_subagent_badge()
         display_name = self._subagent_display_name(name, label, workspace_view)
         followed_label = self._subagent_follow_label(name, label, workspace_view)
@@ -678,8 +670,7 @@ class TuiSurface:
         name = entry[1]
         display_name = self._subagent_display_name(name, entry[2], entry[3])
         if all(
-            self._subagent_display_name(stacked_name, label, workspace_view)
-            != display_name
+            self._subagent_display_name(stacked_name, label, workspace_view) != display_name
             for _tid, stacked_name, label, workspace_view in self._subagent_stack
         ):
             self._subagent_activity.pop(display_name, None)

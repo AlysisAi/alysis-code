@@ -45,6 +45,7 @@ _TERMINALS_USAGE_LINES = (
     "       /terminals help",
 )
 
+
 def _merge_usage_payloads_into_session(
     *, session: Any, payloads: list[dict[str, Any]] | tuple[dict[str, Any], ...]
 ) -> int:

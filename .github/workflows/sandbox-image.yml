@@ -92,9 +92,11 @@ jobs:
             test "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}"
           fi
 
-          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
-          echo "sha12=${GITHUB_SHA::12}" >> "${GITHUB_OUTPUT}"
-          echo "source_date_epoch=$(git show -s --format=%ct HEAD)" >> "${GITHUB_OUTPUT}"
+          {
+            echo "release_tag=${release_tag}"
+            echo "sha12=${GITHUB_SHA::12}"
+            echo "source_date_epoch=$(git show -s --format=%ct HEAD)"
+          } >> "${GITHUB_OUTPUT}"
 
   build-scan-pr:
     name: build, scan, and smoke dev (pr)
@@ -153,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --platform linux/amd64 \
-            alysis-sandbox-pr:${GITHUB_SHA} \
+            "alysis-sandbox-pr:${GITHUB_SHA}" \
             sh -euc 'test "$(id -u)" = 1000; python --version; git --version; rg --version; node --version; npm --version; go version; rustc --version; cargo --version'
 
       - name: Upload Trivy SARIF artifact
@@ -258,10 +260,12 @@ jobs:
 
           amd64_digest="$(resolve_platform_digest amd64)"
           arm64_digest="$(resolve_platform_digest arm64)"
-          echo "amd64_digest=${amd64_digest}" >> "${GITHUB_OUTPUT}"
-          echo "arm64_digest=${arm64_digest}" >> "${GITHUB_OUTPUT}"
-          echo "amd64_ref=${IMAGE}@${amd64_digest}" >> "${GITHUB_OUTPUT}"
-          echo "arm64_ref=${IMAGE}@${arm64_digest}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "amd64_digest=${amd64_digest}"
+            echo "arm64_digest=${arm64_digest}"
+            echo "amd64_ref=${IMAGE}@${amd64_digest}"
+            echo "arm64_ref=${IMAGE}@${arm64_digest}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Validate and bind both platform SBOM predicates
         id: sbom
@@ -349,6 +353,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016 -- command substitution runs inside the container.
           smoke='test "$(id -u)" = 1000; python --version; git --version; rg --version'
           if [[ "${VARIANT}" != "base" ]]; then
             smoke="${smoke}; node --version; npm --version; go version; rustc --version; cargo --version"

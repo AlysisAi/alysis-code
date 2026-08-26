@@ -866,7 +866,9 @@ def _activity_rows(
     clock = (
         f" \u00b7 run time {elapsed}s"
         if elapsed and elapsed_is_run_time
-        else f" {elapsed}s" if elapsed else ""
+        else f" {elapsed}s"
+        if elapsed
+        else ""
     )
     return [[(rail, f"{spinner} "), (body, f"{label}{clock}")]]
 
@@ -963,11 +965,7 @@ def _subagent_panel_view_position(
     run_id: str,
 ) -> tuple[int, int]:
     """Return the selected child's current children-only view number."""
-    order = list(
-        dict.fromkeys(
-            str(value) for value in panel_state.get("run_order", []) if value
-        )
-    )
+    order = list(dict.fromkeys(str(value) for value in panel_state.get("run_order", []) if value))
     try:
         position = order.index(str(run_id)) + 1
     except ValueError:
@@ -1014,10 +1012,7 @@ def _subagents_picker_spec(
     if not active_children:
         return None
 
-    children_by_run_id = {
-        str(child["run_id"]): child
-        for child in active_children
-    }
+    children_by_run_id = {str(child["run_id"]): child for child in active_children}
     selected_run_id = str(panel_state.get("selected_run_id") or "")
     rows: list[dict[str, Any]] = []
     for child in active_children:

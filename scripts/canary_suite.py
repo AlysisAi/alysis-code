@@ -292,17 +292,29 @@ def render_table(summary: CanarySummary, baseline: Baseline) -> str:
     expected = baseline.pass_count if baseline.pass_count is not None else summary.total
     lines.append("")
     lines.append("Comparison to baseline")
-    lines.append(f"  pass count:            {summary.pass_count}/{summary.total} "
-                 f"(baseline expected {expected}/{summary.total})")
+    lines.append(
+        f"  pass count:            {summary.pass_count}/{summary.total} "
+        f"(baseline expected {expected}/{summary.total})"
+    )
     lines.append(f"  failed:                {summary.fail_count}")
     lines.append(f"  unknown resolution:    {summary.unknown_count}")
     md = summary.mean_dispatch_overhead_seconds
-    lines.append(f"  mean dispatch overhead: {_fmt(md)} s"
-                 + (f"  (baseline {_fmt(baseline.mean_dispatch_overhead_seconds)} s)"
-                    if baseline.mean_dispatch_overhead_seconds is not None else ""))
-    lines.append(f"  total cost:            {_fmt(summary.total_cost_usd)}"
-                 + (f"  (baseline {_fmt(baseline.total_cost_usd)})"
-                    if baseline.total_cost_usd is not None else ""))
+    lines.append(
+        f"  mean dispatch overhead: {_fmt(md)} s"
+        + (
+            f"  (baseline {_fmt(baseline.mean_dispatch_overhead_seconds)} s)"
+            if baseline.mean_dispatch_overhead_seconds is not None
+            else ""
+        )
+    )
+    lines.append(
+        f"  total cost:            {_fmt(summary.total_cost_usd)}"
+        + (
+            f"  (baseline {_fmt(baseline.total_cost_usd)})"
+            if baseline.total_cost_usd is not None
+            else ""
+        )
+    )
     verdict, _ = evaluate_verdict(summary, baseline)
     lines.append("")
     lines.append(f"VERDICT: {verdict}")

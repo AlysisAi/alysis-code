@@ -89,6 +89,8 @@ _FORCED_FINAL_TERMINATION_EVENT_TYPES = frozenset(
 _EXHAUSTION_TERMINATION_KINDS = frozenset(
     {"deadline_exhausted", "run_budget_exhausted", "step_budget_exhausted"}
 )
+
+
 def _latest_subagent_store_final_text(sub_session: Any) -> tuple[str, bool, dict[str, Any]]:
     """Last recorded final answer of a child session, plus its ``final`` payload.
 

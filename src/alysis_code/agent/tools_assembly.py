@@ -1318,8 +1318,7 @@ def build_tools(
         findings = _sensitive_path_findings([path])
         if findings and not (root / path).exists():
             message = (
-                f"Path does not exist: {path}. This result is terminal; "
-                "do not retry this path."
+                f"Path does not exist: {path}. This result is terminal; do not retry this path."
             )
             raise AgentRuntimeError(
                 message,

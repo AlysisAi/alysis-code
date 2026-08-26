@@ -1509,7 +1509,9 @@ class AgentSession:
         if writes_allowed:
             remaining.append("- Finish the requested implementation or report a concrete blocker.")
         else:
-            remaining.append("- Report a concrete blocker if the requested result cannot be delivered.")
+            remaining.append(
+                "- Report a concrete blocker if the requested result cannot be delivered."
+            )
 
         kind = _normalize_forced_summary_termination_kind(termination_kind)
         if kind == ForcedFinalSummaryTerminationKind.STEP_BUDGET_EXHAUSTED:

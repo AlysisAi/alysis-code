@@ -112,9 +112,7 @@ CANARY_ENV_VAR = "ALYSIS_API_KEY"
 DEFAULT_CANARY_VALUE = "sk-alysis-canary-DO-NOT-USE-000000000000"
 
 #: Tasks whose primary assertion is service persistence (PR4).
-SERVICE_TASKS = frozenset(
-    {"hf-model-inference", "configure-git-webserver", "qemu-alpine-ssh"}
-)
+SERVICE_TASKS = frozenset({"hf-model-inference", "configure-git-webserver", "qemu-alpine-ssh"})
 
 # ---------------------------------------------------------------------------
 # Check + report vocabulary
@@ -359,9 +357,7 @@ def _budget_stop_records(bundle: ArtifactBundle) -> list[dict]:
     out: list[dict] = []
     for event in bundle.events:
         payload = _event_payload(event)
-        reason = str(
-            payload.get("stop_reason") or payload.get("degraded_reason") or ""
-        ).strip()
+        reason = str(payload.get("stop_reason") or payload.get("degraded_reason") or "").strip()
         if reason == STOP_REASON_RUN_BUDGET_EXHAUSTED:
             out.append(event)
         elif _event_type(event) == "deadline_exhausted":
@@ -380,9 +376,13 @@ def evaluate_compile_compcert(bundle: ArtifactBundle) -> TaskReport:
     # (1) No NonZeroAgentExitCodeError anywhere in the archive.
     if bundle.text_contains(NONZERO_AGENT_EXIT_MARKER):
         hits = ", ".join(bundle.files_containing(NONZERO_AGENT_EXIT_MARKER)[:5])
-        report.add("pr2_no_nonzero_exit_error", FAIL, f"found {NONZERO_AGENT_EXIT_MARKER} in: {hits}")
+        report.add(
+            "pr2_no_nonzero_exit_error", FAIL, f"found {NONZERO_AGENT_EXIT_MARKER} in: {hits}"
+        )
     else:
-        report.add("pr2_no_nonzero_exit_error", PASS, f"no {NONZERO_AGENT_EXIT_MARKER} in artifacts")
+        report.add(
+            "pr2_no_nonzero_exit_error", PASS, f"no {NONZERO_AGENT_EXIT_MARKER} in artifacts"
+        )
 
     # (2) If the budget was hit, it was a clean stop, not an errored status.
     budget_stops = _budget_stop_records(bundle)
@@ -496,14 +496,18 @@ def evaluate_gcode(bundle: ArtifactBundle) -> TaskReport:
     # The thrash guard is bounded by construction (<= 2 notices/run); its
     # presence proves it is wired, its absence is normal. Either way, assert the
     # run reached a terminal state rather than spinning.
-    terminal = bundle.events_of_type("final", "run_finished", "deadline_exhausted", "terminal_error")
+    terminal = bundle.events_of_type(
+        "final", "run_finished", "deadline_exhausted", "terminal_error"
+    )
     thrash = bundle.text_contains(THRASH_NOTICE_MARKER)
     if thrash:
         report.add("pr5_thrash_guard_wired", PASS, "thrash progress notice fired (guard is wired)")
     else:
         report.add("pr5_thrash_guard_wired", SKIP, "no thrash notice (run did not thrash)")
     if terminal:
-        report.add("pr5_reached_terminal_state", PASS, f"{len(terminal)} terminal record(s) present")
+        report.add(
+            "pr5_reached_terminal_state", PASS, f"{len(terminal)} terminal record(s) present"
+        )
     else:
         report.add(
             "pr5_reached_terminal_state",
@@ -584,8 +588,7 @@ def format_report(reports: Iterable[TaskReport]) -> str:
                 skipped += 1
             lines.append(f"  [{check.status:4}] {check.name}: {check.detail}")
     lines.append(
-        f"\nTOTAL {total} checks: {passed} PASS, {failed} FAIL, "
-        f"{warned} WARN, {skipped} SKIP"
+        f"\nTOTAL {total} checks: {passed} PASS, {failed} FAIL, {warned} WARN, {skipped} SKIP"
     )
     return "\n".join(lines)
 
@@ -626,9 +629,7 @@ def _run_live(args: argparse.Namespace) -> int:  # pragma: no cover - needs Harb
         )
         print(f"<<< Harbor exit={completed.returncode} for {task}", flush=True)
         bundle = ArtifactBundle.from_dir(task_out)
-        reports.append(
-            evaluate_task(task, bundle, canary_value=args.canary_value)
-        )
+        reports.append(evaluate_task(task, bundle, canary_value=args.canary_value))
     print(format_report(reports))
     return 1 if any_failed(reports) else 0
 

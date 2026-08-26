@@ -1198,9 +1198,7 @@ class ModelRegistry:
             .lower()
         )
         bundled_provider = (
-            str(bundled_catalog_layer.raw_metadata.get("litellm_provider") or "")
-            .strip()
-            .lower()
+            str(bundled_catalog_layer.raw_metadata.get("litellm_provider") or "").strip().lower()
         )
         catalog_route_provider = (
             str(bundled_catalog_layer.raw_metadata.get("catalog_provider_hint") or "")

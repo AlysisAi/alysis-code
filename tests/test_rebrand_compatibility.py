@@ -385,12 +385,7 @@ def test_release_signature_domain_is_frozen_at_its_prerebrand_value() -> None:
     assert python_domain is not None
     assert python_domain.group(1) == "sylliptor-managed-cli-release-v3"
     ts_path = (
-        root
-        / "extensions"
-        / "vscode-alysis"
-        / "src"
-        / "runtime"
-        / "ManagedCliReleaseSecurity.ts"
+        root / "extensions" / "vscode-alysis" / "src" / "runtime" / "ManagedCliReleaseSecurity.ts"
     )
     if ts_path.is_file():
         ts_domain = re.search(

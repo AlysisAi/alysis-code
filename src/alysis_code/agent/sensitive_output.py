@@ -218,8 +218,7 @@ def redact_sensitive_tool_result(
             if result.get("error_code") == "fs_path_not_found":
                 path = effective.paths[0] if effective.paths else "requested path"
                 stub["error"] = (
-                    f"Path does not exist: {path}. This result is terminal; "
-                    "do not retry this path."
+                    f"Path does not exist: {path}. This result is terminal; do not retry this path."
                 )
                 stub["error_code"] = "fs_path_not_found"
             else:

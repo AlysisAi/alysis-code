@@ -355,9 +355,7 @@ def make_llm_client(
             provider_concurrency_caps=cfg.provider_concurrency_caps,
             provider_retry_settings=resolve_provider_retry_settings(cfg),
             stream_no_progress_timeout_s=cfg.llm_stream_no_progress_timeout_s,
-            inflight_deadline_grace_s=(
-                cfg.subagent_orchestration.inflight_deadline_grace_s
-            ),
+            inflight_deadline_grace_s=(cfg.subagent_orchestration.inflight_deadline_grace_s),
             route_identity=route_identity,
         ),
         reasoning_trace_capability,

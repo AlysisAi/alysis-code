@@ -118,11 +118,7 @@ def _print_byte_diff(before: ReplayedOutcome, after: ReplayedOutcome) -> None:
     after_bytes = after.canonical_json.encode("utf-8")
     shared_length = min(len(before_bytes), len(after_bytes))
     difference_at = next(
-        (
-            index
-            for index in range(shared_length)
-            if before_bytes[index] != after_bytes[index]
-        ),
+        (index for index in range(shared_length) if before_bytes[index] != after_bytes[index]),
         shared_length,
     )
     context_start = max(0, difference_at - 32)

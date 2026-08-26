@@ -149,8 +149,7 @@ class AlysisAgent(BaseInstalledAgent):
             "PYTHONUNBUFFERED": "1",
             "ALYSIS_BASE_URL": self._base_url(),
             "ALYSIS_CONFIG_DIR": _CONFIG_DIR,
-            "ALYSIS_INSTALL_SPEC": self._get_env("ALYSIS_INSTALL_SPEC")
-            or "alysis-code",
+            "ALYSIS_INSTALL_SPEC": self._get_env("ALYSIS_INSTALL_SPEC") or "alysis-code",
             "ALYSIS_MODEL": self._model(),
             "ALYSIS_MODEL_METADATA_POLICY": "warn",
             # setup.sh ends by running `alysis --version`, whose output now

@@ -841,8 +841,8 @@ def _suggest_chat_command(raw_command: str, *, ui_mode: str = "chat") -> str | N
 def _rebuild_session_tools_for_mode(*, session: Any, mode: str) -> None:
     scheduler_holder: dict[str, Any] = {}
     build_kwargs = _session_build_tools_kwargs(session=session, mode=mode)
-    build_kwargs["child_scheduler_sink"] = (
-        lambda scheduler: scheduler_holder.__setitem__("scheduler", scheduler)
+    build_kwargs["child_scheduler_sink"] = lambda scheduler: scheduler_holder.__setitem__(
+        "scheduler", scheduler
     )
     tools = build_tools(**build_kwargs)
     previous_scheduler = getattr(session, "child_scheduler", None)

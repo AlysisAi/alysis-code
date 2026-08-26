@@ -194,9 +194,7 @@ def test_background_subagent_progress_uses_workspace_semantics() -> None:
         },
     )
 
-    readonly_wait_result = {
-        "results": {"run-a": {"effects": ["delegate", "read_workspace"]}}
-    }
+    readonly_wait_result = {"results": {"run-a": {"effects": ["delegate", "read_workspace"]}}}
     assert not _is_action_progress_tool("subagent_wait", result=readonly_wait_result)
     assert _is_exploration_only_tool("subagent_wait", result=readonly_wait_result)
 

@@ -26,14 +26,10 @@ IDE_PROTOCOL_DOC_PATH = REPO_ROOT / "docs" / "ide_protocol.md"
 VSCODE_EXTENSION_DOC_PATH = REPO_ROOT / "docs" / "vscode_extension.md"
 CLI_ROOT_PATH = REPO_ROOT / "src" / "alysis_code" / "cli_impl" / "commands" / "root.py"
 CHAT_COMMANDS_PATH = REPO_ROOT / "src" / "alysis_code" / "cli_impl" / "chat" / "commands.py"
-CHAT_STATE_PATH = (
-    REPO_ROOT / "src" / "alysis_code" / "cli_impl" / "commands" / "chat_state.py"
-)
+CHAT_STATE_PATH = REPO_ROOT / "src" / "alysis_code" / "cli_impl" / "commands" / "chat_state.py"
 IDE_HEALTH_PATH = REPO_ROOT / "src" / "alysis_code" / "ide" / "health.py"
 IDE_STDIO_BRIDGE_PATH = REPO_ROOT / "src" / "alysis_code" / "ide" / "stdio_bridge.py"
-IDE_MANAGEMENT_PROTOCOL_PATH = (
-    REPO_ROOT / "src" / "alysis_code" / "ide" / "management_protocol.py"
-)
+IDE_MANAGEMENT_PROTOCOL_PATH = REPO_ROOT / "src" / "alysis_code" / "ide" / "management_protocol.py"
 EXTENSION_PACKAGE_PATH = REPO_ROOT / "extensions" / "vscode-alysis" / "package.json"
 EXTENSION_PROTOCOL_TS_PATH = (
     REPO_ROOT / "extensions" / "vscode-alysis" / "src" / "client" / "AlysisProtocol.ts"

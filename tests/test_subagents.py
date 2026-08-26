@@ -94,9 +94,9 @@ def test_interactive_subagent_modules_do_not_import_swarm() -> None:
                 )
             elif isinstance(node, ast.Import):
                 imported_modules.update(alias.name for alias in node.names)
-        assert not any(
-            "swarm_" in module_name for module_name in imported_modules
-        ), f"{module_path.name} crosses a subsystem import boundary"
+        assert not any("swarm_" in module_name for module_name in imported_modules), (
+            f"{module_path.name} crosses a subsystem import boundary"
+        )
 
 
 class _RecordingStore:

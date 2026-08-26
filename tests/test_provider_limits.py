@@ -376,16 +376,19 @@ def test_retry_event_observer_receives_content_free_live_payload() -> None:
             raise LLMError("LLM error 503: service unavailable")
         return "ok"
 
-    assert run_provider_limited_call(
-        call=call,
-        provider_key="deepseek",
-        retry_settings=ProviderRetrySettings(max_retries=1),
-        operation="chat",
-        sleep_fn=lambda _seconds: None,
-        random_fn=lambda: 0.5,
-        clock_fn=lambda: next(clock_values),
-        on_retry_event=events.append,
-    ) == "ok"
+    assert (
+        run_provider_limited_call(
+            call=call,
+            provider_key="deepseek",
+            retry_settings=ProviderRetrySettings(max_retries=1),
+            operation="chat",
+            sleep_fn=lambda _seconds: None,
+            random_fn=lambda: 0.5,
+            clock_fn=lambda: next(clock_values),
+            on_retry_event=events.append,
+        )
+        == "ok"
+    )
     assert events == [
         {
             "provider": "deepseek",

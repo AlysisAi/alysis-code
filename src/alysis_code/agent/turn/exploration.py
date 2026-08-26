@@ -488,18 +488,12 @@ def _subagent_result_has_action_effect(
     nested_results = result.get("results")
     if isinstance(nested_results, dict):
         candidates.extend(
-            candidate
-            for candidate in nested_results.values()
-            if isinstance(candidate, dict)
+            candidate for candidate in nested_results.values() if isinstance(candidate, dict)
         )
     for candidate in candidates:
         raw_effects = candidate.get("effects")
         effect_names = (
-            {
-                str(effect or "").strip().lower()
-                for effect in raw_effects
-                if str(effect or "")
-            }
+            {str(effect or "").strip().lower() for effect in raw_effects if str(effect or "")}
             if isinstance(raw_effects, (list, tuple, set))
             else set()
         )
@@ -538,9 +532,7 @@ def _is_action_progress_tool(
     focused: bool = False,
 ) -> bool:
     normalized = _normal_tool_name(tool_name)
-    if normalized in (
-        _SUBAGENT_READ_CONTROL_TOOL_NAMES | _SUBAGENT_EFFECT_CLASSIFIED_TOOL_NAMES
-    ):
+    if normalized in (_SUBAGENT_READ_CONTROL_TOOL_NAMES | _SUBAGENT_EFFECT_CLASSIFIED_TOOL_NAMES):
         return _is_subagent_action_progress_tool(
             normalized,
             arguments=arguments,
@@ -570,9 +562,7 @@ def _is_exploration_only_tool(
     focused: bool = False,
 ) -> bool:
     normalized = _normal_tool_name(tool_name)
-    if normalized in (
-        _SUBAGENT_READ_CONTROL_TOOL_NAMES | _SUBAGENT_EFFECT_CLASSIFIED_TOOL_NAMES
-    ):
+    if normalized in (_SUBAGENT_READ_CONTROL_TOOL_NAMES | _SUBAGENT_EFFECT_CLASSIFIED_TOOL_NAMES):
         return not _is_action_progress_tool(
             normalized,
             arguments=arguments,

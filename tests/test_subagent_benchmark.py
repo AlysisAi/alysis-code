@@ -53,8 +53,7 @@ BENCHMARK_CASES = (
         case_id="M01",
         prompt="Use explorer to read existing README.md and report its contents.",
         node_ids=(
-            "tests/test_mock_provider_smoke.py::"
-            "test_smoke_chat_delegates_readme_review_end_to_end",
+            "tests/test_mock_provider_smoke.py::test_smoke_chat_delegates_readme_review_end_to_end",
         ),
         provider_request_count="2 child requests",
         child_roles=("explorer",),

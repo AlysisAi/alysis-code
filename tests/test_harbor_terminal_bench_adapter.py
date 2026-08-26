@@ -176,8 +176,8 @@ def test_terminal_bench_setup_script_retries_network_installs_and_uses_venv() ->
 
 
 def test_harbor_runner_raises_verifier_timeout_multiplier() -> None:
-    runner_text = (
-        Path(box_adapter_mod.__file__).with_name("run_harbor_tbench.sh")
-    ).read_text(encoding="utf-8")
+    runner_text = (Path(box_adapter_mod.__file__).with_name("run_harbor_tbench.sh")).read_text(
+        encoding="utf-8"
+    )
 
     assert 'TB_VERIFIER_TIMEOUT_MULTIPLIER="${TB_VERIFIER_TIMEOUT_MULTIPLIER:-10}"' in runner_text

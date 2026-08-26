@@ -124,9 +124,7 @@ class SteerInbox:
             messages = list(self._messages)
             self._messages.clear()
             self._wake_signals = deque(
-                signal
-                for signal in self._wake_signals
-                if signal.get("reason") != "parent_steer"
+                signal for signal in self._wake_signals if signal.get("reason") != "parent_steer"
             )
             if not self._wake_signals:
                 self._wake_event.clear()
@@ -148,11 +146,7 @@ def wait_signal_digest(signals: list[dict[str, str]]) -> dict[str, object]:
     normalized = [
         {
             "reason": str(signal.get("reason") or "parent_wake"),
-            **(
-                {"run_id": str(signal["run_id"])}
-                if str(signal.get("run_id") or "")
-                else {}
-            ),
+            **({"run_id": str(signal["run_id"])} if str(signal.get("run_id") or "") else {}),
         }
         for signal in signals
     ]

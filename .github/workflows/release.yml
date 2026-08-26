@@ -97,7 +97,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           uv build --clear --no-create-gitignore --no-build-isolation --no-sources --out-dir dist/python
 
       - name: Validate archive identity, inventory, and clean installation

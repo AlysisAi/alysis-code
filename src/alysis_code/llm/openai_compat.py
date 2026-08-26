@@ -2766,14 +2766,9 @@ class OpenAICompatClient:
                 None,
             )
             if callable(stream_deadline_exhausted) and stream_deadline_exhausted():
-                raise DeadlineExhausted(
-                    "run deadline and in-flight provider grace elapsed"
-                )
+                raise DeadlineExhausted("run deadline and in-flight provider grace elapsed")
             progress_now = progress_clock()
-            if (
-                progress_now - last_meaningful_progress
-                >= self.stream_no_progress_timeout_s
-            ):
+            if progress_now - last_meaningful_progress >= self.stream_no_progress_timeout_s:
                 raise LLMStreamNoProgressError(
                     "LLM stream produced no meaningful payload within "
                     f"{self.stream_no_progress_timeout_s:g}s."

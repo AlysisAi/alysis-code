@@ -143,9 +143,7 @@ class AlysisSimpleAgent(AbstractInstalledAgent):
             or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         )
         self._install_spec = self._clean(
-            kwargs.get("install_spec")
-            or os.environ.get("ALYSIS_INSTALL_SPEC")
-            or "alysis-code"
+            kwargs.get("install_spec") or os.environ.get("ALYSIS_INSTALL_SPEC") or "alysis-code"
         )
         self._max_steps = self._clean(
             kwargs.get("max_steps") or os.environ.get("ALYSIS_MAX_STEPS") or "100"
@@ -208,9 +206,7 @@ class AlysisSimpleAgent(AbstractInstalledAgent):
             with tempfile.TemporaryDirectory(prefix="alysis-source-") as tmp:
                 snapshot = Path(tmp) / "source"
                 self._copy_source_snapshot(snapshot)
-                session.copy_to_container(
-                    snapshot, container_dir="/installed-agent/alysis-source"
-                )
+                session.copy_to_container(snapshot, container_dir="/installed-agent/alysis-source")
                 return super().perform_task(instruction, session, logging_dir=logging_dir)
         finally:
             self._managed_host_started_at_monotonic = None

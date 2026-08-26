@@ -4777,11 +4777,11 @@ def test_stream_meaningful_progress_watchdog_accepts_slow_payloads() -> None:
 
     def handler(_request: httpx.Request) -> httpx.Response:
         body = (
-            ': keepalive\n\n'
+            ": keepalive\n\n"
             'data: {"choices":[{"delta":{"content":"o"}}]}\n\n'
-            ': keepalive\n\n'
+            ": keepalive\n\n"
             'data: {"choices":[{"delta":{"content":"k"}}]}\n\n'
-            'data: [DONE]\n\n'
+            "data: [DONE]\n\n"
         )
         return httpx.Response(200, content=body.encode("utf-8"))
 

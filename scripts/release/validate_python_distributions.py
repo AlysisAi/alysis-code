@@ -113,8 +113,7 @@ def _validate_wheel(wheel: Path, *, name: str, version: str, normalized: str) ->
             unexpected = sorted(
                 name
                 for name in names
-                if not name.startswith("alysis_code/")
-                and not name.startswith(f"{dist_info}/")
+                if not name.startswith("alysis_code/") and not name.startswith(f"{dist_info}/")
             )
             if unexpected:
                 raise DistributionValidationError(
@@ -182,10 +181,7 @@ def _validate_sdist(
 
 
 def _is_allowed_sdist_member(relative_name: str) -> bool:
-    return (
-        relative_name in _SDIST_ROOT_FILES
-        or relative_name.startswith("src/alysis_code/")
-    )
+    return relative_name in _SDIST_ROOT_FILES or relative_name.startswith("src/alysis_code/")
 
 
 def _validate_member_names(

@@ -710,8 +710,7 @@ def test_removed_subagent_command_is_absent_from_chat_registries() -> None:
     assert "/subagent" not in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
     assert "/subagent" not in cli_mod._CHAT_COMMANDS
     assert not any(
-        command.startswith("/subagent ")
-        for command in cli_mod._chat_completer_commands()
+        command.startswith("/subagent ") for command in cli_mod._chat_completer_commands()
     )
     suggestion = cli_mod._suggest_chat_command("/subagen")
     assert suggestion != "/subagent"

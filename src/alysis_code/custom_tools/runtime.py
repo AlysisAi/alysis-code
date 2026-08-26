@@ -98,9 +98,7 @@ def run_custom_tool(
     from alysis_code.branding import env_get
 
     validated_args = _validate_input_args(spec.input_schema, args)
-    missing_env = [
-        name for name in spec.required_env if not str(env_get(name) or "").strip()
-    ]
+    missing_env = [name for name in spec.required_env if not str(env_get(name) or "").strip()]
     if missing_env:
         missing = ", ".join(missing_env)
         return _runtime_failure_payload(

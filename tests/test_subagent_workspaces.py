@@ -1782,7 +1782,7 @@ def test_shared_review_incomplete_advertises_launchable_isolated_resume(
         assert "error" not in resumed, resumed
         assert first["resume_affordance"] == (
             "This run can be continued with "
-            f"subagent_resume(run_id={first['run_id']}, workspace_view=\"isolated\") "
+            f'subagent_resume(run_id={first["run_id"]}, workspace_view="isolated") '
             "preserving its transcript in a fresh isolated workspace."
         )
         waited = harness.tools["subagent_wait"].run({"run_id": resumed["run_id"]})
