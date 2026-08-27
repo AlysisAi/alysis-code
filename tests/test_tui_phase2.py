@@ -407,6 +407,665 @@ def _run_headless(state: TuiState, keys: str, **kwargs):
         return run_tui(state, owl_color=False, input=pipe, output=DummyOutput(), **kwargs)
 
 
+def _run_and_capture_input_geometry(monkeypatch, keys: str):
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    captured = {}
+
+    def geometry(application):
+        main = application.layout.container.content
+        input_row = main.children[3]
+        side = input_row.children[0]
+        frame = input_row.children[1]
+        input_inner = frame.children[1].children[1].get_container()
+        width = side.width() if callable(side.width) else side.width
+        height = side.height() if callable(side.height) else side.height
+        inner_children = getattr(input_inner, "children", None)
+        return width.preferred, height, len(inner_children) if inner_children is not None else 1
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["welcome"] = geometry(application)
+        return application
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+        )
+
+    captured["after"] = geometry(captured["application"])
+    return captured
+
+
+def test_headless_welcome_input_frame_is_full_width_three_rows(monkeypatch):
+    geometry = _run_and_capture_input_geometry(monkeypatch, "/exit\r")
+
+    assert geometry["welcome"] == (0, 3, 1)
+
+
+def test_headless_input_geometry_is_unchanged_after_first_turn(monkeypatch):
+    geometry = _run_and_capture_input_geometry(monkeypatch, "hello\r/exit\r")
+
+    assert geometry["welcome"] == (0, 3, 1)
+    assert geometry["after"] == geometry["welcome"]
+
+
+def _run_headless_with_plain_input_selection(monkeypatch, keys: str):
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from prompt_toolkit.selection import SelectionType
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+
+        def select_input_text():
+            buffer = application.layout.current_buffer
+            buffer.text = "abcd"
+            buffer.cursor_position = 4
+            buffer.start_selection(selection_type=SelectionType.CHARACTERS)
+            buffer.cursor_position = 2
+            assert buffer.selection_state is not None
+            assert buffer.selection_state.shift_mode is False
+
+        application.pre_run_callables.append(select_input_text)
+        return application
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        _result, transcript = app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+        )
+    return [text for role, text in transcript if role == "user"]
+
+
+def test_input_plain_selection_backspace_cuts_selected_span(monkeypatch):
+    assert _run_headless_with_plain_input_selection(monkeypatch, "\x7f\r/exit\r") == ["ab"]
+
+
+def test_input_plain_selection_printable_key_replaces_selected_span(monkeypatch):
+    assert _run_headless_with_plain_input_selection(monkeypatch, "x\r/exit\r") == ["abx"]
+
+
+def test_input_plain_selection_control_j_replaces_selected_span_with_newline(monkeypatch):
+    assert _run_headless_with_plain_input_selection(monkeypatch, "\nZ\r/exit\r") == ["ab\nZ"]
+
+
+def test_input_plain_selection_enter_submits_full_buffer(monkeypatch):
+    assert _run_headless_with_plain_input_selection(monkeypatch, "\r/exit\r") == ["abcd"]
+
+
+def test_input_plain_selection_delete_behavior_is_unchanged(monkeypatch):
+    assert _run_headless_with_plain_input_selection(monkeypatch, "\x1b[3~\r/exit\r") == ["ab"]
+
+
+def _bracketed_paste(text: str) -> str:
+    return f"\x1b[200~{text}\x1b[201~"
+
+
+def _run_headless_paste_submission(monkeypatch, keys: str):
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    captured = {}
+    delivered = []
+    registry_type = getattr(app_module, "_PasteRegistry", None)
+    if registry_type is not None:
+
+        class CapturingPasteRegistry(registry_type):
+            def __init__(self):
+                super().__init__()
+                captured["registry"] = self
+
+            def expand(self, text):
+                captured.setdefault("buffer_before_submit", text)
+                captured.setdefault("payloads_before_submit", self.snapshot())
+                application = captured.get("application")
+                if application is not None:
+                    captured.setdefault(
+                        "complete_state_before_submit",
+                        application.layout.current_buffer.complete_state,
+                    )
+                return super().expand(text)
+
+        monkeypatch.setattr(app_module, "_PasteRegistry", CapturingPasteRegistry)
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        return application
+
+    class RecordingSession:
+        def __init__(self, surface):
+            self.surface = surface
+
+        def run_turn(self, text, *, cancellation_token=None):
+            delivered.append(text)
+            return 0
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+        pipe.send_text(keys)
+        _result, transcript = app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=RecordingSession,
+            background_turns=False,
+        )
+    if "registry" in captured:
+        captured["payloads_after_run"] = captured["registry"].snapshot()
+    user_echoes = [text for role, text in transcript if role == "user"]
+    return delivered, user_echoes, captured
+
+
+def test_large_bracketed_paste_collapses_and_expands_once(monkeypatch):
+    payload = "\n".join(f"line {number}" for number in range(1, 101))
+    token = "[pasted #1 +100 lines]"
+
+    delivered, user_echoes, captured = _run_headless_paste_submission(
+        monkeypatch,
+        _bracketed_paste(payload) + "\r/exit\r",
+    )
+
+    assert captured.get("buffer_before_submit", delivered[0]) == token
+    assert captured["payloads_before_submit"] == {1: payload}
+    assert captured["complete_state_before_submit"] is None
+    assert delivered == [payload]
+    assert user_echoes == [token]
+    assert captured["payloads_after_run"] == {}
+
+
+def test_small_bracketed_paste_inserts_verbatim(monkeypatch):
+    payload = "first\nsecond\nthird"
+
+    delivered, user_echoes, _captured = _run_headless_paste_submission(
+        monkeypatch,
+        _bracketed_paste(payload) + "\r/exit\r",
+    )
+
+    assert delivered == [payload]
+    assert user_echoes == [payload]
+
+
+def test_bracketed_paste_normalizes_crlf_in_small_and_large_payloads(monkeypatch):
+    small_raw = "first\r\nsecond\rthird"
+    small_normalized = "first\nsecond\nthird"
+    large_raw = "\r\n".join(f"line {number}" for number in range(1, 10))
+    large_normalized = "\n".join(f"line {number}" for number in range(1, 10))
+
+    small_delivered, small_echoes, _small_captured = _run_headless_paste_submission(
+        monkeypatch,
+        _bracketed_paste(small_raw) + "\r/exit\r",
+    )
+    large_delivered, large_echoes, _large_captured = _run_headless_paste_submission(
+        monkeypatch,
+        _bracketed_paste(large_raw) + "\r/exit\r",
+    )
+
+    assert small_delivered == [small_normalized]
+    assert small_echoes == [small_normalized]
+    assert large_delivered == [large_normalized]
+    assert large_echoes == ["[pasted #1 +9 lines]"]
+
+
+def test_two_large_pastes_number_and_expand_independently(monkeypatch):
+    first = "\n".join(f"first {number}" for number in range(1, 10))
+    second = "\n".join(f"second {number}" for number in range(1, 10))
+    display = "[pasted #1 +9 lines] between [pasted #2 +9 lines]"
+
+    delivered, user_echoes, captured = _run_headless_paste_submission(
+        monkeypatch,
+        _bracketed_paste(first) + " between " + _bracketed_paste(second) + "\r/exit\r",
+    )
+
+    assert captured.get("buffer_before_submit", user_echoes[0]) == display
+    assert captured["payloads_before_submit"] == {1: first, 2: second}
+    assert delivered == [first + " between " + second]
+    assert user_echoes == [display]
+
+
+def test_backspace_at_paste_token_edge_removes_token_and_orphan(monkeypatch):
+    payload = "\n".join(f"line {number}" for number in range(1, 10))
+
+    delivered, user_echoes, captured = _run_headless_paste_submission(
+        monkeypatch,
+        "keep " + _bracketed_paste(payload) + "\x7f\r/exit\r",
+    )
+
+    assert delivered == ["keep "]
+    assert user_echoes == ["keep "]
+    assert captured["payloads_before_submit"] == {}
+
+
+def test_delete_at_paste_token_edge_removes_token_and_orphan(monkeypatch):
+    payload = "\n".join(f"line {number}" for number in range(1, 10))
+    token = "[pasted #1 +9 lines]"
+
+    delivered, user_echoes, captured = _run_headless_paste_submission(
+        monkeypatch,
+        "keep " + _bracketed_paste(payload) + "\x1b[D" * len(token) + "\x1b[3~\r/exit\r",
+    )
+
+    assert delivered == ["keep "]
+    assert user_echoes == ["keep "]
+    assert captured["payloads_before_submit"] == {}
+
+
+def test_paste_editor_updates_payload_and_token_line_count(monkeypatch):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    payload = "\n".join(f"line {number}" for number in range(1, 10))
+    edited = "edited first\nedited second"
+    captured = {}
+    delivered = []
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["input_buffer"] = application.layout.current_buffer
+        return application
+
+    class RecordingSession:
+        def __init__(self, surface):
+            self.surface = surface
+
+        def run_turn(self, text, *, cancellation_token=None):
+            delivered.append(text)
+            return 0
+
+    def wait_for(predicate, message):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            pipe.send_text(_bracketed_paste(payload) + "\x10")
+            if not wait_for(
+                lambda: (
+                    captured.get("application") is not None
+                    and captured["application"].layout.current_buffer
+                    is not captured.get("input_buffer")
+                ),
+                "paste editor did not open",
+            ):
+                pipe.send_text("\x04")
+                return
+            editor_buffer = captured["application"].layout.current_buffer
+            assert editor_buffer.text == payload
+            editor_buffer.text = edited
+            pipe.send_text("\x13")
+            if not wait_for(
+                lambda: (
+                    captured["application"].layout.current_buffer is captured.get("input_buffer")
+                ),
+                "paste editor did not close after save",
+            ):
+                pipe.send_text("\x04")
+                return
+            captured["token_after_save"] = captured["input_buffer"].text
+            pipe.send_text("\r/exit\r")
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        _result, transcript = app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=RecordingSession,
+            background_turns=False,
+        )
+        feeder.join(timeout=3)
+
+    assert not feeder.is_alive()
+    assert feeder_errors == []
+    assert captured["token_after_save"] == "[pasted #1 +2 lines]"
+    assert delivered == [edited]
+    assert [text for role, text in transcript if role == "user"] == ["[pasted #1 +2 lines]"]
+
+
+def _run_paste_editor_with_plain_selection(monkeypatch, edit_keys: str):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from prompt_toolkit.selection import SelectionType
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    payload = "\n".join(f"line {number}" for number in range(1, 10))
+    captured = {}
+    delivered = []
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["input_buffer"] = application.layout.current_buffer
+        return application
+
+    class RecordingSession:
+        def __init__(self, surface):
+            self.surface = surface
+
+        def run_turn(self, text, *, cancellation_token=None):
+            delivered.append(text)
+            return 0
+
+    def wait_for(predicate, message):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            pipe.send_text(_bracketed_paste(payload) + "\x10")
+            if not wait_for(
+                lambda: (
+                    captured.get("application") is not None
+                    and captured["application"].layout.current_buffer
+                    is not captured.get("input_buffer")
+                ),
+                "paste editor did not open",
+            ):
+                pipe.send_text("\x04")
+                return
+            editor_buffer = captured["application"].layout.current_buffer
+            editor_buffer.text = "abcd"
+            editor_buffer.cursor_position = 4
+            editor_buffer.start_selection(selection_type=SelectionType.CHARACTERS)
+            editor_buffer.cursor_position = 2
+            assert editor_buffer.selection_state is not None
+            assert editor_buffer.selection_state.shift_mode is False
+            pipe.send_text(edit_keys)
+            time.sleep(0.05)
+            pipe.send_text("\x13")
+            if not wait_for(
+                lambda: (
+                    captured["application"].layout.current_buffer is captured.get("input_buffer")
+                ),
+                "paste editor did not close after save",
+            ):
+                pipe.send_text("\x04")
+                return
+            pipe.send_text("\r/exit\r")
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=RecordingSession,
+            background_turns=False,
+        )
+        feeder.join(timeout=3)
+
+    assert not feeder.is_alive()
+    assert feeder_errors == []
+    return delivered
+
+
+def test_editor_plain_selection_backspace_cuts_selected_span(monkeypatch):
+    assert _run_paste_editor_with_plain_selection(monkeypatch, "\x7f") == ["ab"]
+
+
+def test_editor_plain_selection_printable_key_replaces_selected_span(monkeypatch):
+    assert _run_paste_editor_with_plain_selection(monkeypatch, "x") == ["abx"]
+
+
+def test_live_paste_hint_tracks_tokens_on_welcome_delete_and_submit(monkeypatch):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    first = "\n".join(f"first {number}" for number in range(1, 10))
+    second = "\n".join(f"second {number}" for number in range(1, 10))
+    captured = {}
+    delivered = []
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["input_buffer"] = application.layout.current_buffer
+        return application
+
+    class RecordingSession:
+        def __init__(self, surface):
+            self.surface = surface
+
+        def run_turn(self, text, *, cancellation_token=None):
+            delivered.append(text)
+            return 0
+
+    def wait_for(predicate, message):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    def status_snapshot():
+        root = captured["application"].layout.container.content
+        status_container = root.children[1]
+        status_window = status_container.content
+        value = status_window.content.text
+        fragments = value() if callable(value) else value
+        return bool(status_container.filter()), fragment_list_to_text(to_formatted_text(fragments))
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            pipe.send_text(_bracketed_paste(first))
+            if not wait_for(
+                lambda: (
+                    captured.get("input_buffer") is not None
+                    and captured["input_buffer"].text == "[pasted #1 +9 lines]"
+                ),
+                "first paste token did not appear",
+            ):
+                pipe.send_text("\x04")
+                return
+            captured["one"] = status_snapshot()
+
+            pipe.send_text(_bracketed_paste(second))
+            if not wait_for(
+                lambda: captured["input_buffer"].text.endswith("[pasted #2 +9 lines]"),
+                "second paste token did not appear",
+            ):
+                pipe.send_text("\x04")
+                return
+            captured["two"] = status_snapshot()
+
+            pipe.send_text("\x7f\x7f")
+            if not wait_for(
+                lambda: captured["input_buffer"].text == "",
+                "paste tokens were not deleted",
+            ):
+                pipe.send_text("\x04")
+                return
+            captured["deleted"] = status_snapshot()
+
+            pipe.send_text(_bracketed_paste(first) + "\r")
+            if not wait_for(lambda: delivered == [first], "paste payload was not submitted"):
+                pipe.send_text("\x04")
+                return
+            captured["submitted"] = status_snapshot()
+            pipe.send_text("/exit\r")
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=RecordingSession,
+            background_turns=False,
+        )
+        feeder.join(timeout=3)
+
+    assert not feeder.is_alive()
+    assert feeder_errors == []
+    assert captured["one"] == (True, "  pasted #1 +9 lines - ctrl+p to view")
+    assert captured["two"] == (True, "  2 pasted blocks - cursor on one, ctrl+p to view")
+    assert captured["deleted"] == (False, "")
+    assert "pasted" not in captured["submitted"][1]
+
+
+def _run_ctrl_p_away_from_paste_tokens(monkeypatch, payloads):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    captured = {}
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["input_buffer"] = application.layout.current_buffer
+        return application
+
+    def wait_for(predicate, message, timeout=2):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            keys = "lead " + " between ".join(_bracketed_paste(payload) for payload in payloads)
+            pipe.send_text(keys + "\x1b[H\x10")
+            if len(payloads) == 1:
+                if not wait_for(
+                    lambda: (
+                        captured.get("application") is not None
+                        and captured["application"].layout.current_buffer
+                        is not captured.get("input_buffer")
+                    ),
+                    "single-token ctrl+p did not open the editor",
+                    timeout=0.5,
+                ):
+                    pipe.send_text("\x04")
+                    return
+                captured["editor_text"] = captured["application"].layout.current_buffer.text
+                pipe.send_text("\x1b")
+                if not wait_for(
+                    lambda: (
+                        captured["application"].layout.current_buffer
+                        is captured.get("input_buffer")
+                    ),
+                    "paste editor did not close",
+                ):
+                    pipe.send_text("\x04")
+                    return
+            else:
+                time.sleep(0.1)
+                captured["editor_open"] = captured[
+                    "application"
+                ].layout.current_buffer is not captured.get("input_buffer")
+            captured["input_buffer"].text = ""
+            pipe.send_text("/exit\r")
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+        )
+        feeder.join(timeout=3)
+
+    assert not feeder.is_alive()
+    return captured, feeder_errors
+
+
+def test_single_paste_ctrl_p_away_from_token_opens_editor(monkeypatch):
+    payload = "\n".join(f"line {number}" for number in range(1, 10))
+
+    captured, feeder_errors = _run_ctrl_p_away_from_paste_tokens(monkeypatch, [payload])
+
+    assert feeder_errors == []
+    assert captured["editor_text"] == payload
+
+
+def test_two_pastes_ctrl_p_away_from_tokens_keeps_placeholder_noop(monkeypatch):
+    first = "\n".join(f"first {number}" for number in range(1, 10))
+    second = "\n".join(f"second {number}" for number in range(1, 10))
+
+    captured, feeder_errors = _run_ctrl_p_away_from_paste_tokens(monkeypatch, [first, second])
+
+    assert feeder_errors == []
+    assert captured["editor_open"] is False
+
+
 def test_headless_runs_agent_turn():
     state = TuiState(model_name="deepseek-chat", username="t")
     sessions: list[_FakeSession] = []
@@ -859,6 +1518,279 @@ def test_scrollable_control_routes_drag_events_without_disabling_wheel():
     assert ctrl.mouse_handler(wheel) is None
     assert mouse_events == [MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_MOVE]
     assert scrolls == [1]
+
+
+def test_drag_scroll_direction_uses_both_viewport_edges():
+    from alysis_code.cli_impl.tui.app import _drag_scroll_direction
+
+    assert _drag_scroll_direction(screen_y=4, window_top=5, window_height=6) == -1
+    assert _drag_scroll_direction(screen_y=5, window_top=5, window_height=6) == -1
+    assert _drag_scroll_direction(screen_y=7, window_top=5, window_height=6) == 0
+    assert _drag_scroll_direction(screen_y=10, window_top=5, window_height=6) == 1
+    assert _drag_scroll_direction(screen_y=12, window_top=5, window_height=6) == 1
+
+
+def test_drag_capture_projects_outside_pointer_to_nearest_visible_content_row():
+    from types import SimpleNamespace
+
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
+    from alysis_code.cli_impl.tui.app import _project_mouse_event_to_window
+
+    window = Window()
+    window.render_info = SimpleNamespace(
+        window_height=4,
+        window_width=10,
+        _y_offset=5,
+        _x_offset=3,
+        visible_line_to_row_col={
+            0: (20, 2),
+            1: (21, 2),
+            2: (22, 2),
+            3: (23, 2),
+        },
+    )
+    event = MouseEvent(
+        Point(x=8, y=12),
+        MouseEventType.MOUSE_MOVE,
+        MouseButton.LEFT,
+        frozenset(),
+    )
+
+    projected = _project_mouse_event_to_window(event, window)
+
+    assert projected is not None
+    target_event, direction = projected
+    assert target_event.position == Point(x=7, y=23)
+    assert target_event.event_type == MouseEventType.MOUSE_MOVE
+    assert target_event.button == MouseButton.LEFT
+    assert direction == 1
+
+
+def test_mouse_capture_window_preserves_raw_screen_coordinates():
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
+    from alysis_code.cli_impl.tui.app import _MouseCaptureWindow
+
+    seen = []
+    capture = _MouseCaptureWindow(lambda event: seen.append(event.position))
+    event = MouseEvent(
+        Point(x=19, y=11),
+        MouseEventType.MOUSE_UP,
+        MouseButton.LEFT,
+        frozenset(),
+    )
+
+    assert capture._mouse_handler(event) is None
+    assert seen == [Point(x=19, y=11)]
+
+
+def test_transcript_selection_drag_autoscrolls_at_top_edge(monkeypatch):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    captured = {}
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        return application
+
+    class LongReplySession:
+        def __init__(self, surface):
+            self.surface = surface
+
+        def run_turn(self, text, *, cancellation_token=None):
+            self.surface.on_user_message(text)
+            self.surface.on_assistant_message_done(
+                "\n".join(f"transcript row {number}" for number in range(80))
+            )
+            return 0
+
+    def wait_for(predicate, message):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    def stop_app():
+        application = captured.get("application")
+        if application is not None and application.loop is not None:
+            application.loop.call_soon_threadsafe(application.exit)
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    monkeypatch.setattr(app_module, "copy_text_to_clipboard", lambda _text: None)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            pipe.send_text("hello\r")
+
+            def transcript_window():
+                application = captured.get("application")
+                if application is None:
+                    return None
+                return next(
+                    (
+                        window
+                        for window in application.layout.find_all_windows()
+                        if isinstance(window.content, app_module._ScrollableControl)
+                        and window.render_info is not None
+                        and window.vertical_scroll > 0
+                    ),
+                    None,
+                )
+
+            if not wait_for(lambda: transcript_window() is not None, "transcript did not render"):
+                stop_app()
+                return
+            window = transcript_window()
+            assert window is not None and window.render_info is not None
+            info = window.render_info
+            before = window.vertical_scroll
+            x = info._x_offset + 2
+            bottom = info._y_offset + info.window_height - 2
+            top = info._y_offset
+            pipe.send_text(f"\x1b[<0;{x + 1};{bottom + 1}M")
+            if not wait_for(
+                lambda: any(
+                    isinstance(candidate, app_module._MouseCaptureWindow)
+                    and candidate.render_info is not None
+                    for candidate in captured["application"].layout.find_all_windows()
+                ),
+                "transcript drag capture did not activate",
+            ):
+                stop_app()
+                return
+            pipe.send_text(f"\x1b[<32;{x + 1};{top + 1}M")
+            if not wait_for(
+                lambda: window.vertical_scroll < before,
+                "transcript selection did not auto-scroll upward",
+            ):
+                stop_app()
+                return
+            pipe.send_text(f"\x1b[<0;{x + 1};{top + 1}m")
+            stop_app()
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+            session_builder=LongReplySession,
+            background_turns=False,
+        )
+        feeder.join(timeout=4)
+
+    assert not feeder.is_alive()
+    assert feeder_errors == []
+
+
+def test_editor_selection_drag_autoscrolls_at_bottom_edge(monkeypatch):
+    import threading
+    import time
+
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    payload = "\n".join(f"editor row {number}" for number in range(100))
+    captured = {}
+    feeder_errors = []
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+        captured["input_buffer"] = application.layout.current_buffer
+        return application
+
+    def wait_for(predicate, message):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        feeder_errors.append(message)
+        return False
+
+    def stop_app():
+        application = captured.get("application")
+        if application is not None and application.loop is not None:
+            application.loop.call_soon_threadsafe(application.exit)
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+    with create_pipe_input() as pipe:
+
+        def feed():
+            pipe.send_text(_bracketed_paste(payload) + "\x10")
+            if not wait_for(
+                lambda: (
+                    captured.get("application") is not None
+                    and captured["application"].layout.current_buffer
+                    is not captured.get("input_buffer")
+                    and captured["application"].layout.current_window.render_info is not None
+                ),
+                "paste editor did not render",
+            ):
+                stop_app()
+                return
+            application = captured["application"]
+            window = application.layout.current_window
+            editor_buffer = application.layout.current_buffer
+            info = window.render_info
+            assert info is not None
+            x = info._x_offset + 2
+            top = info._y_offset + 1
+            bottom = info._y_offset + info.window_height - 1
+            pipe.send_text(f"\x1b[<0;{x + 1};{top + 1}M")
+            if not wait_for(
+                lambda: any(
+                    isinstance(candidate, app_module._MouseCaptureWindow)
+                    and candidate.render_info is not None
+                    for candidate in application.layout.find_all_windows()
+                ),
+                "editor drag capture did not activate",
+            ):
+                stop_app()
+                return
+            pipe.send_text(f"\x1b[<32;{x + 1};{bottom + 1}M")
+            if not wait_for(
+                lambda: editor_buffer.document.cursor_position_row >= info.window_height,
+                "editor selection did not auto-scroll downward",
+            ):
+                stop_app()
+                return
+            pipe.send_text(f"\x1b[<0;{x + 1};{bottom + 1}m")
+            stop_app()
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        app_module.run_tui(
+            TuiState(model_name="test-model"),
+            owl_color=False,
+            input=pipe,
+            output=DummyOutput(),
+        )
+        feeder.join(timeout=4)
+
+    assert not feeder.is_alive()
+    assert feeder_errors == []
 
 
 def test_headless_pageup_pagedown_do_not_crash():

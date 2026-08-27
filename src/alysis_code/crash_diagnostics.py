@@ -14,6 +14,7 @@ from typing import Any
 from .error_text import sanitize_error_summary
 from .failure_category import classify_failure_category, extract_status_code
 from .logging_redaction import redact_log_text
+from .transport_retry import transport_connection_failure_reason
 
 CRASH_DIAGNOSTIC_SCHEMA_VERSION = 1
 
@@ -275,6 +276,14 @@ def build_error_event_fields(
     status_code = extract_status_code(error)
     if status_code is not None:
         fields["provider_status_code"] = status_code
+    if isinstance(error, BaseException):
+        # A run killed by a route that kept dropping the connection is not the
+        # same event as a model that failed the task, but both landed in
+        # diagnostics as an anonymous infrastructure error. Present only when
+        # it applies, so every other error's block is unchanged.
+        transport_reason = transport_connection_failure_reason(error)
+        if transport_reason is not None:
+            fields["stop_reason"] = transport_reason
     if operation:
         fields["operation"] = str(operation)
     if step is not None:

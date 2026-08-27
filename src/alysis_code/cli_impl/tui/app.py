@@ -19,6 +19,7 @@ when idle). Without a ``session_builder`` the shell keeps the Phase 1 stub reply
 
 from __future__ import annotations
 
+import re
 import textwrap
 import threading
 import time
@@ -34,7 +35,8 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.formatted_text import FormattedText, fragment_list_to_text, to_formatted_text
 from prompt_toolkit.input import create_input
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout, WindowAlign
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
@@ -50,7 +52,7 @@ from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation
-from prompt_toolkit.mouse_events import MouseButton, MouseEventType
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style, merge_styles
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -85,6 +87,7 @@ from .plan_meta import (
     strip_plan_meta_copy_chrome,
 )
 from .plan_meta import plan_meta_rows as render_plan_meta_rows
+from .selection_bindings import selection_editing_bindings
 from .state import TuiState
 from .subagent_panel import (
     append_bounded_entries,
@@ -97,6 +100,87 @@ from .transcript import TuiTranscript
 _EXIT_WORDS = EXIT_WORDS
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _MAX_PENDING_COMMANDS = MAX_PENDING_STEER_MESSAGES
+_INLINE_PASTE_MAX_LINES = 8
+_INLINE_PASTE_MAX_CHARS = 800
+_PASTE_TOKEN_RE = re.compile(r"\[pasted #(?P<id>[1-9]\d*) \+(?P<lines>\d+) lines\]")
+
+
+def _normalize_paste_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _paste_line_count(text: str) -> int:
+    return max(1, len(text.splitlines()))
+
+
+def _paste_token(paste_id: int, payload: str) -> str:
+    return f"[pasted #{paste_id} +{_paste_line_count(payload)} lines]"
+
+
+def _paste_token_at_cursor(text: str, cursor_position: int) -> re.Match[str] | None:
+    for match in _PASTE_TOKEN_RE.finditer(text):
+        if match.start() <= cursor_position <= match.end():
+            return match
+    return None
+
+
+def _paste_token_before_cursor(text: str, cursor_position: int) -> re.Match[str] | None:
+    for match in _PASTE_TOKEN_RE.finditer(text):
+        if match.end() == cursor_position:
+            return match
+    return None
+
+
+def _paste_token_after_cursor(text: str, cursor_position: int) -> re.Match[str] | None:
+    for match in _PASTE_TOKEN_RE.finditer(text):
+        if match.start() == cursor_position:
+            return match
+    return None
+
+
+class _PasteRegistry:
+    def __init__(self) -> None:
+        self._payloads: dict[int, str] = {}
+        self._next_id = 1
+
+    def add(self, payload: str) -> int:
+        paste_id = self._next_id
+        self._next_id += 1
+        self._payloads[paste_id] = payload
+        return paste_id
+
+    def get(self, paste_id: int) -> str | None:
+        return self._payloads.get(paste_id)
+
+    def update(self, paste_id: int, payload: str) -> bool:
+        if paste_id not in self._payloads:
+            return False
+        self._payloads[paste_id] = payload
+        return True
+
+    def snapshot(self) -> dict[int, str]:
+        return dict(self._payloads)
+
+    def live_matches(self, text: str) -> list[re.Match[str]]:
+        return [
+            match
+            for match in _PASTE_TOKEN_RE.finditer(text)
+            if int(match.group("id")) in self._payloads
+        ]
+
+    def retain_tokens(self, text: str) -> None:
+        live_ids = {int(match.group("id")) for match in _PASTE_TOKEN_RE.finditer(text)}
+        for paste_id in tuple(self._payloads):
+            if paste_id not in live_ids:
+                self._payloads.pop(paste_id, None)
+
+    def expand(self, text: str) -> str:
+        self.retain_tokens(text)
+
+        def replace(match: re.Match[str]) -> str:
+            return self._payloads.get(int(match.group("id")), match.group(0))
+
+        return _PASTE_TOKEN_RE.sub(replace, text)
 
 
 class ConfigReloadOutcome(Enum):
@@ -226,6 +310,9 @@ _STYLE = Style.from_dict(
         "tui.status": "#8a8a8a",
         # Working line turns amber once a turn has run long (>=30s).
         "tui.status.warn": "#d29922",
+        # Full-screen /config surface. Keep this semantic so terminal-theme
+        # translation can pair its background with the matching foregrounds.
+        "tui.config": "bg:#0d1117",
         # Right-hand scrollbar. The margin paints spaces, so the colour must be a
         # BACKGROUND (a foreground does nothing on a blank cell, leaving the ugly
         # default light-grey bar). Faint near-black track + accent-green thumb.
@@ -483,6 +570,7 @@ _DEFAULT_WHEEL_STEP_ROWS = 3
 _MIN_WHEEL_STEP_ROWS = 1
 _MAX_WHEEL_STEP_ROWS = 20
 _COPY_NOTICE_SECONDS = 1.5
+_DRAG_SCROLL_INTERVAL_SECONDS = 0.06
 
 
 def _resolve_wheel_step_rows(raw_value: str | None = None) -> int:
@@ -531,6 +619,77 @@ class _ScrollableControl(FormattedTextControl):
         if self._on_mouse_event is not None:
             return self._on_mouse_event(mouse_event)
         return NotImplemented
+
+
+class _MouseCaptureWindow(Window):
+    """Transparent overlay window that receives raw screen mouse coordinates.
+
+    ``Window`` normally translates screen coordinates into content coordinates
+    before calling its control. Its fallback handler still receives the original
+    event, which lets a full-screen transparent float retain a drag after the
+    pointer leaves the control where that drag began.
+    """
+
+    def __init__(self, on_mouse_event: Callable[[MouseEvent], Any]) -> None:
+        super().__init__()
+        self._on_mouse_event = on_mouse_event
+
+    def _mouse_handler(self, mouse_event: MouseEvent) -> Any:
+        return self._on_mouse_event(mouse_event)
+
+
+def _drag_scroll_direction(*, screen_y: int, window_top: int, window_height: int) -> int:
+    """Return -1/0/+1 when a drag is at the top/middle/bottom viewport edge."""
+    if window_height <= 0:
+        return 0
+    if screen_y <= window_top:
+        return -1
+    if screen_y >= window_top + window_height - 1:
+        return 1
+    return 0
+
+
+def _project_mouse_event_to_window(
+    mouse_event: MouseEvent,
+    window: Window,
+) -> tuple[MouseEvent, int] | None:
+    """Project a screen event onto the nearest visible cell of ``window``.
+
+    The capture overlay receives absolute layout coordinates. ``WindowRenderInfo``
+    keeps the exact origin used by prompt_toolkit's own mouse mapper, while its
+    public visible-line map converts the clamped screen row back to content space.
+    """
+    info = window.render_info
+    if info is None or info.window_height <= 0 or info.window_width <= 0:
+        return None
+
+    # prompt_toolkit does not expose the rendered content origin publicly; these
+    # two coordinates are nevertheless the source used by its own mouse wrapper.
+    window_top = int(info._y_offset)
+    window_left = int(info._x_offset)
+    relative_y = max(0, min(mouse_event.position.y - window_top, info.window_height - 1))
+    relative_x = max(0, min(mouse_event.position.x - window_left, info.window_width - 1))
+
+    row_col = info.visible_line_to_row_col.get(relative_y)
+    if row_col is None:
+        visible_rows = sorted(info.visible_line_to_row_col)
+        if not visible_rows:
+            return None
+        nearest = min(visible_rows, key=lambda row: abs(row - relative_y))
+        row_col = info.visible_line_to_row_col[nearest]
+    row, column = row_col
+    projected = MouseEvent(
+        position=Point(x=max(0, column + relative_x), y=max(0, row)),
+        event_type=mouse_event.event_type,
+        button=mouse_event.button,
+        modifiers=mouse_event.modifiers,
+    )
+    direction = _drag_scroll_direction(
+        screen_y=mouse_event.position.y,
+        window_top=window_top,
+        window_height=info.window_height,
+    )
+    return projected, direction
 
 
 def _ordered_selection(anchor: Point, active: Point) -> tuple[Point, Point]:
@@ -2021,11 +2180,14 @@ def _status_line_fragments(
     *,
     running: bool,
     notice: str = "",
+    paste_hint: str = "",
     selection_available: bool = False,
     input_pending: bool = False,
     queued_count: int = 0,
     staged_count: int = 0,
 ) -> FormattedText:
+    if paste_hint.strip():
+        return FormattedText([("class:tui.status", f"  {paste_hint.strip()}")])
     if running:
         if input_pending:
             return FormattedText(
@@ -2127,8 +2289,9 @@ def run_tui(
     command runner so the typed form still applies.
     """
     terminal_theme = theme or detect_terminal_theme()
-    owl = load_owl_animation(color_enabled=owl_color)
+    owl = load_owl_animation(color_enabled=owl_color, theme=terminal_theme)
     transcript = TuiTranscript()
+    paste_registry = _PasteRegistry()
     wheel_step_rows = _resolve_wheel_step_rows()
 
     # ---- turn/run state (mutated across threads; guarded by simple flags) ----
@@ -2195,12 +2358,54 @@ def run_tui(
     # ``on_save`` validates+persists the buffer (returns ``(ok, message)``), and
     # ``status`` shows the last save error inline so the user can fix and re-save.
     editor_box: dict[str, Any] = {"on": False, "title": "Edit", "on_save": None, "status": ""}
+    drag_capture: dict[str, Any] = {
+        "target": None,
+        "direction": 0,
+        "step": None,
+        "generation": 0,
+        "worker_generation": None,
+    }
 
     def _safe_invalidate() -> None:
         try:
             get_app().invalidate()
         except Exception:
             pass
+
+    def _begin_drag_capture(target: str, step: Callable[[int], None]) -> None:
+        drag_capture["generation"] += 1
+        drag_capture.update({"target": target, "direction": 0, "step": step})
+        _safe_invalidate()
+
+    def _stop_drag_capture() -> None:
+        if drag_capture["target"] is None:
+            return
+        drag_capture["generation"] += 1
+        drag_capture.update({"target": None, "direction": 0, "step": None})
+        _safe_invalidate()
+
+    def _set_drag_scroll_direction(direction: int) -> None:
+        drag_capture["direction"] = max(-1, min(int(direction), 1))
+        if not drag_capture["direction"] or drag_capture["target"] is None:
+            return
+
+        generation = int(drag_capture["generation"])
+        if drag_capture["worker_generation"] == generation:
+            return
+        drag_capture["worker_generation"] = generation
+
+        def _auto_scroll() -> None:
+            while drag_capture["generation"] == generation:
+                time.sleep(_DRAG_SCROLL_INTERVAL_SECONDS)
+                if drag_capture["generation"] != generation:
+                    break
+                direction_now = int(drag_capture["direction"])
+                step = drag_capture.get("step")
+                if direction_now and callable(step):
+                    step(direction_now)
+                    _safe_invalidate()
+
+        threading.Thread(target=_auto_scroll, daemon=True).start()
 
     def _reload_saved_config() -> ConfigReloadOutcome:
         outcome = ConfigReloadOutcome.APPLIED
@@ -2623,6 +2828,18 @@ def run_tui(
         current = _follow_top() if scroll["follow"] else int(scroll["offset"])
         scroll["offset"], scroll["follow"] = _scroll_target(current, _follow_top(), delta)
 
+    def _transcript_drag_scroll(direction: int) -> None:
+        if drag_capture["target"] != "transcript":
+            return
+        before = _cursor_row()
+        _scroll_move(direction)
+        after = _cursor_row()
+        active = selection.get("active")
+        if after == before or active is None:
+            return
+        edge_row = after if direction < 0 else min(_last_row(), after + max(0, _win_height() - 1))
+        selection["active"] = Point(x=active.x, y=edge_row)
+
     def _wheel_scroll(direction: int) -> None:
         _scroll_move(direction * wheel_step_rows)
         _safe_invalidate()
@@ -2670,6 +2887,7 @@ def run_tui(
                 selection.get("row_roles") or [], point.y
             )
             selection.update({"anchor": point, "active": point, "dragging": True})
+            _begin_drag_capture("transcript", _transcript_drag_scroll)
             _safe_invalidate()
             return None
         if event_type == MouseEventType.MOUSE_MOVE and selection["dragging"]:
@@ -2679,6 +2897,7 @@ def run_tui(
         if event_type == MouseEventType.MOUSE_UP and selection["dragging"]:
             selection["active"] = point
             selection["dragging"] = False
+            _stop_drag_capture()
             selected = _current_transcript_selection()
             if _plan_meta_click_toggles(
                 pressed_planmeta=bool(selection.get("planmeta_press")),
@@ -2725,7 +2944,20 @@ def run_tui(
         return _has_conversation(transcript.entries)
 
     has_messages = Condition(_conversation_started)
-    no_messages = Condition(lambda: not _conversation_started())
+
+    def _live_paste_matches() -> list[re.Match[str]]:
+        return paste_registry.live_matches(input_area.buffer.text)
+
+    def _paste_hint_text() -> str:
+        matches = _live_paste_matches()
+        if len(matches) == 1:
+            match = matches[0]
+            return f"pasted #{match.group('id')} +{match.group('lines')} lines - ctrl+p to view"
+        if len(matches) > 1:
+            return f"{len(matches)} pasted blocks - cursor on one, ctrl+p to view"
+        return ""
+
+    has_live_paste_tokens = Condition(lambda: bool(_live_paste_matches()))
 
     # ---- status / working line (between transcript and input) ----
     def _status_text() -> FormattedText:
@@ -2736,6 +2968,7 @@ def run_tui(
         return _status_line_fragments(
             running=bool(running["on"]),
             notice=str(selection_notice["text"] or ""),
+            paste_hint=_paste_hint_text(),
             selection_available=bool(_current_transcript_selection()),
             input_pending=bool(input_area.buffer.text.strip()),
             queued_count=len(pending_turns),
@@ -2758,18 +2991,30 @@ def run_tui(
             return " " + _content.INPUT_PLACEHOLDER_FOLLOWUP
         return " " + _content.INPUT_PLACEHOLDER
 
+    def _complete_while_typing() -> bool:
+        buffer = input_area.buffer
+        return _paste_token_at_cursor(buffer.text, buffer.cursor_position) is None
+
     input_area = TextArea(
         height=D(min=1, max=8),
         multiline=True,
         wrap_lines=True,
         style="class:tui.input",
         completer=completer,
-        complete_while_typing=True,
+        complete_while_typing=Condition(_complete_while_typing),
         input_processors=[
             _PlaceholderProcessor(_placeholder_text),
             BeforeInput("> ", style="class:tui.prompt"),
         ],
     )
+
+    def _drop_orphaned_paste_entries(_buffer: Any) -> None:
+        # Tokens are deliberately plain text. If an internal edit mangles their
+        # syntax, the token stops matching, its payload is dropped, and the
+        # remaining text is submitted literally instead of being guessed back.
+        paste_registry.retain_tokens(input_area.buffer.text)
+
+    input_area.buffer.on_text_changed += _drop_orphaned_paste_entries
     welcome_visible = Condition(
         lambda: not _conversation_started() and input_area.buffer.complete_state is None
     )
@@ -3041,7 +3286,11 @@ def run_tui(
         _safe_invalidate()
 
     def _dispatch_command(
-        text: str, *, echo: bool = True, allow_run: bool = True
+        text: str,
+        *,
+        display_text: str | None = None,
+        echo: bool = True,
+        allow_run: bool = True,
     ) -> _DispatchOutcome:
         """Route ``text`` straight through the chat command runner.
 
@@ -3056,7 +3305,7 @@ def run_tui(
         scroll["follow"] = True
         if echo:
             input_area.buffer.reset()
-            transcript.append_user(text)
+            transcript.append_user(text if display_text is None else display_text)
         try:
             # The command's captured Rich output is appended to the transcript and
             # re-wrapped at the transcript's content width, so render it at that
@@ -3087,7 +3336,7 @@ def run_tui(
         _safe_invalidate()  # "handled" — output already shown
         return _DispatchOutcome.CONTINUE
 
-    def _defer_mid_turn_command(text: str) -> None:
+    def _defer_mid_turn_command(text: str, *, display_text: str | None = None) -> None:
         if not _stage_pending_command(pending_operations, text):
             transcript.append(
                 "warn",
@@ -3098,13 +3347,16 @@ def run_tui(
             return
         input_area.buffer.reset()
         scroll["follow"] = True
-        transcript.append_user(text)
+        transcript.append_user(text if display_text is None else display_text)
         transcript.append("system", defer_message(text))
         _safe_invalidate()
 
-    def _deliver_mid_turn_message(text: str, *, queue: bool) -> None:
+    def _deliver_mid_turn_message(
+        text: str, *, display_text: str | None = None, queue: bool
+    ) -> None:
         buff = input_area.buffer
         stripped = text.strip()
+        display_stripped = (text if display_text is None else display_text).strip()
         if not stripped:
             return
         scroll["follow"] = True
@@ -3120,7 +3372,7 @@ def run_tui(
                 return
             pending_turns.append(stripped)
             buff.reset()
-            transcript.append_user(stripped)
+            transcript.append_user(display_stripped)
             transcript.append(
                 "system",
                 f"Queued - runs when this turn finishes ({len(pending_turns)} waiting).",
@@ -3131,7 +3383,7 @@ def run_tui(
         dropped_before = inbox.dropped_count()
         delivered = inbox.send(stripped)
         buff.reset()
-        transcript.append_user(delivered)
+        transcript.append_user(display_stripped if display_text is not None else delivered)
         newly_dropped = inbox.dropped_count() - dropped_before
         if newly_dropped > 0:
             label = "message" if newly_dropped == 1 else "messages"
@@ -3145,12 +3397,13 @@ def run_tui(
 
     def _submit(*, queue_instead: bool = False) -> None:
         buff = input_area.buffer
-        text = buff.text
-        stripped = text.strip()
-        if not stripped:
+        display_text = buff.text
+        if not display_text.strip():
             return
         if approval_box.get("event") is not None:
             return
+        text = paste_registry.expand(display_text)
+        stripped = text.strip()
         if running["on"]:
             if config_overlay is not None and stripped.lower() == "/config":
                 buff.reset()
@@ -3162,10 +3415,14 @@ def run_tui(
                 _safe_invalidate()
                 return
             if action is MidTurnAction.DEFER:
-                _defer_mid_turn_command(text)
+                _defer_mid_turn_command(text, display_text=display_text)
                 return
             if action is MidTurnAction.MESSAGE:
-                _deliver_mid_turn_message(text, queue=queue_instead)
+                _deliver_mid_turn_message(
+                    text,
+                    display_text=display_text if display_text != text else None,
+                    queue=queue_instead,
+                )
                 return
         # Returning to the live tail whenever the user sends something.
         scroll["follow"] = True
@@ -3320,7 +3577,7 @@ def run_tui(
         # Real path with slash-command support: route every submission through
         # the chat command handler (it returns "run" for plain messages).
         if session is not None and command_runner is not None:
-            _dispatch_command(text)
+            _dispatch_command(text, display_text=display_text)
             return
 
         # No command runner (Phase 2 fake session / tests): exit words + run.
@@ -3329,14 +3586,14 @@ def run_tui(
             return
         if session is not None:
             buff.reset()
-            transcript.append_user(text)
+            transcript.append_user(display_text)
             _begin_run(text, {})
             return
 
         # Shell-only path: keep configuration/help available while model calls are
         # blocked. Phase-1 tests still get the historical preview reply when no
         # explicit blocker was supplied.
-        transcript.append_user(text)
+        transcript.append_user(display_text)
         if unavailable_message:
             transcript.append("warn", unavailable_message)
         else:
@@ -3362,29 +3619,13 @@ def run_tui(
         ]
     )
 
-    # Welcome state: blank rows above/below the input line so the text sits
-    # vertically centered in the box. Conversation state: blanks collapse.
-    input_inner = HSplit(
-        [
-            ConditionalContainer(Window(height=1), filter=no_messages),
-            input_area,
-            ConditionalContainer(Window(height=1), filter=no_messages),
-        ]
-    )
-    input_frame = Frame(input_inner)
+    input_frame = Frame(input_area)
 
     def _side_width() -> Any:
-        if _conversation_started():
-            return D.exact(0)
-        try:
-            cols = get_app().output.get_size().columns
-        except Exception:
-            cols = 80
-        box = min(64, max(28, cols - 10))
-        return D.exact(max(0, (cols - box) // 2))
+        return D.exact(0)
 
     def _box_height() -> int:
-        return 5 if not _conversation_started() else 3
+        return 3
 
     input_row = VSplit(
         [
@@ -3400,7 +3641,7 @@ def run_tui(
             body,
             # Working/status line only appears once a conversation is underway, so
             # the welcome screen keeps its Phase 1 spacing exactly.
-            ConditionalContainer(status_window, filter=has_messages),
+            ConditionalContainer(status_window, filter=has_messages | has_live_paste_tokens),
             subagent_panel_container,
             input_row,
             Window(height=1),
@@ -3824,6 +4065,28 @@ def run_tui(
         focusable=True,
         style="class:tui.editor",
     )
+    _native_editor_mouse_handler = editor_area.control.mouse_handler
+
+    def _editor_drag_scroll(direction: int) -> None:
+        if not editor_box["on"] or drag_capture["target"] != "editor":
+            return
+        if direction < 0:
+            editor_area.buffer.cursor_up()
+        else:
+            editor_area.buffer.cursor_down()
+
+    def _editor_mouse_handler(mouse_event: MouseEvent) -> Any:
+        result = _native_editor_mouse_handler(mouse_event)
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
+            if mouse_event.button == MouseButton.LEFT and editor_box["on"]:
+                _begin_drag_capture("editor", _editor_drag_scroll)
+        elif (
+            mouse_event.event_type == MouseEventType.MOUSE_UP and drag_capture["target"] == "editor"
+        ):
+            _stop_drag_capture()
+        return result
+
+    editor_area.control.mouse_handler = _editor_mouse_handler
 
     def _editor_status_bar() -> FormattedText:
         status = str(editor_box.get("status") or "")
@@ -3866,6 +4129,7 @@ def run_tui(
     )
 
     def _open_editor(spec: dict[str, Any]) -> None:
+        _stop_drag_capture()
         editor_box["on"] = True
         editor_box["title"] = spec.get("title") or "Edit"
         editor_box["on_save"] = spec.get("on_save")
@@ -3882,9 +4146,60 @@ def run_tui(
             pass
         _safe_invalidate()
 
+    def _open_paste_editor() -> None:
+        buff = input_area.buffer
+        match = _paste_token_at_cursor(buff.text, buff.cursor_position)
+        payload = paste_registry.get(int(match.group("id"))) if match is not None else None
+        if payload is None:
+            matches = _live_paste_matches()
+            if len(matches) != 1:
+                return
+            match = matches[0]
+            payload = paste_registry.get(int(match.group("id")))
+        if match is None or payload is None:
+            return
+        paste_id = int(match.group("id"))
+
+        def _save_paste(edited_text: str) -> tuple[bool, str]:
+            edited_text = _normalize_paste_text(edited_text)
+            current_match = next(
+                (
+                    candidate
+                    for candidate in _PASTE_TOKEN_RE.finditer(buff.text)
+                    if int(candidate.group("id")) == paste_id
+                ),
+                None,
+            )
+            if current_match is None or not paste_registry.update(paste_id, edited_text):
+                return False, "Paste token is no longer available."
+
+            old_text = buff.text
+            old_cursor = buff.cursor_position
+            replacement = _paste_token(paste_id, edited_text)
+            buff.text = (
+                old_text[: current_match.start()] + replacement + old_text[current_match.end() :]
+            )
+            if old_cursor <= current_match.start():
+                buff.cursor_position = old_cursor
+            elif old_cursor <= current_match.end():
+                buff.cursor_position = current_match.start() + len(replacement)
+            else:
+                buff.cursor_position = old_cursor + len(replacement) - len(current_match.group(0))
+            return True, ""
+
+        _open_editor(
+            {
+                "title": f"pasted #{paste_id}",
+                "text": payload,
+                "on_save": _save_paste,
+            }
+        )
+
     def _close_editor() -> None:
         if not editor_box["on"]:
             return
+        if drag_capture["target"] == "editor":
+            _stop_drag_capture()
         editor_box["on"] = False
         editor_box["on_save"] = None
         try:
@@ -4059,6 +4374,46 @@ def run_tui(
         bottom=0,
     )
 
+    def _captured_drag_mouse_event(mouse_event: MouseEvent) -> Any:
+        target = drag_capture.get("target")
+        if target == "transcript":
+            target_window = transcript_window
+        elif target == "editor":
+            target_window = editor_area.window
+        else:
+            return NotImplemented
+        projected = _project_mouse_event_to_window(mouse_event, target_window)
+        if projected is None:
+            if mouse_event.event_type == MouseEventType.MOUSE_UP:
+                _stop_drag_capture()
+            return None
+
+        target_event, direction = projected
+        if target == "transcript":
+            result = _transcript_mouse_event(target_event)
+        elif target == "editor":
+            result = _editor_mouse_handler(target_event)
+
+        if mouse_event.event_type == MouseEventType.MOUSE_MOVE:
+            _set_drag_scroll_direction(direction)
+        elif mouse_event.event_type == MouseEventType.MOUSE_UP:
+            _stop_drag_capture()
+        return result
+
+    drag_capture_active = Condition(lambda: drag_capture["target"] is not None)
+    drag_capture_float = Float(
+        content=ConditionalContainer(
+            _MouseCaptureWindow(_captured_drag_mouse_event),
+            filter=drag_capture_active,
+        ),
+        left=0,
+        right=0,
+        top=0,
+        bottom=0,
+        z_index=10**6,
+        transparent=True,
+    )
+
     root_container = FloatContainer(
         content=root,
         floats=[
@@ -4076,12 +4431,48 @@ def run_tui(
             *_config_floats,
             # Approval modal sits on top — it interrupts a running turn for a y/a/n.
             approval_float,
+            # While selecting, retain drag/release events beyond the source window.
+            drag_capture_float,
         ],
     )
 
     # ---- key bindings ----
     kb = KeyBindings()
     _input_focused = has_focus(input_area)
+    _input_has_selection = Condition(lambda: input_area.buffer.selection_state is not None)
+
+    def _registered_paste_match_at_cursor() -> re.Match[str] | None:
+        buff = input_area.buffer
+        match = _paste_token_at_cursor(buff.text, buff.cursor_position)
+        if match is None or paste_registry.get(int(match.group("id"))) is None:
+            return None
+        return match
+
+    def _registered_paste_match_before_cursor() -> re.Match[str] | None:
+        buff = input_area.buffer
+        match = _paste_token_before_cursor(buff.text, buff.cursor_position)
+        if match is None or paste_registry.get(int(match.group("id"))) is None:
+            return None
+        return match
+
+    def _registered_paste_match_after_cursor() -> re.Match[str] | None:
+        buff = input_area.buffer
+        match = _paste_token_after_cursor(buff.text, buff.cursor_position)
+        if match is None or paste_registry.get(int(match.group("id"))) is None:
+            return None
+        return match
+
+    _input_paste_token_at_cursor = _input_focused & Condition(
+        lambda: _registered_paste_match_at_cursor() is not None
+    )
+    _input_single_paste_token = _input_focused & Condition(lambda: len(_live_paste_matches()) == 1)
+    _input_paste_editor_available = _input_paste_token_at_cursor | _input_single_paste_token
+    _input_paste_token_before_cursor = _input_focused & Condition(
+        lambda: _registered_paste_match_before_cursor() is not None
+    )
+    _input_paste_token_after_cursor = _input_focused & Condition(
+        lambda: _registered_paste_match_after_cursor() is not None
+    )
     # True while the slash-command dropdown is showing for the input buffer.
     _completing = Condition(lambda: input_area.buffer.complete_state is not None)
     _has_children = Condition(lambda: bool(subagent_panel["run_order"]))
@@ -4220,6 +4611,42 @@ def run_tui(
     @kb.add("escape", "enter", filter=_input_focused & ~_small_modal_open & ~_config_open)
     def _newline(event: Any) -> None:
         input_area.buffer.insert_text("\n")
+
+    @kb.add(
+        Keys.BracketedPaste,
+        filter=_input_focused & ~_small_modal_open & ~_config_open,
+        eager=True,
+    )
+    def _paste_into_input(event: Any) -> None:
+        payload = _normalize_paste_text(event.data)
+        line_count = _paste_line_count(payload)
+        if line_count <= _INLINE_PASTE_MAX_LINES and len(payload) <= _INLINE_PASTE_MAX_CHARS:
+            input_area.buffer.insert_text(payload)
+            return
+
+        paste_id = paste_registry.add(payload)
+        input_area.buffer.insert_text(_paste_token(paste_id, payload))
+        input_area.buffer.cancel_completion()
+
+    @kb.add(
+        "backspace",
+        filter=_input_paste_token_before_cursor & ~_input_has_selection,
+        eager=True,
+    )
+    def _remove_paste_token_before_cursor(event: Any) -> None:
+        match = _registered_paste_match_before_cursor()
+        if match is not None:
+            input_area.buffer.delete_before_cursor(count=len(match.group(0)))
+
+    @kb.add(
+        Keys.Delete,
+        filter=_input_paste_token_after_cursor & ~_input_has_selection,
+        eager=True,
+    )
+    def _remove_paste_token_after_cursor(event: Any) -> None:
+        match = _registered_paste_match_after_cursor()
+        if match is not None:
+            input_area.buffer.delete(count=len(match.group(0)))
 
     @kb.add(
         "c-q",
@@ -4401,7 +4828,11 @@ def run_tui(
     def _approve_no(event: Any) -> None:
         _resolve_approval(allow=False)
 
-    @kb.add("c-p", filter=~_config_open, eager=True)
+    @kb.add("c-p", filter=_input_paste_editor_available & ~_config_open, eager=True)
+    def _edit_paste_token(event: Any) -> None:
+        _open_paste_editor()
+
+    @kb.add("c-p", filter=~_config_open & ~_input_paste_editor_available, eager=True)
     def _command_menu(event: Any) -> None:
         # Command menu placeholder (Phase 3).
         event.app.invalidate()
@@ -4458,15 +4889,15 @@ def run_tui(
     # needs the setup wizard's style classes merged in for its panels to render.
     _app_style = _build_tui_style(terminal_theme)
     if config_overlay is not None:
-        from .setup_app import _SETUP_STYLE
+        from .setup_app import _build_setup_style
 
         config_overlay.register(kb)
-        _app_style = merge_styles([_app_style, _SETUP_STYLE])
+        _app_style = merge_styles([_app_style, _build_setup_style(terminal_theme)])
 
     tui_input, owned_tui_input = _resolve_tui_input(input)
     app: Application = Application(
         layout=Layout(root_container, focused_element=input_area),
-        key_bindings=kb,
+        key_bindings=merge_key_bindings([selection_editing_bindings(), kb]),
         style=_app_style,
         full_screen=True,
         # Keep mouse reporting enabled so wheel events and drag selection are both
@@ -4523,6 +4954,7 @@ def run_tui(
     try:
         result = app.run(pre_run=_pre_run)
     finally:
+        _stop_drag_capture()
         if owned_tui_input is not None:
             owned_tui_input.close()
 

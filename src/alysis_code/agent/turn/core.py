@@ -21,6 +21,7 @@ from ...budget_policy import (
     STOP_REASON_RUN_BUDGET_EXHAUSTED,
     ProgressCheckpoint,
     exit_code_for_stop,
+    is_clean_stop,
     resolve_budget_grace_seconds,
 )
 from ...edit_discipline import scratch_summary_line
@@ -3055,13 +3056,26 @@ def run_turn(
         )
         material_work_persisted = bool(salvaged_paths or durable_service_ids)
         missing_action = _outstanding_turn_action()
-        exit_code = 0 if material_work_persisted else 1
+        # A stop the run chose for itself is an outcome, not a failure, whether
+        # or not it had anything to show for itself -- exiting non-zero made
+        # automation interpret an intentional stop as a process failure.
+        # Every other degraded stop keeps the "exit 0 only when work persisted"
+        # rule, because there the run did not decide anything: it was stopped.
+        clean_stop = is_clean_stop(trigger)
+        if clean_stop:
+            exit_code = exit_code_for_stop(trigger)
+            # Surfaces in the run_finished crash event, so callers can name
+            # the stop without parsing the summary prose.
+            self.stop_reason = trigger
+        else:
+            exit_code = 0 if material_work_persisted else 1
         degraded_payload = {
             "step": step,
             "runtime_kind": self.runtime_kind.value,
             "reason": reason,
             "trigger": trigger,
             "exit_code": exit_code,
+            **({"stop_reason": trigger} if clean_stop else {}),
             "material_work_persisted": material_work_persisted,
             "salvaged_paths": salvaged_paths,
             "durable_service_ids": durable_service_ids,
@@ -3200,6 +3214,9 @@ def run_turn(
                 **_controller_intervention_event_fields(),
                 "degraded": True,
                 "degraded_reason": "empty_response_stall",
+                # Present only for a self-stop, so an ordinary degraded stop's
+                # event stays byte-identical to before.
+                **({"stop_reason": trigger} if is_clean_stop(trigger) else {}),
             },
         )
         assistant_message_emitted = True
@@ -6923,10 +6940,21 @@ def run_turn(
                     explicit_language_override=turn_language_explicit,
                     prior_visible_text=last_visible_assistant_text,
                     streamed_text_emitted=streamed_text_emitted,
-                    final_event_payload=_controller_intervention_event_fields(),
+                    final_event_payload={
+                        **_controller_intervention_event_fields(),
+                        **({"stop_reason": reason} if is_clean_stop(reason) else {}),
+                    },
                 )
                 assistant_message_emitted = True
-                return _finish_turn(1, reason=reason, final_text=local_summary)
+                if is_clean_stop(reason):
+                    self.stop_reason = reason
+                # Reached only when the shared stall resolution is disabled, so
+                # it is the same self-stop as the salvage path above and has to
+                # exit the same way. The decision goes through the stop-reason
+                # table rather than a literal, so both paths stay in step.
+                return _finish_turn(
+                    exit_code_for_stop(reason), reason=reason, final_text=local_summary
+                )
 
             empty_response_anomaly_state.attempts = next_anomaly_attempt
             empty_response_anomaly_state.last_missing_action = missing_action

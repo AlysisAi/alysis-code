@@ -2377,8 +2377,8 @@ def test_responses_chat_retries_are_bounded_by_wall_clock_cap() -> None:
     with pytest.raises(LLMError, match="stream ended early"):
         client.chat(messages=[{"role": "user", "content": "hello"}])
 
-    assert attempts == 1
-    assert sleeps == []
+    assert attempts == 3
+    assert sleeps == [2.0, 4.0]
 
 
 def test_web_search_parses_output_text_citations_and_sources() -> None:

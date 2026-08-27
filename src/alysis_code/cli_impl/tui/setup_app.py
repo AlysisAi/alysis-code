@@ -24,7 +24,7 @@ from prompt_toolkit.cursor_shapes import CursorShape
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText, to_formatted_text
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.layout import Layout, WindowAlign
 from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, ScrollOffsets, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -34,12 +34,22 @@ from prompt_toolkit.layout.processors import (
     ConditionalProcessor,
     PasswordProcessor,
 )
-from prompt_toolkit.styles import Style, merge_styles
+from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.widgets import Frame, TextArea
 
-from .app import _ACCENT, _SPINNER_FRAMES, _render_picker_rows, _wrap_line
+from ...surface.styles import TerminalTheme
+from ...surface.theme import detect_terminal_theme
+from .app import (
+    _ACCENT,
+    _SPINNER_FRAMES,
+    _build_tui_style,
+    _render_picker_rows,
+    _theme_style_value,
+    _wrap_line,
+)
 from .app import _STYLE as _CHAT_STYLE
 from .owl import load_owl_animation
+from .selection_bindings import selection_editing_bindings
 from .setup_flow import Row, SetupFlow
 
 # Tones map to concrete styles. Green is the only accent — degraded/neutral
@@ -73,7 +83,27 @@ _SETUP_STYLE = Style.from_dict(
     }
 )
 
+_SETUP_DARK_STYLE_RULES: dict[str, str] = dict(_SETUP_STYLE.style_rules)
+
+
+def _build_setup_style(theme: TerminalTheme) -> Style:
+    """Build setup/config chrome using the active terminal palette."""
+
+    return Style.from_dict(
+        {
+            selector: _theme_style_value(value, theme)
+            for selector, value in _SETUP_DARK_STYLE_RULES.items()
+        }
+    )
+
+
 _STYLE = merge_styles([_CHAT_STYLE, _SETUP_STYLE])
+
+
+def _build_setup_app_style(theme: TerminalTheme) -> BaseStyle:
+    """Build the standalone setup TUI with one consistent terminal theme."""
+
+    return merge_styles([_build_tui_style(theme), _build_setup_style(theme)])
 
 
 def _row_to_dict(row: Row) -> dict[str, Any]:
@@ -93,6 +123,7 @@ def run_setup_tui(
     input: Any | None = None,
     output: Any | None = None,
     inline_busy: bool = False,
+    theme: TerminalTheme | None = None,
 ) -> bool:
     """Run the alt-screen setup wizard.
 
@@ -105,7 +136,8 @@ def run_setup_tui(
     sequence drives the whole flow deterministically.
     """
     flow = SetupFlow()
-    owl = load_owl_animation(color_enabled=owl_color)
+    terminal_theme = theme or detect_terminal_theme()
+    owl = load_owl_animation(color_enabled=owl_color, theme=terminal_theme)
 
     spinner = {"i": 0}
     busy = {"running": False}
@@ -481,8 +513,8 @@ def run_setup_tui(
 
     app: Application = Application(
         layout=Layout(root, focused_element=message_window),
-        key_bindings=kb,
-        style=_STYLE,
+        key_bindings=merge_key_bindings([selection_editing_bindings(), kb]),
+        style=_build_setup_app_style(terminal_theme),
         full_screen=True,
         mouse_support=False,
         cursor=CursorShape.BEAM,

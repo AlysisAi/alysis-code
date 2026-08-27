@@ -324,6 +324,22 @@ def test_neutral_owl_uses_the_terminal_foreground(monkeypatch) -> None:
     assert "█" in output
 
 
+def test_explicit_owl_theme_stays_in_sync_with_the_tui(monkeypatch) -> None:
+    from alysis_code.cli_impl.commands import welcome as welcome_mod
+    from alysis_code.cli_impl.tui import owl as owl_mod
+
+    def _unexpected_detection(_stream):
+        raise AssertionError("the owl must reuse the TUI's resolved theme")
+
+    monkeypatch.setattr(welcome_mod, "_detect_owl_theme", _unexpected_detection)
+
+    light_frames = owl_mod._load_frames(color_enabled=True, stream=None, theme="light")
+    dark_frames = owl_mod._load_frames(color_enabled=True, stream=None, theme="dark")
+
+    assert light_frames
+    assert dark_frames
+
+
 # --------------------------- headless app ---------------------------
 
 

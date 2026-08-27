@@ -15,6 +15,8 @@ from typing import Any
 
 from prompt_toolkit.formatted_text import ANSI
 
+from ...surface.styles import TerminalTheme
+
 # Render the owl as a crisp *white* silhouette on a dark terminal — without
 # painting a background box. The source art is a single grayscale ramp (index 16
 # plus the 232–255 gray ramp, with a stray system grey 7). The old mapping only
@@ -42,12 +44,17 @@ def _whiten_frames(frames: list[list[str]]) -> list[list[str]]:
     return [[_FG_256_RE.sub(_sub, line) for line in frame] for frame in frames]
 
 
-def _load_frames(*, color_enabled: bool, stream: Any | None) -> list[list[str]]:
+def _load_frames(
+    *,
+    color_enabled: bool,
+    stream: Any | None,
+    theme: TerminalTheme | None = None,
+) -> list[list[str]]:
     """Load + crop the owl frames, returning [] when disabled or unavailable.
 
-    Theme detection (which may probe the terminal via OSC 11) happens here, so
-    callers must invoke this *before* the prompt_toolkit application takes over
-    the terminal.
+    Callers should pass the TUI's resolved theme so every surface uses the same
+    palette. When omitted, detection (which may probe via OSC 11) happens here,
+    before the prompt_toolkit application takes over the terminal.
     """
     target_stream = stream if stream is not None else getattr(sys, "stdout", None)
     try:
@@ -59,17 +66,17 @@ def _load_frames(*, color_enabled: bool, stream: Any | None) -> list[list[str]]:
     except Exception:
         return []
     try:
-        theme = _detect_owl_theme(target_stream)
+        resolved_theme = theme or _detect_owl_theme(target_stream)
         frames = _load_owl_logo_frames(
             stream=target_stream,
             color_enabled=color_enabled,
-            theme=theme,
+            theme=resolved_theme,
         )
         frames = _crop_owl_logo_frames(frames)
         # White silhouette (no background box) on a confirmed dark terminal.
         # Light terminals keep the asset's dark grays; neutral frames were
         # stripped to the terminal's own foreground by the shared loader.
-        if color_enabled and theme == "dark":
+        if color_enabled and resolved_theme == "dark":
             frames = _whiten_frames(frames)
     except Exception:
         return []
@@ -102,8 +109,13 @@ class OwlAnimation:
         return ANSI("\n".join(frame))
 
 
-def load_owl_animation(*, color_enabled: bool = True, stream: Any | None = None) -> OwlAnimation:
-    return OwlAnimation(_load_frames(color_enabled=color_enabled, stream=stream))
+def load_owl_animation(
+    *,
+    color_enabled: bool = True,
+    stream: Any | None = None,
+    theme: TerminalTheme | None = None,
+) -> OwlAnimation:
+    return OwlAnimation(_load_frames(color_enabled=color_enabled, stream=stream, theme=theme))
 
 
 __all__ = ["OwlAnimation", "load_owl_animation"]

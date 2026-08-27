@@ -494,7 +494,7 @@ def test_typed_remote_protocol_truncation_is_retryable() -> None:
 
     assert result == "ok"
     assert attempts == 2
-    assert sleeps == [1.0]
+    assert sleeps == [2.0]
 
 
 def test_wrapped_transport_truncation_stays_retryable_through_cause_chain() -> None:
@@ -522,7 +522,7 @@ def test_wrapped_transport_truncation_stays_retryable_through_cause_chain() -> N
 
     assert result == "ok"
     assert attempts == 2
-    assert reasons == ["provider_stream_truncated"]
+    assert reasons == ["transport_connection_drop"]
 
 
 def test_incomplete_chunked_body_message_is_transient_but_auth_is_not() -> None:

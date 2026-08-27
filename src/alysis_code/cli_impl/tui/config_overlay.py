@@ -55,8 +55,9 @@ from .app import (
 )
 from .setup_app import _TONE_STYLE, _row_to_dict
 
-# Opaque dark background so the full-screen float fully covers the chat behind it.
-_BG = "bg:#0d1117"
+# Opaque theme-aware background so the full-screen float fully covers the chat
+# without pairing a forced dark canvas with light-theme foreground colours.
+_BG = "class:tui.config"
 
 
 class ConfigOverlay:

@@ -1949,8 +1949,8 @@ def test_one_shot_repeated_empty_after_read_salvages_locally(tmp_path: Path) -> 
     salvages = [event for event in events if event.get("type") == "empty_response_stall_salvage"]
 
     # The targeted retry cap still applies, then handling is bounded and the turn
-    # salvages. Nothing was written here, so the exit code stays non-zero.
-    assert exit_code == 1
+    # salvages. Exhausting that bounded recovery is an intentional clean stop.
+    assert exit_code == 0
     assert incomplete
     assert incomplete[-1]["payload"]["attempt"] == 3
     assert 1 <= len(recoveries) <= 2

@@ -812,6 +812,59 @@ def test_headless_ctrl_c_exits_from_input_step(tmp_path, monkeypatch):
     assert _headless("\r\x1b[B\r\x03") is False
 
 
+def test_setup_input_plain_selection_backspace_cuts_selected_span(monkeypatch):
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.selection import SelectionType
+
+    from alysis_code.cli_impl.tui import setup_app as setup_app_module
+    from alysis_code.cli_impl.tui.setup_flow import Screen
+
+    submitted = []
+
+    class InputFlow:
+        stage = "field"
+        success = False
+
+        def set_report(self, callback):
+            self.report = callback
+
+        def current_mode(self):
+            return "input"
+
+        def screen(self):
+            return Screen(
+                stage="field",
+                mode="input",
+                title="Field",
+                input_label="Value",
+                progress="test",
+            )
+
+        def submit_input(self, text):
+            submitted.append(text)
+            self.success = True
+            self.stage = "done"
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+
+        def select_input_text():
+            buffer = application.layout.current_buffer
+            buffer.text = "abcd"
+            buffer.cursor_position = 4
+            buffer.start_selection(selection_type=SelectionType.CHARACTERS)
+            buffer.cursor_position = 2
+
+        application.pre_run_callables.append(select_input_text)
+        return application
+
+    monkeypatch.setattr(setup_app_module, "SetupFlow", InputFlow)
+    monkeypatch.setattr(setup_app_module, "Application", capture_application)
+
+    assert _headless("\x7f\r") is True
+    assert submitted == ["ab"]
+
+
 def test_headless_full_path_saves(tmp_path, monkeypatch):
     _config_env(tmp_path, monkeypatch)
     _patch_validate(monkeypatch)

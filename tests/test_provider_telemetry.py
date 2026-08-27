@@ -895,9 +895,9 @@ def test_stream_retry_telemetry_records_restart_without_raw_content() -> None:
 
     summary = last_provider_call_summary()
     assert summary is not None
-    assert summary["retry_reasons"] == ["provider_stream_truncated"]
+    assert summary["retry_reasons"] == ["transport_connection_drop"]
     assert summary["streaming"]["stream_restart_count"] == 1
-    assert summary["streaming"]["stream_restart_reason"] == "provider_stream_truncated"
+    assert summary["streaming"]["stream_restart_reason"] == "transport_connection_drop"
     rendered = json.dumps(summary, sort_keys=True)
     assert "partial" not in rendered
 

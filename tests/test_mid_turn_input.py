@@ -868,7 +868,7 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
     started = threading.Event()
     release = threading.Event()
     persona_calls: list[bool] = []
-    state_holder: dict[str, Any] = {}
+    mode_calls: list[bool] = []
 
     class BlockingSession:
         def __init__(self, surface: Any) -> None:
@@ -882,6 +882,10 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
 
     def persona_cycle() -> list[tuple[str, str]]:
         persona_calls.append(True)
+        return []
+
+    def mode_cycle() -> list[tuple[str, str]]:
+        mode_calls.append(True)
         return []
 
     def feed(pipe: Any) -> None:
@@ -899,15 +903,9 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
     from prompt_toolkit.output import DummyOutput
 
     from alysis_code.cli_impl.tui import run_tui
-    from alysis_code.cli_impl.tui.state import TuiState, next_exec_mode
+    from alysis_code.cli_impl.tui.state import TuiState
 
-    state = TuiState(model_name="test-model", username="tester", exec_mode="auto")
-    state_holder["state"] = state
-
-    def mode_cycle() -> list[tuple[str, str]]:
-        state.exec_mode = next_exec_mode(state.exec_mode)
-        return []
-
+    state = TuiState(model_name="test-model", username="tester")
     with create_pipe_input() as pipe:
         feeder = threading.Thread(target=lambda: feed(pipe), daemon=True)
         feeder.start()
@@ -926,5 +924,5 @@ def test_tab_blocks_persona_cycle_mid_turn_but_shift_tab_stays_live() -> None:
     assert result == "/exit"
     assert not feeder.is_alive()
     assert persona_calls == []
-    assert state_holder["state"].exec_mode == "fullaccess"
+    assert mode_calls == [True]
     assert any("/persona is unavailable" in text for role, text in transcript if role == "warn")

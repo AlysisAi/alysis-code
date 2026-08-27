@@ -670,7 +670,7 @@ def test_one_recovery_is_attempted_then_the_turn_salvages(
     assert recoveries[0]["compaction"]["applied"] is False
     assert len(salvages) == 1
     assert salvages[0]["trigger"]
-    assert exit_code == 1
+    assert exit_code == 0
     # The recovery backed off before re-issuing, and the turn stopped instead of
     # re-asking indefinitely.
     assert _no_real_backoff_sleep == [pytest.approx(2.0)]
@@ -829,7 +829,7 @@ def test_salvage_summary_reports_runtime_outcomes_separately_from_files() -> Non
     assert "Changes left in the working tree" not in summary
 
 
-def test_salvage_exits_nonzero_when_nothing_was_produced(tmp_path: Path) -> None:
+def test_salvage_clean_stop_exits_zero_when_nothing_was_produced(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
     (repo / "data.txt").write_text("alpha\nbeta\n", encoding="utf-8")
@@ -859,7 +859,7 @@ def test_salvage_exits_nonzero_when_nothing_was_produced(tmp_path: Path) -> None
     )
 
     salvages = _payloads(events, "empty_response_stall_salvage")
-    assert exit_code == 1
+    assert exit_code == 0
     assert salvages and salvages[0]["material_work_persisted"] is False
     assert salvages[0]["salvaged_paths"] == []
     assert salvages[0]["salvage_evidence_sources"] == ["git_diff"]
@@ -921,9 +921,9 @@ def test_kill_switch_restores_the_legacy_terminate_on_empty_behaviour(
         ],
     )
 
-    # Legacy behaviour: retry to the attempt cap, then terminate non-zero even
-    # though a file was written.
-    assert exit_code == 1
+    # Disabling stall recovery still restores termination at the attempt cap;
+    # the centralized clean-stop contract now reports that termination as zero.
+    assert exit_code == 0
     assert (repo / "answer.txt").exists()
     event_types = {event.get("type") for event in events}
     assert "empty_response_stall_detected" not in event_types

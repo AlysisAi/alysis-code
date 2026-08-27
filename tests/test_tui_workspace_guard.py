@@ -164,6 +164,29 @@ def test_prompt_cancel_raises_keyboard_interrupt():
         _drive(workspace_guard_prompt_text, "\x03", text="Workspace path")
 
 
+def test_prompt_plain_selection_backspace_cuts_selected_span(monkeypatch):
+    import prompt_toolkit.application
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.selection import SelectionType
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+
+        def select_input_text():
+            buffer = application.layout.current_buffer
+            buffer.text = "abcd"
+            buffer.cursor_position = 4
+            buffer.start_selection(selection_type=SelectionType.CHARACTERS)
+            buffer.cursor_position = 2
+
+        application.pre_run_callables.append(select_input_text)
+        return application
+
+    monkeypatch.setattr(prompt_toolkit.application, "Application", capture_application)
+
+    assert _drive(workspace_guard_prompt_text, "\x7f\r", text="Workspace path") == "ab"
+
+
 # --------------------------- wiring into the startup resolver ---------------------------
 
 

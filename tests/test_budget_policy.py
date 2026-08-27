@@ -46,6 +46,16 @@ class TestExitCodeDecisionTable(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.assertEqual(bp.exit_code_for_stop(reason), 0)
 
+    def test_empty_response_anomaly_retry_exhausted_exits_zero(self) -> None:
+        # The second graceful stop found in the wild: trial-1 gpt2-codegolf
+        # ended "Stopped after empty_response_anomaly_retry_exhausted" and
+        # exited 1, so the harness recorded NonZeroAgentExitCodeError.
+        self.assertEqual(bp.exit_code_for_stop("empty_response_anomaly_retry_exhausted"), 0)
+        self.assertEqual(
+            bp.exit_code_for_stop(bp.STOP_REASON_EMPTY_RESPONSE_ANOMALY_RETRY_EXHAUSTED),
+            0,
+        )
+
     def test_genuine_errors_stay_nonzero(self) -> None:
         for reason in (
             "terminal_error",
@@ -53,6 +63,21 @@ class TestExitCodeDecisionTable(unittest.TestCase):
             "empty_response_stall",
             "step_budget_exhausted",
             "cancelled_by_user",
+        ):
+            with self.subTest(reason=reason):
+                self.assertEqual(bp.exit_code_for_stop(reason), 1)
+
+    def test_unknown_reasons_stay_nonzero(self) -> None:
+        # The registry is a whitelist. Anything not on it -- including a
+        # near-miss spelling of a member, and a reason invented later -- is a
+        # failure until someone deliberately adds it.
+        for reason in (
+            "empty_response_anomaly_budget_exhausted",
+            "empty_response_anomaly",
+            "retry_exhausted",
+            "run_budget",
+            "transport_connection_failure",
+            "some_future_reason",
         ):
             with self.subTest(reason=reason):
                 self.assertEqual(bp.exit_code_for_stop(reason), 1)
@@ -79,6 +104,68 @@ class TestExitCodeDecisionTable(unittest.TestCase):
         # "completed" is a graceful exit but it is NOT a budget stop; only the
         # budget stop may claim the run_budget_exhausted marker.
         self.assertFalse(bp.is_budget_stop("completed"))
+        # ...and neither may the other clean stop.
+        self.assertFalse(bp.is_budget_stop("empty_response_anomaly_retry_exhausted"))
+
+
+class TestCleanStopRegistry(unittest.TestCase):
+    """Adding a graceful stop must be a constant, not new plumbing."""
+
+    def test_registry_membership(self) -> None:
+        self.assertEqual(
+            bp.CLEAN_STOP_REASONS,
+            frozenset(
+                {
+                    "run_budget_exhausted",
+                    "empty_response_anomaly_retry_exhausted",
+                }
+            ),
+        )
+
+    def test_is_clean_stop_accepts_every_member(self) -> None:
+        for reason in bp.CLEAN_STOP_REASONS:
+            with self.subTest(reason=reason):
+                self.assertTrue(bp.is_clean_stop(reason))
+                self.assertEqual(bp.exit_code_for_stop(reason), 0)
+
+    def test_is_clean_stop_rejects_non_members(self) -> None:
+        for reason in ("cancelled_by_user", "terminal_error", "boom", None):
+            with self.subTest(reason=reason):
+                self.assertFalse(bp.is_clean_stop(reason))
+
+    def test_ordinary_completion_is_not_a_self_stop(self) -> None:
+        # It exits zero, but nothing should record it as a stop the run chose:
+        # is_clean_stop gates the stop_reason marker, and "the turn ended" is
+        # not a stop reason.
+        for reason in ("", "completed", "session_close", None):
+            with self.subTest(reason=reason):
+                self.assertFalse(bp.is_clean_stop(reason))
+                self.assertEqual(bp.exit_code_for_stop(reason), 0)
+
+    def test_clean_stop_matching_is_case_and_space_insensitive(self) -> None:
+        self.assertTrue(bp.is_clean_stop("  Empty_Response_Anomaly_Retry_Exhausted  "))
+
+    def test_clean_stops_exit_zero_even_with_a_custom_failure_code(self) -> None:
+        # A clean stop outranks the caller's failure code, the same way a
+        # budget stop already did.
+        for reason in bp.CLEAN_STOP_REASONS:
+            with self.subTest(reason=reason):
+                self.assertEqual(bp.exit_code_for_stop(reason, failure_exit_code=75), 0)
+
+    def test_graceful_set_is_the_union(self) -> None:
+        self.assertEqual(
+            bp.GRACEFUL_STOP_REASONS,
+            bp.NORMAL_COMPLETION_REASONS | bp.CLEAN_STOP_REASONS,
+        )
+        # The two halves are disjoint: a completion is not a self-stop.
+        self.assertFalse(bp.NORMAL_COMPLETION_REASONS & bp.CLEAN_STOP_REASONS)
+
+    def test_registry_entries_are_lowercase_and_stripped(self) -> None:
+        # is_clean_stop lowercases its input before the lookup, so a member
+        # that was not already lowercase could never match.
+        for reason in bp.CLEAN_STOP_REASONS:
+            with self.subTest(reason=reason):
+                self.assertEqual(reason, reason.strip().lower())
 
 
 class TestBudgetCancellationToken(unittest.TestCase):
@@ -452,6 +539,12 @@ class TestCheckpointNoticeText(unittest.TestCase):
     def test_stop_reason_marker(self) -> None:
         self.assertEqual(bp.STOP_REASON_RUN_BUDGET_EXHAUSTED, "run_budget_exhausted")
         self.assertEqual(bp.PROGRESS_CHECKPOINT_FAILED_EVENT, "progress_checkpoint_failed")
+        # Must match the trigger string the turn engine already passes around,
+        # or the stop stays non-zero and nothing joins up.
+        self.assertEqual(
+            bp.STOP_REASON_EMPTY_RESPONSE_ANOMALY_RETRY_EXHAUSTED,
+            "empty_response_anomaly_retry_exhausted",
+        )
 
 
 if __name__ == "__main__":

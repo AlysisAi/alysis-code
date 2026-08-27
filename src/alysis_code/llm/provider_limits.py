@@ -14,6 +14,14 @@ from urllib.parse import urlsplit
 
 from ..failure_category import is_provider_throttling_error, provider_unavailable_retry_reason
 from ..provider_url import known_provider_key_from_base_url
+from ..transport_retry import (
+    RETRY_REASON_TRANSPORT_CONNECTION_DROP,
+    connection_drop_budget_exhausted,
+    connection_drop_delay_seconds,
+    connection_drop_retry_budget,
+    is_connection_drop_error,
+    mark_transport_connection_failure,
+)
 from .types import LLMStreamNoProgressError
 
 T = TypeVar("T")
@@ -183,13 +191,33 @@ def run_provider_limited_call(
             return call()
         except Exception as exc:
             retry_reason = _provider_retry_reason(exc)
-            if (
-                retry_reason is None
-                or _is_provider_call_non_retryable(exc)
-                or retries_used >= settings.max_retries
-            ):
+            # A connection dropped mid-response gets a budget of its own. It is
+            # the one failure class that costs nothing to retry -- the body
+            # never arrived, so no completed response work is repeated -- and
+            # giving up immediately can fail an otherwise recoverable request.
+            #
+            # Every other reason keeps the configured budget untouched, and a
+            # caller that already raised max_retries keeps its larger value.
+            connection_drop = is_connection_drop_error(exc)
+            retries_allowed = (
+                connection_drop_retry_budget(settings.max_retries)
+                if connection_drop
+                else settings.max_retries
+            )
+            if retry_reason is None or _is_provider_call_non_retryable(exc):
                 raise
-            wait_seconds = _retry_delay_seconds(settings, retries_used, jitter)
+            if connection_drop_budget_exhausted(retries_used, retries_allowed):
+                if connection_drop:
+                    # Still a genuine error -- nothing was accomplished -- but
+                    # a named one, so diagnostics can distinguish a dead route
+                    # from a model that failed the task on its merits.
+                    mark_transport_connection_failure(exc)
+                raise
+            if connection_drop:
+                retry_reason = RETRY_REASON_TRANSPORT_CONNECTION_DROP
+                wait_seconds = connection_drop_delay_seconds(retries_used, jitter_sample=jitter())
+            else:
+                wait_seconds = _retry_delay_seconds(settings, retries_used, jitter)
             if _retry_wall_clock_cap_blocks(
                 retry_reason=retry_reason,
                 retry_started_at=retry_started_at,
@@ -265,7 +293,15 @@ def _retry_wall_clock_cap_blocks(
     clock: Callable[[], float],
 ) -> bool:
     if (
-        retry_reason not in {"provider_unavailable", "provider_stream_truncated"}
+        retry_reason
+        not in {
+            "provider_unavailable",
+            "provider_stream_truncated",
+            # The larger connection-drop budget is still subject to any
+            # wall-clock cap a caller set. A route that caps retry time meant
+            # it, and a bigger attempt budget must not quietly escape it.
+            RETRY_REASON_TRANSPORT_CONNECTION_DROP,
+        }
         or cap_seconds is None
     ):
         return False
@@ -394,6 +430,13 @@ def single_retry_is_worthwhile(exc: BaseException) -> bool:
 
     if _is_provider_call_non_retryable(exc):
         return False
+    # A connection dropped mid-body is transient too, but its signatures
+    # ("peer closed connection", "incomplete chunked read") are absent from
+    # _TRANSIENT_TRANSPORT_MARKERS, which only knows socket-level failures.
+    # Without this, a caller running its own bounded retry silently declined
+    # to retry the one failure most worth retrying.
+    if is_connection_drop_error(exc):
+        return True
     return _transient_transport_retry_reason(exc) is not None
 
 

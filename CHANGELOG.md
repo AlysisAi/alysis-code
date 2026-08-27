@@ -408,6 +408,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.1] - 2026-08-27
+
+Input usability and runtime reliability improvements.
+
+### Fixed
+
+- The TUI now keeps input geometry, selection editing, paste-token hints,
+  dragged-selection scrolling, and terminal-theme styling consistent across
+  chat, configuration, setup, and workspace-guard surfaces.
+- Intentional clean stops now exit successfully and retain a machine-readable
+  `stop_reason`; genuine failures and unknown stop reasons remain non-zero.
+- Connections dropped mid-response receive a dedicated bounded retry schedule,
+  preserve caller-configured larger budgets, respect wall-clock caps, and emit
+  consistent retry, stream-restart, and terminal diagnostic reasons.
+
 ## [0.13.0] - 2026-08-22
 
 The reliability wave. Six stacked fixes (PR1-PR6) targeting the failure modes

@@ -58,6 +58,11 @@ BUDGET_CHECKPOINT_FRACTION_ENV = "ALYSIS_BUDGET_CHECKPOINT_FRACTION"
 # without parsing prose.
 STOP_REASON_RUN_BUDGET_EXHAUSTED = "run_budget_exhausted"
 
+# The model stopped returning usable responses and the targeted recovery for
+# that was spent. The run then reports what it has and ends. Same shape of
+# outcome as a budget stop: chosen by the run, not a crash.
+STOP_REASON_EMPTY_RESPONSE_ANOMALY_RETRY_EXHAUSTED = "empty_response_anomaly_retry_exhausted"
+
 PROGRESS_CHECKPOINT_FAILED_EVENT = "progress_checkpoint_failed"
 
 # A budget stop is a normal outcome, not a failure: the agent did what it could
@@ -73,15 +78,39 @@ BUDGET_CHECKPOINT_NOTICE = (
     "Reassess approach or report the concrete blocker."
 )
 
-# Terminal reasons that are *not* failures. Everything else exits non-zero.
-GRACEFUL_STOP_REASONS = frozenset(
+# Reasons for which the run *decided* to stop: it hit a limit it owns, wound
+# down deliberately, reported what it had, and exited. These are outcomes, not
+# failures, and every one of them must exit zero -- a non-zero code makes a
+# harness record NonZeroAgentExitCodeError and throw the trial away.
+#
+# This is a registry rather than a special case per stop path. The budget stop
+# was fixed first and got bespoke plumbing; the empty-response stop then had to
+# be fixed the same way, separately, because there was nothing to join. A
+# future graceful stop joins by adding its constant here.
+#
+# The bar for membership: the run chose to end and said so honestly. An
+# exception escaping, a provider that never came back, a user abort -- none of
+# those are self-stops, and they keep their non-zero codes.
+CLEAN_STOP_REASONS = frozenset(
+    {
+        STOP_REASON_RUN_BUDGET_EXHAUSTED,
+        STOP_REASON_EMPTY_RESPONSE_ANOMALY_RETRY_EXHAUSTED,
+    }
+)
+
+# Ordinary terminal states, which were never failures to begin with. Separate
+# from CLEAN_STOP_REASONS because "the turn ended" is not a self-stop and
+# nothing should record it as one.
+NORMAL_COMPLETION_REASONS = frozenset(
     {
         "",
         "completed",
         "session_close",
-        STOP_REASON_RUN_BUDGET_EXHAUSTED,
     }
 )
+
+# Terminal reasons that are *not* failures. Everything else exits non-zero.
+GRACEFUL_STOP_REASONS = NORMAL_COMPLETION_REASONS | CLEAN_STOP_REASONS
 
 
 class RunBudgetCancelled(Exception):
@@ -200,6 +229,20 @@ def exit_code_for_stop(
     if reason in GRACEFUL_STOP_REASONS:
         return BUDGET_STOP_EXIT_CODE
     return int(failure_exit_code)
+
+
+def is_clean_stop(stop_reason: str | None) -> bool:
+    """True when ``stop_reason`` names a stop the run chose for itself.
+
+    The predicate a stop path should consult before deciding an exit code, so
+    joining the clean-stop set is a one-line change to
+    :data:`CLEAN_STOP_REASONS` rather than new plumbing at the stop site.
+
+    Note this is narrower than :data:`GRACEFUL_STOP_REASONS`: an ordinary
+    completion exits zero but is not a self-stop, and must not be recorded as
+    one.
+    """
+    return str(stop_reason or "").strip().lower() in CLEAN_STOP_REASONS
 
 
 def is_budget_stop(stop_reason: str | None) -> bool:

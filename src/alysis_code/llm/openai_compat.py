@@ -28,6 +28,7 @@ from ..reasoning_contracts import (
 )
 from ..request_estimation import estimate_provider_payload_tokens
 from ..run_provenance import active_sampling_settings, apply_sampling_to_payload
+from ..transport_retry import RETRY_REASON_TRANSPORT_CONNECTION_DROP
 from .cache_capabilities import (
     CACHE_CONTROL_FIELD,
     OPENROUTER_SESSION_ID_FIELD,
@@ -2269,7 +2270,10 @@ class OpenAICompatClient:
         def _record_retry(attempt: int, reason: str, wait_seconds: float) -> None:
             nonlocal stream_restart_count, stream_restart_reason, any_text_delta_emitted
             telemetry.on_retry(attempt, reason, wait_seconds)
-            if stream and str(reason).startswith("provider_stream_"):
+            if stream and (
+                str(reason).startswith("provider_stream_")
+                or reason == RETRY_REASON_TRANSPORT_CONNECTION_DROP
+            ):
                 stream_restart_count += 1
                 stream_restart_reason = str(reason)
                 transport_metadata["stream_restart_count"] = stream_restart_count

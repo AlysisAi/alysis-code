@@ -29,6 +29,7 @@ from typing import Any
 
 from .app import _ACCENT, _render_picker_rows, _wrap_line
 from .app import _STYLE as _CHAT_STYLE
+from .selection_bindings import selection_editing_bindings
 
 # The shared row builders prefix labels with "N) " for the classic numbered
 # prompt; the TUI picker draws its own "N." gutter, so strip the leading number.
@@ -304,7 +305,7 @@ def workspace_guard_prompt_text(
     from prompt_toolkit.application import Application
     from prompt_toolkit.filters import Condition
     from prompt_toolkit.formatted_text import FormattedText
-    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
     from prompt_toolkit.layout import Layout
     from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
@@ -361,7 +362,7 @@ def workspace_guard_prompt_text(
 
     app: Application = Application(
         layout=Layout(root, focused_element=input_area),
-        key_bindings=kb,
+        key_bindings=merge_key_bindings([selection_editing_bindings(), kb]),
         style=_guard_style(),
         full_screen=True,
         mouse_support=False,

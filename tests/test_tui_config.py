@@ -1218,6 +1218,51 @@ def test_headless_config_can_open_on_start():
     assert transcript == []
 
 
+def test_config_input_plain_selection_backspace_cuts_and_enter_accepts(monkeypatch):
+    from prompt_toolkit.application import Application as PromptToolkitApplication
+    from prompt_toolkit.selection import SelectionType
+
+    from alysis_code.cli_impl.tui import app as app_module
+
+    submitted = []
+    captured = {}
+
+    class InputFlow(ConfigFlow):
+        def __init__(self):
+            super().__init__(cfg=_cfg())
+            self.stage = "model_timeout"
+
+        def submit_input(self, text):
+            submitted.append(text)
+            self.saved = False
+            self.stage = "done"
+
+    def capture_application(*args, **kwargs):
+        application = PromptToolkitApplication(*args, **kwargs)
+        captured["application"] = application
+
+        def select_config_text():
+            buffer = application.layout.current_buffer
+            buffer.text = "abcd"
+            buffer.cursor_position = 4
+            buffer.start_selection(selection_type=SelectionType.CHARACTERS)
+            buffer.cursor_position = 2
+
+        application.pre_run_callables.append(select_config_text)
+        return application
+
+    monkeypatch.setattr(app_module, "Application", capture_application)
+
+    result, _transcript = _run_headless(
+        "\x7f\r/exit\r",
+        config_flow_factory=InputFlow,
+        open_config_on_start=True,
+    )
+
+    assert result == "/exit"
+    assert submitted == ["ab"]
+
+
 @pytest.mark.parametrize(
     ("command", "factory_name"),
     [("/config", "config_flow_factory")],
