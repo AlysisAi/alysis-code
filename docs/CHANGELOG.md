@@ -408,6 +408,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.3] - 2026-08-28
+
+### Fixed
+
+- Restored the Ubuntu Python 3.11 and 3.12 CI jobs after the repository cleanup by aligning Ruff
+  formatting, updating moved sandbox contract paths, preserving the security-documentation
+  contract, making immediate shell-output coverage independent of thread scheduling, and allowing
+  harmless floating-point clock precision in deadline coverage.
+
 ## [0.13.2] - 2026-08-28
 
 Public launch and repository-layout refresh.

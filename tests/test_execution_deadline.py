@@ -182,8 +182,9 @@ def test_subagent_deadline_uses_finite_fallback_without_parent() -> None:
     assert child.enabled is True
     assert child.configured_duration_seconds == 900.0
     assert child.source == DeadlineSource.SUBAGENT_FALLBACK
-    assert child.remaining_seconds() is not None
-    assert 899.0 <= child.remaining_seconds() <= 900.0
+    remaining = child.remaining_seconds()
+    assert remaining is not None
+    assert 899.0 <= remaining <= 900.0 + 1e-6
 
 
 def test_subagent_deadline_reuses_exact_earlier_parent_object() -> None:

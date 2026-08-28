@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "sandbox-image.yml"
-DOCKERFILE = ROOT / "sandbox" / "Dockerfile"
+DOCKERFILE = ROOT / "scripts" / "sandbox" / "Dockerfile"
 
 
 def _workflow() -> str:
@@ -195,7 +195,9 @@ def test_docker_toolchains_and_external_images_are_immutable_inputs() -> None:
 
 def test_server_image_installs_the_exact_python_lock() -> None:
     dockerfile = _dockerfile()
-    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    dockerignore = (ROOT / "scripts" / "sandbox" / "Dockerfile.dockerignore").read_text(
+        encoding="utf-8"
+    )
 
     assert "COPY pyproject.toml uv.lock README.md" in dockerfile
     assert "uv sync --locked --no-dev --no-editable --extra server" in dockerfile

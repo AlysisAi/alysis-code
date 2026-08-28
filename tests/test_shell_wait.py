@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -324,6 +325,11 @@ def test_shell_output_existing_callers_remain_immediate(
     try:
         started = session.tools["shell_background"].run({"cmd": "fake"})
         result = session.tools["shell_output"].run({"process_id": started["process_id"]})
+        for _ in range(50):
+            if result["lines"]:
+                break
+            time.sleep(0.01)
+            result = session.tools["shell_output"].run({"process_id": started["process_id"]})
 
         assert "waited" not in result
         assert [line["text"] for line in result["lines"]] == ["one\n"]

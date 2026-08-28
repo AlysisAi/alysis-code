@@ -816,10 +816,7 @@ def _legacy_distribution_plan(
             method="pipx",
             supported=False,
             command=("pipx", "uninstall", installed_name),
-            reason=(
-                f"Run `pipx uninstall {installed_name}`, then "
-                f"`pipx install {target_name}`."
-            ),
+            reason=(f"Run `pipx uninstall {installed_name}`, then `pipx install {target_name}`."),
         )
 
     return InstallerPlan(
@@ -827,8 +824,7 @@ def _legacy_distribution_plan(
         supported=False,
         command=(executable, "-m", "pip", "install", "--upgrade", target_name),
         reason=(
-            f"Install `{target_name}`, then `pip uninstall {installed_name}` "
-            "to remove the old one."
+            f"Install `{target_name}`, then `pip uninstall {installed_name}` to remove the old one."
         ),
     )
 

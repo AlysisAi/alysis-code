@@ -85,6 +85,10 @@ LM Studio, vLLM) and run fully offline. The `/config` picker lists every preset.
   isolation with an always-on denylist that refuses `rm -rf /`, `curl | sh`, and `sudo` — even in
   `fullaccess`.
 
+Shell and verification commands default to strict sandboxing. Verification can run outside that
+sandbox only when explicitly configured with `verify_sandbox.mode="off"` or
+`ALYSIS_VERIFY_SANDBOX_MODE=off`.
+
 ## Modes & Personas
 
 Two layers control what the agent may do — one enforces, one focuses.
