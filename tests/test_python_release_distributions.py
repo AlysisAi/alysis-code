@@ -116,7 +116,7 @@ def test_hatch_sdist_uses_an_explicit_release_inventory() -> None:
 
     assert project["tool"]["hatch"]["build"]["targets"]["sdist"]["include"] == [
         "/.gitignore",
-        "/CHANGELOG.md",
+        "/docs/CHANGELOG.md",
         "/LICENSE",
         "/NOTICE",
         "/README.md",

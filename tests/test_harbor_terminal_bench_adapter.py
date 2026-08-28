@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 
 from alysis_code.run_outcome import INFRASTRUCTURE_FAILURE_EXIT_CODE, RunOutcome
-from benchmarks.terminal_bench import box_harbor_agent as box_adapter_mod
-from benchmarks.terminal_bench.box_harbor_agent import AlysisAgent as BoxAlysisAgent
-from benchmarks.terminal_bench.harbor_agent import AlysisHarborAgent
+from scripts.benchmarks.terminal_bench import box_harbor_agent as box_adapter_mod
+from scripts.benchmarks.terminal_bench.box_harbor_agent import AlysisAgent as BoxAlysisAgent
+from scripts.benchmarks.terminal_bench.harbor_agent import AlysisHarborAgent
 
 
 def _agent(**kwargs: Any) -> AlysisHarborAgent:
@@ -107,7 +107,7 @@ def test_box_adapter_install_uses_versioned_setup_script_and_wheel(tmp_path: Pat
     install_env = agent._install_env()
     install_command = agent._install_command()
 
-    assert agent._host_setup_script_path().endswith("benchmarks/terminal_bench/setup.sh")
+    assert agent._host_setup_script_path().endswith("scripts/benchmarks/terminal_bench/setup.sh")
     assert install_env["ALYSIS_WHEEL"] == "/tmp/alysis-agent/" + wheel.name
     assert install_env["ALYSIS_MODEL"] == "mimo-v2.5-pro"
     assert install_env["ALYSIS_BASE_URL"] == "https://example.invalid/v1"

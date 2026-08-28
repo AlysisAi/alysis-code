@@ -39,7 +39,7 @@ From the repository root:
 export TB_AGENT_TIMEOUT_SEC=1800
 uvx terminal-bench run \
   --dataset terminal-bench-core==0.1.1 \
-  --agent-import-path benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
+  --agent-import-path scripts.benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
   --global-agent-timeout-sec "$TB_AGENT_TIMEOUT_SEC" \
   --agent-kwarg managed_host_agent_timeout_sec="$TB_AGENT_TIMEOUT_SEC" \
   --task-id hello-world \
@@ -52,7 +52,7 @@ uvx terminal-bench run \
 export TB_AGENT_TIMEOUT_SEC=1800
 uvx terminal-bench run \
   --dataset terminal-bench-core==0.1.1 \
-  --agent-import-path benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
+  --agent-import-path scripts.benchmarks.terminal_bench.alysis_agent:AlysisSimpleAgent \
   --global-agent-timeout-sec "$TB_AGENT_TIMEOUT_SEC" \
   --agent-kwarg managed_host_agent_timeout_sec="$TB_AGENT_TIMEOUT_SEC" \
   --n-concurrent 4

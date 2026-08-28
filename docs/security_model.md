@@ -149,5 +149,5 @@ hook configs before trusting them.
 
 ## Reporting Security Issues
 
-Report vulnerabilities privately by following the root [Security Policy](../SECURITY.md). Do not
+Report vulnerabilities privately by following the root [Security Policy](../.github/SECURITY.md). Do not
 open public GitHub issues for security bugs.

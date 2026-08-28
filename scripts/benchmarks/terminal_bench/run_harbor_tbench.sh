@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -89,7 +89,7 @@ Run ID: $RUN_ID
 Started: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 Repo: $REPO_ROOT
 Dataset: $TB_DATASET
-Agent: benchmarks.terminal_bench.harbor_agent:AlysisHarborAgent
+Agent: scripts.benchmarks.terminal_bench.harbor_agent:AlysisHarborAgent
 Model: $ALYSIS_MODEL
 Base URL: $ALYSIS_BASE_URL
 Sandbox: Alysis Code shell/verify sandbox off; Harbor/Docker task isolation still active
@@ -117,7 +117,7 @@ fi
 cmd=(
   "${harbor_cmd[@]}" run
   -d "$TB_DATASET"
-  --agent-import-path benchmarks.terminal_bench.harbor_agent:AlysisHarborAgent
+  --agent-import-path scripts.benchmarks.terminal_bench.harbor_agent:AlysisHarborAgent
   -m "$ALYSIS_MODEL"
   --jobs-dir "$JOBS_DIR"
   --job-name "$RUN_ID"

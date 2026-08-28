@@ -33,7 +33,7 @@ Start with the [root README](../README.md) for installation and first use. Use t
 
 ## Project
 
-- [Contributing](../CONTRIBUTING.md): local development and pull request guidance.
-- [Release process](../RELEASING.md): package and sandbox-image release steps.
-- [Security policy](../SECURITY.md): private vulnerability reporting.
-- [Code of Conduct](../CODE_OF_CONDUCT.md): community participation expectations.
+- [Contributing](../.github/CONTRIBUTING.md): local development and pull request guidance.
+- [Release process](RELEASING.md): package and sandbox-image release steps.
+- [Security policy](../.github/SECURITY.md): private vulnerability reporting.
+- [Code of Conduct](../.github/CODE_OF_CONDUCT.md): community participation expectations.

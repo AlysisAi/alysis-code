@@ -29,7 +29,7 @@ Offline (this box, or any box with an existing artifact archive)::
 Live (runner box, produces artifacts then asserts)::
 
     python3 scripts/regression_suite.py --run \
-        --harbor-cmd 'bash benchmarks/terminal_bench/run_harbor_tbench.sh' \
+        --harbor-cmd 'bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh' \
         --artifacts-root ./runs/regression \
         --canary-value "$ALYSIS_REGRESSION_CANARY_VALUE"
 
@@ -675,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--harbor-cmd",
-        default="bash benchmarks/terminal_bench/run_harbor_tbench.sh",
+        default="bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh",
         help="Live mode only: the Harbor command; reads TB_INCLUDE_TASK per task.",
     )
     parser.add_argument(

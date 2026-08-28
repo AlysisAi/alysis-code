@@ -787,14 +787,19 @@ def _legacy_distribution_plan(
     prefix: str,
     env: Mapping[str, str],
 ) -> InstallerPlan:
-    """Plan the move from the pre-rebrand distribution to the current one."""
+    """Plan the move from the pre-rebrand distribution to the current one.
+
+    The reasons below stay purely operational — what to run — rather than
+    narrating the rename at the user. They are shown in the TUI update prompt,
+    where the history of the package name is not what anyone needs.
+    """
     if _editable_install_reason(installed_name):
         return InstallerPlan(
             method="editable",
             supported=False,
             reason=(
-                f"This is an editable install of `{installed_name}`. Pull the renamed "
-                f"source and reinstall as `{target_name}`."
+                f"This is an editable install of `{installed_name}`. Pull the latest "
+                f"source and reinstall it as `{target_name}`."
             ),
         )
 
@@ -812,8 +817,8 @@ def _legacy_distribution_plan(
             supported=False,
             command=("pipx", "uninstall", installed_name),
             reason=(
-                f"`{installed_name}` was renamed to `{target_name}`. Run "
-                f"`pipx uninstall {installed_name}` then `pipx install {target_name}`."
+                f"Run `pipx uninstall {installed_name}`, then "
+                f"`pipx install {target_name}`."
             ),
         )
 
@@ -822,8 +827,8 @@ def _legacy_distribution_plan(
         supported=False,
         command=(executable, "-m", "pip", "install", "--upgrade", target_name),
         reason=(
-            f"`{installed_name}` was renamed to `{target_name}`. Install the new package, "
-            f"then `pip uninstall {installed_name}` to remove the old one."
+            f"Install `{target_name}`, then `pip uninstall {installed_name}` "
+            "to remove the old one."
         ),
     )
 

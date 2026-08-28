@@ -21,5 +21,5 @@ this directory.
 
 ## See Also
 
-- [Contributing](../CONTRIBUTING.md)
+- [Contributing](../.github/CONTRIBUTING.md)
 - [Release process](../RELEASING.md)

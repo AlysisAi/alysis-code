@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _REPO_ROOT / "src"
 if _SRC_ROOT.exists() and os.fspath(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(_SRC_ROOT))

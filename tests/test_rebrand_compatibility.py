@@ -42,9 +42,9 @@ def test_child_repetition_replay_uses_canonical_package_and_brand() -> None:
 
 @pytest.fixture(autouse=True)
 def _clear_notices():
-    branding.consume_legacy_notices()
+    branding.reset_legacy_tracking()
     yield
-    branding.consume_legacy_notices()
+    branding.reset_legacy_tracking()
 
 
 # --- environment variables --------------------------------------------------
@@ -88,19 +88,28 @@ def test_current_env_wins_in_an_injected_mapping() -> None:
     assert env_get_from(source, "ALYSIS_REMOTE_SYNC") == "warn"
 
 
-def test_reading_a_legacy_var_warns_exactly_once(monkeypatch) -> None:
+def test_reading_a_legacy_var_is_silent_but_logged_once(monkeypatch, caplog) -> None:
+    """The fallback must not put a rename notice in front of the user.
+
+    It used to raise a DeprecationWarning, which surfaced as a stray line above
+    the TUI on every launch for anyone still carrying a ``SYLLIPTOR_*`` var. The
+    value still resolves; the record now goes to the log only, once.
+    """
     monkeypatch.delenv("ALYSIS_THEME", raising=False)
     monkeypatch.setenv("SYLLIPTOR_THEME", "dark")
 
     with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", DeprecationWarning)
-        env_get("ALYSIS_THEME")
-        env_get("ALYSIS_THEME")
+        warnings.simplefilter("always")
+        with caplog.at_level("WARNING", logger="alysis_code.branding"):
+            assert env_get("ALYSIS_THEME") == "dark"
+            assert env_get("ALYSIS_THEME") == "dark"
 
-    deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert len(deprecations) == 1
-    assert "SYLLIPTOR_THEME" in str(deprecations[0].message)
-    assert "ALYSIS_THEME" in str(deprecations[0].message)
+    assert [w for w in caught if issubclass(w.category, DeprecationWarning)] == []
+
+    logged = [r for r in caplog.records if "legacy_env_var" in r.getMessage()]
+    assert len(logged) == 1
+    assert "SYLLIPTOR_THEME" in logged[0].getMessage()
+    assert "ALYSIS_THEME" in logged[0].getMessage()
 
 
 def test_unknown_var_without_legacy_counterpart_returns_default(monkeypatch) -> None:

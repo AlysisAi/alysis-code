@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from benchmarks.terminal_bench import alysis_agent as adapter_mod
-from benchmarks.terminal_bench.alysis_agent import (
+from scripts.benchmarks.terminal_bench import alysis_agent as adapter_mod
+from scripts.benchmarks.terminal_bench.alysis_agent import (
     MANAGED_HOST_DEADLINE_DIAGNOSTIC_FILENAME,
     MANAGED_HOST_SHUTDOWN_RESERVE_ENV,
     VERIFY_CMD_ENV,

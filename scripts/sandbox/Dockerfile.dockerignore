@@ -1,7 +1,7 @@
 *
 
-!sandbox/
-!sandbox/**
+!scripts/sandbox/
+!scripts/sandbox/**
 !src/
 !src/**
 !pyproject.toml

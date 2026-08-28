@@ -4,7 +4,10 @@ The CLI shipped as "Sylliptor" (package ``sylliptor-agent-cli``, command
 ``sylliptor``, env prefix ``SYLLIPTOR_``) before being renamed to Alysis Code.
 Everything a user could have written down — env vars in a CI config, a
 ``.sylliptor/`` directory committed to their repo, a keyring entry holding MCP
-OAuth tokens — still resolves, with a one-time deprecation notice. See
+OAuth tokens — still resolves. The fallbacks are deliberately *silent*: they
+are a courtesy to people who already migrated once, not something to announce
+above the TUI on every launch. Each one is recorded to the log at warning level
+so a support session can still see which legacy input was used. See
 ``docs/migration-alysis-code.md`` for the removal timeline.
 """
 
@@ -14,7 +17,6 @@ import logging
 import os
 import shutil
 import threading
-import warnings
 from collections.abc import Mapping
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -49,8 +51,6 @@ MIGRATION_MARKER_NAME = ".migrated-to-alysis"
 
 _notice_lock = threading.Lock()
 _legacy_env_seen: dict[str, str] = {}
-_migrated_paths: dict[str, str] = {}
-_legacy_paths_in_use: dict[str, str] = {}
 
 
 def legacy_env_name(name: str) -> str | None:
@@ -61,15 +61,12 @@ def legacy_env_name(name: str) -> str | None:
 
 
 def _record_legacy_env(legacy: str, current: str) -> None:
+    """Log a legacy variable read, once per variable, without warning the user."""
     with _notice_lock:
         if legacy in _legacy_env_seen:
             return
         _legacy_env_seen[legacy] = current
-    message = (
-        f"{legacy} is deprecated and will be removed in a future release; rename it to {current}."
-    )
     LOGGER.warning("legacy_env_var legacy=%s current=%s", legacy, current)
-    warnings.warn(message, DeprecationWarning, stacklevel=3)
 
 
 def env_get(name: str, default: str | None = None) -> str | None:
@@ -121,26 +118,14 @@ def with_legacy_env_aliases(env: Mapping[str, str]) -> dict[str, str]:
     return merged
 
 
-def consume_legacy_notices() -> list[str]:
-    """Drain accumulated deprecation notices for the CLI to surface once."""
-    with _notice_lock:
-        env_items = sorted(_legacy_env_seen.items())
-        migrated = sorted(_migrated_paths.items())
-        in_use = sorted(_legacy_paths_in_use.items())
-        _legacy_env_seen.clear()
-        _migrated_paths.clear()
-        _legacy_paths_in_use.clear()
+def reset_legacy_tracking() -> None:
+    """Forget which legacy inputs have been seen, so logging repeats.
 
-    notices = [
-        f"Environment variable {legacy} is deprecated — use {current}."
-        for legacy, current in env_items
-    ]
-    notices.extend(f"Copied {legacy} to {current}." for legacy, current in migrated)
-    notices.extend(
-        f"Using legacy directory {legacy}; rename it to {current} when convenient."
-        for legacy, current in in_use
-    )
-    return notices
+    Only the per-process de-duplication state; nothing user-visible depends on
+    it. Tests use it to isolate cases that each expect a fresh log line.
+    """
+    with _notice_lock:
+        _legacy_env_seen.clear()
 
 
 def _github_owner_from_url(url: str) -> str | None:
@@ -223,8 +208,6 @@ def _migrate_legacy_dir(current: Path, legacy: Path) -> Path:
         # Marker is an optimisation; a missing one only costs a redundant check.
         pass
 
-    with _notice_lock:
-        _migrated_paths.setdefault(str(legacy), str(current))
     LOGGER.info("legacy_dir_migrated legacy=%s current=%s", legacy, current)
     return current
 
@@ -259,8 +242,7 @@ def resolve_project_dir(root: Path) -> Path:
         return current
     legacy = root / LEGACY_PROJECT_DIR_NAME
     if legacy.is_dir():
-        with _notice_lock:
-            _legacy_paths_in_use.setdefault(str(legacy), str(current))
+        LOGGER.debug("legacy_project_dir_in_use legacy=%s current=%s", legacy, current)
         return legacy
     return current
 

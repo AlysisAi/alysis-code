@@ -149,7 +149,7 @@ docker pull ghcr.io/alysisai/alysis-sandbox:dev
 Build locally:
 
 ```bash
-docker build --build-arg VARIANT=dev -t alysis-sandbox:dev -f sandbox/Dockerfile sandbox/
+docker build --build-arg VARIANT=dev -t alysis-sandbox:dev -f scripts/sandbox/Dockerfile .
 ```
 
 Pin a production image by digest:

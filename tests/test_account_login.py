@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from alysis_code import account_login
+from alysis_code import account_login, alysis_cloud
 from alysis_code.config import (
     load_config,
     load_persisted_profile_keys,
@@ -137,6 +137,46 @@ def test_logout_when_not_logged_in_returns_false(tmp_path: Path, monkeypatch) ->
     assert account_login.logout(cfg) is False
 
 
+def test_approval_url_pins_host_to_configured_site(monkeypatch) -> None:
+    """The server never gets to choose which website login opens.
+
+    Regression: the deployed device-code function still returned the
+    pre-rebrand host in ``verification_url_complete``, so `alysis login`
+    launched the retired Sylliptor site even though the client was rebranded.
+    """
+    monkeypatch.delenv("ALYSIS_SITE_URL", raising=False)
+    monkeypatch.delenv("SYLLIPTOR_SITE_URL", raising=False)
+    site = alysis_cloud.site_url()
+
+    legacy = f"https://sylliptor.alysisai.com/activate?code={_USER_CODE}"
+    assert (
+        account_login._approval_url(legacy, user_code=_USER_CODE)
+        == f"{site}/activate?code={_USER_CODE}"
+    )
+
+    # Any foreign origin is rewritten; path and query survive.
+    assert (
+        account_login._approval_url("https://evil.example/activate?code=XX", user_code=_USER_CODE)
+        == f"{site}/activate?code=XX"
+    )
+
+    # Missing or unusable server values fall back to the local activate URL.
+    for empty in ("", "   ".strip(), "://nonsense"):
+        assert _USER_CODE in account_login._approval_url(empty, user_code=_USER_CODE)
+        assert account_login._approval_url(empty, user_code=_USER_CODE).startswith(site)
+
+
+def test_approval_url_follows_site_override(monkeypatch) -> None:
+    """Staging/local deployments still steer the browser via ALYSIS_SITE_URL."""
+    monkeypatch.setenv("ALYSIS_SITE_URL", "https://staging.example.test")
+    assert (
+        account_login._approval_url(
+            f"https://sylliptor.alysisai.com/activate?code={_USER_CODE}", user_code=_USER_CODE
+        )
+        == f"https://staging.example.test/activate?code={_USER_CODE}"
+    )
+
+
 def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
     stub = _StubDeviceFlowServer(approve_after=3)  # a couple of pending polls first
@@ -146,8 +186,11 @@ def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch
         cfg = load_config()
         result = account_login.login(cfg, browser_opener=_noop_browser(opened), timeout_s=30)
 
-        # The browser was pointed at the approval page with the code prefilled.
+        # The browser was pointed at the approval page with the code prefilled,
+        # on OUR site — not the "https://example.test" host the stub returned.
         assert opened and _USER_CODE in opened[0]
+        assert opened[0].startswith(alysis_cloud.site_url())
+        assert "example.test" not in opened[0]
         # The CLI kept polling until approval.
         assert stub.polls == 3
 

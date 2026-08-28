@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _REPO_ROOT / "src"
 if _SRC_ROOT.exists() and os.fspath(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(_SRC_ROOT))
@@ -77,7 +77,7 @@ _CRASH_LOG = f"{_ART_DIR}/alysis-crash.jsonl"
 # Terminal-Bench's observed per-task allowance is ~3.5h; 3h leaves the agent a
 # margin to finalize inside the harness window instead of being killed by it.
 _TBENCH_RUN_BUDGET_SECONDS = "10800"
-_SETUP_DIR = "/installed-agent/alysis-source/benchmarks/terminal_bench"
+_SETUP_DIR = "/installed-agent/alysis-source/scripts/benchmarks/terminal_bench"
 _SETUP_SCRIPT = f"{_SETUP_DIR}/setup.sh"
 _SETUP_TIMEOUT_SEC = 1800
 

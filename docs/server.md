@@ -184,7 +184,7 @@ By default, docker server workers use `ghcr.io/alysisai/alysis-sandbox:server`.
 Build the server worker image:
 
 ```bash
-docker build --build-arg VARIANT=server -t alysis-sandbox:server -f sandbox/Dockerfile .
+docker build --build-arg VARIANT=server -t alysis-sandbox:server -f scripts/sandbox/Dockerfile .
 ```
 
 Override image tag used by server workers:

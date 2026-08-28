@@ -5,7 +5,7 @@ This is the maintainer checklist for publishing Alysis Code packages and sandbox
 ## Version And Tag
 
 1. Bump the package version in `pyproject.toml` and `src/alysis_code/__init__.py`.
-2. Update `CHANGELOG.md` with user-facing changes and known limitations.
+2. Update `docs/CHANGELOG.md` with user-facing changes and known limitations.
 3. Commit the release changes.
 4. Create and push the release tag:
 

@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Renamed from Sylliptor to Alysis Code.** The command is now `alysis`, the
   PyPI package is `alysis-code`, the Python module is `alysis_code`, the
   environment prefix is `ALYSIS_`, and the per-repo directory is `.alysis/`.
-  See [docs/migration-alysis-code.md](docs/migration-alysis-code.md).
+  See [docs/migration-alysis-code.md](migration-alysis-code.md).
 
   Existing installs keep working. Config and credential directories are copied
   to their new locations on first run; the MCP OAuth keyring entry and any
@@ -407,6 +407,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   routing rules and workspace context instead of replacing them with a partial repair prompt.
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
+
+## [0.13.2] - 2026-08-28
+
+Public launch and repository-layout refresh.
+
+### Added
+
+- A theme-adaptive README banner with dedicated light and dark artwork.
+- `alysis-code` as the canonical executable, while retaining `alysis` as the short alias.
+
+### Changed
+
+- Simplified the public README around installation, core capabilities, modes, and documentation.
+- Moved governance files under `.github/`, release and changelog documents under `docs/`, and
+  sandbox and benchmark sources under `scripts/` for a cleaner repository root.
+- Legacy Sylliptor environment and command compatibility now forwards silently while retaining
+  diagnostic logging for support.
+
+### Fixed
+
+- Device-login approval URLs now remain pinned to the configured Alysis site instead of trusting
+  a backend-provided origin.
 
 ## [0.13.1] - 2026-08-27
 

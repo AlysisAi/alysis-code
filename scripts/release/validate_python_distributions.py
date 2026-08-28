@@ -32,7 +32,7 @@ _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_MEMBER_BYTES = 64 * 1024 * 1024
 _SDIST_ROOT_FILES = {
     ".gitignore",
-    "CHANGELOG.md",
+    "docs/CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "PKG-INFO",

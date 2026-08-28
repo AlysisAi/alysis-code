@@ -34,16 +34,11 @@ from .cli_impl.commands.cli_surface import *
 def legacy_app() -> None:
     """Entry point for the deprecated ``sylliptor`` command.
 
-    Behaves identically to ``alysis``; the only difference is a notice on
-    stderr, so piping stdout to another program is unaffected.
+    Forwards to ``alysis`` silently. The alias exists so muscle memory, shell
+    aliases, CI scripts and IDE configs written against the old name keep
+    working — announcing that on every launch only put a stray line above the
+    TUI. The removal timeline lives in ``docs/migration-alysis-code.md``.
     """
-    import sys as _sys
-
-    print(
-        "note: 'sylliptor' has been renamed to 'alysis'. This alias still works "
-        "but will be removed in a future release.",
-        file=_sys.stderr,
-    )
     app()
 
 

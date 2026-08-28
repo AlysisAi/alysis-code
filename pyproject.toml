@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alysis-code"
-version = "0.13.1"
+version = "0.13.2"
 description = "Local CLI coding agent powered by any API."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,11 +51,11 @@ dependencies = [
 ]
 
 [project.urls]
-Changelog = "https://github.com/AlysisAi/alysis-code/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/AlysisAi/alysis-code/blob/main/docs/CHANGELOG.md"
 Documentation = "https://github.com/AlysisAi/alysis-code/tree/main/docs"
 Funding = "https://github.com/sponsors/AlysisAi"
 Issues = "https://github.com/AlysisAi/alysis-code/issues"
-Security = "https://github.com/AlysisAi/alysis-code/blob/main/SECURITY.md"
+Security = "https://github.com/AlysisAi/alysis-code/blob/main/.github/SECURITY.md"
 Source = "https://github.com/AlysisAi/alysis-code"
 
 [project.optional-dependencies]
@@ -77,10 +77,13 @@ server = [
 ]
 
 [project.scripts]
+# Canonical command.
+alysis-code = "alysis_code.cli:app"
+# Short alias.
 alysis = "alysis_code.cli:app"
 # Deprecated alias kept so muscle memory, shell aliases, CI scripts and IDE
-# configs written against the old name keep working. Prints a one-line notice
-# and forwards. Remove no earlier than the next major release.
+# configs written against the old name keep working. Forwards silently.
+# Remove no earlier than the next major release.
 sylliptor = "alysis_code.cli:legacy_app"
 
 [tool.hatch.build.targets.wheel]
@@ -93,7 +96,7 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 include = [
   "/.gitignore",
-  "/CHANGELOG.md",
+  "/docs/CHANGELOG.md",
   "/LICENSE",
   "/NOTICE",
   "/README.md",

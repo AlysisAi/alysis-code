@@ -71,14 +71,14 @@ def test_python_runtime_baseline_is_documented_and_ci_aligned() -> None:
     pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
     readme = _read("README.md")
     server_doc = _read("docs/server.md")
-    contributing = _read("CONTRIBUTING.md")
+    contributing = _read(".github/CONTRIBUTING.md")
     ci = _read(".github/workflows/ci.yml")
 
     assert pyproject["project"]["requires-python"] == ">=3.11"
     assert pyproject["tool"]["ruff"]["target-version"] == "py311"
     assert '"python-version":"3.11"' in ci
     assert '"python-version":"3.12"' in ci
-    assert "Alysis Code requires Python 3.11 or newer" in readme
+    assert "Alysis Code requires **Python 3.11+**" in readme
     assert "Use Python 3.11+" in contributing
     assert "Python 3.11 or newer" in server_doc
 
@@ -86,10 +86,9 @@ def test_python_runtime_baseline_is_documented_and_ci_aligned() -> None:
 def test_readme_keeps_public_launch_surface() -> None:
     readme = _read("README.md")
 
-    assert "ALYSIS" in readme
-    assert (
-        "raw.githubusercontent.com/AlysisAi/alysis-code/main/docs/assets/alysis-demo.gif" in readme
-    )
+    assert "Alysis Code" in readme
+    assert 'src="docs/assets/banner.svg"' in readme
+    assert 'srcset="docs/assets/banner-dark.svg"' in readme
     # The product site. Derived from alysis_cloud so a future move updates this
     # assertion with the constant rather than leaving a stale literal behind.
     from alysis_code.alysis_cloud import site_url
@@ -98,12 +97,12 @@ def test_readme_keeps_public_launch_surface() -> None:
     assert "sylliptor.alysisai.com" not in readme
     assert 'href="https://github.com/AlysisAi/alysis-code/tree/main/docs">Docs</a>' in readme
     assert (
-        'href="https://github.com/AlysisAi/alysis-code/blob/main/CHANGELOG.md">Changelog</a>'
+        'href="https://github.com/AlysisAi/alysis-code/blob/main/docs/CHANGELOG.md">Changelog</a>'
         in readme
     )
     assert 'href="https://github.com/sponsors/AlysisAi"' in readme
     assert "pipx install alysis-code" in readme
-    assert "Apache License 2.0" in readme
+    assert "Apache-2.0" in readme
 
 
 def test_governance_and_packaging_metadata_are_public_ready() -> None:
@@ -119,8 +118,8 @@ def test_governance_and_packaging_metadata_are_public_ready() -> None:
     assert "packaging>=23.0" in dependencies
     assert (repo_root / "LICENSE").read_text(encoding="utf-8").startswith("Apache License")
     assert "Copyright 2026 AlysisAi" in _read("NOTICE")
-    assert "alysis-contributor-pack" not in _read("CONTRIBUTING.md")
-    assert "products@alysisai.com" in _read("SECURITY.md")
+    assert "alysis-contributor-pack" not in _read(".github/CONTRIBUTING.md")
+    assert "products@alysisai.com" in _read(".github/SECURITY.md")
     assert pyproject["project"]["urls"]["Documentation"].endswith("/tree/main/docs")
 
 

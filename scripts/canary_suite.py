@@ -28,7 +28,7 @@ Live (runner box)::
 
     python3 scripts/canary_suite.py --run \
         --tasks scripts/canary_tasks.txt \
-        --harbor-cmd 'bash benchmarks/terminal_bench/run_harbor_tbench.sh' \
+        --harbor-cmd 'bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh' \
         --artifacts-root ./runs/canary
 
 Exit code: ``0`` when no canary regressed against the baseline; ``1`` when at
@@ -404,7 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--harbor-cmd",
-        default="bash benchmarks/terminal_bench/run_harbor_tbench.sh",
+        default="bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh",
         help="Live mode only: Harbor command; reads TB_INCLUDE_TASK per task.",
     )
     parser.add_argument(

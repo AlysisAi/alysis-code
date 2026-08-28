@@ -26,6 +26,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from . import alysis_cloud as cloud
 from .config import (
@@ -302,6 +303,38 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
     return f"Login request failed (HTTP {exc.code})."
 
 
+def _approval_url(server_url: str, *, user_code: str) -> str:
+    """Build the /activate URL to open, pinning the host to the configured site.
+
+    The device endpoint returns its own ``verification_url`` /
+    ``verification_url_complete``. Opening that verbatim lets the *server*
+    decide which website the CLI sends the user to — which is how a deployment
+    still carrying the pre-rebrand host (``sylliptor.alysisai.com``) kept
+    launching the retired site long after the client had been rebranded, and
+    which would equally let a compromised or misconfigured backend point
+    sign-in anywhere. Only the path and query are taken from the response; the
+    origin always comes from ``alysis_cloud.site_url()`` (env-overridable via
+    ALYSIS_SITE_URL for staging/local stubs), so the host the user lands on is
+    the one this client trusts.
+    """
+    base = cloud.site_url()
+    path = "/activate"
+    query = f"code={user_code}" if user_code else ""
+
+    if server_url:
+        try:
+            parts = urlsplit(server_url)
+        except ValueError:
+            parts = None
+        if parts is not None:
+            if parts.path:
+                path = parts.path if parts.path.startswith("/") else f"/{parts.path}"
+            if parts.query:
+                query = parts.query
+
+    return f"{base}{path}?{query}" if query else f"{base}{path}"
+
+
 def _request_device_code() -> _DeviceGrant:
     client_name = f"alysis-cli @ {platform.node() or 'unknown-host'}"[:80]
     body = _post_json(cloud.device_code_url(), {"client_name": client_name})
@@ -311,11 +344,10 @@ def _request_device_code() -> _DeviceGrant:
     if not device_code or not user_code:
         raise AlysisLoginError("Login service did not return a device code.")
 
-    verification_url = str(
-        body.get("verification_url_complete") or body.get("verification_url") or ""
-    ).strip()
-    if not verification_url:
-        verification_url = f"{cloud.activate_url()}?code={user_code}"
+    verification_url = _approval_url(
+        str(body.get("verification_url_complete") or body.get("verification_url") or "").strip(),
+        user_code=user_code,
+    )
 
     try:
         interval_s = max(float(body.get("interval", _DEFAULT_POLL_INTERVAL_S)), 0.0)

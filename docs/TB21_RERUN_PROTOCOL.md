@@ -34,7 +34,7 @@ The six fixes (PR1-PR6) and their most direct Terminal-Bench targets:
 - **PR1/PR6** — cross-cutting: no secret can reach a log; every run records a
   non-fakeable build identity and effective config so a score is attributable.
 
-The complete model-facing footprint of the wave is in `CHANGELOG.md` under
+The complete model-facing footprint of the wave is in `docs/CHANGELOG.md` under
 "Model-visible string changes in 0.13.0" — read it before you start so you know
 exactly what the model will and will not see differently.
 
@@ -62,7 +62,7 @@ exactly what the model will and will not see differently.
 
 3. Build the agent image/wheel the campaign will use, from that stamped tree.
    `alysis --version` on the built artifact must show `dirty: no` and a real
-   commit (not `commit: unknown`). `benchmarks/terminal_bench/setup.sh` already
+   commit (not `commit: unknown`). `scripts/benchmarks/terminal_bench/setup.sh` already
    greps for exactly this.
 
 ## Step 1 — Pre-flight on the runner box
@@ -123,7 +123,7 @@ build. Run the seven regression tasks and assert on their artifacts:
 
 ```bash
 python3 scripts/regression_suite.py --run \
-    --harbor-cmd 'bash benchmarks/terminal_bench/run_harbor_tbench.sh' \
+    --harbor-cmd 'bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh' \
     --artifacts-root ./runs/regression \
     --canary-value "$ALYSIS_REGRESSION_CANARY_VALUE"
 ```
@@ -154,7 +154,7 @@ SWE-bench instances per the note at the bottom of that file.
 ```bash
 python3 scripts/canary_suite.py --run \
     --tasks scripts/canary_tasks.txt \
-    --harbor-cmd 'bash benchmarks/terminal_bench/run_harbor_tbench.sh' \
+    --harbor-cmd 'bash scripts/benchmarks/terminal_bench/run_harbor_tbench.sh' \
     --artifacts-root ./runs/canary
 ```
 

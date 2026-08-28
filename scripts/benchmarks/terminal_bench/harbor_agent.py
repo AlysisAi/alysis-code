@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _REPO_ROOT / "src"
 if _SRC_ROOT.exists() and os.fspath(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(_SRC_ROOT))
@@ -197,8 +197,8 @@ class AlysisHarborAgent(BaseInstalledAgent):
         await self.exec_as_root(  # type: ignore[attr-defined]
             environment,
             command=(
-                "chmod +x /installed-agent/alysis-source/benchmarks/terminal_bench/setup.sh "
-                "&& /installed-agent/alysis-source/benchmarks/terminal_bench/setup.sh"
+                "chmod +x /installed-agent/alysis-source/scripts/benchmarks/terminal_bench/setup.sh "
+                "&& /installed-agent/alysis-source/scripts/benchmarks/terminal_bench/setup.sh"
             ),
             env=self._install_env(),
             timeout_sec=SETUP_TIMEOUT_SEC,
@@ -362,9 +362,12 @@ def _copy_source_snapshot(snapshot: Path) -> None:
         snapshot / "src",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
     )
-    bench_dir = snapshot / "benchmarks" / "terminal_bench"
+    bench_dir = snapshot / "scripts" / "benchmarks" / "terminal_bench"
     bench_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_REPO_ROOT / "benchmarks" / "terminal_bench" / "setup.sh", bench_dir / "setup.sh")
+    shutil.copy2(
+        _REPO_ROOT / "scripts" / "benchmarks" / "terminal_bench" / "setup.sh",
+        bench_dir / "setup.sh",
+    )
 
 
 def _clean(value: object) -> str:

@@ -7,9 +7,9 @@ on:
   pull_request:
     paths:
       - .github/workflows/sandbox-image.yml
-      - sandbox/**
+      - scripts/sandbox/**
       - .dockerignore
-      - .trivyignore
+      - .github/.trivyignore
       - pyproject.toml
       - uv.lock
       - src/**
@@ -119,8 +119,8 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: ./sandbox
-          file: ./sandbox/Dockerfile
+          context: .
+          file: ./scripts/sandbox/Dockerfile
           platforms: linux/amd64
           push: false
           load: true
@@ -146,7 +146,7 @@ jobs:
           ignore-unfixed: false
           vuln-type: os,library
           severity: HIGH,CRITICAL
-          trivyignores: .trivyignore
+          trivyignores: .github/.trivyignore
           limit-severities-for-sarif: true
           cache: true
 
@@ -222,8 +222,8 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: ${{ matrix.variant == 'server' && '.' || './sandbox' }}
-          file: ./sandbox/Dockerfile
+          context: .
+          file: ./scripts/sandbox/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max
@@ -324,7 +324,7 @@ jobs:
           ignore-unfixed: false
           vuln-type: os,library
           severity: HIGH,CRITICAL
-          trivyignores: .trivyignore
+          trivyignores: .github/.trivyignore
           limit-severities-for-sarif: true
           cache: true
 
@@ -341,7 +341,7 @@ jobs:
           ignore-unfixed: false
           vuln-type: os,library
           severity: HIGH,CRITICAL
-          trivyignores: .trivyignore
+          trivyignores: .github/.trivyignore
           limit-severities-for-sarif: true
           cache: true
 
