@@ -408,6 +408,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.4] - 2026-09-05
+
+Model-catalog and TUI-access refresh.
+
+### Added
+
+- Added GPT-6 Astra as the default OpenAI model, with aliases, pricing, context-window,
+  reasoning, OpenRouter, and ChatGPT-subscription metadata.
+- Added newly available first-party and gateway routes for Claude Fable 5.1, Gemini 3.8
+  Flash, Qwen 3.8, GLM-5.3, Kimi K3, Doubao Seed 2.1, DeepSeek V4 snapshots, Grok 4.6,
+  and related hosted variants.
+
+### Changed
+
+- Refreshed every hosted preset's model picker, aliases, validation model, retirement
+  mappings, pricing, context limits, and reasoning contracts against provider catalogs.
+- Updated TUI model labels to preserve vendor naming and made profile pickers show each
+  profile's model, host, active state, retired-model state, and duplicates.
+- Migrated the Perplexity preset from the retiring Sonar Chat Completions endpoint to the
+  Agent API, including hosted web search and saved-profile migration.
+- Replaced the OpenAI economy and validation model with GPT-5.6 Luna and kept
+  GPT-5.3 Codex limited to the Responses preset.
+
+### Fixed
+
+- OpenAI Chat Completions now uses `max_completion_tokens` for GPT-5 and newer models.
+- Native Gemini tool and response schemas are projected onto Gemini's supported OpenAPI
+  subset before requests are sent.
+
 ## [0.13.3] - 2026-08-28
 
 ### Fixed

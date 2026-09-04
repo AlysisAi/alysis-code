@@ -125,6 +125,19 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         # tools + reasoning_effort != "none" on /v1/chat/completions is a 400
         # on the 5.6/5.4 families (report hazard #1) — the *value* allowlist is
         # identical on both endpoints; routing is the client's decision.
+        # Source: https://developers.openai.com/api/docs/models/gpt-6-astra —
+        # reasoning.effort supports low|medium|high|xhigh|max; no "none".
+        (
+            "gpt-6-astra",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_EFFORT,
+                values=("low", "medium", "high", "xhigh", "max"),
+                off=OFF_IMPOSSIBLE,
+                notes="GPT-6 Astra always reasons; Chat Completions and Responses both "
+                "supported; 'none' is not a documented effort",
+            ),
+        ),
         (
             "gpt-5.6-",
             _C(
@@ -134,6 +147,17 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 default="medium",
                 off=OFF_EXPLICIT,
                 notes="chat surface 400s on tools + effort!=none; 'minimal' is dead on 5.x",
+            ),
+        ),
+        (
+            "gpt-5.5",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_REASONING_EFFORT,
+                values=("none", "low", "medium", "high", "xhigh"),
+                off=OFF_EXPLICIT,
+                notes="previous flagship (snapshot gpt-5.5-2026-04-23); effort none..xhigh "
+                "per the model page — treat the chat-surface tools+effort 400 as live",
             ),
         ),
         (
@@ -158,6 +182,20 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "anthropic": (
+        # Source: https://platform.claude.com/docs/en/models/fable-5-1/overview
+        (
+            "claude-fable-5-1",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_THINKING_ADAPTIVE,
+                values=("low", "medium", "high", "xhigh", "max"),
+                default="high",
+                off=OFF_IMPOSSIBLE,
+                accepts_tool_choice_while_reasoning=False,
+                notes="always adaptive; forced tool_choice (any/tool) returns an error; "
+                "its thinking blocks cannot be replayed to earlier models",
+            ),
+        ),
         (
             "claude-fable-5",
             _C(
@@ -223,6 +261,17 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "gemini": (
+        (
+            "gemini-3.8-flash",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_THINKING_LEVEL,
+                values=("low", "medium", "high"),
+                default="medium",
+                off=OFF_IMPOSSIBLE,
+                notes="'minimal' errors on Gemini 3.8 Flash, same as 3.7",
+            ),
+        ),
         (
             "gemini-3.7-flash",
             _C(
@@ -350,6 +399,29 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 "reasoning_effort enum",
             ),
         ),
+        # Source: https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b
+        # The build page shows enable_thinking + reasoning_budget kwargs but
+        # does not document their wire location; probe before emitting.
+        (
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            _C(
+                mode=UNKNOWN,
+                wire=WIRE_ENABLE_THINKING,
+                off=OFF_UNKNOWN,
+                notes="documented as enable_thinking + reasoning_budget on the hosted "
+                "sample; exact placement unverified — send nothing until probed",
+            ),
+        ),
+        (
+            "moonshotai/kimi-k3",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_EFFORT,
+                off=OFF_IMPOSSIBLE,
+                notes="always-on upstream; NVIDIA's page mentions effort up to 'max' but "
+                "publishes no value set — emit nothing until probed",
+            ),
+        ),
     ),
     "qwen": (
         (
@@ -379,6 +451,21 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "zhipu": (
+        # Source: https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3 and
+        # .../vlm/glm-5.3-flash — thinking.type=disabled is rejected on both;
+        # reasoning_effort low|high|max (default max) is the only knob.
+        (
+            "glm-5.3",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_EFFORT,
+                values=("low", "high", "max"),
+                default="max",
+                off=OFF_IMPOSSIBLE,
+                emits_flat_reasoning_effort=True,
+                notes="covers glm-5.3-flash too; thinking:{'type':'disabled'} = error",
+            ),
+        ),
         (
             "glm-5.2",
             _C(
@@ -410,8 +497,10 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
     ),
     "zai_coding_plan": (
         # Sources: https://docs.z.ai/guides/llm/glm-5.3
-        # https://docs.z.ai/guides/llm/glm-5-turbo
-        # https://docs.z.ai/guides/llm/glm-4.7
+        # https://docs.z.ai/guides/vlm/glm-5.3-flash
+        # https://docs.z.ai/devpack/overview — the plan serves exactly glm-5.3
+        # and glm-5.3-flash; glm-5.2/5.1 route to 5.3 and glm-5-turbo/4.7 to
+        # 5.3-flash server-side, so one prefix rule covers every plan id.
         (
             "glm-5.3",
             _C(
@@ -428,7 +517,7 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
             ),
         ),
         (
-            "glm-5-turbo",
+            "glm-",
             _C(
                 mode=ALWAYS_ON,
                 wire=WIRE_REASONING_EFFORT,
@@ -436,19 +525,7 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 default="max",
                 off=OFF_IMPOSSIBLE,
                 emits_flat_reasoning_effort=True,
-                notes="Coding Plan reasoning floor follows the shared effort normalizer",
-            ),
-        ),
-        (
-            "glm-4.7",
-            _C(
-                mode=ALWAYS_ON,
-                wire=WIRE_REASONING_EFFORT,
-                values=("low", "high", "max"),
-                default="max",
-                off=OFF_IMPOSSIBLE,
-                emits_flat_reasoning_effort=True,
-                notes="Coding Plan reasoning floor follows the shared effort normalizer",
+                notes="every other glm id is server-routed to glm-5.3 or glm-5.3-flash",
             ),
         ),
     ),
@@ -561,6 +638,17 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 notes="also rejects client-provided tools entirely",
             ),
         ),
+        # Source: https://console.groq.com/docs/model/qwen/qwen3.8-27b
+        (
+            "qwen/qwen3.8-27b",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_REASONING_EFFORT,
+                values=("none", "low", "medium", "high", "default"),
+                off=OFF_EXPLICIT,
+                emits_flat_reasoning_effort=True,
+            ),
+        ),
         (
             "qwen/qwen3.6-27b",
             _C(
@@ -600,6 +688,9 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 "tools + response_format together = rejected",
             ),
         ),
+        # zai-glm-4.7 was deprecated 2026-08-17 and removed from the public
+        # catalog; the preset aliases it to gpt-oss-120b. The contract stays so
+        # a saved config that bypasses the alias still emits nothing unsafe.
         (
             "zai-glm-4.7",
             _C(
@@ -608,8 +699,8 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 values=("none",),
                 off=OFF_EXPLICIT,
                 emits_flat_reasoning_effort=True,
-                notes="only 'none' is documented as a control value; low/medium/high are not "
-                "documented on this Cerebras model",
+                notes="deprecated 2026-08-17; only 'none' was ever documented as a "
+                "control value on this Cerebras model",
             ),
         ),
         (
@@ -647,6 +738,18 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ("mistral-large-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
         ("codestral-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
         ("ministral-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
+        # Source: https://docs.mistral.ai/models/zai-glm-5-2 — the page lists
+        # no reasoning feature for the hosted GLM-5.2 route.
+        (
+            "zai-glm-",
+            _C(
+                mode=UNKNOWN,
+                wire=WIRE_REASONING_EFFORT,
+                off=OFF_UNKNOWN,
+                notes="third-party route; reasoning controls undocumented on Mistral — "
+                "send nothing until probed",
+            ),
+        ),
     ),
     "xai": (
         # The current xAI reasoning guide documents the flat field for its SDK,
@@ -729,9 +832,27 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "perplexity": (
+        # Agent API (Responses format). Source:
+        # https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/how-to —
+        # reasoning_effort maps to reasoning.effort, but per-route value sets
+        # are unpublished; the Sonar route itself exposes no reasoning knob.
+        (
+            "perplexity/sonar",
+            _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT, notes="search model; no effort knob"),
+        ),
         (
             "sonar",
-            _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT, notes="sonar rejects tools anyway"),
+            _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT, notes="retired Sonar chat id"),
+        ),
+        (
+            "perplexity/",
+            _C(
+                mode=UNKNOWN,
+                wire=WIRE_REASONING_OBJECT,
+                off=OFF_UNKNOWN,
+                notes="reasoning.effort is accepted on the Agent API; allowed values per "
+                "hosted route are unpublished — send nothing until probed",
+            ),
         ),
     ),
     "together": (
@@ -753,7 +874,28 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 mode=ALWAYS_ON,
                 wire=WIRE_REASONING_ENABLED,
                 off=OFF_IMPOSSIBLE,
-                notes="thinking cannot be disabled on Together",
+                notes="thinking cannot be disabled on Together (id left serverless "
+                "2026-08-27; kept for dedicated-endpoint users)",
+            ),
+        ),
+        (
+            "moonshotai/Kimi-K3",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_ENABLED,
+                off=OFF_IMPOSSIBLE,
+                notes="always-on upstream; Together publishes no toggle for K3 — emit "
+                "no reasoning field",
+            ),
+        ),
+        (
+            "Qwen/",
+            _C(
+                mode=UNKNOWN,
+                wire=WIRE_REASONING_ENABLED,
+                off=OFF_UNKNOWN,
+                notes="Qwen3.5-9B is hybrid-thinking upstream; Together's wire shape is "
+                "unverified — probe before emitting",
             ),
         ),
         (

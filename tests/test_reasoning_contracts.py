@@ -15,6 +15,7 @@ from alysis_code.reasoning_contracts import (
     OPTIONAL,
     UNKNOWN,
     UNKNOWN_CONTRACT,
+    WIRE_NONE,
     reasoning_contract_for,
     reasoning_labels_allowed_by_contract,
     reasoning_off_hazard,
@@ -73,6 +74,12 @@ def test_openai_codex_cannot_disable() -> None:
     codex = reasoning_contract_for("openai", "gpt-5.3-codex")
     assert codex.mode == ALWAYS_ON
     assert not codex.allows_value("none")
+    # GPT-6 Astra documents low..max only — no "none" — so it is always-on too.
+    astra = reasoning_contract_for("openai", "gpt-6-astra")
+    assert astra.mode == ALWAYS_ON and astra.off == OFF_IMPOSSIBLE
+    assert astra.values == ("low", "medium", "high", "xhigh", "max")
+    assert not astra.allows_value("none")
+    assert not reasoning_off_is_safe("openai", "gpt-6-astra")
     terra = reasoning_contract_for("openai", "gpt-5.6-terra")
     assert terra.allows_value("none") and terra.default == "medium"
     assert not terra.allows_value("minimal")  # dead on the 5.x families
@@ -85,6 +92,73 @@ def test_anthropic_adaptive_vs_haiku() -> None:
     assert haiku.wire == "budget_tokens"
     sonnet = reasoning_contract_for("anthropic", "claude-sonnet-5")
     assert sonnet.off == OFF_OMIT and sonnet.toggleable
+
+
+def test_anthropic_fable_5_1_forbids_forced_tool_choice() -> None:
+    fable51 = reasoning_contract_for("anthropic", "claude-fable-5-1")
+    fable5 = reasoning_contract_for("anthropic", "claude-fable-5")
+
+    assert fable51 is not fable5  # exact id sorts ahead of the family prefix
+    assert fable51.mode == ALWAYS_ON and fable51.off == OFF_IMPOSSIBLE
+    assert fable51.default == "high"
+    assert fable51.accepts_tool_choice_while_reasoning is False
+    assert fable5.accepts_tool_choice_while_reasoning is True
+
+
+def test_gemini_3_8_flash_matches_3_7_contract() -> None:
+    flash38 = reasoning_contract_for("gemini", "gemini-3.8-flash")
+
+    assert flash38.mode == ALWAYS_ON and flash38.off == OFF_IMPOSSIBLE
+    assert flash38.values == ("low", "medium", "high")
+    assert not flash38.allows_value("minimal")
+
+
+def test_glm_5_3_cannot_disable_thinking_on_either_zhipu_surface() -> None:
+    for provider in ("zhipu", "zai_coding_plan"):
+        for model in ("glm-5.3", "glm-5.3-flash"):
+            contract = reasoning_contract_for(provider, model)
+            assert contract.mode == ALWAYS_ON, (provider, model)
+            assert contract.off == OFF_IMPOSSIBLE, (provider, model)
+            assert contract.values == ("low", "high", "max"), (provider, model)
+            assert contract.emits_flat_reasoning_effort, (provider, model)
+    # The general API still lets glm-5.2 toggle thinking off.
+    assert reasoning_off_is_safe("zhipu", "glm-5.2")
+    # Every plan id routes to a 5.3 model server-side, so none may claim "off".
+    assert not reasoning_off_is_safe("zai_coding_plan", "glm-4.7")
+
+
+def test_kimi_code_k3_256k_shares_the_k3_contract() -> None:
+    k3 = reasoning_contract_for("moonshot", "k3", preset_key="kimi-code")
+    k3_256k = reasoning_contract_for("moonshot", "k3-256k", preset_key="kimi-code")
+
+    assert k3_256k is k3
+    assert k3.default == "high" and k3.off == OFF_SWAPS_MODEL
+
+
+def test_perplexity_agent_api_routes_send_nothing_until_probed() -> None:
+    sonar = reasoning_contract_for("perplexity", "perplexity/sonar")
+    assert sonar.mode == NONE and sonar.wire == WIRE_NONE
+
+    glm = reasoning_contract_for("perplexity", "perplexity/glm-5.3")
+    assert glm.mode == UNKNOWN
+    assert not glm.toggleable
+    assert not reasoning_off_is_safe("perplexity", "perplexity/kimi-k3")
+
+
+def test_groq_qwen_3_8_exposes_the_full_effort_ladder() -> None:
+    contract = reasoning_contract_for("groq", "qwen/qwen3.8-27b")
+
+    assert contract.mode == OPTIONAL and contract.off == OFF_EXPLICIT
+    assert contract.allows_value("none") and contract.allows_value("high")
+    assert contract.emits_flat_reasoning_effort
+
+
+def test_nvidia_and_together_kimi_k3_never_emit_a_disable() -> None:
+    for provider, model in (("nvidia", "moonshotai/kimi-k3"), ("together", "moonshotai/Kimi-K3")):
+        contract = reasoning_contract_for(provider, model)
+        assert contract.mode == ALWAYS_ON, (provider, model)
+        assert contract.off == OFF_IMPOSSIBLE, (provider, model)
+        assert contract.values == (), (provider, model)  # no allowlisted efforts
 
 
 def test_anthropic_opus_5_omitting_the_param_is_not_off() -> None:

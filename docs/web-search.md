@@ -29,14 +29,14 @@ model contains its own search engine.
 | Google Gemini | `gemini_grounding` | Gemini 2.5 and current Gemini 3.x models through Google Search grounding. |
 | Alibaba Qwen | `dashscope_chat` | Qwen 3.7 and 3.6 use the Responses API `web_search` tool. Qwen 3.5 and supported older Qwen aliases use Chat Completions `enable_search`. The preset pins search to `qwen3.7-plus` when a selected coding model has no search support. |
 | Zhipu / GLM | `zhipu_web_search` | Uses Zhipu's first-party Web Search API independently of the selected GLM chat model. |
-| Moonshot / Kimi | `moonshot_kimi` | Uses `builtin_function.$web_search`; Kimi recommends `kimi-k2.6` and requires thinking to be disabled for this tool. |
+| Moonshot / Kimi | `moonshot_kimi` | Uses `builtin_function.$web_search` pinned to `kimi-k2.6`. Moonshot currently flags `$web_search` as "being updated; not recommended in the near term" on its pricing pages. |
 | MiniMax | `minimax_coding_plan` | Uses the Token Plan search endpoint. A Token Plan key is required; ordinary pay-as-you-go model keys are not interchangeable. |
 | ByteDance Doubao | `volcengine_web_search` | Uses the Ark Responses API `web_search` tool with supported Doubao Seed models. |
 | Groq | `groq_compound` | Uses `groq/compound-mini` as the provider-hosted search system, regardless of the selected Groq chat model. |
 | Mistral | `mistral_conversations` | Uses the Conversations API built-in `web_search` tool with Mistral chat models. |
 | xAI | `xai_responses` | Uses the xAI Responses API server-side web-search tool with current Grok models. |
 | Cohere | `cohere_web_search` | Uses Cohere Platform's hosted v1 `web-search` connector. Cohere marks the connector deprecated; v2 requires a user-defined external tool. |
-| Perplexity | `perplexity_sonar` | Uses Sonar's web-grounded API and returned search results. |
+| Perplexity | `perplexity_sonar` | Uses the Agent API (`POST /v1/agent`, Responses format) with the `web_search` tool on the `perplexity/sonar` route. Sonar Chat Completions shuts down 2026-09-27; profiles saved against the old base URL are redirected to `/v1/agent` automatically. |
 
 The following direct providers do not currently document a provider-hosted web-search API that
 Alysis Code can call with the provider key:
@@ -116,4 +116,4 @@ the keyless fallback entirely (for example in locked-down environments).
 - [Mistral web search](https://docs.mistral.ai/studio-api/agents/agent-tools/websearch)
 - [xAI web search](https://docs.x.ai/developers/tools/web-search)
 - [Cohere v1 to v2 web-search migration](https://docs.cohere.com/v2/docs/migrating-v1-to-v2)
-- [Perplexity Sonar API](https://docs.perplexity.ai/api-reference/sonar-post)
+- [Perplexity Agent API web search](https://docs.perplexity.ai/docs/agent-api/tools/web-search) and [Sonar migration guide](https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/how-to)

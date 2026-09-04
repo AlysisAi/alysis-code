@@ -632,6 +632,64 @@ def test_provider_switch_changes_active():
     assert flow.state.active_profile == "anthropic"
 
 
+def test_provider_switch_rows_show_model_host_and_what_needs_attention():
+    """The picker used to list bare names, hiding stale and duplicate profiles."""
+    cfg = AppConfig(model="gemini-3.8-flash")
+    cfg.extra_fields = {
+        "profiles": {
+            "gemini": {
+                "protocol": "gemini_generate_content",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                "default_model": "gemini-3.8-flash",
+            },
+            # Retired id on a known preset: the catalog remaps it, the row says so.
+            "qwen": {
+                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "default_model": "qwen3-coder-plus",
+            },
+            "qwen-intl": {
+                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "default_model": "qwen3-coder-plus",
+            },
+            # Custom endpoint: no preset, so no staleness judgement — just facts.
+            "quen": {
+                "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "default_model": "qwen3.5-plus",
+            },
+            "default": {
+                "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "default_model": "qwen3.5-plus",
+            },
+            "empty": {"base_url": "https://api.openai.com/v1"},
+        },
+        "active_profile": "gemini",
+    }
+    flow = ConfigFlow(cfg=cfg)
+    flow.choose("profile")
+    flow.choose("switch")
+    rows = {row.value: row for row in flow.screen().rows}
+
+    assert rows["gemini"].description == (
+        "active · gemini-3.8-flash · generativelanguage.googleapis.com"
+    )
+    assert rows["gemini"].current is True
+    assert rows["qwen"].description == (
+        "qwen3-coder-plus · dashscope-intl.aliyuncs.com · retired → qwen3.7-plus · same as qwen-intl"
+    )
+    assert rows["qwen-intl"].description.endswith("same as qwen")
+    assert rows["quen"].description == (
+        "qwen3.5-plus · coding-intl.dashscope.aliyuncs.com · same as default"
+    )
+    assert "retired" not in rows["quen"].description
+    assert rows["empty"].description == "no model · api.openai.com"
+
+    # The remove picker carries the same facts so pruning is informed.
+    flow.choose("gemini")
+    flow.choose("remove")
+    remove_rows = {row.value: row for row in flow.screen().rows}
+    assert remove_rows["qwen-intl"].description == rows["qwen-intl"].description
+
+
 def test_provider_add_preset_with_base_url():
     flow = ConfigFlow(cfg=AppConfig(model="x"))
     flow.choose("profile")

@@ -1201,16 +1201,31 @@ def perplexity_sonar_search(
     provider_concurrency_caps: dict[str, int] | None = None,
     provider_retry_settings: ProviderRetrySettings | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": "user", "content": query}],
-        "web_search_options": {"search_context_size": "low"},
+    """Grounded search through Perplexity's Agent API (``POST /v1/agent``).
+
+    Sonar Chat Completions (``/v1/sonar``, models ``sonar`` / ``sonar-pro``)
+    shuts down 2026-09-27. The Agent API is Responses-format: the prompt goes
+    in ``input``, grounding is opt-in via the ``web_search`` tool (domain
+    filters live in the tool's ``filters``), and the reply is a typed
+    ``output`` array carrying a ``search_results`` item and a ``message`` item.
+    """
+    if model in _PERPLEXITY_RETIRED_SONAR_IDS:
+        model = _PERPLEXITY_DEFAULT_SEARCH_MODEL
+    web_search_tool: dict[str, Any] = {
+        "type": "web_search",
+        "search_context_size": "low",
+        "max_results": max(1, min(int(max_results), 20)),
     }
     if allowed_domains:
-        payload["search_domain_filter"] = list(allowed_domains)
+        web_search_tool["filters"] = {"search_domain_filter": list(allowed_domains)}
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": query,
+        "tools": [web_search_tool],
+    }
     data = _post_json(
         provider_label="Perplexity",
-        url=f"{base_url.rstrip('/')}/v1/sonar",
+        url=_perplexity_agent_url(base_url),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -1225,18 +1240,7 @@ def perplexity_sonar_search(
         provider_retry_settings=provider_retry_settings,
         operation="perplexity_sonar_search",
     )
-    answer = _chat_completion_answer(data)
-    raw_results = data.get("search_results")
-    raw_sources = (
-        [item for item in raw_results if isinstance(item, dict)]
-        if isinstance(raw_results, list)
-        else []
-    )
-    raw_citations = data.get("citations")
-    if isinstance(raw_citations, list):
-        raw_sources.extend(
-            {"url": str(item), "title": ""} for item in raw_citations if str(item).strip()
-        )
+    answer, raw_sources = _perplexity_agent_answer_and_sources(data)
     sources, sources_truncated = _dedupe_sources(
         raw_sources,
         allowed_domains=allowed_domains,
@@ -1257,6 +1261,68 @@ def perplexity_sonar_search(
         "response_id": str(data.get("id") or "").strip() or None,
         "sources_truncated": sources_truncated,
     }
+
+
+_PERPLEXITY_DEFAULT_SEARCH_MODEL = "perplexity/sonar"
+# Sonar Chat Completions ids; they are not valid Agent API model ids.
+_PERPLEXITY_RETIRED_SONAR_IDS: frozenset[str] = frozenset(
+    {"sonar", "sonar-pro", "sonar-reasoning", "sonar-reasoning-pro", "sonar-deep-research"}
+)
+
+
+def _perplexity_agent_url(base_url: str) -> str:
+    """Resolve the Agent API endpoint from either the new or the legacy base URL.
+
+    The preset now carries ``https://api.perplexity.ai/v1``; profiles saved
+    before the migration carry ``https://api.perplexity.ai``. Both must reach
+    ``/v1/agent``.
+    """
+    root = base_url.rstrip("/")
+    if not root.endswith("/v1"):
+        root = f"{root}/v1"
+    return f"{root}/agent"
+
+
+def _perplexity_agent_answer_and_sources(
+    data: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Extract the answer text and search results from a Responses-format body."""
+    answer_parts: list[str] = []
+    raw_sources: list[dict[str, Any]] = []
+    output = data.get("output")
+    for item in output if isinstance(output, list) else []:
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type") or "")
+        if item_type == "message":
+            content = item.get("content")
+            for part in content if isinstance(content, list) else []:
+                if not isinstance(part, dict):
+                    continue
+                if str(part.get("type") or "") in {"output_text", "text"}:
+                    text = str(part.get("text") or "").strip()
+                    if text:
+                        answer_parts.append(text)
+            continue
+        results = item.get("results")
+        if item_type == "search_results" or isinstance(results, list):
+            for result in results if isinstance(results, list) else []:
+                if not isinstance(result, dict):
+                    continue
+                url = str(result.get("url") or "").strip()
+                if not url:
+                    continue
+                raw_sources.append(
+                    {
+                        "url": url,
+                        "title": str(result.get("title") or "").strip(),
+                        "snippet": str(result.get("snippet") or "").strip(),
+                        "date": str(result.get("date") or "").strip(),
+                    }
+                )
+    fallback_text = str(data.get("output_text") or "").strip()
+    answer = "\n\n".join(answer_parts).strip() or fallback_text
+    return answer, raw_sources
 
 
 def groq_compound_search(

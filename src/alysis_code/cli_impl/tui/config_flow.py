@@ -37,6 +37,8 @@ from ...config import (
 from ...llm.protocols import validate_reasoning_trace_adapter_for_protocol
 from ...profile_presets import (
     PROFILE_PRESETS,
+    canonical_model_alias_for_preset,
+    find_preset_for_profile,
     make_profile_from_preset,
     preset_selection_label,
 )
@@ -182,6 +184,75 @@ def _short_preset_description(preset: Any) -> str:
         return short
     host = urlparse(preset.base_url).netloc
     return host or "any OpenAI-compatible base URL"
+
+
+def _profile_identity(raw: Any) -> tuple[str, str, str]:
+    """(protocol, normalized base URL, casefolded model) for duplicate detection."""
+    profile = raw if isinstance(raw, dict) else {}
+    protocol = str(profile.get("protocol") or "openai_compat").strip()
+    base_url = str(profile.get("base_url") or "").strip().rstrip("/")
+    model = str(profile.get("default_model") or "").strip().casefold()
+    return protocol, base_url, model
+
+
+def _profile_retired_model_replacement(name: str, raw: Any) -> str:
+    """The catalog's replacement id when a saved profile pins a retired model id.
+
+    Empty when the model is current, unknown, or the profile matches no
+    preset (custom endpoints cannot be judged offline).
+    """
+    profile = raw if isinstance(raw, dict) else {}
+    model = str(profile.get("default_model") or "").strip()
+    if not model:
+        return ""
+    try:
+        spec = ProfileSpec(
+            name=name,
+            protocol=str(profile.get("protocol") or "openai_compat").strip(),
+            base_url=str(profile.get("base_url") or "").strip(),
+            default_model=model,
+        )
+        preset = find_preset_for_profile(spec)
+    except Exception:  # noqa: BLE001 - a malformed saved profile must not break the picker
+        return ""
+    if preset is None:
+        return ""
+    canonical = canonical_model_alias_for_preset(preset, model)
+    return canonical if canonical != model else ""
+
+
+def _profile_row_descriptions(profiles: dict[str, Any], *, active: str | None) -> dict[str, str]:
+    """One summary line per saved profile: ``model · host`` plus what needs attention.
+
+    The bare name list hid everything that matters when choosing or pruning a
+    profile — which model it pins, which endpoint it hits, whether that model
+    id has been retired (the catalog will remap it, but the profile should be
+    updated), and whether it duplicates another profile.
+    """
+    identities: dict[tuple[str, str, str], list[str]] = {}
+    for name in sorted(profiles):
+        identities.setdefault(_profile_identity(profiles[name]), []).append(name)
+
+    descriptions: dict[str, str] = {}
+    for name in sorted(profiles):
+        raw = profiles[name]
+        profile = raw if isinstance(raw, dict) else {}
+        model = str(profile.get("default_model") or "").strip()
+        host = urlparse(str(profile.get("base_url") or "").strip()).netloc
+        parts: list[str] = []
+        if name == active:
+            parts.append("active")
+        parts.append(model or "no model")
+        if host:
+            parts.append(host)
+        replacement = _profile_retired_model_replacement(name, raw)
+        if replacement:
+            parts.append(f"retired → {replacement}")
+        twins = [other for other in identities.get(_profile_identity(raw), []) if other != name]
+        if twins and model:
+            parts.append(f"same as {twins[0]}")
+        descriptions[name] = " · ".join(parts)
+    return descriptions
 
 
 # stage → interaction mode, so the overlay's key-binding filters don't have to
@@ -1479,10 +1550,13 @@ class ConfigFlow:
         )
 
     def _screen_provider_switch(self) -> Screen:
+        descriptions = _profile_row_descriptions(
+            self.state.profiles, active=self.state.active_profile
+        )
         rows = [
             Row(
                 label=name,
-                description="active" if name == self.state.active_profile else "",
+                description=descriptions.get(name, ""),
                 value=name,
                 current=name == self.state.active_profile,
             )
@@ -1609,7 +1683,13 @@ class ConfigFlow:
         )
 
     def _screen_provider_remove(self) -> Screen:
-        rows = [Row(label=name, value=name) for name in sorted(self.state.profiles)]
+        descriptions = _profile_row_descriptions(
+            self.state.profiles, active=self.state.active_profile
+        )
+        rows = [
+            Row(label=name, description=descriptions.get(name, ""), value=name)
+            for name in sorted(self.state.profiles)
+        ]
         return Screen(
             stage="provider_remove",
             mode="list",

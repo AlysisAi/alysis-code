@@ -81,10 +81,21 @@ def test_disconnected_landing_uses_one_neutral_model_access_instruction():
     "model,expected",
     [
         ("deepseek-chat", "DeepSeek Chat"),
-        ("gpt-4o", "GPT 4o"),
+        # OpenAI and Zhipu hyphenate the version onto the family name.
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-6-astra", "GPT-6 Astra"),
+        ("openai/gpt-5.6-terra", "GPT-5.6 Terra"),
+        ("glm-5.3-flash", "GLM-5.3 Flash"),
+        # Other vendors do not, and the version is not glued to a non-family word.
+        ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+        # Dash-encoded dots (Anthropic, Doubao) become one version number.
+        ("claude-fable-5-1", "Claude Fable 5.1"),
+        ("claude-opus-4-8", "Claude Opus 4.8"),
+        ("doubao-seed-2-1-pro-260628", "Doubao Seed 2.1 Pro 260628"),
+        ("kimi-k3", "Kimi K3"),
         ("xiaomi/mimo-v2.5-pro", "MiMo V2.5 Pro"),
         ("", "model"),
-        ("openai/gpt-4o-mini", "GPT 4o Mini"),
+        ("openai/gpt-4o-mini", "GPT-4o Mini"),
     ],
 )
 def test_pretty_model_label(model, expected):

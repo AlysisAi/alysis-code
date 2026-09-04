@@ -312,7 +312,7 @@ class WebSearchRuntimeStatus:
             if self.provider == _OPENROUTER_WEB_PROVIDER:
                 return "OpenRouter server-side web_search is ready."
             if self.provider == _PERPLEXITY_SONAR_PROVIDER:
-                return "Perplexity Sonar web-grounded search is ready."
+                return "Perplexity Agent API web-grounded search is ready."
             if self.provider == _GROQ_COMPOUND_PROVIDER:
                 return "Groq Compound web search is ready."
             if self.provider == _MISTRAL_CONVERSATIONS_PROVIDER:
@@ -964,7 +964,8 @@ def _resolve_perplexity_sonar_readiness(
         provider=_PERPLEXITY_SONAR_PROVIDER,
         base_url_label="Perplexity",
         base_url_predicate=_is_perplexity_base_url,
-        default_model="sonar",
+        # Agent API route; the Sonar Chat Completions ids retire 2026-09-27.
+        default_model="perplexity/sonar",
     )
 
 

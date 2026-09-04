@@ -447,6 +447,232 @@ class _GeminiToolMapping:
     include_server_side_tool_invocations: bool
 
 
+# Gemini's ``Schema`` message is an OpenAPI 3.0 subset, not JSON Schema. Any
+# other keyword is a hard 400 ("Unknown name ... Cannot find field"), and the
+# tool registry, MCP servers and custom tools all emit plain JSON Schema
+# (``additionalProperties``, ``uniqueItems``, ``$ref`` ...). Everything not in
+# this set is dropped or rewritten before the declaration leaves the client.
+_GEMINI_SCHEMA_FIELDS: frozenset[str] = frozenset(
+    {
+        "type",
+        "format",
+        "title",
+        "description",
+        "nullable",
+        "enum",
+        "maxItems",
+        "minItems",
+        "properties",
+        "required",
+        "minProperties",
+        "maxProperties",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "example",
+        "anyOf",
+        "propertyOrdering",
+        "default",
+        "items",
+        "minimum",
+        "maximum",
+    }
+)
+# ``format`` is validated per type; unknown values are rejected outright.
+_GEMINI_SCHEMA_FORMATS: dict[str, frozenset[str]] = {
+    "string": frozenset({"date-time", "enum"}),
+    "number": frozenset({"float", "double"}),
+    "integer": frozenset({"int32", "int64"}),
+}
+_GEMINI_SCHEMA_TYPES: frozenset[str] = frozenset(
+    {"string", "number", "integer", "boolean", "array", "object", "null"}
+)
+_GEMINI_SCHEMA_MAX_DEPTH = 32
+
+
+def _resolve_local_schema_ref(ref: str, root: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve ``#/$defs/x`` / ``#/definitions/x`` style pointers inside ``root``."""
+    if not ref.startswith("#/"):
+        return None
+    node: Any = root
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node if isinstance(node, dict) else None
+
+
+def _gemini_schema(
+    schema: Any,
+    *,
+    root: dict[str, Any] | None = None,
+    depth: int = 0,
+) -> dict[str, Any]:
+    """Project an arbitrary JSON Schema onto Gemini's ``Schema`` subset.
+
+    Unknown keywords are dropped; ``const`` becomes a one-value ``enum``;
+    ``oneOf`` becomes ``anyOf``; a single-branch ``allOf`` is merged; union
+    ``type`` lists become ``nullable`` + ``anyOf``; local ``$ref`` pointers are
+    inlined; ``required`` is trimmed to declared properties; ``format`` values
+    Gemini does not validate are removed.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    if depth > _GEMINI_SCHEMA_MAX_DEPTH:
+        return {}
+    root_schema = root if root is not None else schema
+
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        target = _resolve_local_schema_ref(ref, root_schema)
+        merged: dict[str, Any] = dict(target or {})
+        merged.update({key: value for key, value in schema.items() if key != "$ref"})
+        if target is None and len(merged) == 0:
+            return {}
+        return _gemini_schema(merged, root=root_schema, depth=depth + 1)
+
+    working: dict[str, Any] = dict(schema)
+    all_of = working.pop("allOf", None)
+    if isinstance(all_of, list):
+        branches = [branch for branch in all_of if isinstance(branch, dict)]
+        if len(branches) == 1:
+            merged_all = dict(branches[0])
+            merged_all.update(working)
+            working = merged_all
+    one_of = working.pop("oneOf", None)
+    if isinstance(one_of, list) and "anyOf" not in working:
+        working["anyOf"] = one_of
+    if "const" in working and "enum" not in working:
+        working["enum"] = [working["const"]]
+    working.pop("const", None)
+
+    out: dict[str, Any] = {}
+    raw_type = working.get("type")
+    nullable = bool(working.get("nullable"))
+    resolved_type: str | None = None
+    if isinstance(raw_type, list):
+        candidates = [str(item).strip().lower() for item in raw_type if isinstance(item, str)]
+        if "null" in candidates:
+            nullable = True
+        non_null = [item for item in candidates if item != "null" and item in _GEMINI_SCHEMA_TYPES]
+        if len(non_null) == 1:
+            resolved_type = non_null[0]
+        elif len(non_null) > 1 and "anyOf" not in working:
+            working["anyOf"] = [{"type": item} for item in non_null]
+    elif isinstance(raw_type, str):
+        candidate = raw_type.strip().lower()
+        if candidate == "null":
+            nullable = True
+        elif candidate in _GEMINI_SCHEMA_TYPES:
+            resolved_type = candidate
+    if resolved_type is not None:
+        out["type"] = resolved_type
+    if nullable:
+        out["nullable"] = True
+
+    for key in ("title", "description", "pattern"):
+        value = working.get(key)
+        if isinstance(value, str) and value:
+            out[key] = value
+    for key in (
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+        "minLength",
+        "maxLength",
+    ):
+        value = working.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            out[key] = value
+    for key in ("minimum", "maximum"):
+        value = working.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[key] = value
+    if "default" in working and working["default"] is not None:
+        out["default"] = copy.deepcopy(working["default"])
+    if "example" in working and working["example"] is not None:
+        out["example"] = copy.deepcopy(working["example"])
+
+    fmt = working.get("format")
+    if isinstance(fmt, str) and resolved_type in _GEMINI_SCHEMA_FORMATS:
+        if fmt in _GEMINI_SCHEMA_FORMATS[resolved_type]:
+            out["format"] = fmt
+
+    enum_values = working.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        if resolved_type in {None, "string"}:
+            out["enum"] = [str(value) for value in enum_values]
+            out["type"] = "string"
+        else:
+            # Gemini only validates enums on strings; keep the value list
+            # visible to the model through the description instead.
+            rendered = ", ".join(str(value) for value in enum_values)
+            hint = f"Allowed values: {rendered}"
+            out["description"] = (
+                f"{out['description']} ({hint})" if out.get("description") else hint
+            )
+
+    properties = working.get("properties")
+    if isinstance(properties, dict):
+        clean_properties: dict[str, Any] = {}
+        for prop_name, prop_schema in properties.items():
+            if not isinstance(prop_name, str) or not prop_name:
+                continue
+            clean_properties[prop_name] = _gemini_schema(
+                prop_schema if isinstance(prop_schema, dict) else {},
+                root=root_schema,
+                depth=depth + 1,
+            )
+        if clean_properties:
+            out["properties"] = clean_properties
+            required = working.get("required")
+            if isinstance(required, list):
+                kept = [
+                    name for name in required if isinstance(name, str) and name in clean_properties
+                ]
+                if kept:
+                    out["required"] = kept
+            ordering = working.get("propertyOrdering")
+            if isinstance(ordering, list):
+                kept_order = [
+                    name for name in ordering if isinstance(name, str) and name in clean_properties
+                ]
+                if kept_order:
+                    out["propertyOrdering"] = kept_order
+
+    items = working.get("items")
+    if isinstance(items, list):
+        items = items[0] if items and isinstance(items[0], dict) else None
+    if isinstance(items, dict):
+        out["items"] = _gemini_schema(items, root=root_schema, depth=depth + 1)
+    elif out.get("type") == "array":
+        # Gemini requires ``items`` on arrays; an untyped item schema is the
+        # closest expression of JSON Schema's "anything".
+        out["items"] = {}
+
+    any_of = working.get("anyOf")
+    if isinstance(any_of, list):
+        branches = [
+            _gemini_schema(branch, root=root_schema, depth=depth + 1)
+            for branch in any_of
+            if isinstance(branch, dict)
+        ]
+        # A ``{"type": "null"}`` branch is Gemini's ``nullable`` flag.
+        if any(branch == {"nullable": True} for branch in branches):
+            out["nullable"] = True
+        branches = [branch for branch in branches if branch != {"nullable": True}]
+        if len(branches) == 1:
+            single = branches[0]
+            for key, value in single.items():
+                out.setdefault(key, value)
+        elif branches:
+            out["anyOf"] = branches
+
+    return {key: value for key, value in out.items() if key in _GEMINI_SCHEMA_FIELDS}
+
+
 def _gemini_function_declaration_from_chat_tool(tool: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(tool, dict):
         return None
@@ -460,9 +686,13 @@ def _gemini_function_declaration_from_chat_tool(tool: dict[str, Any]) -> dict[st
     name = str(source.get("name") or "").strip()
     if not name:
         return None
+    raw_parameters = source.get("parameters")
+    parameters = _gemini_schema(raw_parameters) if isinstance(raw_parameters, dict) else {}
+    if not parameters.get("type"):
+        parameters["type"] = "object"
     declaration: dict[str, Any] = {
         "name": name,
-        "parameters": copy.deepcopy(source.get("parameters") or {"type": "object"}),
+        "parameters": parameters,
     }
     description = str(source.get("description") or "").strip()
     if description:
@@ -2574,7 +2804,9 @@ def _gemini_response_format(response_format: dict[str, Any] | None) -> dict[str,
             )
         return {
             "responseMimeType": "application/json",
-            "responseSchema": copy.deepcopy(schema),
+            # responseSchema is the same OpenAPI-subset ``Schema`` message as
+            # function parameters, so it needs the same projection.
+            "responseSchema": _gemini_schema(schema),
         }
     if response_type == "text":
         return {}

@@ -195,14 +195,18 @@ def test_setup_wizard_saves_config(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n{tmp_path}\n",
+        # Model choice 8 = "type a custom model" (the Responses preset lists
+        # seven suggestions); the typed retired alias canonicalizes.
+        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
     cfg_path = tmp_path / "cfg" / "config.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert cfg["model"] == "gpt-5.4-nano"
+    # gpt-5-nano is retired (shutdown 2026-12-11); OpenAI's documented
+    # replacement is gpt-5.6-luna.
+    assert cfg["model"] == "gpt-5.6-luna"
     assert cfg["default_workspace_path"] == os.fspath(tmp_path.resolve())
 
 
@@ -212,7 +216,9 @@ def test_setup_wizard_can_persist_api_key(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n{tmp_path}\n",
+        # Model choice 8 = "type a custom model" (the Responses preset lists
+        # seven suggestions); the typed retired alias canonicalizes.
+        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
@@ -2257,7 +2263,8 @@ def test_setup_wizard_can_pick_first_suggested_model(monkeypatch, tmp_path: Path
 
     cfg_path = tmp_path / "cfg" / "config.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert cfg["model"] == "gpt-5.6-terra"
+    # Model choice "1" is the preset's first suggestion: GPT-6 Astra.
+    assert cfg["model"] == "gpt-6-astra"
     assert cfg["default_workspace_path"] == os.fspath(tmp_path.resolve())
 
 
@@ -2267,14 +2274,16 @@ def test_setup_wizard_reprompts_invalid_workspace(monkeypatch, tmp_path: Path) -
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        input=f"\n1\n1\npersisted-key\n7\ngpt-5-nano\n1\n/does/not/exist\n{tmp_path}\n",
+        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n/does/not/exist\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
 
     cfg_path = tmp_path / "cfg" / "config.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    assert cfg["model"] == "gpt-5.4-nano"
+    # gpt-5-nano is retired (shutdown 2026-12-11); OpenAI's documented
+    # replacement is gpt-5.6-luna.
+    assert cfg["model"] == "gpt-5.6-luna"
     assert cfg["default_workspace_path"] == os.fspath(tmp_path.resolve())
 
 

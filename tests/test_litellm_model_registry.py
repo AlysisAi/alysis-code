@@ -676,6 +676,8 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             0.000002,
             0.000006,
         ),
+        # OpenRouter gateway rates as listed 2026-09-02 (roughly halved since
+        # the July snapshot).
         (
             "https://openrouter.ai/api/v1",
             "deepseek/deepseek-v4-pro-0813",
@@ -683,8 +685,8 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             384_000,
             "deepseek-v4-pro",
             False,
-            0.000001188,
-            0.000003564,
+            0.00000066,
+            0.00000198,
         ),
         (
             "https://openrouter.ai/api/v1",
@@ -693,7 +695,7 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             384_000,
             "deepseek-v4-flash",
             False,
-            0.00000008,
+            0.000000065,
             0.00000018,
         ),
         (
@@ -703,8 +705,58 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             384_000,
             "deepseek-v4-flash-vision-exp",
             True,
-            0.00000044,
-            0.00000132,
+            0.00000022,
+            0.00000066,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "z-ai/glm-5.3",
+            1_310_720,
+            131_072,
+            "glm-5.3",
+            False,
+            0.0000014,
+            0.0000044,
+        ),
+        (
+            "https://openrouter.ai/api/v1",
+            "moonshotai/kimi-k3",
+            1_048_576,
+            131_072,
+            "kimi-k3",
+            True,
+            0.000003,
+            0.000015,
+        ),
+        (
+            "https://api.together.ai/v1",
+            "zai-org/GLM-5.3",
+            1_000_000,
+            131_072,
+            "glm-5.3",
+            False,
+            0.0000014,
+            0.0000044,
+        ),
+        (
+            "https://api.fireworks.ai/inference/v1",
+            "accounts/fireworks/models/glm-5p3-flash",
+            1_000_000,
+            131_072,
+            "glm-5.3-flash",
+            True,
+            0.00000015,
+            0.0000005,
+        ),
+        (
+            "https://api.perplexity.ai/v1",
+            "perplexity/kimi-k3",
+            1_048_576,
+            131_072,
+            "kimi-k3",
+            True,
+            0.000003,
+            0.000015,
         ),
         (
             "https://api.together.ai/v1",
@@ -743,8 +795,8 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             384_000,
             "deepseek-v4-flash",
             False,
-            0.00000014,
-            0.00000028,
+            0.00000022,
+            0.00000066,
         ),
     ],
 )
@@ -848,7 +900,16 @@ def test_official_zai_coding_plan_metadata_covers_glm_53() -> None:
     assert meta.field_sources["context_window_tokens"] == (
         f"{OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE}:zai_coding_plan"
     )
-    assert meta.raw_metadata["catalog_sources"] == ["https://docs.z.ai/guides/llm/glm-5.3"]
+    assert meta.raw_metadata["catalog_sources"] == [
+        "https://docs.z.ai/guides/llm/glm-5.3",
+        "https://docs.z.ai/devpack/overview",
+    ]
+
+    flash = ModelRegistry(cfg=cfg).get("glm-5.3-flash")
+    assert flash.context_window_tokens == 1_000_000
+    assert flash.max_output_tokens == 131_072
+    assert flash.supports_vision is True
+    assert flash.input_cost_per_token is None  # plan credits are not token prices
 
 
 def test_official_moonshot_k3_metadata_preserves_large_input_budget() -> None:
@@ -917,9 +978,116 @@ def test_official_anthropic_metadata_covers_opus_5_absent_from_the_snapshot() ->
     )
 
 
+def test_every_suggested_hosted_model_resolves_real_capacity() -> None:
+    """No model a preset recommends may fall back to the unknown 128K/8K shape.
+
+    A fallback here means the TUI would show the model with a shrunken context
+    budget and a metadata warning on every turn (qwen3.7-plus, Cohere's
+    default and OpenRouter's default all did this before 2026-09-02).
+    """
+    from alysis_code.profile_presets import PROFILE_PRESETS
+
+    local_or_custom = {"ollama", "lm-studio", "vllm", "custom"}
+    fallbacks: list[tuple[str, str]] = []
+    for preset in PROFILE_PRESETS:
+        if preset.key in local_or_custom:
+            continue
+        for model in preset.suggested_models:
+            cfg = AppConfig(base_url=preset.base_url, model=model)
+            meta = ModelRegistry(cfg=cfg).get(model, include_provider_auth=False)
+            if any("fallback context/max_output" in warning for warning in meta.warnings):
+                fallbacks.append((preset.key, model))
+    assert fallbacks == []
+
+
+def test_official_anthropic_metadata_covers_fable_5_1_with_cheaper_cache_reads() -> None:
+    cfg = AppConfig(base_url="https://api.anthropic.com/v1", model="claude-fable-5-1")
+    meta = ModelRegistry(cfg=cfg).get("claude-fable-5-1")
+
+    assert meta.context_window_tokens == 1_128_000
+    assert meta.max_output_tokens == 128_000
+    assert meta.supports_vision is True
+    assert meta.supports_reasoning is True
+    assert meta.input_cost_per_token == 0.00001
+    assert meta.output_cost_per_token == 0.00005
+    # 0.025x cache-read multiplier, not the usual 0.1x.
+    assert meta.cache_read_input_cost_per_token == 0.00000025
+    assert meta.cache_creation_5m_input_cost_per_token == 0.0000125
+    assert meta.cache_creation_1h_input_cost_per_token == 0.00002
+    assert meta.field_sources["context_window_tokens"] == (
+        f"{OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE}:anthropic"
+    )
+    assert meta.warnings == ()
+
+
+@pytest.mark.parametrize(
+    ("model", "context_window", "input_cost", "output_cost", "cache_write_cost"),
+    [
+        ("gpt-6-astra", 1_050_000, 0.00001, 0.00005, 0.0000125),
+        ("gpt-5.6-sol", 1_050_000, 0.000004, 0.00002, 0.000005),
+        ("gpt-5.6-terra", 1_050_000, 0.000002, 0.000012, 0.0000025),
+        ("gpt-5.6-luna", 1_050_000, 0.0000002, 0.0000012, 0.00000025),
+        ("gpt-5.4-mini", 400_000, 0.00000075, 0.0000045, None),
+        ("gpt-5.3-codex", 400_000, 0.00000175, 0.000014, None),
+    ],
+)
+def test_official_openai_metadata_overrides_pre_cut_snapshot_prices(
+    model: str,
+    context_window: int,
+    input_cost: float,
+    output_cost: float,
+    cache_write_cost: float | None,
+) -> None:
+    # The pinned LiteLLM snapshot carries GPT-5.6 launch prices and a 1M
+    # window for the 400K 5.4-mini / 5.3-codex ids; the official layer wins.
+    cfg = AppConfig(base_url="https://api.openai.com/v1", model=model)
+    meta = ModelRegistry(cfg=cfg).get(model)
+
+    assert meta.context_window_tokens == context_window
+    assert meta.max_output_tokens == 128_000
+    assert meta.input_cost_per_token == input_cost
+    assert meta.output_cost_per_token == output_cost
+    assert meta.cache_creation_input_cost_per_token == cache_write_cost
+    assert meta.field_sources["input_cost_per_token"] == (
+        f"{OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE}:openai"
+    )
+
+
+def test_built_in_mimo_metadata_uses_current_list_prices() -> None:
+    cfg = AppConfig(base_url="https://api.xiaomimimo.com/v1", model="mimo-v2.5-pro")
+
+    pro = ModelRegistry(cfg=cfg).get("mimo-v2.5-pro")
+    omni = ModelRegistry(cfg=cfg).get("mimo-v2.5")
+
+    assert pro.context_window_tokens == 1_000_000
+    assert pro.input_cost_per_token == 0.000000435
+    assert pro.output_cost_per_token == 0.00000087
+    assert omni.supports_vision is True
+    assert omni.input_cost_per_token == 0.00000014
+    assert omni.output_cost_per_token == 0.00000028
+
+
+def test_official_perplexity_agent_api_metadata_covers_hosted_routes() -> None:
+    cfg = AppConfig(base_url="https://api.perplexity.ai/v1", model="perplexity/sonar")
+
+    sonar = ModelRegistry(cfg=cfg).get("perplexity/sonar")
+    glm = ModelRegistry(cfg=cfg).get("perplexity/glm-5.3")
+
+    assert sonar.input_cost_per_token == 0.00000025
+    assert sonar.output_cost_per_token == 0.0000025
+    assert sonar.supports_reasoning is False
+    assert not any("fallback context/max_output" in warning for warning in sonar.warnings)
+    # Hosted GLM-5.3 inherits the canonical model's capacity.
+    assert glm.context_window_tokens == 1_000_000
+    assert glm.max_output_tokens == 131_072
+    assert glm.input_cost_per_token == 0.0000014
+    assert glm.raw_metadata["canonical_model"] == "glm-5.3"
+
+
 @pytest.mark.parametrize(
     ("model", "input_cost", "output_cost", "cache_read_cost"),
     [
+        ("gemini-3.8-flash", 0.00000075, 0.00000375, 0.000000075),
         ("gemini-3.7-flash", 0.00000075, 0.00000375, 0.000000075),
         ("gemini-3.6-flash", 0.00000075, 0.00000375, 0.000000075),
         ("gemini-3.5-flash-lite", 0.0000003, 0.0000025, 0.00000003),
@@ -975,7 +1143,7 @@ def test_official_xai_metadata_covers_grok_46_newer_than_snapshot() -> None:
     assert meta.cache_read_input_cost_per_token == 0.0000005
     assert meta.reasoning_output_cost_per_token == 0.000006
     assert meta.raw_metadata["catalog_sources"] == [
-        "https://docs.x.ai/developers/grok-4-6",
+        "https://docs.x.ai/developers/models/grok-4.6",
         "https://docs.x.ai/developers/pricing",
     ]
     assert meta.field_sources["context_window_tokens"] == (

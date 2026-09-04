@@ -421,6 +421,24 @@ def _is_moonshot_provider(provider_key: str | None) -> bool:
     return _normalize_provider_key(provider_key) in {_MOONSHOT_PROVIDER_KEY, "kimi_code"}
 
 
+# Routes whose Chat Completions surface wants ``max_completion_tokens``.
+# OpenAI's gpt-5 / o-series reject the legacy ``max_tokens`` outright
+# ("Unsupported parameter: 'max_tokens' is not supported with this model"),
+# and OpenAI accepts ``max_completion_tokens`` on every chat model, so the
+# first-party host (and Azure, which mirrors it) always uses the new field.
+# The decision is keyed on the endpoint host, not on a provider inferred from
+# a ``gpt-*`` model name: an unknown OpenAI-compatible gateway serving such a
+# model may only implement ``max_tokens``.
+_MAX_COMPLETION_TOKENS_HOST_PROVIDERS = frozenset({"openai", "azure"})
+
+
+def _uses_max_completion_tokens(provider_key: str | None, *, base_url: str | None) -> bool:
+    if _is_moonshot_provider(provider_key):
+        return True
+    host_provider = _normalize_provider_key(_provider_key_from_base_url(base_url))
+    return host_provider in _MAX_COMPLETION_TOKENS_HOST_PROVIDERS
+
+
 def _is_nvidia_provider(provider_key: str | None) -> bool:
     return _normalize_provider_key(provider_key) == _NVIDIA_PROVIDER_KEY
 
@@ -2130,7 +2148,7 @@ class OpenAICompatClient:
         if max_tokens is not None:
             output_limit_field = (
                 "max_completion_tokens"
-                if _is_moonshot_provider(transport_provider_key)
+                if _uses_max_completion_tokens(transport_provider_key, base_url=self.base_url)
                 else "max_tokens"
             )
             payload[output_limit_field] = int(max_tokens)

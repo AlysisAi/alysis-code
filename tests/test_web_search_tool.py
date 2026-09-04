@@ -1687,28 +1687,104 @@ def test_web_search_dispatches_to_perplexity_sonar_backend(
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://api.perplexity.ai/v1/sonar"
+        # Agent API endpoint; the preset base URL already carries /v1.
+        assert str(request.url) == "https://api.perplexity.ai/v1/agent"
         body = json.loads(request.content.decode("utf-8"))
-        assert body["model"] == "sonar"
-        assert body["search_domain_filter"] == ["docs.example.com"]
+        assert body["model"] == "perplexity/sonar"
+        assert body["input"] == "perplexity search"
+        # Grounding is opt-in on the Agent API; domain filters live on the tool.
+        assert body["tools"] == [
+            {
+                "type": "web_search",
+                "search_context_size": "low",
+                "max_results": 5,
+                "filters": {"search_domain_filter": ["docs.example.com"]},
+            }
+        ]
+        assert "messages" not in body
         return httpx.Response(
             200,
             json={
-                "id": "pplx_1",
-                "model": "sonar",
-                "choices": [{"message": {"content": "Perplexity searched the web."}}],
-                "search_results": [
+                "id": "resp_1",
+                "model": "perplexity/sonar",
+                "object": "response",
+                "output": [
                     {
-                        "title": "Perplexity Docs",
-                        "url": "https://docs.example.com/perplexity",
-                        "snippet": "PPLX snippet",
-                    }
+                        "type": "search_results",
+                        "results": [
+                            {
+                                "id": 1,
+                                "title": "Perplexity Docs",
+                                "url": "https://docs.example.com/perplexity",
+                                "snippet": "PPLX snippet",
+                                "date": "2026-08-01",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "Perplexity searched the web.[1]"}
+                        ],
+                    },
                 ],
+                "status": "completed",
             },
         )
 
     result = web_search(
         query="perplexity search",
+        cfg=AppConfig(
+            model="perplexity/glm-5.3",
+            base_url="https://api.perplexity.ai/v1",
+            web_search_adapter="perplexity_sonar",
+            web_search_model="perplexity/sonar",
+        ),
+        api_key="pplx-key",
+        allowed_domains=["docs.example.com"],
+        max_sources=5,
+        transport=httpx.MockTransport(handler),
+        resolver=_public_resolver,
+    )
+
+    assert result["backend"] == "perplexity_sonar"
+    assert result["answer"] == "Perplexity searched the web.[1]"
+    assert result["sources"][0]["snippet"] == "PPLX snippet"
+    assert result["response_id"] == "resp_1"
+
+
+def test_perplexity_search_migrates_legacy_sonar_profiles_to_the_agent_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A profile saved against the retired Sonar surface still reaches /v1/agent."""
+    monkeypatch.delenv("ALYSIS_WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.perplexity.ai/v1/agent"
+        body = json.loads(request.content.decode("utf-8"))
+        # Retired Sonar chat ids are not Agent API models; they map to the
+        # hosted Sonar route.
+        assert body["model"] == "perplexity/sonar"
+        assert "filters" not in body["tools"][0]
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_2",
+                "output": [
+                    {
+                        "type": "search_results",
+                        "results": [{"title": "Docs", "url": "https://docs.example.com/x"}],
+                    },
+                    {"type": "message", "content": [{"type": "output_text", "text": "ok"}]},
+                ],
+            },
+        )
+
+    result = web_search(
+        query="legacy sonar profile",
         cfg=AppConfig(
             model="sonar-pro",
             base_url="https://api.perplexity.ai",
@@ -1716,13 +1792,13 @@ def test_web_search_dispatches_to_perplexity_sonar_backend(
             web_search_model="sonar",
         ),
         api_key="pplx-key",
-        allowed_domains=["docs.example.com"],
         transport=httpx.MockTransport(handler),
         resolver=_public_resolver,
     )
 
     assert result["backend"] == "perplexity_sonar"
-    assert result["sources"][0]["snippet"] == "PPLX snippet"
+    assert result["answer"] == "ok"
+    assert result["sources"][0]["url"] == "https://docs.example.com/x"
 
 
 def test_web_search_dispatches_to_groq_compound_backend(

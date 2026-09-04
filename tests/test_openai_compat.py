@@ -1666,6 +1666,39 @@ def test_together_deepseek_reasoning_round_trips_for_tool_calls(stream: bool) ->
     assert second.content == "ok"
 
 
+@pytest.mark.parametrize(
+    ("base_url", "expected_field"),
+    [
+        # OpenAI's gpt-5 / o-series reject max_tokens outright (live 400 on
+        # 2026-09-04: "Unsupported parameter: 'max_tokens' is not supported
+        # with this model. Use 'max_completion_tokens' instead.").
+        ("https://api.openai.com/v1", "max_completion_tokens"),
+        # Third-party gateways keep the legacy spelling many of them require —
+        # even when the model name would make the provider look like OpenAI.
+        ("https://openrouter.ai/api/v1", "max_tokens"),
+        ("https://gateway.example/v1", "max_tokens"),
+    ],
+)
+def test_output_limit_field_follows_the_transport_host(base_url: str, expected_field: str) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = OpenAICompatClient(
+        base_url=base_url,
+        api_key="k",
+        model="gpt-5.6-terra",
+        transport=httpx.MockTransport(handler),
+    )
+    client.chat(messages=[{"role": "user", "content": "hi"}], max_tokens=64)
+
+    assert captured[expected_field] == 64
+    other = "max_tokens" if expected_field == "max_completion_tokens" else "max_completion_tokens"
+    assert other not in captured
+
+
 def test_kimi_k3_uses_documented_request_shape_and_round_trips_reasoning() -> None:
     calls: list[dict[str, object]] = []
 

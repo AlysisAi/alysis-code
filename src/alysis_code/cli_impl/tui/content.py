@@ -35,11 +35,18 @@ _ACRONYMS = {
 }
 
 
+# Families whose vendors hyphenate the version onto the name ("GPT-6 Astra",
+# "GPT-5.6 Terra", "GLM-5.3"). Everything else keeps a space ("Gemini 3.8
+# Flash", "Claude Opus 5", "Kimi K3"), which matches those vendors' naming.
+_HYPHENATED_VERSION_FAMILIES = frozenset({"GPT", "GLM"})
+
+
 def pretty_model_label(model: str | None) -> str:
     """Turn a raw model id into a friendly footer label.
 
-    ``deepseek-chat`` -> ``DeepSeek Chat``; ``gpt-4o`` -> ``GPT 4o``. Falls back
-    to the raw id when there is nothing sensible to do.
+    ``deepseek-chat`` -> ``DeepSeek Chat``; ``gpt-6-astra`` -> ``GPT-6 Astra``;
+    ``gpt-4o`` -> ``GPT-4o``. Falls back to the raw id when there is nothing
+    sensible to do.
     """
     raw = (model or "").strip()
     if not raw:
@@ -50,11 +57,20 @@ def pretty_model_label(model: str | None) -> str:
     for token in tokens:
         low = token.lower()
         if low in _ACRONYMS:
-            out.append(_ACRONYMS[low])
+            word = _ACRONYMS[low]
         elif token.isupper():
-            out.append(token)
+            word = token
         else:
-            out.append(token[:1].upper() + token[1:])
+            word = token[:1].upper() + token[1:]
+        if out and out[-1] in _HYPHENATED_VERSION_FAMILIES and word[:1].isdigit():
+            out[-1] = f"{out[-1]}-{word}"
+            continue
+        # Ids that cannot carry a dot spell "5.1" as "5-1" (claude-fable-5-1,
+        # doubao-seed-2-1-pro): two adjacent bare numbers are one version.
+        if out and out[-1].isdigit() and word.isdigit():
+            out[-1] = f"{out[-1]}.{word}"
+            continue
+        out.append(word)
     return " ".join(out) or raw
 
 

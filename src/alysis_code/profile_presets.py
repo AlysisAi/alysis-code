@@ -333,6 +333,17 @@ def advanced_provider_selection_presets() -> list[ProfilePreset]:
     return [*first_party_compat, *local, *custom, *aliases, *account_gated]
 
 
+# Shared by every DashScope region. Alibaba retires the qwen3-coder-* line on
+# 2026-10-10 platform-wide (notices 1949/1950/2000 intl, 118344/118345 cn) and
+# names qwen3.7-plus as the coding replacement; qwen3.8-max-preview was retired
+# 2026-08-05 and is server-routed to qwen3.8-max. Legacy-but-live ids
+# (qwen3.7-max, qwen3.6-flash, qwen-flash) are deliberately not remapped.
+_QWEN_RETIRED_MODEL_ALIASES: dict[str, str] = {
+    "qwen3-coder-plus": "qwen3.7-plus",
+    "qwen3-coder-next": "qwen3.7-plus",
+    "qwen3.8-max-preview": "qwen3.8-max",
+}
+
 PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
     ProfilePreset(
         key="openai",
@@ -342,42 +353,57 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         suggested_models=(
+            "gpt-6-astra",
             "gpt-5.6-terra",
             "gpt-5.6-sol",
             "gpt-5.6-luna",
-            "gpt-5.3-codex",
+            "gpt-5.5",
             "gpt-5.4-mini",
-            "gpt-5.4-nano",
         ),
         suggested_model_descriptions={
-            "gpt-5.6-terra": "default - balanced 5.6 tier, 1.05M context",
-            "gpt-5.6-sol": "advanced - flagship 5.6 tier, 1.05M context",
+            # gpt-6-astra (2026-09-03) is OpenAI's flagship and the default here;
+            # Terra is the balanced pick at 1/5 of Astra's input price.
+            # gpt-5.3-codex is Responses-only (Chat Completions: Not supported)
+            # and lives on the openai-responses preset. gpt-5.6-luna replaces
+            # gpt-5.4-nano as the economy tier: same $0.20 input, cheaper
+            # output, 1.05M context.
+            "gpt-6-astra": "default - GPT-6 flagship, reasoning always on, 1.05M",
+            "gpt-5.6-terra": "advanced - balanced 5.6 tier at 1/5 the price, 1.05M",
+            "gpt-5.6-sol": "reasoning - top 5.6 tier, 1.05M context",
             "gpt-5.6-luna": "fast - low-cost 5.6 tier, full 1.05M context",
-            "gpt-5.3-codex": "coding - agentic codex model, 400K context",
-            "gpt-5.4-mini": "fallback - cheap tier for subagents, 400K",
-            "gpt-5.4-nano": "economy - cheapest live id, 400K context",
+            "gpt-5.5": "fallback - previous flagship, 1.05M context",
+            "gpt-5.4-mini": "economy - cheap tier for subagents, 400K",
         },
         model_aliases={
             "gpt-5.6": "gpt-5.6-sol",
-            "gpt-5-nano": "gpt-5.4-nano",
-            # 2026-07-23 shutdowns from OpenAI's deprecations page: codex and
-            # chat-latest ids remap to the still-callable gpt-5.5 tier.
-            "gpt-5-codex": "gpt-5.5",
-            "gpt-5.1-codex": "gpt-5.5",
-            "gpt-5.1-codex-max": "gpt-5.5",
-            "gpt-5.2-codex": "gpt-5.5",
-            "gpt-5.1-codex-mini": "gpt-5.4-mini",
-            "gpt-5-chat-latest": "gpt-5.5",
-            "gpt-5.1-chat-latest": "gpt-5.5",
+            # No official bare alias exists for Astra yet; a typed "gpt-6"
+            # would otherwise 404, so it lands on the only GPT-6 snapshot.
+            "gpt-6": "gpt-6-astra",
+            # Official replacements from OpenAI's deprecations page (2026-07-23
+            # codex/chat-latest shutdowns; gpt-5-nano shuts down 2026-12-11).
+            "gpt-5-nano": "gpt-5.6-luna",
+            "gpt-5-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex-max": "gpt-5.6-sol",
+            "gpt-5.2-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex-mini": "gpt-5.6-terra",
+            "gpt-5-chat-latest": "gpt-5.6-sol",
+            "gpt-5.1-chat-latest": "gpt-5.6-sol",
+            # gpt-5.3-codex cannot be called on /v1/chat/completions at all;
+            # on this preset it remaps to Codex's own documented successor.
+            "gpt-5.3-codex": "gpt-5.6-sol",
         },
-        validation_model="gpt-5.4-nano",
+        validation_model="gpt-5.6-luna",
         web_search_adapter=OPENAI_RESPONSES_ADAPTER,
         cache_capability=_OPENAI_PROMPT_CACHE_CAPABILITY,
         setup_warning=(
             "gpt-5.6/5.4 reject tool calls with reasoning_effort other than "
             "'none' on Chat Completions (and 5.6 defaults to 'medium') — for "
             "agentic runs use the OpenAI Responses preset, or pin effort to "
-            "'none' here."
+            "'none' here. gpt-5.3-codex is Responses-only and is not offered here. "
+            "gpt-6-astra cannot disable reasoning and is rolling out to API "
+            "accounts in stages from 2026-09-03; a 404 means your account is not "
+            "enabled yet."
         ),
     ),
     ProfilePreset(
@@ -388,40 +414,45 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         suggested_models=(
+            "gpt-6-astra",
             "gpt-5.6-terra",
             "gpt-5.6-sol",
             "gpt-5.6-luna",
             "gpt-5.3-codex",
+            "gpt-5.5",
             "gpt-5.4-mini",
-            "gpt-5.4-nano",
         ),
         suggested_model_descriptions={
-            "gpt-5.6-terra": "default - balanced 5.6 tier, 1.05M context",
-            "gpt-5.6-sol": "advanced - flagship 5.6 tier, 1.05M context",
+            "gpt-6-astra": "default - GPT-6 flagship, reasoning always on, 1.05M",
+            "gpt-5.6-terra": "advanced - balanced 5.6 tier at 1/5 the price, 1.05M",
+            "gpt-5.6-sol": "reasoning - top 5.6 tier, 1.05M context",
             "gpt-5.6-luna": "fast - low-cost 5.6 tier, full 1.05M context",
-            "gpt-5.3-codex": "coding - agentic codex model, 400K context",
-            "gpt-5.4-mini": "fallback - cheap tier for subagents, 400K",
-            "gpt-5.4-nano": "economy - cheapest live id, 400K context",
+            "gpt-5.3-codex": "coding - agentic codex model, 400K, Responses-only",
+            "gpt-5.5": "fallback - previous flagship, 1.05M context",
+            "gpt-5.4-mini": "economy - cheap tier for subagents, 400K",
         },
         model_aliases={
             "gpt-5.6": "gpt-5.6-sol",
-            "gpt-5-nano": "gpt-5.4-nano",
-            # 2026-07-23 shutdowns from OpenAI's deprecations page: codex and
-            # chat-latest ids remap to the still-callable gpt-5.5 tier.
-            "gpt-5-codex": "gpt-5.5",
-            "gpt-5.1-codex": "gpt-5.5",
-            "gpt-5.1-codex-max": "gpt-5.5",
-            "gpt-5.2-codex": "gpt-5.5",
-            "gpt-5.1-codex-mini": "gpt-5.4-mini",
-            "gpt-5-chat-latest": "gpt-5.5",
-            "gpt-5.1-chat-latest": "gpt-5.5",
+            "gpt-6": "gpt-6-astra",
+            # Official replacements from OpenAI's deprecations page (2026-07-23
+            # codex/chat-latest shutdowns; gpt-5-nano shuts down 2026-12-11).
+            "gpt-5-nano": "gpt-5.6-luna",
+            "gpt-5-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex-max": "gpt-5.6-sol",
+            "gpt-5.2-codex": "gpt-5.6-sol",
+            "gpt-5.1-codex-mini": "gpt-5.6-terra",
+            "gpt-5-chat-latest": "gpt-5.6-sol",
+            "gpt-5.1-chat-latest": "gpt-5.6-sol",
         },
-        validation_model="gpt-5.4-nano",
+        validation_model="gpt-5.6-luna",
         web_search_adapter=OPENAI_RESPONSES_ADAPTER,
         cache_capability=_OPENAI_PROMPT_CACHE_CAPABILITY,
         notes=(
             "Native OpenAI Responses API chat with SSE streaming support. Use the OpenAI compat "
-            "preset to keep Chat Completions-compatible behavior."
+            "preset to keep Chat Completions-compatible behavior. gpt-6-astra is rolling out "
+            "to API accounts in stages from 2026-09-03; a 404 means the account is not "
+            "enabled yet."
         ),
     ),
     ProfilePreset(
@@ -434,15 +465,19 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "claude-sonnet-5",
             "claude-opus-5",
-            "claude-fable-5",
+            "claude-fable-5-1",
             "claude-haiku-4-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
         ),
         suggested_model_descriptions={
+            # Fable 5.1 (2026-09-01) supersedes Fable 5, which is now in
+            # Anthropic's Legacy table. Fable 5 stays callable and is not
+            # aliased: 5.1 rejects forced tool_choice, so a silent swap could
+            # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
             "claude-opus-5": "advanced - agentic coding + deep reasoning, 1M ctx",
-            "claude-fable-5": "reasoning - adaptive thinking always on, 1M ctx",
+            "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
             "claude-haiku-4-5": "fast - 200K context, lowest cost tier",
             "claude-opus-4-8": "fallback - previous-generation opus, 1M context",
             "claude-opus-4-7": "legacy - prior opus generation, 1M context",
@@ -450,6 +485,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         model_aliases={
             # claude-sonnet-4-6 moved to Anthropic's Legacy table; Sonnet 5 is
             # newer and cheaper. Retired haiku ids remap to the 4.5 bare alias.
+            # claude-opus-4-1 retired 2026-08-05 (official replacement 4-8).
             "claude-sonnet-4": "claude-sonnet-5",
             "claude-sonnet-4-5": "claude-sonnet-5",
             "claude-sonnet-4-6": "claude-sonnet-5",
@@ -460,6 +496,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "claude-opus-4.7": "claude-opus-4-7",
             "claude-opus-4-1": "claude-opus-4-8",
             "claude-opus-4-6": "claude-opus-4-8",
+            "claude-fable-5.1": "claude-fable-5-1",
         },
         validation_model="claude-haiku-4-5",
         web_search_adapter=ANTHROPIC_MESSAGES_ADAPTER,
@@ -479,15 +516,19 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "claude-sonnet-5",
             "claude-opus-5",
-            "claude-fable-5",
+            "claude-fable-5-1",
             "claude-haiku-4-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
         ),
         suggested_model_descriptions={
+            # Fable 5.1 (2026-09-01) supersedes Fable 5, which is now in
+            # Anthropic's Legacy table. Fable 5 stays callable and is not
+            # aliased: 5.1 rejects forced tool_choice, so a silent swap could
+            # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
             "claude-opus-5": "advanced - agentic coding + deep reasoning, 1M ctx",
-            "claude-fable-5": "reasoning - adaptive thinking always on, 1M ctx",
+            "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
             "claude-haiku-4-5": "fast - 200K context, lowest cost tier",
             "claude-opus-4-8": "fallback - previous-generation opus, 1M context",
             "claude-opus-4-7": "legacy - prior opus generation, 1M context",
@@ -495,6 +536,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         model_aliases={
             # claude-sonnet-4-6 moved to Anthropic's Legacy table; Sonnet 5 is
             # newer and cheaper. Retired haiku ids remap to the 4.5 bare alias.
+            # claude-opus-4-1 retired 2026-08-05 (official replacement 4-8).
             "claude-sonnet-4": "claude-sonnet-5",
             "claude-sonnet-4-5": "claude-sonnet-5",
             "claude-sonnet-4-6": "claude-sonnet-5",
@@ -505,6 +547,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "claude-opus-4.7": "claude-opus-4-7",
             "claude-opus-4-1": "claude-opus-4-8",
             "claude-opus-4-6": "claude-opus-4-8",
+            "claude-fable-5.1": "claude-fable-5-1",
         },
         validation_model="claude-haiku-4-5",
         web_search_adapter=ANTHROPIC_MESSAGES_ADAPTER,
@@ -527,15 +570,19 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "claude-sonnet-5",
             "claude-opus-5",
-            "claude-fable-5",
+            "claude-fable-5-1",
             "claude-haiku-4-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
         ),
         suggested_model_descriptions={
+            # Fable 5.1 (2026-09-01) supersedes Fable 5, which is now in
+            # Anthropic's Legacy table. Fable 5 stays callable and is not
+            # aliased: 5.1 rejects forced tool_choice, so a silent swap could
+            # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
             "claude-opus-5": "advanced - agentic coding + deep reasoning, 1M ctx",
-            "claude-fable-5": "reasoning - adaptive thinking always on, 1M ctx",
+            "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
             "claude-haiku-4-5": "fast - 200K context, lowest cost tier",
             "claude-opus-4-8": "fallback - previous-generation opus, 1M context",
             "claude-opus-4-7": "legacy - prior opus generation, 1M context",
@@ -543,6 +590,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         model_aliases={
             # claude-sonnet-4-6 moved to Anthropic's Legacy table; Sonnet 5 is
             # newer and cheaper. Retired haiku ids remap to the 4.5 bare alias.
+            # claude-opus-4-1 retired 2026-08-05 (official replacement 4-8).
             "claude-sonnet-4": "claude-sonnet-5",
             "claude-sonnet-4-5": "claude-sonnet-5",
             "claude-sonnet-4-6": "claude-sonnet-5",
@@ -553,6 +601,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "claude-opus-4.7": "claude-opus-4-7",
             "claude-opus-4-1": "claude-opus-4-8",
             "claude-opus-4-6": "claude-opus-4-8",
+            "claude-fable-5.1": "claude-fable-5-1",
         },
         validation_model="claude-haiku-4-5",
         web_search_adapter=ANTHROPIC_MESSAGES_ADAPTER,
@@ -570,22 +619,26 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://generativelanguage.googleapis.com/v1beta",
         api_key_env="GEMINI_API_KEY",
         suggested_models=(
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
-            "gemini-3.6-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro-preview",
         ),
         suggested_model_descriptions={
-            "gemini-3.7-flash": "default - newest GA coding and agentic model, 1M",
-            "gemini-3.6-flash": "fallback - production GA flash model, 1M context",
-            "gemini-3.5-flash-lite": "economy - lowest-cost GA tier, 1M context",
+            # No GA Pro model exists; 3.1-pro-preview is still served with no
+            # shutdown date. Intro pricing on 3.6/3.7/3.8 Flash ends 2026-12-31.
+            "gemini-3.8-flash": "default - newest stable flash for SWE and agents, 1M",
+            "gemini-3.7-flash": "fallback - previous stable flash model, 1M context",
+            "gemini-3.5-flash-lite": "economy - lowest-cost stable tier, 1M context",
             "gemini-3.1-pro-preview": "advanced - pro reasoning preview, 1M context",
         },
         model_aliases={
             # Only shut-down or invalid legacy ids are rewritten. Active stable
             # ids and provider-managed *-latest aliases pass through unchanged.
+            # gemini-3.1-flash-lite itself shuts down 2027-05-07, so the
+            # 2.0-flash-lite remap lands on its documented successor.
             "gemini-2.0-flash": "gemini-3.6-flash",
-            "gemini-2.0-flash-lite": "gemini-3.1-flash-lite",
+            "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
             "gemini-3.1-preview": "gemini-3.1-pro-preview",
             "gemini-3-pro-preview": "gemini-3.1-pro-preview",
             "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
@@ -611,22 +664,26 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key_env="GEMINI_API_KEY",
         suggested_models=(
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
-            "gemini-3.6-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro-preview",
         ),
         suggested_model_descriptions={
-            "gemini-3.7-flash": "default - newest GA coding and agentic model, 1M",
-            "gemini-3.6-flash": "fallback - production GA flash model, 1M context",
-            "gemini-3.5-flash-lite": "economy - lowest-cost GA tier, 1M context",
+            # No GA Pro model exists; 3.1-pro-preview is still served with no
+            # shutdown date. Intro pricing on 3.6/3.7/3.8 Flash ends 2026-12-31.
+            "gemini-3.8-flash": "default - newest stable flash for SWE and agents, 1M",
+            "gemini-3.7-flash": "fallback - previous stable flash model, 1M context",
+            "gemini-3.5-flash-lite": "economy - lowest-cost stable tier, 1M context",
             "gemini-3.1-pro-preview": "advanced - pro reasoning preview, 1M context",
         },
         model_aliases={
             # Only shut-down or invalid legacy ids are rewritten. Active stable
             # ids and provider-managed *-latest aliases pass through unchanged.
+            # gemini-3.1-flash-lite itself shuts down 2027-05-07, so the
+            # 2.0-flash-lite remap lands on its documented successor.
             "gemini-2.0-flash": "gemini-3.6-flash",
-            "gemini-2.0-flash-lite": "gemini-3.1-flash-lite",
+            "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
             "gemini-3.1-preview": "gemini-3.1-pro-preview",
             "gemini-3-pro-preview": "gemini-3.1-pro-preview",
             "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
@@ -646,22 +703,26 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://generativelanguage.googleapis.com/v1beta",
         api_key_env="GEMINI_API_KEY",
         suggested_models=(
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
-            "gemini-3.6-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro-preview",
         ),
         suggested_model_descriptions={
-            "gemini-3.7-flash": "default - newest GA coding and agentic model, 1M",
-            "gemini-3.6-flash": "fallback - production GA flash model, 1M context",
-            "gemini-3.5-flash-lite": "economy - lowest-cost GA tier, 1M context",
+            # No GA Pro model exists; 3.1-pro-preview is still served with no
+            # shutdown date. Intro pricing on 3.6/3.7/3.8 Flash ends 2026-12-31.
+            "gemini-3.8-flash": "default - newest stable flash for SWE and agents, 1M",
+            "gemini-3.7-flash": "fallback - previous stable flash model, 1M context",
+            "gemini-3.5-flash-lite": "economy - lowest-cost stable tier, 1M context",
             "gemini-3.1-pro-preview": "advanced - pro reasoning preview, 1M context",
         },
         model_aliases={
             # Only shut-down or invalid legacy ids are rewritten. Active stable
             # ids and provider-managed *-latest aliases pass through unchanged.
+            # gemini-3.1-flash-lite itself shuts down 2027-05-07, so the
+            # 2.0-flash-lite remap lands on its documented successor.
             "gemini-2.0-flash": "gemini-3.6-flash",
-            "gemini-2.0-flash-lite": "gemini-3.1-flash-lite",
+            "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
             "gemini-3.1-preview": "gemini-3.1-pro-preview",
             "gemini-3-pro-preview": "gemini-3.1-pro-preview",
             "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
@@ -698,16 +759,18 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             ),
         },
         model_aliases={
-            # deepseek-chat / deepseek-reasoner are discontinued 2026-07-24;
-            # saved configs pinning them keep working via these remaps.
+            # deepseek-chat / deepseek-reasoner were discontinued 2026-07-24 and
+            # no longer resolve; saved configs pinning them keep working via
+            # these remaps.
             "deepseek-chat": "deepseek-v4-flash",
             "deepseek-reasoner": "deepseek-v4-flash",
         },
         validation_model="deepseek-v4-flash",
         setup_warning=(
-            "Do not use retired legacy aliases deepseek-chat or deepseek-reasoner "
-            "for production defaults; use the V4 model IDs. The vision model is "
-            "experimental and may change without a stable-release deprecation window."
+            "Retired aliases deepseek-chat and deepseek-reasoner no longer resolve; "
+            "use the V4 model IDs. Pricing is peak/off-peak (off-peak is 50% of the "
+            "listed rate). The vision model is experimental and may change without "
+            "a stable-release deprecation window."
         ),
     ),
     ProfilePreset(
@@ -720,28 +783,37 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "nvidia/nemotron-3-super-120b-a12b",
             "nvidia/nemotron-3-ultra-550b-a55b",
-            "nvidia/nemotron-3-nano-30b-a3b",
-            "deepseek-ai/deepseek-v4-pro",
-            "deepseek-ai/deepseek-v4-flash",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "moonshotai/kimi-k3",
+            "deepseek-ai/deepseek-v4-pro-0813",
+            "deepseek-ai/deepseek-v4-flash-0731",
         ),
         suggested_model_descriptions={
+            # The free endpoints for nemotron-3-nano and the undated DeepSeek
+            # ids are marked Deprecated on build.nvidia.com; the dated DeepSeek
+            # snapshots and Nemotron 3.5 Lightning are their live successors.
             "nvidia/nemotron-3-super-120b-a12b": (
                 "default - balanced agentic reasoning, 1M context"
             ),
             "nvidia/nemotron-3-ultra-550b-a55b": (
                 "advanced - frontier agentic reasoning, 1M context"
             ),
-            "nvidia/nemotron-3-nano-30b-a3b": (
-                "fast - efficient reasoning and tool use, 262K hosted context"
+            "nvidia/nemotron-3.5-lightning-30b-a3b": (
+                "fast - efficient reasoning and tool use, 1M hosted context"
             ),
-            "deepseek-ai/deepseek-v4-pro": (
-                "third-party model hosted by NVIDIA - advanced agentic reasoning"
+            "moonshotai/kimi-k3": "coding - third-party Kimi K3 hosted by NVIDIA, 1M multimodal",
+            "deepseek-ai/deepseek-v4-pro-0813": (
+                "reasoning - third-party DeepSeek V4 Pro hosted by NVIDIA, 1M"
             ),
-            "deepseek-ai/deepseek-v4-flash": (
-                "third-party model hosted by NVIDIA - fast agentic reasoning"
+            "deepseek-ai/deepseek-v4-flash-0731": (
+                "economy - third-party DeepSeek V4 Flash hosted by NVIDIA, 1M"
             ),
         },
-        validation_model="nvidia/nemotron-3-nano-30b-a3b",
+        # No aliases on purpose: nemotron-3-nano and the undated DeepSeek ids
+        # are "Free Endpoint: Deprecated" on build.nvidia.com but still appear
+        # in the live /v1/models inventory, and live ids are never rewritten.
+        # They simply leave the offline recommendation set.
+        validation_model="nvidia/nemotron-3.5-lightning-30b-a3b",
         setup_warning=(
             "NVIDIA hosted Free Endpoints are rate-limited development endpoints for "
             "prototyping; availability is not a production SLA and may vary by account."
@@ -761,22 +833,21 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "qwen3.7-plus",
             "qwen3.8-max",
-            "qwen3.7-max",
-            "qwen3-coder-plus",
-            "qwen3-coder-next",
-            "qwen3.6-flash",
-            "qwen-flash",
+            "qwen3.8-flash",
+            "qwen3.7-flash",
         ),
         suggested_model_descriptions={
-            "qwen3.7-plus": "default - 1M context, balanced cost",
+            # Alibaba's documented coding recommendation is qwen3.7-plus; the
+            # qwen3-coder-* line shuts down 2026-10-10 in every region.
+            # qwen3.7-max, qwen3.6-flash and qwen-flash moved to the Legacy
+            # table (still callable, not aliased).
+            "qwen3.7-plus": "default - 1M context, balanced cost, coding pick",
             "qwen3.8-max": "advanced - newest multimodal flagship, 1M context",
-            "qwen3.7-max": "fallback - previous flagship, 1M context",
-            "qwen3-coder-plus": "coding - 1M context, long-repo work",
-            "qwen3-coder-next": "agentic - newest coder, 256K context",
-            "qwen3.6-flash": "fast - lower-latency, 1M context",
-            "qwen-flash": "economy - cheapest 1M-context option",
+            "qwen3.8-flash": "fast - low-cost multimodal tier, 1M context",
+            "qwen3.7-flash": "economy - cheapest current-gen model, 1M context",
         },
-        validation_model="qwen-flash",
+        model_aliases=_QWEN_RETIRED_MODEL_ALIASES,
+        validation_model="qwen3.7-flash",
         web_search_adapter=DASHSCOPE_CHAT_ADAPTER,
         web_search_model="qwen3.7-plus",
         cache_capability=_QWEN_DIAGNOSTIC_CACHE_CAPABILITY,
@@ -794,25 +865,27 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "qwen3.7-plus",
             "qwen3.8-max",
-            "qwen3.7-max",
-            "qwen3.6-flash",
-            "qwen-flash",
+            "qwen3.8-flash",
+            "qwen3.7-flash",
         ),
         suggested_model_descriptions={
-            "qwen3.7-plus": "default - 1M context, balanced cost",
+            # Same roster as the Singapore surface; US (Virginia) "Global" SKUs
+            # are priced ~17-30% below Singapore. Web search is not served for
+            # qwen3.8-max in the US, so hosted search stays on qwen3.7-plus.
+            "qwen3.7-plus": "default - 1M context, balanced cost, coding pick",
             "qwen3.8-max": "advanced - newest multimodal flagship, 1M context",
-            "qwen3.7-max": "fallback - previous flagship, 1M context",
-            "qwen3.6-flash": "fast - lower-latency, 1M context",
-            "qwen-flash": "economy - cheapest 1M-context option",
+            "qwen3.8-flash": "fast - low-cost multimodal tier, 1M context",
+            "qwen3.7-flash": "economy - cheapest current-gen model, 1M context",
         },
-        validation_model="qwen-flash",
+        model_aliases=_QWEN_RETIRED_MODEL_ALIASES,
+        validation_model="qwen3.7-flash",
         web_search_adapter=DASHSCOPE_CHAT_ADAPTER,
         web_search_model="qwen3.7-plus",
         cache_capability=_QWEN_DIAGNOSTIC_CACHE_CAPABILITY,
         setup_warning=(
             "DashScope API keys are region-specific; use a key from the US region. "
-            "Qwen coder models are not served from US (Virginia) — use qwen3.7-plus "
-            "for code work."
+            "The qwen3-coder-* line shuts down 2026-10-10 in every region — use "
+            "qwen3.7-plus for code work."
         ),
     ),
     ProfilePreset(
@@ -825,22 +898,21 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         suggested_models=(
             "qwen3.7-plus",
             "qwen3.8-max",
-            "qwen3.7-max",
-            "qwen3-coder-plus",
-            "qwen3-coder-next",
-            "qwen3.6-flash",
-            "qwen-flash",
+            "qwen3.8-flash",
+            "qwen3.7-flash",
         ),
         suggested_model_descriptions={
-            "qwen3.7-plus": "default - 1M context, balanced cost",
+            # Alibaba's documented coding recommendation is qwen3.7-plus; the
+            # qwen3-coder-* line shuts down 2026-10-10 in every region.
+            # qwen3.7-max, qwen3.6-flash and qwen-flash moved to the Legacy
+            # table (still callable, not aliased).
+            "qwen3.7-plus": "default - 1M context, balanced cost, coding pick",
             "qwen3.8-max": "advanced - newest multimodal flagship, 1M context",
-            "qwen3.7-max": "fallback - previous flagship, 1M context",
-            "qwen3-coder-plus": "coding - 1M context, long-repo work",
-            "qwen3-coder-next": "agentic - newest coder, 256K context",
-            "qwen3.6-flash": "fast - lower-latency, 1M context",
-            "qwen-flash": "economy - cheapest 1M-context option",
+            "qwen3.8-flash": "fast - low-cost multimodal tier, 1M context",
+            "qwen3.7-flash": "economy - cheapest current-gen model, 1M context",
         },
-        validation_model="qwen-flash",
+        model_aliases=_QWEN_RETIRED_MODEL_ALIASES,
+        validation_model="qwen3.7-flash",
         web_search_adapter=DASHSCOPE_CHAT_ADAPTER,
         web_search_model="qwen3.7-plus",
         cache_capability=_QWEN_DIAGNOSTIC_CACHE_CAPABILITY,
@@ -854,26 +926,31 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://open.bigmodel.cn/api/paas/v4/",
         api_key_env="ZHIPUAI_API_KEY",
         suggested_models=(
+            "glm-5.3",
+            "glm-5.3-flash",
             "glm-5.2",
-            "glm-5.1",
-            "glm-5-turbo",
-            "glm-4.7",
             "glm-4.7-flashx",
             "glm-4.7-flash",
         ),
         suggested_model_descriptions={
-            "glm-5.2": "default - 1M context, agentic coding",
-            "glm-5.1": "advanced - previous flagship, 200K context",
-            "glm-5-turbo": "coding - 200K context, cheaper than glm-5.1",
-            "glm-4.7": "fallback - cheap 200K context",
-            "glm-4.7-flashx": "fast - 200K context, no free-tier rate caps",
-            "glm-4.7-flash": "economy - free tier, 200K context, rate limited",
+            # glm-5.3 / glm-5.3-flash cannot disable thinking (thinking.type=
+            # disabled is rejected); reasoning_effort low|high|max is the knob.
+            # glm-5.2 keeps the optional-thinking contract at the same price.
+            # glm-5.1 / glm-5-turbo / glm-4.7 remain callable but are dominated.
+            "glm-5.3": "default - 1M context, agentic coding flagship",
+            "glm-5.3-flash": "fast - 1M multimodal, ~1/10 the price of glm-5.3",
+            "glm-5.2": "fallback - previous flagship, thinking toggleable, 1M",
+            "glm-4.7-flashx": "economy - 200K context, no free-tier rate caps",
+            "glm-4.7-flash": "free - free tier, 200K context, rate limited",
         },
-        # No aliases on purpose: glm-5, glm-4.6 etc. remain individually priced
-        # and callable — remapping would silently change what users are billed.
+        # No aliases on purpose: glm-5.1, glm-5-turbo, glm-4.7 etc. remain
+        # individually priced and callable — remapping would silently change
+        # what users are billed.
         validation_model="glm-4.7-flash",
         web_search_adapter=ZHIPU_WEB_SEARCH_ADAPTER,
-        web_search_model="glm-5.1",
+        # The Zhipu web_search tool endpoint is model-independent; this is the
+        # label attached to hosted-search results.
+        web_search_model="glm-5.3",
     ),
     ProfilePreset(
         key="zai-coding-plan",
@@ -884,17 +961,25 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="ZAI_API_KEY",
         suggested_models=(
             "glm-5.3",
-            "glm-5-turbo",
-            "glm-4.7",
+            "glm-5.3-flash",
         ),
         suggested_model_descriptions={
+            # docs.z.ai/devpack/overview lists exactly these two plan models.
+            # Both reason unconditionally (effort low|high|max, default max).
             "glm-5.3": "default - latest agentic coding model, 1M context",
-            "glm-5-turbo": "fast - lower-credit agent model, 200K context",
-            "glm-4.7": "fallback - lowest-credit plan model, 200K context",
+            "glm-5.3-flash": "fast - 1M multimodal, 3x the plan quota of glm-5.3",
         },
-        # GLM-4.7 consumes fewer plan credits than GLM-5.3 and is available on
-        # every Coding Plan tier, so use it for the initial credential probe.
-        validation_model="glm-4.7",
+        model_aliases={
+            # The plan proxy already routes these server-side; the local remap
+            # keeps context/capability metadata honest for saved configs.
+            "glm-5.2": "glm-5.3",
+            "glm-5.1": "glm-5.3",
+            "glm-5-turbo": "glm-5.3-flash",
+            "glm-4.7": "glm-5.3-flash",
+        },
+        # GLM-5.3-Flash consumes a third of the plan credits of GLM-5.3 and is
+        # available on every Coding Plan tier, so use it for the credential probe.
+        validation_model="glm-5.3-flash",
         cache_capability=_ZAI_CODING_PLAN_CACHE_CAPABILITY,
         setup_warning=(
             "Requires a Z.AI GLM Coding Plan key; general pay-as-you-go and "
@@ -903,8 +988,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         ),
         notes=(
             "Subscription Coding Plan endpoint, not the general Z.AI or China Zhipu API. "
-            "All plan tiers currently offer GLM-5.3, GLM-5-Turbo, and GLM-4.7; "
-            "GLM-5.2/5.1 requests are routed by the server to GLM-5.3."
+            "All plan tiers offer GLM-5.3 and GLM-5.3-Flash; GLM-5.2/5.1 requests are "
+            "routed by the server to GLM-5.3 and GLM-5-Turbo/4.7 to GLM-5.3-Flash. "
+            "Quota is credit-based (off-peak, including weekends, costs 50%)."
         ),
     ),
     ProfilePreset(
@@ -930,8 +1016,11 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "kimi-k2.6": "fallback - 256K context, thinking toggleable",
         },
         model_aliases={
-            # Only kimi-k2.6 accepts a thinking-off flag; K2.7/K3 error on it.
-            # kimi-k2.5 and the moonshot-v1-* family end 2026-08-31.
+            # Every id below now 404s on the platform (K2 family retired
+            # 2026-05-25; kimi-k2.5 and moonshot-v1-* on 2026-08-31). Moonshot's
+            # stated migration target is kimi-k3, but that is ~3x the price of
+            # the retired tiers, so cheap retired ids land on kimi-k2.6 — the
+            # only model here that still honours a thinking-off flag.
             "kimi-k2": "kimi-k2.6",
             "kimi-k2.5": "kimi-k2.6",
             "kimi-k2-thinking": "kimi-k2.6",
@@ -948,8 +1037,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         },
         validation_model="kimi-k2.6",
         web_search_adapter=MOONSHOT_KIMI_ADAPTER,
-        # kimi-k3 cannot disable thinking, which Kimi's $web_search tool requires,
-        # so provider-hosted search stays pinned to kimi-k2.6.
+        # Moonshot's pricing pages flag $web_search as "being updated; not
+        # recommended in the near term". Hosted search stays on kimi-k2.6, the
+        # cheapest id the docs still list as $web_search-capable.
         web_search_model="kimi-k2.6",
         cache_capability=_MOONSHOT_AUTOMATIC_CACHE_CAPABILITY,
         setup_warning=(
@@ -964,12 +1054,14 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         protocol="openai_compat",
         base_url="https://api.kimi.com/coding/v1",
         api_key_env="KIMI_API_KEY",
-        suggested_models=("k3", "kimi-for-coding", "kimi-for-coding-highspeed"),
+        suggested_models=("k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"),
         suggested_model_descriptions={
-            # Tier gating: kimi-for-coding = all members; k3 = Moderato+ (256K)
-            # and 1M only on Allegretto+; -highspeed = Allegretto+ only.
-            # Disabling thinking on this endpoint silently routes to K2.6.
+            # Tier gating: kimi-for-coding = all members; k3 / k3-256k =
+            # Moderato+ (k3 is 256K there, 1M only on Allegretto+); -highspeed =
+            # Allegretto+ only. Default reasoning_effort on this endpoint is
+            # "high"; disabling thinking silently routes to K2.6.
             "k3": "default - 256K context, 1M on Allegretto+",
+            "k3-256k": "economy - K3 pinned to 256K, ~half the quota burn of k3",
             "kimi-for-coding": "coding - 256K context, all membership tiers",
             "kimi-for-coding-highspeed": "fast - 256K context, Allegretto tier or above",
         },
@@ -1012,8 +1104,11 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "kimi-k2.6": "fallback - 256K context, thinking toggleable",
         },
         model_aliases={
-            # Only kimi-k2.6 accepts a thinking-off flag; K2.7/K3 error on it.
-            # kimi-k2.5 and the moonshot-v1-* family end 2026-08-31.
+            # Every id below now 404s on the platform (K2 family retired
+            # 2026-05-25; kimi-k2.5 and moonshot-v1-* on 2026-08-31). Moonshot's
+            # stated migration target is kimi-k3, but that is ~3x the price of
+            # the retired tiers, so cheap retired ids land on kimi-k2.6 — the
+            # only model here that still honours a thinking-off flag.
             "kimi-k2": "kimi-k2.6",
             "kimi-k2.5": "kimi-k2.6",
             "kimi-k2-thinking": "kimi-k2.6",
@@ -1030,8 +1125,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         },
         validation_model="kimi-k2.6",
         web_search_adapter=MOONSHOT_KIMI_ADAPTER,
-        # kimi-k3 cannot disable thinking, which Kimi's $web_search tool requires,
-        # so provider-hosted search stays pinned to kimi-k2.6.
+        # Moonshot's pricing pages flag $web_search as "being updated; not
+        # recommended in the near term". Hosted search stays on kimi-k2.6, the
+        # cheapest id the docs still list as $web_search-capable.
         web_search_model="kimi-k2.6",
         cache_capability=_MOONSHOT_AUTOMATIC_CACHE_CAPABILITY,
         setup_warning=(
@@ -1053,16 +1149,14 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "MiniMax-M2.5",
         ),
         suggested_model_descriptions={
-            # No thinking/reasoning toggle is documented for any MiniMax model —
-            # send no reasoning-control parameter on this preset. M3 input above
-            # 512K bills at a higher long-context rate.
+            # M3 exposes thinking.type adaptive|disabled; M2.x cannot disable
+            # thinking. M3 input above 512K bills at 2x the base rate.
+            # MiniMax-M2 / M2.5 stay live as separately priced legacy ids, so
+            # no alias remaps them.
             "MiniMax-M3": "default - 1M context, multimodal agentic coding",
-            "MiniMax-M2.7": "coding - 200K context, prior flagship",
+            "MiniMax-M2.7": "coding - 204K context, prior flagship",
             "MiniMax-M2.7-highspeed": "fast - same weights as M2.7, latency-tuned",
-            "MiniMax-M2.5": "fallback - stable prior generation",
-        },
-        model_aliases={
-            "MiniMax-M2": "MiniMax-M2.7",
+            "MiniMax-M2.5": "fallback - stable prior generation, 204K",
         },
         validation_model="MiniMax-M2.5",
         web_search_adapter=MINIMAX_CODING_PLAN_ADAPTER,
@@ -1082,15 +1176,21 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         protocol="openai_compat",
         base_url="https://api.xiaomimimo.com/v1",
         api_key_env="XIAOMI_API_KEY",
-        suggested_models=("mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2.5"),
+        suggested_models=("mimo-v2.5-pro", "mimo-v2.5"),
         suggested_model_descriptions={
+            # mimo-v2-flash shut down 2026-06-30 (auto-routed to mimo-v2.5).
+            # mimo-v2.5-pro-ultraspeed exists but is closed-beta by application
+            # and absent from /v1/models, so it is not offered here.
             "mimo-v2.5-pro": "default - flagship reasoning, coding & agents (1M context)",
-            "mimo-v2-flash": "faster & lighter (256K context)",
-            "mimo-v2.5": "omni - text + image understanding (1M context)",
+            "mimo-v2.5": "omni - text + image/audio/video understanding (1M context)",
         },
         validation_model="mimo-v2.5-pro",
-        # Migrate the legacy bare "mimo" placeholder up to the flagship model.
-        model_aliases={"mimo": "mimo-v2.5-pro"},
+        model_aliases={
+            # Migrate the legacy bare "mimo" placeholder up to the flagship model;
+            # the retired flash id follows Xiaomi's own server-side routing.
+            "mimo": "mimo-v2.5-pro",
+            "mimo-v2-flash": "mimo-v2.5",
+        },
     ),
     ProfilePreset(
         key="bytedance",
@@ -1100,23 +1200,28 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://ark.cn-beijing.volces.com/api/v3",
         api_key_env="ARK_API_KEY",
         suggested_models=(
-            "doubao-seed-2-0-pro-260215",
-            "doubao-seed-2-0-code-preview-260215",
-            "doubao-seed-2-0-lite-260215",
-            "doubao-seed-2-0-mini-260215",
+            "doubao-seed-evolving",
+            "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2-1-turbo-260628",
+            "doubao-seed-2-0-mini-260428",
         ),
         suggested_model_descriptions={
-            "doubao-seed-2-0-pro-260215": "default - flagship seed 2.0, agentic tasks",
-            "doubao-seed-2-0-code-preview-260215": "coding - 256K context, preview snapshot",
-            "doubao-seed-2-0-lite-260215": "fast - balanced quality and latency",
-            "doubao-seed-2-0-mini-260215": "economy - cheapest seed 2.0, high concurrency",
+            # Ark's recommended table (2026-09-02). The seed-2-0-*-260215 ids
+            # remain callable as previous-generation snapshots and are not
+            # aliased. Prices on ark.cn-beijing are CNY.
+            "doubao-seed-evolving": "default - rolling latest coding/agent model, 1M",
+            "doubao-seed-2-1-pro-260628": "advanced - seed 2.1 flagship, 256K, flat pricing",
+            "doubao-seed-2-1-turbo-260628": "fast - half the price of 2.1 pro, 256K",
+            "doubao-seed-2-0-mini-260428": "economy - cheapest current snapshot, 224K input",
         },
-        validation_model="doubao-seed-2-0-mini-260215",
+        validation_model="doubao-seed-2-0-mini-260428",
         web_search_adapter=VOLCENGINE_WEB_SEARCH_ADAPTER,
         setup_warning=(
-            "Model ids rest on registry evidence only (Ark docs are not "
-            "machine-readable) — verify with a live Ark key; Ark may require "
-            "endpoint ids (ep-...) instead of bare model names."
+            "Ids follow Ark's model list (docs.volcengine.com/docs/82379/1330310); "
+            "Ark may still require endpoint ids (ep-...) on some accounts. "
+            "doubao-seed-evolving is a rolling id updated weekly — return "
+            "encrypted_content in history and keep request config stable within "
+            "a session."
         ),
     ),
     ProfilePreset(
@@ -1128,21 +1233,23 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="GROQ_API_KEY",
         suggested_models=(
             "openai/gpt-oss-120b",
-            "qwen/qwen3.6-27b",
+            "qwen/qwen3.8-27b",
             "openai/gpt-oss-20b",
             "groq/compound",
         ),
         suggested_model_descriptions={
             # groq/compound runs server-side built-in tools and does NOT accept
             # client tool_call — never route normal agent tool loops to it.
+            # qwen/qwen3.6-27b stays callable (preview) but 3.8-27b supersedes it.
             "openai/gpt-oss-120b": "default - 131K context, adjustable reasoning",
-            "qwen/qwen3.6-27b": "coding - thinking modes and vision, preview tier",
+            "qwen/qwen3.8-27b": "coding - thinking modes and vision, preview tier",
             "openai/gpt-oss-20b": "fast - cheapest non-deprecated production id",
             "groq/compound": "agentic - server-side web search and code exec",
         },
         model_aliases={
-            # Both llama ids shut down 2026-08-16 (Groq deprecations table);
-            # the other retired ids remap per the same table.
+            # Both llama ids left the free/developer tiers 2026-08-16 (Groq
+            # deprecations table; enterprise committed-spend keys still see
+            # them); the other retired ids remap per the same table.
             "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
             "llama-3.1-8b-instant": "openai/gpt-oss-20b",
             "qwen/qwen3-32b": "openai/gpt-oss-120b",
@@ -1156,7 +1263,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         web_search_model="groq/compound-mini",
         setup_warning=(
             "Groq is mostly OpenAI-compatible; avoid preview-only models as production "
-            "defaults (qwen/qwen3.6-27b is preview and may be pulled without notice)."
+            "defaults (qwen/qwen3.8-27b is preview and may be pulled without notice)."
         ),
     ),
     ProfilePreset(
@@ -1168,29 +1275,36 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="CEREBRAS_API_KEY",
         suggested_models=(
             "gpt-oss-120b",
-            "zai-glm-4.7",
             "gemma-4-31b",
         ),
         suggested_model_descriptions={
-            # Context values are the free-tier floor (65K); paid keys get 131K.
-            # gpt-oss-120b cannot disable reasoning (effort low|medium|high).
-            "gpt-oss-120b": "default - only GA public model, ~3000 tok/s",
-            "zai-glm-4.7": "coding - strongest here, deprecates 2026-08-17",
-            "gemma-4-31b": "fallback - only image-input model, preview tier",
+            # Cerebras' public catalog is exactly these two models; GLM 5.x,
+            # Kimi, Qwen-Coder, MiniMax and DeepSeek exist only as dedicated
+            # (enterprise) endpoints with no public id. Context is the free-tier
+            # floor (65K); paid keys get 131K / 40K output. gpt-oss-120b cannot
+            # disable reasoning (effort low|medium|high).
+            "gpt-oss-120b": "default - reasoning + tools, ~3000 tok/s",
+            "gemma-4-31b": "fallback - only image-input model, optional reasoning",
         },
         model_aliases={
             # The llama family left Cerebras public endpoints 2026-02-16 (and
-            # "llama3.3-70b" was never a valid spelling of the id).
+            # "llama3.3-70b" was never a valid spelling of the id). zai-glm-4.7
+            # was deprecated 2026-08-17 with no named successor.
             "llama3.3-70b": "gpt-oss-120b",
             "llama-3.3-70b": "gpt-oss-120b",
             "llama3.1-70b": "gpt-oss-120b",
             "llama3.1-8b": "gpt-oss-120b",
             "qwen-3-32b": "gpt-oss-120b",
-            "qwen-3-coder-480b": "zai-glm-4.7",
-            "zai-glm-4.6": "zai-glm-4.7",
+            "qwen-3-coder-480b": "gpt-oss-120b",
+            "zai-glm-4.6": "gpt-oss-120b",
+            "zai-glm-4.7": "gpt-oss-120b",
             "deepseek-r1-distill-llama-70b": "gpt-oss-120b",
         },
         validation_model="gpt-oss-120b",
+        setup_warning=(
+            "Cerebras public endpoints serve only gpt-oss-120b and gemma-4-31b; "
+            "zai-glm-4.7 was deprecated 2026-08-17 and now remaps to gpt-oss-120b."
+        ),
     ),
     ProfilePreset(
         key="mistral",
@@ -1203,22 +1317,28 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "mistral-medium-3-5",
             "mistral-large-2512",
             "mistral-small-2603",
+            "zai-glm-5-2",
             "codestral-2508",
             "ministral-8b-2512",
         ),
         suggested_model_descriptions={
-            # codestral is FIM/completion-oriented with ~4K max output — routers
-            # should prefer the default for multi-file agentic patch turns.
+            # codestral is FIM/completion-oriented — routers should prefer the
+            # default for multi-file agentic patch turns. zai-glm-5-2 is a
+            # third-party model Mistral hosts (Public Preview, 1-month
+            # deprecation notice) and the only 1M-context option here.
             "mistral-medium-3-5": "default - agentic and coding flagship, 256K",
             "mistral-large-2512": "advanced - mistral large 3, 675B MoE, 256K",
             "mistral-small-2603": "fast - mistral small 4, low latency",
-            "codestral-2508": "coding - FIM and completion, 4K max output",
+            "zai-glm-5-2": "coding - hosted GLM-5.2, 1M context, preview tier",
+            "codestral-2508": "fim - code completion and FIM, 128K context",
             "ministral-8b-2512": "economy - small tool-capable model",
         },
         model_aliases={
             # Mistral documents mistral-medium-3-5 as the primary API id. Keep
             # the former Alysis Code default as a compatibility alias, while the
             # provider-managed -latest alias passes through unchanged.
+            # devstral-2512 / magistral-* / mistral-medium-2508 were deprecated
+            # 2026-05-22 (still callable under the 6-month GA notice policy).
             "mistral-medium-2604": "mistral-medium-3-5",
             "mistral-medium-3": "mistral-medium-3-5",
             "mistral-medium-2508": "mistral-medium-3-5",
@@ -1261,8 +1381,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "grok-4.20-0309-non-reasoning",
         ),
         suggested_model_descriptions={
-            # grok-build-0.1 is served from us-east-1/us-west-2 only. Max output
-            # is unpublished for the 4.20 family — clamp conservatively.
+            # Regions: grok-4.3 is us-east-1 only; 4.6/4.5/build-0.1/4.20 are
+            # us-east-1 + us-west-2. Batch API only on 4.3 and the 4.20 family.
+            # Max output is unpublished across the lineup — clamp conservatively.
             "grok-4.6": "default - newest flagship for coding and agents, 500K",
             "grok-4.5": "fallback - previous flagship for coding and agents",
             "grok-build-0.1": "coding - agentic engineering model, 256K",
@@ -1271,10 +1392,11 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "grok-4.20-0309-non-reasoning": "fast - no-reasoning snapshot, 1M context",
         },
         model_aliases={
-            # Retired 2026-05-15, full shutdown 2026-08-15. The *-non-reasoning
-            # slugs deliberately map to the non-reasoning snapshot (xAI's own
-            # redirect lands them on grok-4.3 with effort=none, which the alias
-            # table cannot express).
+            # Retired 2026-05-15; xAI keeps the slugs resolving as redirects
+            # (no shutdown date is published). The *-non-reasoning slugs
+            # deliberately map to the non-reasoning snapshot (xAI's own redirect
+            # lands them on grok-4.3 with effort=none, which the alias table
+            # cannot express).
             "grok-code-fast-1": "grok-build-0.1",
             "grok-4": "grok-4.3",
             "grok-4-0709": "grok-4.3",
@@ -1290,9 +1412,10 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         web_search_adapter=XAI_RESPONSES_ADAPTER,
         cache_capability=_XAI_CONVERSATION_HEADER_CACHE_CAPABILITY,
         setup_warning=(
-            "Retired slugs (grok-4, grok-4-fast, grok-3, grok-code-fast-1) shut down "
-            "fully 2026-08-15 and are billed at grok-4.3 rates until then; migrate "
-            "pinned configs explicitly. Ids use dots, not dashes (grok-4.6)."
+            "Retired slugs (grok-4, grok-4-fast, grok-3, grok-code-fast-1) still "
+            "resolve as redirects billed at grok-4.3 / grok-build-0.1 rates; migrate "
+            "pinned configs explicitly. Ids use dots, not dashes (grok-4.6). "
+            "grok-4.3 is served from us-east-1 only."
         ),
     ),
     ProfilePreset(
@@ -1344,25 +1467,38 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="OPENROUTER_API_KEY",
         suggested_models=(
             "anthropic/claude-sonnet-5",
-            "anthropic/claude-opus-4.8",
+            "anthropic/claude-opus-5",
+            "anthropic/claude-fable-5.1",
+            "openai/gpt-6-astra",
             "openai/gpt-5.6-terra",
             "openai/gpt-5.6-luna",
-            "z-ai/glm-5.2",
+            "google/gemini-3.8-flash",
+            "x-ai/grok-4.6",
+            "z-ai/glm-5.3",
+            "z-ai/glm-5.3-flash",
+            "moonshotai/kimi-k3",
             "deepseek/deepseek-v4-pro-0813",
             "deepseek/deepseek-v4-flash-0731",
             "deepseek/deepseek-v4-flash-vision-exp",
             "qwen/qwen3.8-max",
         ),
         suggested_model_descriptions={
-            # Vendor prefixes are exact: z-ai/ (not zai/), x-ai/, moonshotai/.
-            # Avoid '-latest' floating aliases and rate-limited :free variants
-            # for agent loops.
+            # Vendor prefixes are exact: z-ai/ (not zai/), x-ai/, moonshotai/;
+            # OpenRouter spells Claude versions with dots (claude-fable-5.1).
+            # Avoid '-latest' floating aliases (~z-ai/glm-latest etc.) and
+            # rate-limited :free variants for agent loops.
             "anthropic/claude-sonnet-5": "default - coding and agents, 1M context",
-            "anthropic/claude-opus-4.8": "advanced - long-horizon autonomous work",
+            "anthropic/claude-opus-5": "advanced - long-horizon autonomous work, 1M",
+            "anthropic/claude-fable-5.1": "reasoning - Mythos-class, always-on thinking",
+            "openai/gpt-6-astra": "advanced - GPT-6 flagship, reasoning always on, 1.05M",
             "openai/gpt-5.6-terra": "coding - balanced gpt-5.6 tier, 1.05M context",
             "openai/gpt-5.6-luna": "fast - cost-efficient gpt-5.6 tier",
-            "z-ai/glm-5.2": "economy - cheap 1M-context tool caller",
-            "deepseek/deepseek-v4-pro-0813": "agentic - current reasoning MoE, 1M context",
+            "google/gemini-3.8-flash": "fallback - newest stable Gemini flash, 1M",
+            "x-ai/grok-4.6": "agentic - xAI flagship for coding and agents, 500K",
+            "z-ai/glm-5.3": "open - GLM-5.3 agentic coding flagship, 1.3M routing",
+            "z-ai/glm-5.3-flash": "economy - cheapest 1M-class multimodal tool caller",
+            "moonshotai/kimi-k3": "open - Kimi K3 long-horizon coding, 1M multimodal",
+            "deepseek/deepseek-v4-pro-0813": "reasoning - DeepSeek V4 Pro snapshot, 1M",
             "deepseek/deepseek-v4-flash-0731": "fast - current low-cost 1M release",
             "deepseek/deepseek-v4-flash-vision-exp": (
                 "vision preview - image understanding and tools, 1M context"
@@ -1381,20 +1517,55 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
     ProfilePreset(
         key="perplexity",
         provider_key="perplexity",
-        label="Perplexity Sonar",
-        protocol="openai_compat",
-        base_url="https://api.perplexity.ai",
+        label="Perplexity Agent API",
+        # Sonar Chat Completions (api.perplexity.ai, models sonar / sonar-pro)
+        # shuts down 2026-09-27. The Agent API is an OpenAI Responses-format
+        # surface (POST /v1/agent; /v1/responses is an accepted alias), so the
+        # native Responses client drives it directly.
+        protocol="openai_responses",
+        base_url="https://api.perplexity.ai/v1",
         api_key_env="PERPLEXITY_API_KEY",
-        suggested_models=("sonar-pro", "sonar"),
-        web_search_adapter=PERPLEXITY_SONAR_ADAPTER,
-        web_search_model="sonar",
-        setup_warning=(
-            "Search-only: sonar models reject tool definitions (HTTP 400), so this "
-            "preset cannot run agentic tool loops. Perplexity's coding models live "
-            "on the Agent API (/v1/agent), which needs a Responses-style client "
-            "Alysis Code does not ship yet."
+        suggested_models=(
+            "perplexity/sonar",
+            "perplexity/glm-5.3",
+            "perplexity/kimi-k3",
+            "perplexity/kimi-k2.7-code",
+            "perplexity/deepseek-v4-flash-0731",
         ),
-        notes="Sonar models include web-grounded answers and citations.",
+        suggested_model_descriptions={
+            # Perplexity-hosted ids only. Third-party routes (openai/*,
+            # anthropic/*, google/*, xai/*) also resolve on this surface but
+            # are billed at their vendors' list prices; users can type them in.
+            "perplexity/sonar": "default - Perplexity search model, grounded via web_search tool",
+            "perplexity/glm-5.3": "coding - hosted GLM-5.3 agentic coding, tools + MCP",
+            "perplexity/kimi-k3": "advanced - hosted Kimi K3 long-horizon coding",
+            "perplexity/kimi-k2.7-code": "agentic - hosted Kimi K2.7 Code specialist",
+            "perplexity/deepseek-v4-flash-0731": "fast - cheapest hosted route ($0.13/$0.26)",
+        },
+        model_aliases={
+            # Retired Sonar Chat Completions ids. Perplexity maps them to the
+            # fast/low/medium/high presets; the closest explicit model is the
+            # hosted Sonar route.
+            "sonar": "perplexity/sonar",
+            "sonar-pro": "perplexity/sonar",
+            "sonar-reasoning": "perplexity/sonar",
+            "sonar-reasoning-pro": "perplexity/sonar",
+            "sonar-deep-research": "perplexity/sonar",
+        },
+        validation_model="perplexity/deepseek-v4-flash-0731",
+        web_search_adapter=PERPLEXITY_SONAR_ADAPTER,
+        web_search_model="perplexity/sonar",
+        setup_warning=(
+            "Agent API (Responses format) at https://api.perplexity.ai/v1. Profiles "
+            "saved against the old Sonar base URL (https://api.perplexity.ai, models "
+            "sonar / sonar-pro) stop working on 2026-09-27 — re-create them from this "
+            "preset. temperature/top_p are ignored for GPT-5-family routes."
+        ),
+        notes=(
+            "Perplexity Agent API: one Responses-format endpoint for Perplexity-hosted "
+            "Sonar/GLM/Kimi/DeepSeek/Nemotron routes plus third-party vendors, with "
+            "built-in web_search, fetch-URL, sandbox, and MCP tools."
+        ),
     ),
     ProfilePreset(
         key="together",
@@ -1404,39 +1575,48 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://api.together.ai/v1",
         api_key_env="TOGETHER_API_KEY",
         suggested_models=(
-            "zai-org/GLM-5.2",
-            "moonshotai/Kimi-K2.7-Code",
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3",
             "deepseek-ai/DeepSeek-V4-Pro-0813",
             "deepseek-ai/DeepSeek-V4-Flash-0731",
+            "zai-org/GLM-5.3-Flash",
             "MiniMaxAI/MiniMax-M3",
             "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
+            "Qwen/Qwen3.5-9B",
         ),
         suggested_model_descriptions={
-            # Ids are case-sensitive and vendor-prefixed. Kimi-K2.7-Code and
-            # MiniMax-M3 reason unconditionally — never emit a reasoning-off or
-            # effort param for them.
-            "zai-org/GLM-5.2": "default - general coding, 256K context",
-            "moonshotai/Kimi-K2.7-Code": "coding - code specialist, 256K context",
+            # Ids are case-sensitive and vendor-prefixed. Kimi-K3 reasons
+            # unconditionally — never emit a reasoning-off param for it.
+            # Kimi-K2.7-Code left serverless 2026-08-27; gpt-oss-20b is
+            # scheduled for removal 2026-09-14 (Together names Qwen3.5-9B as
+            # its replacement).
+            "zai-org/GLM-5.3": "default - agentic coding flagship, 1M context",
+            "moonshotai/Kimi-K3": "coding - long-horizon coding, 1M multimodal",
             "deepseek-ai/DeepSeek-V4-Pro-0813": "reasoning - current flagship, 1M context",
             "deepseek-ai/DeepSeek-V4-Flash-0731": "fast - current 1M-context release",
-            "MiniMaxAI/MiniMax-M3": "economy - cheapest 512K-context option",
+            "zai-org/GLM-5.3-Flash": "economy - cheapest 1M-context tool caller",
+            "MiniMaxAI/MiniMax-M3": "multimodal - 512K context, vision + agentic coding",
             "openai/gpt-oss-120b": "open - larger tool-capable GPT-OSS model, 128K context",
-            "openai/gpt-oss-20b": "fallback - cheapest tool-capable id",
+            "Qwen/Qwen3.5-9B": "fallback - small vision + tool model, 262K context",
         },
         model_aliases={
             # Fallback policy, NOT vendor renames: Together retires serverless
-            # models with a blank successor column. Two are cross-vendor
-            # substitutions — surface the swap to the user at resolution time.
+            # models with a blank successor column (dates from its deprecations
+            # page). Several are cross-vendor substitutions — surface the swap
+            # to the user at resolution time.
             "zai-org/GLM-5.1": "zai-org/GLM-5.2",
-            "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": "moonshotai/Kimi-K2.7-Code",
-            "Qwen/Qwen3-Coder-Next-FP8": "moonshotai/Kimi-K2.7-Code",
+            "moonshotai/Kimi-K2.7-Code": "moonshotai/Kimi-K3",
+            "moonshotai/Kimi-K2.6": "moonshotai/Kimi-K3",
+            "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": "moonshotai/Kimi-K3",
+            "Qwen/Qwen3-Coder-Next-FP8": "moonshotai/Kimi-K3",
+            "deepseek-ai/DeepSeek-V4-Pro": "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "openai/gpt-oss-20b": "Qwen/Qwen3.5-9B",
         },
-        validation_model="openai/gpt-oss-20b",
+        validation_model="Qwen/Qwen3.5-9B",
         setup_warning=(
             "Together retires serverless models on a published schedule with no "
             "successor mapping — expect id churn; verify access with Together's "
-            "Models API."
+            "Models API. openai/gpt-oss-20b is removed 2026-09-14."
         ),
     ),
     ProfilePreset(
@@ -1447,36 +1627,50 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         base_url="https://api.fireworks.ai/inference/v1",
         api_key_env="FIREWORKS_API_KEY",
         suggested_models=(
-            "accounts/fireworks/models/glm-5p2",
-            "accounts/fireworks/models/kimi-k2p7-code",
+            "accounts/fireworks/models/glm-5p3",
+            "accounts/fireworks/models/kimi-k3",
             "accounts/fireworks/models/deepseek-v4-pro-0813",
             "accounts/fireworks/models/deepseek-v4-flash-0731",
+            "accounts/fireworks/models/glm-5p3-flash",
             "accounts/fireworks/models/minimax-m3",
             "accounts/fireworks/models/qwen3p7-plus",
         ),
         suggested_model_descriptions={
-            # 'p' is the decimal convention (5p2 = 5.2). Catalog membership does
+            # 'p' is the decimal convention (5p3 = 5.3). Catalog membership does
             # NOT imply serverless availability on Fireworks — every id here is
-            # confirmed serverless-capable.
-            "accounts/fireworks/models/glm-5p2": "default - general agentic coding, 1M context",
-            "accounts/fireworks/models/kimi-k2p7-code": "coding - 262K context, tool calling",
+            # confirmed serverless-capable. glm-5p2 and kimi-k2p7-code remain
+            # serverless and callable; they are superseded, not retired.
+            "accounts/fireworks/models/glm-5p3": "default - agentic coding flagship, 1M context",
+            "accounts/fireworks/models/kimi-k3": "coding - Fireworks' top code/agent pick, 1M",
             "accounts/fireworks/models/deepseek-v4-pro-0813": (
                 "reasoning - current 1M-context production release"
             ),
             "accounts/fireworks/models/deepseek-v4-flash-0731": (
                 "fast - current lowest-cost 1M-context release"
             ),
-            "accounts/fireworks/models/minimax-m3": "economy - 512K context, effort control",
+            "accounts/fireworks/models/glm-5p3-flash": (
+                "economy - 1M context, image input, ~1/10 of glm-5p3"
+            ),
+            "accounts/fireworks/models/minimax-m3": "multimodal - 512K context, effort control",
             "accounts/fireworks/models/qwen3p7-plus": "fallback - 262K context, standard tier only",
         },
         model_aliases={
             # qwen2p5-coder is not serverless-capable at all (on-demand GPU
-            # only); the other two are superseded snapshots.
+            # only); glm-5p1 lost serverless; the undated DeepSeek ids,
+            # gpt-oss-20b and minimax-m2p7 were retired in August 2026 with
+            # Fireworks' documented replacements below.
             "accounts/fireworks/models/qwen2p5-coder-32b-instruct": (
                 "accounts/fireworks/models/kimi-k2p7-code"
             ),
-            "accounts/fireworks/models/kimi-k2p6": "accounts/fireworks/models/kimi-k2p7-code",
             "accounts/fireworks/models/glm-5p1": "accounts/fireworks/models/glm-5p2",
+            "accounts/fireworks/models/deepseek-v4-pro": (
+                "accounts/fireworks/models/deepseek-v4-pro-0813"
+            ),
+            "accounts/fireworks/models/deepseek-v4-flash": (
+                "accounts/fireworks/models/deepseek-v4-flash-0731"
+            ),
+            "accounts/fireworks/models/gpt-oss-20b": "accounts/fireworks/models/gpt-oss-120b",
+            "accounts/fireworks/models/minimax-m2p7": "accounts/fireworks/models/minimax-m3",
         },
         validation_model="accounts/fireworks/models/deepseek-v4-flash-0731",
     ),
@@ -1633,8 +1827,22 @@ def _profile_matches_preset(profile: ProfileSpec, preset: ProfilePreset) -> bool
     return True
 
 
+_FIRST_PARTY_FAMILY_PROVIDER_KEYS: frozenset[str] = frozenset({"openai", "anthropic", "gemini"})
+
+
 def profile_provider_family(profile: ProfileSpec) -> str | None:
     """Resolve a profile to a first-party family for protocol conversion and diagnostics."""
+    # A third-party preset can speak a first-party wire protocol (Perplexity's
+    # Agent API is OpenAI Responses-format). Protocol alone must not classify
+    # such a profile as OpenAI/Anthropic/Gemini for conversion or diagnostics.
+    matched = find_preset_for_profile(profile)
+    if (
+        matched is not None
+        and matched.provider_key
+        and matched.provider_key not in _FIRST_PARTY_FAMILY_PROVIDER_KEYS
+    ):
+        return None
+
     protocol = str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
     if protocol == OPENAI_RESPONSES_PROTOCOL:
         return "openai"

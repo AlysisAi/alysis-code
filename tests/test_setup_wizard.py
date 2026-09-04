@@ -843,10 +843,15 @@ def test_model_picker_rows_include_preset_suggestions(monkeypatch, tmp_path: Pat
 
     assert setup_wizard_mod.run_setup_wizard() is True
     model_rows = picker.calls[1]["rows"]
+    assert model_rows[0] == (
+        "gpt-6-astra",
+        "gpt-6-astra",
+        "default - GPT-6 flagship, reasoning always on, 1.05M",
+    )
     assert (
         "gpt-5.6-terra",
         "gpt-5.6-terra",
-        "default - balanced 5.6 tier, 1.05M context",
+        "advanced - balanced 5.6 tier at 1/5 the price, 1.05M",
     ) in model_rows
     assert model_rows[-1][1] == "Type a custom model name"
 
@@ -970,7 +975,7 @@ def test_zai_coding_plan_setup_persists_only_documented_reasoning_levels(
 def test_gemini_model_picker_uses_stable_models(monkeypatch, tmp_path: Path) -> None:
     _config_env(tmp_path, monkeypatch)
     _patch_console(monkeypatch)
-    picker = PickerScript(["gemini", "gemini-3.7-flash"])
+    picker = PickerScript(["gemini", "gemini-3.8-flash"])
     monkeypatch.setattr(setup_wizard_mod, "_run_wizard_picker", picker)
     monkeypatch.setattr(
         setup_wizard_mod.typer, "prompt", PromptScript(["", "sk-test-1234", os.fspath(tmp_path)])
@@ -978,8 +983,8 @@ def test_gemini_model_picker_uses_stable_models(monkeypatch, tmp_path: Path) -> 
 
     assert setup_wizard_mod.run_setup_wizard() is True
     model_values = [value for value, _label, _description in picker.calls[1]["rows"]]
-    assert model_values[0] == "gemini-3.7-flash"
-    assert "gemini-3.6-flash" in model_values
+    assert model_values[0] == "gemini-3.8-flash"
+    assert "gemini-3.7-flash" in model_values
     assert "gemini-3.5-flash-lite" in model_values
     assert "gemini-3.1-pro-preview" in model_values
     assert "gemini-2.5-pro" not in model_values

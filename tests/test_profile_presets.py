@@ -141,9 +141,54 @@ def test_compatibility_presets_stay_openai_compatible() -> None:
             "anthropic-native",
             "gemini",
             "gemini-native",
+            # Perplexity's Agent API is a Responses-format surface.
+            "perplexity",
         }:
             continue
         assert preset.protocol == "openai_compat", preset.key
+
+
+def test_perplexity_preset_targets_the_agent_api_not_retired_sonar() -> None:
+    preset = get_preset("perplexity")
+
+    assert preset is not None
+    assert preset.protocol == "openai_responses"
+    assert preset.base_url == "https://api.perplexity.ai/v1"
+    assert preset.suggested_models[0] == "perplexity/sonar"
+    assert all(model.startswith("perplexity/") for model in preset.suggested_models)
+    assert all(model in preset.suggested_model_descriptions for model in preset.suggested_models)
+    assert preset.web_search_model == "perplexity/sonar"
+    # Sonar Chat Completions ids shut down 2026-09-27 and remap to the hosted
+    # Sonar route on the Agent API.
+    for retired in ("sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"):
+        assert canonical_model_alias_for_preset(preset, retired) == "perplexity/sonar"
+    assert "2026-09-27" in preset.setup_warning
+
+
+def test_perplexity_profile_is_not_classified_as_first_party_openai() -> None:
+    from alysis_code.profile_presets import profile_provider_family
+
+    profile = ProfileSpec(
+        name="perplexity",
+        protocol="openai_responses",
+        base_url="https://api.perplexity.ai/v1",
+        default_model="perplexity/sonar",
+    )
+
+    assert find_preset_for_profile(profile) is not None
+    assert find_preset_for_profile(profile).key == "perplexity"  # type: ignore[union-attr]
+    assert profile_provider_family(profile) is None
+    # A real OpenAI Responses profile still resolves to the openai family.
+    assert (
+        profile_provider_family(
+            ProfileSpec(
+                name="work",
+                protocol="openai_responses",
+                base_url="https://api.openai.com/v1",
+            )
+        )
+        == "openai"
+    )
 
 
 def test_each_non_custom_preset_has_valid_base_url_and_suggested_models() -> None:
@@ -161,21 +206,56 @@ def test_openai_preset_uses_working_chat_completion_models() -> None:
     assert preset is not None
     assert preset.base_url == "https://api.openai.com/v1"
     assert preset.suggested_models == (
+        "gpt-6-astra",
         "gpt-5.6-terra",
         "gpt-5.6-sol",
         "gpt-5.6-luna",
-        "gpt-5.3-codex",
+        "gpt-5.5",
         "gpt-5.4-mini",
-        "gpt-5.4-nano",
     )
+    # gpt-5.3-codex does not support /v1/chat/completions at all.
+    assert "gpt-5.3-codex" not in preset.suggested_models
+    assert canonical_model_alias_for_preset(preset, "gpt-5.3-codex") == "gpt-5.6-sol"
 
 
-def test_openai_preset_preserves_legacy_nano_alias_without_hiding_current_nano() -> None:
-    preset = get_preset("openai")
+def test_openai_presets_lead_with_gpt_6_astra() -> None:
+    # GPT-6 Astra (2026-09-03) is OpenAI's flagship and heads both OpenAI
+    # surfaces; Terra follows as the balanced pick at 1/5 the input price.
+    for key in ("openai", "openai-responses"):
+        preset = get_preset(key)
+
+        assert preset is not None
+        assert preset.suggested_models[:2] == ("gpt-6-astra", "gpt-5.6-terra")
+        assert preset.suggested_model_descriptions["gpt-6-astra"].startswith("default")
+        assert make_profile_from_preset(preset).default_model == "gpt-6-astra"
+        assert canonical_model_alias_for_preset(preset, "gpt-6") == "gpt-6-astra"
+        assert canonical_model_alias_for_preset(preset, "gpt-6-astra") == "gpt-6-astra"
+    openrouter = get_preset("openrouter")
+    assert openrouter is not None
+    assert "openai/gpt-6-astra" in openrouter.suggested_models
+
+
+def test_openai_responses_preset_keeps_the_responses_only_codex_model() -> None:
+    preset = get_preset("openai-responses")
 
     assert preset is not None
-    assert canonical_model_alias_for_preset(preset, "gpt-5-nano") == "gpt-5.4-nano"
-    assert canonical_model_alias_for_preset(preset, "gpt-5.4-nano") == "gpt-5.4-nano"
+    assert "gpt-5.3-codex" in preset.suggested_models
+    assert canonical_model_alias_for_preset(preset, "gpt-5.3-codex") == "gpt-5.3-codex"
+    assert preset.validation_model == "gpt-5.6-luna"
+
+
+def test_openai_presets_follow_official_replacements_without_hiding_live_ids() -> None:
+    for key in ("openai", "openai-responses"):
+        preset = get_preset(key)
+
+        assert preset is not None
+        # OpenAI's deprecations page names gpt-5.6-luna as gpt-5-nano's successor.
+        assert canonical_model_alias_for_preset(preset, "gpt-5-nano") == "gpt-5.6-luna"
+        assert canonical_model_alias_for_preset(preset, "gpt-5-codex") == "gpt-5.6-sol"
+        assert canonical_model_alias_for_preset(preset, "gpt-5.1-codex-mini") == "gpt-5.6-terra"
+        # Still-live ids pass through untouched.
+        assert canonical_model_alias_for_preset(preset, "gpt-5.4-nano") == "gpt-5.4-nano"
+        assert canonical_model_alias_for_preset(preset, "gpt-5.5") == "gpt-5.5"
 
 
 def test_moonshot_presets_alias_retired_kimi_k2_to_current_model() -> None:
@@ -218,7 +298,7 @@ def test_provider_presets_use_current_openai_compatible_base_urls() -> None:
         "xai": "https://api.x.ai/v1",
         "cohere": "https://api.cohere.ai/compatibility/v1",
         "openrouter": "https://openrouter.ai/api/v1",
-        "perplexity": "https://api.perplexity.ai",
+        "perplexity": "https://api.perplexity.ai/v1",
         "together": "https://api.together.ai/v1",
         "fireworks": "https://api.fireworks.ai/inference/v1",
         "ollama": "http://localhost:11434/v1",
@@ -243,12 +323,16 @@ def test_anthropic_preset_uses_native_messages_endpoint_and_current_models() -> 
     assert preset.suggested_models == (
         "claude-sonnet-5",
         "claude-opus-5",
-        "claude-fable-5",
+        "claude-fable-5-1",
         "claude-haiku-4-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
     )
     assert all(model in preset.suggested_model_descriptions for model in preset.suggested_models)
+    # Fable 5 is Legacy but still callable; 5.1 changes forced-tool semantics,
+    # so it is deliberately not remapped. The dotted spelling is normalised.
+    assert canonical_model_alias_for_preset(preset, "claude-fable-5") == "claude-fable-5"
+    assert canonical_model_alias_for_preset(preset, "claude-fable-5.1") == "claude-fable-5-1"
 
 
 def test_anthropic_presets_all_offer_the_same_claude_roster() -> None:
@@ -278,6 +362,7 @@ def test_anthropic_cache_minimum_is_per_model_not_one_number() -> None:
     # Opus 5 halved the floor; the older Opus tiers never did.
     assert minimum("claude-opus-5") == 512
     assert minimum("claude-fable-5") == 512
+    assert minimum("claude-fable-5-1") == 512
     assert minimum("claude-opus-4-8") == 1024
     assert minimum("claude-sonnet-5") == 1024
     assert minimum("claude-opus-4-7") == 2048
@@ -309,14 +394,14 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "deepseek-v4-flash-vision-exp",
         ),
         "gemini": (
+            "gemini-3.8-flash",
             "gemini-3.7-flash",
-            "gemini-3.6-flash",
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro-preview",
         ),
         "groq": (
             "openai/gpt-oss-120b",
-            "qwen/qwen3.6-27b",
+            "qwen/qwen3.8-27b",
             "openai/gpt-oss-20b",
             "groq/compound",
         ),
@@ -324,6 +409,7 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "mistral-medium-3-5",
             "mistral-large-2512",
             "mistral-small-2603",
+            "zai-glm-5-2",
             "codestral-2508",
             "ministral-8b-2512",
         ),
@@ -342,31 +428,72 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
         "nvidia": (
             "nvidia/nemotron-3-super-120b-a12b",
             "nvidia/nemotron-3-ultra-550b-a55b",
-            "nvidia/nemotron-3-nano-30b-a3b",
-            "deepseek-ai/deepseek-v4-pro",
-            "deepseek-ai/deepseek-v4-flash",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "moonshotai/kimi-k3",
+            "deepseek-ai/deepseek-v4-pro-0813",
+            "deepseek-ai/deepseek-v4-flash-0731",
         ),
-        "zai-coding-plan": ("glm-5.3", "glm-5-turbo", "glm-4.7"),
-        "kimi-code": ("k3", "kimi-for-coding", "kimi-for-coding-highspeed"),
+        "zai-coding-plan": ("glm-5.3", "glm-5.3-flash"),
+        "kimi-code": ("k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"),
+        "zhipu": (
+            "glm-5.3",
+            "glm-5.3-flash",
+            "glm-5.2",
+            "glm-4.7-flashx",
+            "glm-4.7-flash",
+        ),
+        "qwen-intl": ("qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-flash"),
+        "qwen-us": ("qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-flash"),
+        "qwen-cn": ("qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-flash"),
+        "cerebras": ("gpt-oss-120b", "gemma-4-31b"),
+        "bytedance": (
+            "doubao-seed-evolving",
+            "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2-1-turbo-260628",
+            "doubao-seed-2-0-mini-260428",
+        ),
+        "perplexity": (
+            "perplexity/sonar",
+            "perplexity/glm-5.3",
+            "perplexity/kimi-k3",
+            "perplexity/kimi-k2.7-code",
+            "perplexity/deepseek-v4-flash-0731",
+        ),
         "openrouter": (
             "anthropic/claude-sonnet-5",
-            "anthropic/claude-opus-4.8",
+            "anthropic/claude-opus-5",
+            "anthropic/claude-fable-5.1",
+            "openai/gpt-6-astra",
             "openai/gpt-5.6-terra",
             "openai/gpt-5.6-luna",
-            "z-ai/glm-5.2",
+            "google/gemini-3.8-flash",
+            "x-ai/grok-4.6",
+            "z-ai/glm-5.3",
+            "z-ai/glm-5.3-flash",
+            "moonshotai/kimi-k3",
             "deepseek/deepseek-v4-pro-0813",
             "deepseek/deepseek-v4-flash-0731",
             "deepseek/deepseek-v4-flash-vision-exp",
             "qwen/qwen3.8-max",
         ),
         "together": (
-            "zai-org/GLM-5.2",
-            "moonshotai/Kimi-K2.7-Code",
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3",
             "deepseek-ai/DeepSeek-V4-Pro-0813",
             "deepseek-ai/DeepSeek-V4-Flash-0731",
+            "zai-org/GLM-5.3-Flash",
             "MiniMaxAI/MiniMax-M3",
             "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
+            "Qwen/Qwen3.5-9B",
+        ),
+        "fireworks": (
+            "accounts/fireworks/models/glm-5p3",
+            "accounts/fireworks/models/kimi-k3",
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            "accounts/fireworks/models/deepseek-v4-flash-0731",
+            "accounts/fireworks/models/glm-5p3-flash",
+            "accounts/fireworks/models/minimax-m3",
+            "accounts/fireworks/models/qwen3p7-plus",
         ),
         "xai": (
             "grok-4.6",
@@ -412,9 +539,18 @@ def test_nvidia_preset_uses_hosted_nim_contract() -> None:
     assert preset.provider_key == "nvidia"
     assert preset.protocol == "openai_compat"
     assert preset.api_key_env == "NVIDIA_API_KEY"
-    assert preset.validation_model == "nvidia/nemotron-3-nano-30b-a3b"
+    assert preset.validation_model == "nvidia/nemotron-3.5-lightning-30b-a3b"
     assert preset.web_search_adapter == "auto"
     assert "rate-limited" in preset.setup_warning
+    # Deprecated free endpoints leave the offline picker but stay live in
+    # NVIDIA's /v1/models inventory, so they are never rewritten.
+    assert "nvidia/nemotron-3-nano-30b-a3b" not in preset.suggested_models
+    assert "deepseek-ai/deepseek-v4-pro" not in preset.suggested_models
+    assert preset.model_aliases == {}
+    assert (
+        canonical_model_alias_for_preset(preset, "deepseek-ai/deepseek-v4-pro")
+        == "deepseek-ai/deepseek-v4-pro"
+    )
 
 
 def test_zai_coding_plan_preset_is_separate_from_general_zhipu_api() -> None:
@@ -425,13 +561,29 @@ def test_zai_coding_plan_preset_is_separate_from_general_zhipu_api() -> None:
     assert preset.protocol == "openai_compat"
     assert preset.base_url == "https://api.z.ai/api/coding/paas/v4"
     assert preset.api_key_env == "ZAI_API_KEY"
-    assert preset.validation_model == "glm-4.7"
-    assert preset.model_aliases == {}
+    assert preset.validation_model == "glm-5.3-flash"
+    # The plan proxy routes every other GLM id server-side; the local alias
+    # table mirrors that so saved configs resolve to honest metadata.
+    assert canonical_model_alias_for_preset(preset, "glm-5.2") == "glm-5.3"
+    assert canonical_model_alias_for_preset(preset, "glm-4.7") == "glm-5.3-flash"
+    assert canonical_model_alias_for_preset(preset, "glm-5-turbo") == "glm-5.3-flash"
     assert "glm-5.2" not in preset.suggested_models
     assert "supported coding tools" in preset.setup_warning
 
 
-def test_qwen_intl_offers_38_max_without_changing_the_balanced_default() -> None:
+def test_zhipu_general_api_keeps_optional_thinking_fallback_and_free_tier() -> None:
+    preset = get_preset("zhipu")
+
+    assert preset is not None
+    assert preset.suggested_models[0] == "glm-5.3"
+    assert "glm-5.2" in preset.suggested_models
+    assert "glm-4.7-flash" in preset.suggested_models
+    # Live-but-superseded ids are never silently rebilled.
+    assert preset.model_aliases == {}
+    assert canonical_model_alias_for_preset(preset, "glm-5.1") == "glm-5.1"
+
+
+def test_qwen_regions_share_the_current_roster_and_retire_the_coder_line() -> None:
     preset = get_preset("qwen-intl")
     us_preset = get_preset("qwen-us")
     cn_preset = get_preset("qwen-cn")
@@ -442,11 +594,20 @@ def test_qwen_intl_offers_38_max_without_changing_the_balanced_default() -> None
     assert preset.suggested_models[:3] == (
         "qwen3.7-plus",
         "qwen3.8-max",
-        "qwen3.7-max",
+        "qwen3.8-flash",
     )
     assert preset.suggested_model_descriptions["qwen3.8-max"].startswith("advanced")
-    assert us_preset.suggested_models[:3] == preset.suggested_models[:3]
-    assert cn_preset.suggested_models[:3] == preset.suggested_models[:3]
+    assert us_preset.suggested_models == preset.suggested_models
+    assert cn_preset.suggested_models == preset.suggested_models
+    for region in (preset, us_preset, cn_preset):
+        assert region.validation_model == "qwen3.7-flash"
+        # qwen3-coder-plus / -next shut down 2026-10-10 in every region.
+        assert canonical_model_alias_for_preset(region, "qwen3-coder-plus") == "qwen3.7-plus"
+        assert canonical_model_alias_for_preset(region, "qwen3-coder-next") == "qwen3.7-plus"
+        assert canonical_model_alias_for_preset(region, "qwen3.8-max-preview") == "qwen3.8-max"
+        # Legacy-but-live ids pass through unchanged.
+        assert canonical_model_alias_for_preset(region, "qwen3.7-max") == "qwen3.7-max"
+        assert canonical_model_alias_for_preset(region, "qwen-flash") == "qwen-flash"
 
 
 def test_fireworks_uses_current_dated_deepseek_v4_ids() -> None:
@@ -458,6 +619,39 @@ def test_fireworks_uses_current_dated_deepseek_v4_ids() -> None:
     assert "accounts/fireworks/models/deepseek-v4-pro" not in preset.suggested_models
     assert "accounts/fireworks/models/deepseek-v4-flash" not in preset.suggested_models
     assert preset.validation_model == "accounts/fireworks/models/deepseek-v4-flash-0731"
+    # Undated ids were retired in August 2026 and remap to the dated snapshots.
+    assert (
+        canonical_model_alias_for_preset(preset, "accounts/fireworks/models/deepseek-v4-pro")
+        == "accounts/fireworks/models/deepseek-v4-pro-0813"
+    )
+    # kimi-k2p6 is still serverless, so it must not be silently swapped.
+    assert (
+        canonical_model_alias_for_preset(preset, "accounts/fireworks/models/kimi-k2p6")
+        == "accounts/fireworks/models/kimi-k2p6"
+    )
+
+
+def test_together_replaces_removed_serverless_ids_before_their_shutdown() -> None:
+    preset = get_preset("together")
+
+    assert preset is not None
+    assert preset.suggested_models[0] == "zai-org/GLM-5.3"
+    assert "moonshotai/Kimi-K2.7-Code" not in preset.suggested_models
+    assert "openai/gpt-oss-20b" not in preset.suggested_models
+    assert preset.validation_model == "Qwen/Qwen3.5-9B"
+    assert canonical_model_alias_for_preset(preset, "moonshotai/Kimi-K2.7-Code") == (
+        "moonshotai/Kimi-K3"
+    )
+    assert canonical_model_alias_for_preset(preset, "openai/gpt-oss-20b") == "Qwen/Qwen3.5-9B"
+
+
+def test_cerebras_offers_only_its_public_catalog() -> None:
+    preset = get_preset("cerebras")
+
+    assert preset is not None
+    assert preset.suggested_models == ("gpt-oss-120b", "gemma-4-31b")
+    assert canonical_model_alias_for_preset(preset, "zai-glm-4.7") == "gpt-oss-120b"
+    assert canonical_model_alias_for_preset(preset, "qwen-3-coder-480b") == "gpt-oss-120b"
 
 
 def test_gemini_aliases_preserve_active_and_provider_managed_model_ids() -> None:
@@ -475,6 +669,12 @@ def test_gemini_aliases_preserve_active_and_provider_managed_model_ids() -> None
         assert canonical_model_alias_for_preset(preset, model) == model
 
     assert canonical_model_alias_for_preset(preset, "gemini-2.0-flash") == ("gemini-3.6-flash")
+    # gemini-3.1-flash-lite shuts down 2027-05-07; the 2.0 lite remap lands on
+    # its documented successor instead.
+    assert canonical_model_alias_for_preset(preset, "gemini-2.0-flash-lite") == (
+        "gemini-3.5-flash-lite"
+    )
+    assert preset.suggested_models[0] == "gemini-3.8-flash"
 
 
 def test_mistral_uses_documented_medium_id_and_preserves_legacy_default() -> None:
@@ -595,7 +795,7 @@ def test_profile_conversion_replaces_known_incompatible_model() -> None:
     converted = convert_profile_to_preset(profile, native_preset)
 
     assert converted.protocol == "gemini_generate_content"
-    assert converted.default_model == "gemini-3.7-flash"
+    assert converted.default_model == "gemini-3.8-flash"
 
 
 def test_profile_conversion_replaces_provider_qualified_model_ids() -> None:
@@ -667,11 +867,13 @@ def test_xiaomi_mimo_is_a_plain_byok_preset() -> None:
     assert preset.protocol == "openai_compat"
     assert preset.base_url == "https://api.xiaomimimo.com/v1"
     assert preset.api_key_env == "XIAOMI_API_KEY"
-    assert preset.suggested_models == ("mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2.5")
+    assert preset.suggested_models == ("mimo-v2.5-pro", "mimo-v2.5")
     assert all(model in preset.suggested_model_descriptions for model in preset.suggested_models)
     assert preset.validation_model == "mimo-v2.5-pro"
-    # The legacy bare "mimo" placeholder migrates to the flagship model.
+    # The legacy bare "mimo" placeholder migrates to the flagship model; the
+    # retired flash id (shut down 2026-06-30) follows Xiaomi's own routing.
     assert canonical_model_alias_for_preset(preset, "mimo") == "mimo-v2.5-pro"
+    assert canonical_model_alias_for_preset(preset, "mimo-v2-flash") == "mimo-v2.5"
     # No special label casing: the picker shows the plain preset label.
     assert preset_selection_label(preset) == "Xiaomi MiMo"
 

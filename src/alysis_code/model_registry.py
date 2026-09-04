@@ -86,9 +86,24 @@ OFFICIAL_PROVIDER_MODEL_CATALOG_SOURCE = "official_provider_model_catalog"
 CANONICAL_MODEL_CATALOG_SOURCE = "canonical_model_catalog"
 _CANONICAL_MODEL_SOURCES: dict[str, tuple[str, ...]] = {
     "qwen3.8-max": ("https://help.aliyun.com/en/model-studio/qwen3-8-max",),
+    "qwen3.7-plus": ("https://www.alibabacloud.com/help/en/model-studio/qwen3-7-plus",),
+    "qwen3.8-flash": ("https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",),
+    "qwen3.7-flash": ("https://www.alibabacloud.com/help/en/model-studio/qwen3-7-flash",),
     "deepseek-v4-pro": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash-vision-exp": ("https://api-docs.deepseek.com/quick_start/pricing/",),
+    "glm-5.3": (
+        "https://docs.z.ai/guides/llm/glm-5.3",
+        "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3",
+    ),
+    "glm-5.3-flash": (
+        "https://docs.z.ai/guides/vlm/glm-5.3-flash",
+        "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash",
+    ),
+    "kimi-k3": (
+        "https://platform.kimi.ai/docs/models.md",
+        "https://platform.kimi.ai/docs/pricing/chat-k3",
+    ),
 }
 _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
     "qwen3.8-max": {
@@ -97,8 +112,29 @@ _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "supports_vision": True,
         "supports_reasoning": True,
     },
+    # The DashScope default model was absent from the pinned snapshot and fell
+    # back to 128K/8K on every run.
+    "qwen3.7-plus": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
+    "qwen3.8-flash": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
+    "qwen3.7-flash": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
     "deepseek-v4-pro": {
         "context_window_tokens": 1_000_000,
+        # DeepSeek publishes "384K" (393,216) as the V4 output ceiling.
         "max_output_tokens": 384_000,
         "supports_vision": False,
         "supports_reasoning": True,
@@ -115,6 +151,28 @@ _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "supports_vision": True,
         "supports_reasoning": True,
     },
+    # GLM-5.3 (2026-08-19) and GLM-5.3-Flash (2026-08-26): 1M context, 128K
+    # output, thinking cannot be disabled. Flash is natively multimodal.
+    "glm-5.3": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": False,
+        "supports_reasoning": True,
+    },
+    "glm-5.3-flash": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
+    # Kimi K3: 1M shared window; 131,072 is the API's normal completion
+    # allowance and therefore the useful local reserve on every host.
+    "kimi-k3": {
+        "context_window_tokens": 1_048_576,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
 }
 # Provider model ids are routing details, not separate capability records. This
 # declarative alias table lets each route inherit the canonical model's limits
@@ -122,46 +180,116 @@ _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
 _PROVIDER_CANONICAL_MODEL_IDS: dict[str, dict[str, str]] = {
     "qwen": {
         "qwen3.8-max": "qwen3.8-max",
+        "qwen3.7-plus": "qwen3.7-plus",
+        "qwen3.8-flash": "qwen3.8-flash",
+        "qwen3.7-flash": "qwen3.7-flash",
     },
     "deepseek": {
         "deepseek-v4-pro": "deepseek-v4-pro",
         "deepseek-v4-flash": "deepseek-v4-flash",
         "deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
     },
+    "zhipu": {
+        "glm-5.3": "glm-5.3",
+        "glm-5.3-flash": "glm-5.3-flash",
+    },
+    "zai_coding_plan": {
+        "glm-5.3": "glm-5.3",
+        "glm-5.3-flash": "glm-5.3-flash",
+    },
+    "moonshot": {
+        "kimi-k3": "kimi-k3",
+    },
     "openrouter": {
         "qwen/qwen3.8-max": "qwen3.8-max",
+        "qwen/qwen3.8-flash": "qwen3.8-flash",
         "deepseek/deepseek-v4-pro-0813": "deepseek-v4-pro",
         "deepseek/deepseek-v4-flash-0731": "deepseek-v4-flash",
         "deepseek/deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
+        "z-ai/glm-5.3": "glm-5.3",
+        "z-ai/glm-5.3-flash": "glm-5.3-flash",
+        "moonshotai/kimi-k3": "kimi-k3",
     },
     "together": {
         "deepseek-ai/DeepSeek-V4-Pro-0813": "deepseek-v4-pro",
         "deepseek-ai/DeepSeek-V4-Flash-0731": "deepseek-v4-flash",
+        "zai-org/GLM-5.3": "glm-5.3",
+        "zai-org/GLM-5.3-Flash": "glm-5.3-flash",
+        "moonshotai/Kimi-K3": "kimi-k3",
     },
     "fireworks": {
         "accounts/fireworks/models/deepseek-v4-pro-0813": "deepseek-v4-pro",
         "accounts/fireworks/models/deepseek-v4-flash-0731": "deepseek-v4-flash",
+        "accounts/fireworks/models/deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
+        "accounts/fireworks/models/glm-5p3": "glm-5.3",
+        "accounts/fireworks/models/glm-5p3-flash": "glm-5.3-flash",
+        "accounts/fireworks/models/kimi-k3": "kimi-k3",
     },
     "nvidia": {
         "deepseek-ai/deepseek-v4-pro": "deepseek-v4-pro",
         "deepseek-ai/deepseek-v4-flash": "deepseek-v4-flash",
+        "deepseek-ai/deepseek-v4-pro-0813": "deepseek-v4-pro",
+        "deepseek-ai/deepseek-v4-flash-0731": "deepseek-v4-flash",
+        "moonshotai/kimi-k3": "kimi-k3",
+    },
+    "perplexity": {
+        "perplexity/glm-5.3": "glm-5.3",
+        "perplexity/kimi-k3": "kimi-k3",
+        "perplexity/deepseek-v4-flash-0731": "deepseek-v4-flash",
     },
 }
 _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
+    "openai": {
+        model: (
+            f"https://developers.openai.com/api/docs/models/{model}",
+            "https://developers.openai.com/api/docs/pricing",
+        )
+        for model in (
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+            "gpt-5.3-codex",
+        )
+    },
     "zai_coding_plan": {
-        "glm-5.3": ("https://docs.z.ai/guides/llm/glm-5.3",),
-        "glm-5-turbo": ("https://docs.z.ai/guides/llm/glm-5-turbo",),
-        "glm-4.7": ("https://docs.z.ai/guides/llm/glm-4.7",),
+        "glm-5.3": ("https://docs.z.ai/guides/llm/glm-5.3", "https://docs.z.ai/devpack/overview"),
+        "glm-5.3-flash": (
+            "https://docs.z.ai/guides/vlm/glm-5.3-flash",
+            "https://docs.z.ai/devpack/overview",
+        ),
+    },
+    "zhipu": {
+        model: (model_url, "https://open.bigmodel.cn/pricing")
+        for model, model_url in {
+            "glm-5.3": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3",
+            "glm-5.3-flash": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash",
+            "glm-5.2": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2",
+            "glm-4.7-flashx": "https://docs.bigmodel.cn/cn/guide/models/text/glm-4.7",
+            "glm-4.7-flash": "https://docs.bigmodel.cn/cn/guide/models/free/glm-4.7-flash",
+        }.items()
     },
     "xai": {
-        "grok-4.6": (
-            "https://docs.x.ai/developers/grok-4-6",
+        model: (
+            f"https://docs.x.ai/developers/models/{model}",
             "https://docs.x.ai/developers/pricing",
-        ),
+        )
+        for model in (
+            "grok-4.6",
+            "grok-4.5",
+            "grok-build-0.1",
+            "grok-4.3",
+            "grok-4.20-0309-reasoning",
+            "grok-4.20-0309-non-reasoning",
+        )
     },
     "gemini": {
         model: (model_url, "https://ai.google.dev/gemini-api/docs/pricing")
         for model, model_url in {
+            "gemini-3.8-flash": ("https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"),
             "gemini-3.7-flash": ("https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash"),
             "gemini-3.6-flash": ("https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash"),
             "gemini-3.5-flash-lite": (
@@ -174,6 +302,8 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
             "https://help.aliyun.com/en/model-studio/qwen3-8-max",
             "https://help.aliyun.com/en/model-studio/qwen-api-via-openai-chat-completions",
         ),
+        "qwen3.8-flash": ("https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash",),
+        "qwen3.7-flash": ("https://www.alibabacloud.com/help/en/model-studio/qwen3-7-flash",),
     },
     "deepseek": {
         model: (
@@ -189,26 +319,48 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
     "openrouter": {
         model: ("https://openrouter.ai/api/v1/models",)
         for model in (
+            "anthropic/claude-sonnet-5",
+            "openai/gpt-6-astra",
+            "openai/gpt-5.6-terra",
+            "openai/gpt-5.6-luna",
+            "anthropic/claude-opus-5",
+            "anthropic/claude-fable-5.1",
+            "google/gemini-3.8-flash",
+            "x-ai/grok-4.6",
+            "z-ai/glm-5.3",
+            "z-ai/glm-5.3-flash",
+            "moonshotai/kimi-k3",
             "qwen/qwen3.8-max",
+            "qwen/qwen3.8-flash",
             "deepseek/deepseek-v4-pro-0813",
             "deepseek/deepseek-v4-flash-0731",
             "deepseek/deepseek-v4-flash-vision-exp",
         )
     },
     "together": {
-        model: ("https://docs.together.ai/docs/serverless/models",)
+        model: ("https://docs.together.ai/docs/serverless-models",)
         for model in (
+            "zai-org/GLM-5.3",
+            "zai-org/GLM-5.3-Flash",
+            "moonshotai/Kimi-K3",
             "deepseek-ai/DeepSeek-V4-Pro-0813",
             "deepseek-ai/DeepSeek-V4-Flash-0731",
+            "Qwen/Qwen3.5-9B",
+            "MiniMaxAI/MiniMax-M3",
         )
     },
     "fireworks": {
-        "accounts/fireworks/models/deepseek-v4-pro-0813": (
-            "https://fireworks.ai/models/deepseek-ai/deepseek-v4-pro-0813",
-        ),
-        "accounts/fireworks/models/deepseek-v4-flash-0731": (
-            "https://fireworks.ai/models/deepseek-ai/deepseek-v4-flash-0731",
-        ),
+        model: (f"https://fireworks.ai/models/fireworks/{slug}",)
+        for model, slug in {
+            "accounts/fireworks/models/glm-5p3": "glm-5p3",
+            "accounts/fireworks/models/glm-5p3-flash": "glm-5p3-flash",
+            "accounts/fireworks/models/kimi-k3": "kimi-k3",
+            "accounts/fireworks/models/deepseek-v4-pro-0813": "deepseek-v4-pro-0813",
+            "accounts/fireworks/models/deepseek-v4-flash-0731": "deepseek-v4-flash-0731",
+            "accounts/fireworks/models/deepseek-v4-flash-vision-exp": (
+                "deepseek-v4-flash-vision-exp"
+            ),
+        }.items()
     },
     "nvidia": {
         "nvidia/nemotron-3-super-120b-a12b": (
@@ -217,8 +369,18 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         "nvidia/nemotron-3-ultra-550b-a55b": (
             "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b",
         ),
+        "nvidia/nemotron-3.5-lightning-30b-a3b": (
+            "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b",
+        ),
         "nvidia/nemotron-3-nano-30b-a3b": (
             "https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b",
+        ),
+        "moonshotai/kimi-k3": ("https://build.nvidia.com/moonshotai/kimi-k3",),
+        "deepseek-ai/deepseek-v4-pro-0813": (
+            "https://build.nvidia.com/deepseek-ai/deepseek-v4-pro-0813",
+        ),
+        "deepseek-ai/deepseek-v4-flash-0731": (
+            "https://build.nvidia.com/deepseek-ai/deepseek-v4-flash-0731",
         ),
         "deepseek-ai/deepseek-v4-pro": ("https://build.nvidia.com/deepseek-ai/deepseek-v4-pro",),
         "deepseek-ai/deepseek-v4-flash": (
@@ -226,7 +388,11 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "moonshot": {
-        model: ("https://platform.moonshot.ai/docs/pricing/chat",)
+        model: ("https://platform.kimi.ai/docs/pricing/chat-k3",)
+        if model == "kimi-k3"
+        else ("https://platform.kimi.ai/docs/pricing/chat-k27-code",)
+        if model.startswith("kimi-k2.7")
+        else ("https://platform.kimi.ai/docs/pricing/chat-k26",)
         for model in (
             "kimi-k3",
             "kimi-k2.7-code",
@@ -234,36 +400,214 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
             "kimi-k2.6",
         )
     },
+    "minimax": {
+        model: ("https://platform.minimax.io/docs/guides/pricing-paygo",)
+        for model in ("MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed")
+    },
+    "bytedance": {
+        model: (
+            "https://docs.volcengine.com/docs/82379/1330310",
+            "https://docs.volcengine.com/docs/82379/1544106",
+        )
+        for model in (
+            "doubao-seed-evolving",
+            "doubao-seed-2-1-pro-260628",
+            "doubao-seed-2-1-turbo-260628",
+            "doubao-seed-2-0-mini-260428",
+        )
+    },
+    "groq": {
+        "qwen/qwen3.8-27b": ("https://console.groq.com/docs/model/qwen/qwen3.8-27b",),
+        "groq/compound": ("https://console.groq.com/docs/models",),
+        "groq/compound-mini": ("https://console.groq.com/docs/models",),
+    },
+    "cerebras": {
+        "gemma-4-31b": ("https://inference-docs.cerebras.ai/models/gemma-4-31b",),
+    },
+    "mistral": {
+        "mistral-small-2603": (
+            "https://docs.mistral.ai/models/mistral-small-4-0-26-03",
+            "https://docs.mistral.ai/inference/pricing",
+        ),
+        "zai-glm-5-2": (
+            "https://docs.mistral.ai/models/zai-glm-5-2",
+            "https://docs.mistral.ai/inference/pricing",
+        ),
+    },
+    "cohere": {
+        "command-a-plus-05-2026": ("https://docs.cohere.com/docs/command-a-plus",),
+        "command-a-reasoning-08-2025": ("https://docs.cohere.com/docs/command-a-reasoning",),
+    },
+    "perplexity": {
+        model: ("https://docs.perplexity.ai/docs/agent-api/models",)
+        for model in (
+            "perplexity/sonar",
+            "perplexity/glm-5.3",
+            "perplexity/kimi-k3",
+            "perplexity/kimi-k2.7-code",
+            "perplexity/deepseek-v4-flash-0731",
+        )
+    },
     "anthropic": {
         "claude-opus-5": (
-            "https://docs.anthropic.com/en/docs/about-claude/models/overview",
-            "https://docs.anthropic.com/en/docs/about-claude/pricing",
+            "https://platform.claude.com/docs/en/models/opus-5/overview",
+            "https://platform.claude.com/docs/en/about-claude/pricing",
+        ),
+        "claude-fable-5-1": (
+            "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+            "https://platform.claude.com/docs/en/about-claude/pricing",
         ),
     },
 }
 _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
+    "openai": {
+        # The provenance-pinned LiteLLM snapshot (2026-07-11) predates OpenAI's
+        # 5.6 price cuts (Luna/Terra 2026-07-30, Sol 2026-08-21, promo through
+        # at least 2026-11-21) and its cache-write charge (1.25x input on the
+        # 5.6 family only). Windows: 5.6 = 1.05M total / 922K max input; 5.4
+        # mini/nano and 5.3-codex = 400K total / 272K max input. Rates above
+        # 272K input on 5.6 are 2x in / 1.5x out, which this flat schema
+        # cannot express — base rates are recorded.
+        # GPT-6 Astra (2026-09-03): same 1.05M / 922K-input / 128K shape,
+        # $10 / $50, cached input $1, cache writes $12.50 (1.25x input).
+        "gpt-6-astra": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00005,
+            "cache_read_input_cost_per_token": 0.000001,
+            "cache_creation_input_cost_per_token": 0.0000125,
+            "reasoning_output_cost_per_token": 0.00005,
+        },
+        "gpt-5.6-sol": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000004,
+            "output_cost_per_token": 0.00002,
+            "cache_read_input_cost_per_token": 0.0000004,
+            "cache_creation_input_cost_per_token": 0.000005,
+            "reasoning_output_cost_per_token": 0.00002,
+        },
+        "gpt-5.6-terra": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000012,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.000012,
+        },
+        "gpt-5.6-luna": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000002,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.00000002,
+            "cache_creation_input_cost_per_token": 0.00000025,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
+        "gpt-5.5": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000005,
+            "output_cost_per_token": 0.00003,
+            "cache_read_input_cost_per_token": 0.0000005,
+            "reasoning_output_cost_per_token": 0.00003,
+        },
+        "gpt-5.4-mini": {
+            "context_window_tokens": 400_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000075,
+            "output_cost_per_token": 0.0000045,
+            "cache_read_input_cost_per_token": 0.000000075,
+            "reasoning_output_cost_per_token": 0.0000045,
+        },
+        "gpt-5.4-nano": {
+            "context_window_tokens": 400_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000002,
+            "output_cost_per_token": 0.00000125,
+            "cache_read_input_cost_per_token": 0.00000002,
+            "reasoning_output_cost_per_token": 0.00000125,
+        },
+        "gpt-5.3-codex": {
+            "context_window_tokens": 400_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000175,
+            "output_cost_per_token": 0.000014,
+            "cache_read_input_cost_per_token": 0.000000175,
+            "reasoning_output_cost_per_token": 0.000014,
+        },
+    },
     "zai_coding_plan": {
-        # GLM-5.3 is currently exclusive to the subscription Coding Plan API;
-        # the general pay-per-token API is still marked "coming soon". Plan
-        # credits are not token prices, so this route intentionally carries no
-        # monetary cost fields.
+        # Plan credits are not token prices, so this route intentionally
+        # carries no monetary cost fields. (GLM-5.3 is also on the Z.AI
+        # pay-per-token price list since 2026-08-18 — $1.40/$4.40/$0.26 — but
+        # that is a different endpoint.)
         "glm-5.3": {
             "context_window_tokens": 1_000_000,
             "max_output_tokens": 131_072,
             "supports_vision": False,
             "supports_reasoning": True,
         },
-        "glm-5-turbo": {
+        "glm-5.3-flash": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+    },
+    "zhipu": {
+        # open.bigmodel.cn bills in CNY; this schema is USD-per-token, so only
+        # capacity is recorded for the China surface.
+        "glm-5.3": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_vision": False,
+            "supports_reasoning": True,
+        },
+        "glm-5.3-flash": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+        "glm-5.2": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_vision": False,
+            "supports_reasoning": True,
+        },
+        "glm-4.7-flashx": {
             "context_window_tokens": 200_000,
             "max_output_tokens": 131_072,
             "supports_vision": False,
             "supports_reasoning": True,
         },
-        "glm-4.7": {
+        "glm-4.7-flash": {
             "context_window_tokens": 200_000,
             "max_output_tokens": 131_072,
             "supports_vision": False,
             "supports_reasoning": True,
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "cache_read_input_cost_per_token": 0.0,
         },
     },
     "xai": {
@@ -284,11 +628,76 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_read_input_cost_per_token": 0.0000005,
             "reasoning_output_cost_per_token": 0.000006,
         },
+        # Same shape as 4.6; cache reads are cheaper ($0.30 vs $0.50).
+        "grok-4.5": {
+            "context_window_tokens": 500_000,
+            "max_output_tokens": 500_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000006,
+            "cache_read_input_cost_per_token": 0.0000003,
+            "reasoning_output_cost_per_token": 0.000006,
+        },
+        # docs.x.ai/developers/models (2026-08-21): build-0.1 is a 256K shared
+        # window; 4.3 and the 4.20 snapshots are 1M shared windows (the pinned
+        # snapshot overstated 4.3 at 2M and lacked the others entirely). Base
+        # rates below 200K prompt tokens; xAI doubles them above that.
+        "grok-build-0.1": {
+            "context_window_tokens": 256_000,
+            "max_output_tokens": 256_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.000002,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "reasoning_output_cost_per_token": 0.000002,
+        },
+        "grok-4.3": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 1_000_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000125,
+            "output_cost_per_token": 0.0000025,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "reasoning_output_cost_per_token": 0.0000025,
+        },
+        "grok-4.20-0309-reasoning": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 1_000_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000125,
+            "output_cost_per_token": 0.0000025,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "reasoning_output_cost_per_token": 0.0000025,
+        },
+        "grok-4.20-0309-non-reasoning": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 1_000_000,
+            "supports_vision": True,
+            "supports_reasoning": False,
+            "input_cost_per_token": 0.00000125,
+            "output_cost_per_token": 0.0000025,
+            "cache_read_input_cost_per_token": 0.0000002,
+        },
     },
     "gemini": {
-        # These GA models postdate the provenance-pinned LiteLLM snapshot.
+        # These stable models postdate the provenance-pinned LiteLLM snapshot.
         # Capacity and current standard-tier pricing are from Google's model
-        # and pricing pages. The 3.7/3.6 introductory rates expire 2026-12-31.
+        # and pricing pages. The 3.8/3.7/3.6 introductory rates expire
+        # 2026-12-31 and become $1.50 / $7.50 / $0.15 from 2027-01-01.
+        "gemini-3.8-flash": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 65_536,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000075,
+            "output_cost_per_token": 0.00000375,
+            "cache_read_input_cost_per_token": 0.000000075,
+            "reasoning_output_cost_per_token": 0.00000375,
+        },
         "gemini-3.7-flash": {
             "context_window_tokens": 1_048_576,
             "max_output_tokens": 65_536,
@@ -321,14 +730,18 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "qwen": {
-        # Qwen3.8-Max is available from the China, Singapore, Frankfurt, US,
-        # and Tokyo surfaces under the same bare model id. Prices vary by
-        # region/currency, which this provider-level flat schema cannot encode,
-        # so costs remain unknown instead of applying one region globally.
+        # The current Qwen ids are served from the China, Singapore, Frankfurt,
+        # US, Hong Kong and Tokyo surfaces under the same bare model id. Prices
+        # vary by region/currency, which this provider-level flat schema cannot
+        # encode, so costs remain unknown instead of applying one region
+        # globally. Capacity comes from the canonical layer.
         "qwen3.8-max": {},
+        "qwen3.8-flash": {},
+        "qwen3.7-flash": {},
     },
     "deepseek": {
-        # DeepSeek charges half price outside two daily peak windows. The
+        # DeepSeek charges half price outside two daily peak windows (peak =
+        # 01:00-04:00 and 06:00-10:00 UTC Mon-Fri since 2026-08-16). The
         # registry cannot express time-dependent rates, so use peak pricing as
         # a conservative upper-bound estimate rather than under-reporting cost.
         "deepseek-v4-pro": {
@@ -351,6 +764,117 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "openrouter": {
+        # Prices are OpenRouter's listed gateway rates (openrouter.ai/api/v1/
+        # models, 2026-09-02); windows are the gateway routing contract, which
+        # may exceed an individual upstream route's cap. The preset's default
+        # and the two OpenAI routes were absent from the pinned snapshot and
+        # fell back to 128K/8K.
+        "anthropic/claude-sonnet-5": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.00001,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.00001,
+        },
+        "openai/gpt-6-astra": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00005,
+            "cache_read_input_cost_per_token": 0.000001,
+            "cache_creation_input_cost_per_token": 0.0000125,
+            "reasoning_output_cost_per_token": 0.00005,
+        },
+        "openai/gpt-5.6-terra": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000012,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.000012,
+        },
+        "openai/gpt-5.6-luna": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000002,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.00000002,
+            "cache_creation_input_cost_per_token": 0.00000025,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
+        "anthropic/claude-opus-5": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000005,
+            "output_cost_per_token": 0.000025,
+            "cache_read_input_cost_per_token": 0.0000005,
+            "cache_creation_input_cost_per_token": 0.00000625,
+            "reasoning_output_cost_per_token": 0.000025,
+        },
+        "anthropic/claude-fable-5.1": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00005,
+            "cache_read_input_cost_per_token": 0.00000025,
+            "cache_creation_input_cost_per_token": 0.0000125,
+            "reasoning_output_cost_per_token": 0.00005,
+        },
+        "google/gemini-3.8-flash": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 65_536,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000075,
+            "output_cost_per_token": 0.00000375,
+            "cache_read_input_cost_per_token": 0.000000075,
+            "reasoning_output_cost_per_token": 0.00000375,
+        },
+        "x-ai/grok-4.6": {
+            "context_window_tokens": 500_000,
+            "max_output_tokens": 450_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000006,
+            "cache_read_input_cost_per_token": 0.0000005,
+            "reasoning_output_cost_per_token": 0.000006,
+        },
+        "z-ai/glm-5.3": {
+            "context_window_tokens": 1_310_720,
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "cache_read_input_cost_per_token": 0.00000026,
+            "reasoning_output_cost_per_token": 0.0000044,
+        },
+        "z-ai/glm-5.3-flash": {
+            "context_window_tokens": 1_310_720,
+            "input_cost_per_token": 0.000000075,
+            "output_cost_per_token": 0.00000025,
+            "cache_read_input_cost_per_token": 0.000000015,
+            "reasoning_output_cost_per_token": 0.00000025,
+        },
+        "moonshotai/kimi-k3": {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_cost_per_token": 0.0000003,
+            "reasoning_output_cost_per_token": 0.000015,
+        },
         "qwen/qwen3.8-max": {
             "input_cost_per_token": 0.000002,
             "output_cost_per_token": 0.000006,
@@ -358,12 +882,19 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_creation_input_cost_per_token": 0.0000025,
             "reasoning_output_cost_per_token": 0.000006,
         },
+        "qwen/qwen3.8-flash": {
+            "input_cost_per_token": 0.00000015,
+            "output_cost_per_token": 0.00000047,
+            "cache_read_input_cost_per_token": 0.000000016,
+            "cache_creation_input_cost_per_token": 0.0000002,
+            "reasoning_output_cost_per_token": 0.00000047,
+        },
         "deepseek/deepseek-v4-pro-0813": {
             "context_window_tokens": 1_048_576,
-            "input_cost_per_token": 0.000001188,
-            "output_cost_per_token": 0.000003564,
-            "cache_read_input_cost_per_token": 0.0000000396,
-            "reasoning_output_cost_per_token": 0.000003564,
+            "input_cost_per_token": 0.00000066,
+            "output_cost_per_token": 0.00000198,
+            "cache_read_input_cost_per_token": 0.000000022,
+            "reasoning_output_cost_per_token": 0.00000198,
         },
         "deepseek/deepseek-v4-flash-0731": {
             # OpenRouter's public model catalog advertises a 1.31M routing
@@ -371,22 +902,41 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             # capped at 1,048,576 tokens. Preserve the gateway-level contract;
             # route-specific limits remain OpenRouter's responsibility.
             "context_window_tokens": 1_310_720,
-            "input_cost_per_token": 0.00000008,
+            "input_cost_per_token": 0.000000065,
             "output_cost_per_token": 0.00000018,
             "cache_read_input_cost_per_token": 0.000000016,
             "reasoning_output_cost_per_token": 0.00000018,
         },
         "deepseek/deepseek-v4-flash-vision-exp": {
             "context_window_tokens": 1_048_576,
-            # OpenRouter exposes DeepSeek's time-window overrides. Use the
-            # highest published rate so a flat estimate does not undercount.
-            "input_cost_per_token": 0.00000044,
-            "output_cost_per_token": 0.00000132,
-            "cache_read_input_cost_per_token": 0.000000014,
-            "reasoning_output_cost_per_token": 0.00000132,
+            "input_cost_per_token": 0.00000022,
+            "output_cost_per_token": 0.00000066,
+            "cache_read_input_cost_per_token": 0.000000007,
+            "reasoning_output_cost_per_token": 0.00000066,
         },
     },
     "together": {
+        # docs.together.ai/docs/serverless-models, 2026-09-02.
+        "zai-org/GLM-5.3": {
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "cache_read_input_cost_per_token": 0.00000026,
+            "reasoning_output_cost_per_token": 0.0000044,
+        },
+        "zai-org/GLM-5.3-Flash": {
+            # Together lists the text route only; image input is not advertised.
+            "supports_vision": False,
+            "input_cost_per_token": 0.00000015,
+            "output_cost_per_token": 0.0000005,
+            "cache_read_input_cost_per_token": 0.00000003,
+            "reasoning_output_cost_per_token": 0.0000005,
+        },
+        "moonshotai/Kimi-K3": {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_cost_per_token": 0.0000003,
+            "reasoning_output_cost_per_token": 0.000015,
+        },
         "deepseek-ai/DeepSeek-V4-Pro-0813": {
             "context_window_tokens": 1_048_576,
             "input_cost_per_token": 0.00000132,
@@ -400,8 +950,48 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_read_input_cost_per_token": 0.00000003,
             "reasoning_output_cost_per_token": 0.00000028,
         },
+        "Qwen/Qwen3.5-9B": {
+            "context_window_tokens": 262_144,
+            "max_output_tokens": 32_768,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000017,
+            "output_cost_per_token": 0.00000025,
+            "reasoning_output_cost_per_token": 0.00000025,
+        },
+        "MiniMaxAI/MiniMax-M3": {
+            "context_window_tokens": 524_288,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000003,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.00000006,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
     },
     "fireworks": {
+        # docs.fireworks.ai/serverless/pricing, 2026-09-02. Fireworks lists
+        # 1,040,000 for its 1M-class routes; canonical capacity is inherited
+        # and only the stricter gateway figures are overridden here.
+        "accounts/fireworks/models/glm-5p3": {
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "cache_read_input_cost_per_token": 0.00000026,
+            "reasoning_output_cost_per_token": 0.0000044,
+        },
+        "accounts/fireworks/models/glm-5p3-flash": {
+            "input_cost_per_token": 0.00000015,
+            "output_cost_per_token": 0.0000005,
+            "cache_read_input_cost_per_token": 0.00000003,
+            "reasoning_output_cost_per_token": 0.0000005,
+        },
+        "accounts/fireworks/models/kimi-k3": {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_cost_per_token": 0.0000003,
+            "reasoning_output_cost_per_token": 0.000015,
+        },
         "accounts/fireworks/models/deepseek-v4-pro-0813": {
             "context_window_tokens": 1_048_576,
             "input_cost_per_token": 0.00000132,
@@ -411,19 +1001,27 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
         "accounts/fireworks/models/deepseek-v4-flash-0731": {
             "context_window_tokens": 1_048_576,
-            "input_cost_per_token": 0.00000014,
-            "output_cost_per_token": 0.00000028,
-            "cache_read_input_cost_per_token": 0.000000028,
-            "reasoning_output_cost_per_token": 0.00000028,
+            "input_cost_per_token": 0.00000022,
+            "output_cost_per_token": 0.00000066,
+            "cache_read_input_cost_per_token": 0.000000007,
+            "reasoning_output_cost_per_token": 0.00000066,
+        },
+        "accounts/fireworks/models/deepseek-v4-flash-vision-exp": {
+            "input_cost_per_token": 0.00000022,
+            "output_cost_per_token": 0.00000066,
+            "cache_read_input_cost_per_token": 0.000000007,
+            "reasoning_output_cost_per_token": 0.00000066,
         },
     },
     "nvidia": {
-        # NVIDIA's hosted NIM catalog publishes the Nemotron 3 Super and Ultra
-        # models with 1M context. Nano's hosted endpoint currently advertises
-        # 262K. The hosted Nemotron endpoints accept up to 32,768 output tokens;
-        # 16,384 is their default, not their ceiling. NVIDIA-hosted DeepSeek V4
-        # uses a separate 16,384-token ceiling. Free Endpoint access is
-        # rate-limited prototyping, so no durable token price is encoded here.
+        # NVIDIA's hosted NIM catalog publishes the Nemotron 3 Super, Ultra and
+        # 3.5 Lightning models with 1M context; Nano's hosted endpoint
+        # advertises 262K. The hosted Nemotron endpoints accept up to 32,768
+        # output tokens; 16,384 is their default, not their ceiling. Hosted
+        # third-party routes (DeepSeek V4, Kimi K3) use the samples' 16,384
+        # ceiling. Free Endpoint access is rate-limited prototyping, so no
+        # durable token price is encoded here. The undated DeepSeek ids and
+        # Nano are Deprecated free endpoints kept for saved configs.
         "nvidia/nemotron-3-super-120b-a12b": {
             "context_window_tokens": 1_048_576,
             "max_output_tokens": 32_768,
@@ -436,11 +1034,29 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "supports_vision": False,
             "supports_reasoning": True,
         },
+        "nvidia/nemotron-3.5-lightning-30b-a3b": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 16_384,
+            "supports_vision": False,
+            "supports_reasoning": True,
+        },
         "nvidia/nemotron-3-nano-30b-a3b": {
             "context_window_tokens": 262_144,
             "max_output_tokens": 32_768,
             "supports_vision": False,
             "supports_reasoning": True,
+        },
+        "moonshotai/kimi-k3": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 16_384,
+        },
+        "deepseek-ai/deepseek-v4-pro-0813": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 16_384,
+        },
+        "deepseek-ai/deepseek-v4-flash-0731": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 16_384,
         },
         "deepseek-ai/deepseek-v4-pro": {
             "context_window_tokens": 1_048_576,
@@ -451,14 +1067,193 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "max_output_tokens": 16_384,
         },
     },
-    "moonshot": {
-        "kimi-k3": {
+    "minimax": {
+        # platform.minimax.io/docs/guides/pricing-paygo (2026-09-02). M3 is
+        # listed at "permanent 50% off" ($0.30/$1.20); input above 512K bills
+        # 2x, which this flat schema cannot express — base rates recorded.
+        "MiniMax-M3": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 524_288,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000003,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.00000006,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
+        "MiniMax-M2.7": {
+            "context_window_tokens": 204_800,
+            "max_output_tokens": 204_800,
+            "supports_vision": False,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000003,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.00000006,
+            "cache_creation_input_cost_per_token": 0.000000375,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
+        "MiniMax-M2.7-highspeed": {
+            "context_window_tokens": 204_800,
+            "max_output_tokens": 204_800,
+            "supports_vision": False,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000006,
+            "output_cost_per_token": 0.0000024,
+            "cache_read_input_cost_per_token": 0.00000006,
+            "cache_creation_input_cost_per_token": 0.000000375,
+            "reasoning_output_cost_per_token": 0.0000024,
+        },
+    },
+    "bytedance": {
+        # Ark (ark.cn-beijing) bills in CNY, so only capacity is recorded. The
+        # 2.0 family has a 256K window but a 224K max input; 2.1 and the
+        # rolling seed-evolving id allow 256K output.
+        "doubao-seed-evolving": {
             "context_window_tokens": 1_048_576,
-            # K3 can use the full context for output, but 131,072 is the API's
-            # normal completion allowance and therefore the useful local reserve.
+            "max_output_tokens": 262_144,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+        "doubao-seed-2-1-pro-260628": {
+            "context_window_tokens": 262_144,
+            "max_output_tokens": 262_144,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+        "doubao-seed-2-1-turbo-260628": {
+            "context_window_tokens": 262_144,
+            "max_output_tokens": 262_144,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+        "doubao-seed-2-0-mini-260428": {
+            "context_window_tokens": 229_376,
             "max_output_tokens": 131_072,
             "supports_vision": True,
             "supports_reasoning": True,
+        },
+    },
+    "groq": {
+        # console.groq.com/docs/model/qwen/qwen3.8-27b prints "131,042" for the
+        # window (almost certainly 131,072); the lower literal is kept.
+        "qwen/qwen3.8-27b": {
+            "context_window_tokens": 131_042,
+            "max_output_tokens": 16_384,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000008,
+            "output_cost_per_token": 0.000004,
+            "reasoning_output_cost_per_token": 0.000004,
+        },
+        # Compound systems run server-side tools; Groq lists no token price
+        # ("-") and an 8,192-token completion cap. Absent from the snapshot.
+        "groq/compound": {
+            "context_window_tokens": 131_072,
+            "max_output_tokens": 8_192,
+            "supports_vision": False,
+            "supports_reasoning": False,
+        },
+        "groq/compound-mini": {
+            "context_window_tokens": 131_072,
+            "max_output_tokens": 8_192,
+            "supports_vision": False,
+            "supports_reasoning": False,
+        },
+    },
+    "cerebras": {
+        # inference-docs.cerebras.ai/models/gemma-4-31b: 65K context / 32K
+        # output on the free tier (131K / 40K paid); the page's own price
+        # figures contradict each other, so cost stays unknown.
+        "gemma-4-31b": {
+            "context_window_tokens": 65_536,
+            "max_output_tokens": 32_768,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+    },
+    "mistral": {
+        # docs.mistral.ai/models/mistral-small-4-0-26-03: 256K context; the
+        # output ceiling is unpublished, so a conservative reserve is used.
+        "mistral-small-2603": {
+            "context_window_tokens": 262_144,
+            "max_output_tokens": 32_768,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000015,
+            "output_cost_per_token": 0.0000006,
+            "reasoning_output_cost_per_token": 0.0000006,
+        },
+        # Third-party GLM-5.2 route hosted by Mistral (Public Preview,
+        # 2026-08-06). Reasoning support is not documented on the page.
+        "zai-glm-5-2": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": False,
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "cache_read_input_cost_per_token": 0.00000014,
+        },
+    },
+    "cohere": {
+        # docs.cohere.com/docs/models (2026-09-02). Per-token prices for the
+        # live Command models render client-side and could not be verified,
+        # so only capacity is recorded. The preset default was falling back
+        # to 128K/8K.
+        "command-a-plus-05-2026": {
+            "context_window_tokens": 128_000,
+            "max_output_tokens": 64_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        },
+        "command-a-reasoning-08-2025": {
+            "context_window_tokens": 256_000,
+            "max_output_tokens": 32_000,
+            "supports_vision": False,
+            "supports_reasoning": True,
+        },
+    },
+    "perplexity": {
+        # Agent API (docs.perplexity.ai/docs/agent-api/models, 2026-09-02).
+        # Perplexity publishes prices but no windows for its hosted routes;
+        # GLM/Kimi/DeepSeek capacity comes from the canonical layer. Sonar's
+        # window is undocumented, so a conservative 128K is recorded.
+        "perplexity/sonar": {
+            "context_window_tokens": 128_000,
+            "max_output_tokens": 8_192,
+            "supports_vision": False,
+            "supports_reasoning": False,
+            "input_cost_per_token": 0.00000025,
+            "output_cost_per_token": 0.0000025,
+        },
+        "perplexity/glm-5.3": {
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "reasoning_output_cost_per_token": 0.0000044,
+        },
+        "perplexity/kimi-k3": {
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "reasoning_output_cost_per_token": 0.000015,
+        },
+        "perplexity/kimi-k2.7-code": {
+            "context_window_tokens": 262_144,
+            "max_output_tokens": 32_768,
+            "supports_vision": False,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000095,
+            "output_cost_per_token": 0.000004,
+            "reasoning_output_cost_per_token": 0.000004,
+        },
+        "perplexity/deepseek-v4-flash-0731": {
+            "input_cost_per_token": 0.00000013,
+            "output_cost_per_token": 0.00000026,
+            "reasoning_output_cost_per_token": 0.00000026,
+        },
+    },
+    "moonshot": {
+        # platform.kimi.ai pricing pages (USD, global platform). Capacity for
+        # kimi-k3 is inherited from the canonical layer.
+        "kimi-k3": {
             "input_cost_per_token": 0.000003,
             "output_cost_per_token": 0.000015,
             "cache_read_input_cost_per_token": 0.0000003,
@@ -492,11 +1287,12 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "anthropic": {
-        # Opus 5 ships ahead of the vendored litellm mirror, and that mirror is
-        # refresh-policy pinned to an upstream commit — so its capacity lives
-        # here rather than as a hand-edit that would falsify the snapshot's
-        # provenance. Drop this entry once a catalog refresh carries the model.
-        # Same shape as its siblings: 1M input + 128K output, Opus 4.8 pricing.
+        # Opus 5 and Fable 5.1 ship ahead of the vendored litellm mirror, and
+        # that mirror is refresh-policy pinned to an upstream commit — so their
+        # capacity lives here rather than as a hand-edit that would falsify the
+        # snapshot's provenance. Drop these once a catalog refresh carries them.
+        # Anthropic documents "1M context + 128K output"; the window below is
+        # the input+output sum so the local reserve does not eat the 1M input.
         "claude-opus-5": {
             "context_window_tokens": 1_128_000,
             "max_output_tokens": 128_000,
@@ -508,6 +1304,20 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_creation_input_cost_per_token": 0.00000625,
             "cache_creation_5m_input_cost_per_token": 0.00000625,
             "cache_creation_1h_input_cost_per_token": 0.00001,
+        },
+        # Fable 5.1 (2026-09-01): Fable 5 in/out pricing with cache reads at
+        # 0.025x ($0.25/MTok) instead of 0.1x.
+        "claude-fable-5-1": {
+            "context_window_tokens": 1_128_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00005,
+            "cache_read_input_cost_per_token": 0.00000025,
+            "cache_creation_input_cost_per_token": 0.0000125,
+            "cache_creation_5m_input_cost_per_token": 0.0000125,
+            "cache_creation_1h_input_cost_per_token": 0.00002,
         },
     },
 }
@@ -526,28 +1336,26 @@ _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "input_cost_per_token": 0.000000435,
         "output_cost_per_token": 0.00000087,
     },
-    # Hosted Xiaomi MiMo trial models. The proxy serves these ids when allowlisted,
-    # and falls back server-side to its canonical MiMo model otherwise.
+    # Xiaomi MiMo pay-as-you-go ids (mimo.mi.com/docs/en-US/price/pay-as-you-go,
+    # 2026-09-02). mimo-v2-flash shut down 2026-06-30 and is aliased to
+    # mimo-v2.5 at the preset layer. Cache reads are $0.0036 / $0.0028 per MTok.
     "mimo-v2.5-pro": {
         "context_window_tokens": 1_000_000,
         "max_output_tokens": 131_072,
         "supports_vision": False,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000003,
-    },
-    "mimo-v2-flash": {
-        "context_window_tokens": 262_144,
-        "max_output_tokens": 65_536,
-        "supports_vision": False,
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000003,
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.000000435,
+        "output_cost_per_token": 0.00000087,
+        "cache_read_input_cost_per_token": 0.0000000036,
     },
     "mimo-v2.5": {
         "context_window_tokens": 1_000_000,
         "max_output_tokens": 131_072,
         "supports_vision": True,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.000002,
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "cache_read_input_cost_per_token": 0.0000000028,
     },
     # Legacy friendly id kept for sessions that logged in before model choice.
     # Hosted Xiaomi MiMo trial: the CLI sends the friendly id "mimo" (the proxy
@@ -565,10 +1373,17 @@ _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
     },
     # Kimi Code membership ids served by api.kimi.com/coding/v1 (subscription
     # billing, so no per-token costs). Context windows from
-    # kimi.com/code/docs, July 2026.
+    # kimi.com/code/docs, September 2026. k3 is 1M only on Allegretto+ (256K on
+    # Moderato); k3-256k is the same model pinned to 256K at ~half the quota.
     "k3": {
         "context_window_tokens": 1_048_576,
         "max_output_tokens": 1_048_576,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
+    "k3-256k": {
+        "context_window_tokens": 262_144,
+        "max_output_tokens": 262_144,
         "supports_vision": True,
         "supports_reasoning": True,
     },
