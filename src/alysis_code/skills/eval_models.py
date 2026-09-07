@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 SkillsEvalInvocationMode = Literal["normal", "explicit_skill"]
+SkillsEvalSessionMode = Literal["readonly"]
 SkillsEvalRunStatus = Literal["passed", "failed", "skipped"]
 SkillsEvalPreflightClassification = Literal[
     "ok",
@@ -13,6 +14,7 @@ SkillsEvalPreflightClassification = Literal[
     "provider",
     "runtime",
 ]
+SkillsEvalSelectionStatus = Literal["selected", "no_match", "unavailable"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,7 @@ class SkillsEvalCase:
     verification_command: str | None = None
     tags: tuple[str, ...] = ()
     notes: str = ""
+    session_mode: SkillsEvalSessionMode | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,15 @@ class SkillsEvalExecutionResult:
     skill_read_called: bool = False
     skill_read_names: tuple[str, ...] = ()
     skill_read_call_count: int = 0
+    successful_skill_read_names: tuple[str, ...] = ()
+    successful_skill_read_count: int = 0
+    skill_selection_status: SkillsEvalSelectionStatus | None = None
+    skill_selection_selected_names: tuple[str, ...] = ()
+    skill_selection_call_count: int = 0
+    skill_selection_failure_kinds: tuple[str, ...] = ()
+    skill_selection_blocked_count: int = 0
+    skill_selection_blocked_reasons: tuple[str, ...] = ()
+    skill_selection_unhonored_count: int = 0
     skill_lifecycle_cli_used: bool = False
     skill_lifecycle_cli_commands: tuple[str, ...] = ()
     skill_lifecycle_cli_call_count: int = 0
@@ -129,14 +141,29 @@ class SkillsEvalRecord:
     completion_gate_incomplete_after_retries_count: int = 0
     forced_final_summary_count: int = 0
     verification_credit_miss_count: int = 0
+    automatic_selection_required: bool = False
+    successful_skill_read_names: tuple[str, ...] = ()
+    successful_skill_read_count: int = 0
+    skill_selection_status: SkillsEvalSelectionStatus | None = None
+    skill_selection_selected_names: tuple[str, ...] = ()
+    skill_selection_call_count: int = 0
+    skill_selection_failure_kinds: tuple[str, ...] = ()
+    skill_selection_blocked_count: int = 0
+    skill_selection_blocked_reasons: tuple[str, ...] = ()
+    skill_selection_unhonored_count: int = 0
     error: str | None = None
 
     def observed_skill_names(self) -> tuple[str, ...]:
+        skill_read_names = (
+            self.successful_skill_read_names
+            if self.automatic_selection_required
+            else self.skill_read_names
+        )
         names: list[str] = []
         seen: set[str] = set()
         for raw in (
             *self.matched_skill_names,
-            *self.skill_read_names,
+            *skill_read_names,
             *self.manual_skill_bundle_names,
             *(
                 (self.explicit_skill_name,)
@@ -158,9 +185,40 @@ class SkillsEvalRecord:
         expected = {item.casefold() for item in self.expected_skills}
         if not expected:
             return False
+        if self.automatic_selection_required:
+            if not self.automatic_selection_exact_match():
+                return False
+            loaded = {name.casefold() for name in self.successful_skill_read_names}
+            return loaded == expected
         return any(name.casefold() in expected for name in self.observed_skill_names())
 
+    def automatic_selection_exact_match(self) -> bool | None:
+        if not self.automatic_selection_required:
+            return None
+        if self.skill_selection_call_count != 1:
+            return False
+        expected = {item.casefold() for item in self.expected_skills}
+        selected = {item.casefold() for item in self.skill_selection_selected_names}
+        if expected:
+            return self.skill_selection_status == "selected" and selected == expected
+        return self.skill_selection_status == "no_match" and not selected
+
+    def selector_available(self) -> bool | None:
+        if not self.automatic_selection_required:
+            return None
+        return self.skill_selection_call_count == 1 and self.skill_selection_status in {
+            "selected",
+            "no_match",
+        }
+
     def any_skill_activity(self) -> bool:
+        if self.automatic_selection_required:
+            return bool(
+                self.skill_selection_status == "selected"
+                or self.successful_skill_read_names
+                or self.manual_skill_bundle_accessed
+                or self.matched_skill_context_attached
+            )
         return bool(
             self.explicit_skill_context_used
             or self.matched_skill_context_attached
@@ -194,6 +252,18 @@ class SkillsEvalRecord:
             "skill_read_called": self.skill_read_called,
             "skill_read_names": list(self.skill_read_names),
             "skill_read_call_count": self.skill_read_call_count,
+            "successful_skill_read_names": list(self.successful_skill_read_names),
+            "successful_skill_read_count": self.successful_skill_read_count,
+            "automatic_selection_required": self.automatic_selection_required,
+            "skill_selection_status": self.skill_selection_status,
+            "skill_selection_selected_names": list(self.skill_selection_selected_names),
+            "skill_selection_call_count": self.skill_selection_call_count,
+            "skill_selection_failure_kinds": list(self.skill_selection_failure_kinds),
+            "skill_selection_blocked_count": self.skill_selection_blocked_count,
+            "skill_selection_blocked_reasons": list(self.skill_selection_blocked_reasons),
+            "skill_selection_unhonored_count": self.skill_selection_unhonored_count,
+            "automatic_selection_exact_match": self.automatic_selection_exact_match(),
+            "selector_available": self.selector_available(),
             "skill_lifecycle_cli_used": self.skill_lifecycle_cli_used,
             "skill_lifecycle_cli_commands": list(self.skill_lifecycle_cli_commands),
             "skill_lifecycle_cli_call_count": self.skill_lifecycle_cli_call_count,

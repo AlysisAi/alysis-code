@@ -5,12 +5,15 @@ at a `SKILL.md` file.
 
 ## Contents
 
-- `discovery.py` finds skills in approved project and user roots.
+- `discovery.py` finds skills in approved project, user, and bundled roots.
 - `loader.py`, `models.py`, and `validation.py` parse and validate bundles.
 - `scaffold.py`, `install.py`, `state.py`, and `transactions.py` support the
   local skill lifecycle.
 - `prompting.py` prepares concise skill context for sessions.
-- `matching.py` and `evals.py` support deterministic matching and evaluation.
+- `selection.py` builds and validates bounded model-led selection requests.
+- `eval_models.py`, `eval_runner.py`, and `evals.py` provide the skills evaluation harness.
+- `matching.py` retains a legacy lexical matcher for compatibility tests; production automatic
+  selection does not use it.
 - `conventions.py` handles repo convention files, which are separate from
   skills.
 

@@ -268,7 +268,11 @@ def test_create_session_adds_write_guidance_only_for_writable_modes(tmp_path: Pa
 def test_create_session_splits_skill_lifecycle_and_discovery_guidance(
     tmp_path: Path,
 ) -> None:
-    cfg = AppConfig(model="test-model", web_search_mode="off")
+    cfg = AppConfig(
+        model="test-model",
+        web_search_mode="off",
+        bundled_skills_enabled=False,
+    )
     session_without_skills = create_session(
         cfg=cfg,
         root=tmp_path,
@@ -301,6 +305,12 @@ def test_create_session_splits_skill_lifecycle_and_discovery_guidance(
             for item in getattr(session_with_skills, "tool_list", [])
             if isinstance(item, dict)
         }
+        skill_context = "\n".join(
+            str(message.get("content") or "")
+            for message in session_with_skills.messages
+            if str(message.get("role") or "") == "user"
+            and "<skill_context>" in str(message.get("content") or "")
+        )
 
         assert "Skills lifecycle" in no_skills_prompt
         assert "alysis skill init" in no_skills_prompt
@@ -314,13 +324,24 @@ def test_create_session_splits_skill_lifecycle_and_discovery_guidance(
 
         assert "Skills lifecycle" in skills_prompt
         assert "Skills and skill_read" in skills_prompt
-        assert "BEFORE acting on a task that matches a skill's description" in skills_prompt
+        assert "Select only a skill whose action the user requests" in skills_prompt
+        assert "concept mention is not a match" in skills_prompt
+        assert "Honor explicit exclusions" in skills_prompt
+        assert "choose the most specific fit" in skills_prompt
         assert "Do not invent skill names" in skills_prompt
         assert "Project-local explicit-turn skill context" in skills_prompt
         assert "alysis skill init" in skills_prompt
         assert "alysis skill validate" in skills_prompt
         assert "alysis skill install" in skills_prompt
         assert "skill_read" in skills_tool_names
+        assert "Compare all descriptions" in skill_context
+        assert "requested outcome and workflow" in skill_context
+        assert "not shared steps or concept mentions" in skill_context
+        assert "honor exclusions" in skill_context
+        assert "narrowest fit" in skill_context
+        assert "broad skills are fallbacks" in skill_context
+        assert "call skill_read(name) before any other task action" in skill_context
+        assert "optional attachable context" not in skill_context
     finally:
         session_without_skills.close()
         session_with_skills.close()
@@ -356,8 +377,11 @@ def test_create_session_respects_explicit_skills_auto_invoke_false_for_discovery
 
         assert session.skills_auto_invoke is False
         assert "<skill_context>" in joined_messages
+        assert "Skills are optional attachable context" in joined_messages
+        assert "requested actions, not concept mentions" not in joined_messages
+        assert "call skill_read(name) before any other task action" not in joined_messages
         assert "skill_read" in tool_names
-        assert "BEFORE acting on a task that matches a skill's description" not in system_prompt
+        assert "Select only a skill whose action the user requests" not in system_prompt
         assert "<matched_skill_context>" not in joined_messages
     finally:
         session.close()
@@ -386,10 +410,14 @@ def test_interactive_bootstrap_payload_stays_bounded(tmp_path: Path, monkeypatch
         tools_json = json.dumps(session.tool_list, ensure_ascii=True)
         # Budget tripwire, not a correctness bound. Measured with the capability-gated
         # dependency-scout and session artifact reader present; retain the explicit
-        # 120-token floor (8639 measured after adding slot-aware fan-out guidance).
+        # 120-token floor (9361 at d0ede266; 9371 after the stage-aware commit
+        # description replaced the shorter staged-only description; 9384 after the
+        # mode-aware catalog guidance; 9386 after the skill_read schema wording;
+        # 9432 after semantic skill-selection guardrails across prompt surfaces;
+        # 9461 after scope-first workflow metadata and compare-all catalog guidance).
         estimated_tokens = _estimated_tokens(messages_json) + _estimated_tokens(tools_json)
         _assert_dependency_scout_visible(session)
-        assert 8759 - estimated_tokens >= 120
+        assert 9581 - estimated_tokens >= 120
     finally:
         session.close()
 
@@ -467,10 +495,14 @@ def test_one_shot_bootstrap_payload_stays_bounded(tmp_path: Path, monkeypatch) -
         tools_json = json.dumps(session.tool_list, ensure_ascii=True)
         # Budget tripwire, not a correctness bound. Measured with the capability-gated
         # dependency-scout and session artifact reader present; retain the explicit
-        # 120-token floor (9265 measured after adding slot-aware fan-out guidance).
+        # 120-token floor (9987 at d0ede266; 9997 after the stage-aware commit
+        # description replaced the shorter staged-only description; 10010 after the
+        # mode-aware catalog guidance; 10012 after the skill_read schema wording;
+        # 10058 after semantic skill-selection guardrails across prompt surfaces;
+        # 10087 after scope-first workflow metadata and compare-all catalog guidance).
         estimated_tokens = _estimated_tokens(messages_json) + _estimated_tokens(tools_json)
         _assert_dependency_scout_visible(session)
-        assert 9385 - estimated_tokens >= 120
+        assert 10207 - estimated_tokens >= 120
     finally:
         session.close()
 

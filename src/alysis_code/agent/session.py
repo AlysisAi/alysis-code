@@ -95,12 +95,13 @@ from ..llm.metadata import (
 )
 from ..llm.openai_compat import OpenAICompatClient as _OpenAICompatClient
 from ..llm.protocols import OPENAI_COMPAT_PROTOCOL, get_provider_protocol_capabilities
+from ..llm.provider_limits import ProviderRetrySettings, resolve_provider_retry_settings
 from ..llm.types import UsageConfidence, UsageSource
 from ..mcp.config import load_resolved_mcp_config
 from ..mcp.manager import ForgeTaskScopedMcpManager, McpManager, create_mcp_manager
 from ..model_metadata_policy import ActiveModelRef, evaluate_active_model_metadata_policy
 from ..model_registry import ModelRegistry, resolve_model_provider_key
-from ..model_router import ROLE_CODING, ROLE_COMPACTOR, resolve_model_for_role
+from ..model_router import ROLE_CODING, ROLE_COMPACTOR, ROLE_ROUTER, resolve_model_for_role
 from ..personas import (
     PersonaSwitchState,
     load_custom_personas,
@@ -235,6 +236,15 @@ from .subagent_execution import ChildScheduler
 
 OpenAICompatClient = _OpenAICompatClient
 _DEFAULT_CREATE_MCP_MANAGER = create_mcp_manager
+_SKILL_SELECTOR_TIMEOUT_S = 15.0
+
+
+def _skill_selector_provider_retry_settings(
+    cfg: AppConfig | None,
+) -> ProviderRetrySettings:
+    """Keep the optional selector to one provider attempt on every protocol."""
+
+    return replace(resolve_provider_retry_settings(cfg), disable_retries=True)
 
 
 def _build_workspace_trust_prompt(
@@ -2197,7 +2207,16 @@ def create_session(
             role=ROLE_COMPACTOR,
             plan=None,
         )
+    router_model_name = ""
+    if resolved_skills_enabled and skills_auto_invoke and bool(discovered_skills.ordered):
+        router_model_name = resolve_model_for_role(
+            cfg=session_cfg,
+            role=ROLE_ROUTER,
+            plan=None,
+        )
     active_model_refs = [ActiveModelRef(role=ROLE_CODING, model_name=session_cfg.model)]
+    if router_model_name:
+        active_model_refs.append(ActiveModelRef(role=ROLE_ROUTER, model_name=router_model_name))
     if compactor_model_name:
         active_model_refs.append(
             ActiveModelRef(role=ROLE_COMPACTOR, model_name=compactor_model_name)
@@ -2220,6 +2239,35 @@ def create_session(
         reasoning_effort=llm_reasoning_effort,
         session_id=session_id,
     )
+    router_client: ChatClient | None = None
+    if router_model_name:
+        selector_timeout_s = min(llm_timeout_s, _SKILL_SELECTOR_TIMEOUT_S)
+        router_client = _make_session_llm_client(
+            cfg=session_cfg,
+            api_key=api_key,
+            model=router_model_name,
+            timeout_s=selector_timeout_s,
+            temperature=0.0,
+            prompt_cache_key=prompt_cache_stream_key,
+            prompt_cache_retention=resolve_prompt_cache_retention(session_cfg),
+            prompt_cache_namespace=_prompt_cache_namespace(ROLE_ROUTER),
+            enable_thinking=False,
+            reasoning_effort="",
+            session_id=session_id,
+        )
+        # Client adapters normalize an empty effort to ``None``. Keep the
+        # selector's session-owned state explicit so later in-place reloads and
+        # stale-client checks preserve the reasoning-off contract verbatim.
+        router_client.reasoning_effort = ""
+        if hasattr(router_client, "stream_no_progress_timeout_s"):
+            router_client.stream_no_progress_timeout_s = min(
+                float(router_client.stream_no_progress_timeout_s),
+                selector_timeout_s,
+            )
+        if hasattr(router_client, "provider_retry_settings"):
+            router_client.provider_retry_settings = _skill_selector_provider_retry_settings(
+                session_cfg
+            )
     sessions_dir = (
         session_log_dir_override
         if session_log_dir_override is not None
@@ -2413,7 +2461,7 @@ def create_session(
             "task_max_steps": session_cfg.task_max_steps,
             "subagent_max_steps": session_cfg.subagent_max_steps,
             "model": session_cfg.model,
-            "router_model": "",
+            "router_model": router_model_name,
             "base_url_descriptor": endpoint_descriptor(session_cfg.base_url),
             "profile_name": active_profile.name,
             "protocol": active_profile.protocol,
@@ -3134,6 +3182,9 @@ def create_session(
             surface=surface,
             store=store,
             client=client,
+            router_client=router_client,
+            _semantic_router_bound_client=client,
+            _provisioned_router_client=router_client,
             persona_client_cache={(session_cfg.model, coding_temperature): client},
             persona_client_key=(session_cfg.model, coding_temperature),
             model_registry=registry,

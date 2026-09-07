@@ -54,6 +54,10 @@ User-global roots:
 - `~/.claude/skills/<skill_name>/SKILL.md`
 - `~/.copilot/skills/<skill_name>/SKILL.md`
 
+Bundled root:
+
+- the packaged `alysis_code/skills/bundled/<skill_name>/SKILL.md` directory
+
 Alysis Code discovers only approved roots. It does not scan arbitrary `skills/` directories.
 
 When multiple skills have the same name:
@@ -62,12 +66,20 @@ When multiple skills have the same name:
 2. native project roots win over interop roots at the same level
 3. project-local skills win over user-global skills
 4. user-global native roots win over user-global interop roots
+5. every project-local or user-global skill wins over a bundled skill with the same name
 
 Malformed skills are skipped and reported as discovery issues instead of crashing session startup.
 
 ## How Skills Are Used
 
 When `skills_enabled=true`, Alysis Code advertises discovered skill names and short descriptions to the session. Full skill bodies are not injected by default.
+
+With `skills_auto_invoke=true`, an isolated, reasoning-off model call compares the current text
+request with the advertised catalog and returns one opaque primary candidate ID or `NONE`. Alysis Code maps
+that response back to the current registry and requires the main agent to read the selected
+`SKILL.md` entrypoint before other task tools. The selector never uses a fixed skill-name or
+keyword routing table, never executes tools, and fails open to the ordinary model-led decision if
+the selector is unavailable. Explicit skill attachment and image-bearing turns skip this selector.
 
 The model can read a skill on demand with the read-only built-in tool:
 
@@ -97,6 +109,44 @@ Behavior:
 - `/skill <name> <task...>` attaches that skill to the current turn only
 
 Explicit skill attachment does not persist across later turns.
+
+At an idle prompt, `$` is the shorter explicit form and provides live skill-name completion:
+
+```text
+$migrations
+$migrations add an audit-log migration
+```
+
+`$<name>` shows information and `$<name> <task...>` attaches the skill for one turn.
+Only an exact discovered skill name activates the shorthand, so other `$...` text remains an
+ordinary user message. While a turn is already running, `$...` remains ordinary steering; it is
+not interpreted as an invocation.
+
+## Bundled Skill Pack
+
+Alysis Code ships eight starter skills:
+
+| Skill | Purpose |
+| --- | --- |
+| `address-pr-comments` | Resolve existing pull-request review threads and prepare a response summary. |
+| `code-review` | Review a diff or branch and report severity-ordered findings with file and line evidence. |
+| `commit` | Create a Conventional Commit, staging a coherent set when the index is empty. |
+| `debug` | Reproduce and isolate a specific observable failure before fixing it. |
+| `fix-ci` | Diagnose a failing CI job from its logs, reproduce it when practical, and verify the focused repair. |
+| `release-notes` | Draft grouped release notes from merged history since the previous tag. |
+| `security-review` | Perform a requested security-focused diff or branch assessment without automatic fixes. |
+| `skill-creator` | Create or revise a reusable skill through the supported scaffold and validation workflow. |
+
+Bundled skills have the lowest discovery precedence. Add a project or user-global skill with the same name to replace the bundled definition entirely.
+
+Disable or re-enable one bundled skill through the normal global state file:
+
+```bash
+alysis skill disable code-review
+alysis skill enable code-review
+```
+
+Lifecycle removal never deletes packaged bundles. Set `bundled_skills_enabled=false` to remove the entire bundled root from discovery while leaving other skill roots enabled.
 
 ## CLI
 
@@ -158,7 +208,7 @@ Lifecycle commands create and remove managed native skills. Interop roots remain
 
 ## Trust Model
 
-Skills are untrusted instructions. Project-local skills come from the repository. User-global skills come from the user's environment. Neither can override system instructions, direct user requests, execution modes, workspace binding, or tool policy.
+Skills are untrusted instructions. Project-local skills come from the repository, user-global skills come from the user's environment, and bundled skills ship with Alysis Code. None can override system instructions, direct user requests, execution modes, workspace binding, or tool policy.
 
 Review skills before relying on them, especially when they recommend commands, external services, or broad edits.
 
@@ -167,20 +217,57 @@ Review skills before relying on them, especially when they recommend commands, e
 ```bash
 alysis config set skills_enabled true
 alysis config set skills_auto_invoke true
+alysis config set bundled_skills_enabled true
 ```
 
 Defaults:
 
 - `skills_enabled = true`
 - `skills_auto_invoke = true`
+- `bundled_skills_enabled = true`
 
-Set `skills_enabled=false` to disable skill discovery and `skill_read` registration. Set `skills_auto_invoke=false` for manual discovery and explicit `/skill` usage.
+Set `skills_enabled=false` to disable skill discovery, advertisement, automatic matching, and
+`skill_read` registration in both the parent session and every delegated child. This master switch
+also suppresses bundled skills even when `bundled_skills_enabled=true`; subagents remain available
+when enabled because delegation and skills are independent capabilities. Set
+`skills_auto_invoke=false` for manual discovery and explicit `/skill` or `$` usage. Set
+`bundled_skills_enabled=false` to hide only the packaged starter pack while other skill roots remain
+enabled. Automatic selection adds one short model request to eligible text turns; that request is
+reasoning-off and has a 15-second transport and stream-progress ceiling.
+
+## Bundled Pack Evaluation
+
+Run the bundled pack's model-in-loop gate from the repository root:
+
+```bash
+.venv/bin/python -m alysis_code.skills.eval_runner \
+  --manifest tests/fixtures/skills_eval/bundled_pack_cases.json \
+  --mode combined_auto \
+  --deadline-seconds 300 \
+  --launch-gate
+```
+
+The command writes raw records plus JSON and Markdown summaries under `.alysis/evals/skills/`
+by default. It returns non-zero when any case fails or when a launch-readiness threshold is not
+met; release-gate details are preserved in both summaries. Omit `--launch-gate` for diagnostic
+runs that should enforce individual case results without applying the aggregate launch thresholds.
+Launch-gate runs require the complete manifest and cannot be combined with `--case`; the manifest
+must select exactly one `combined_auto` mode and include verified normal, explicit, and adjacent
+readonly negative-control coverage for every expected skill. A readonly authentication preflight
+runs before the suite. Each launch-gate agent run has a finite 300-second wall-clock deadline by
+default; `--deadline-seconds` overrides it. Diagnostic runs remain unbounded unless the option is supplied.
+A manifest tagged as the bundled pack must cover every packaged bundled skill.
+These evaluations call the configured model; they are not part of the unit test suite.
+Eval manifests are trusted developer input because each `verification_command` executes through
+the shell. Review any untrusted manifest before running it.
 
 ## Limitations
 
+The starter pack above is bundled and versioned with Alysis Code. These distribution and runtime limitations remain:
+
 - no marketplace or registry browsing
 - no packaged skill update channel
-- no dynamic per-skill slash aliases
+- no dynamic per-skill slash aliases; explicit per-skill invocation uses `$<name>`
 - no implicit script execution
 - no arbitrary-root scanning outside approved paths
 - no automatic skill loading inside swarm workers

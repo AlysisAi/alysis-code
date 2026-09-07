@@ -53,6 +53,7 @@ from alysis_code.agent_loop import create_session
 from alysis_code.config import AppConfig, ConfigError, set_config_value
 from alysis_code.llm.openai_compat import LLMResponse, ToolCall
 from alysis_code.session_store import read_session_events
+from alysis_code.verify_gate import VerifyCommandResult, VerifyRunResult
 
 # ---------------------------------------------------------------------------
 # Synthetic buggy repo + tool-effect driver
@@ -149,6 +150,13 @@ def test_missing_semantic_contract_is_not_bug_fix_shaped() -> None:
 
 def test_command_running_an_agent_created_file_matches_it() -> None:
     assert match_repro_artifacts("python repro_slug.py", {"repro_slug.py"}) == ("repro_slug.py",)
+    assert match_repro_artifacts("sh repro_slug.py", {"repro_slug.py"}) == ("repro_slug.py",)
+    assert match_repro_artifacts("sh -ec 'python repro_slug.py'", {"repro_slug.py"}) == (
+        "repro_slug.py",
+    )
+    assert match_repro_artifacts(
+        "bash -o pipefail checks/repro_slug.sh", {"checks/repro_slug.sh"}
+    ) == ("checks/repro_slug.sh",)
     assert match_repro_artifacts(
         "pytest tests/repro_slug.py::test_case -q", {"tests/repro_slug.py"}
     ) == ("tests/repro_slug.py",)
@@ -156,6 +164,32 @@ def test_command_running_an_agent_created_file_matches_it() -> None:
     assert match_repro_artifacts("python repro_slug.py", {"tmp/repro_slug.py"}) == (
         "tmp/repro_slug.py",
     )
+
+
+def test_inline_code_path_literals_are_not_executed_repro_artifacts() -> None:
+    command = (
+        'python -c "import subprocess,sys; from pathlib import Path; '
+        "subprocess.run([sys.executable,'checks.py'], check=True); "
+        "text=Path('REVIEW_RESPONSES.md').read_text(); "
+        "assert 'T1' in text and 'T2' in text\""
+    )
+
+    assert match_repro_artifacts(command, {"REVIEW_RESPONSES.md"}) == ()
+    assert match_repro_artifacts("python -c 'repro_slug.py'", {"repro_slug.py"}) == ()
+    assert match_repro_artifacts("sh -ec \"python -c 'repro_slug.py'\"", {"repro_slug.py"}) == ()
+    assert (
+        match_repro_artifacts(
+            "env PYTHON=/usr/bin/python python -c 'repro_slug.py'", {"repro_slug.py"}
+        )
+        == ()
+    )
+    assert (
+        match_repro_artifacts(
+            "bash -o pipefail -c \"python -c 'repro_slug.py'\"", {"repro_slug.py"}
+        )
+        == ()
+    )
+    assert match_repro_artifacts("ruby -we 'repro_slug.py'", {"repro_slug.py"}) == ()
 
 
 def test_unrelated_command_matches_no_artifact() -> None:
@@ -843,6 +877,232 @@ def test_scripted_run_reports_a_satisfied_reproduction(
     assert "reproduction_first_task_shape" not in types
     assert "repro_run_observed" in types
     assert "one_shot_completion_gate_repro_unconfirmed" not in types
+
+
+def test_supplemental_check_after_silent_authoritative_verify_finalizes_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "title.py").write_text(
+        "def normalize_title(value):\n    return value.strip().lower()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "checks.py").write_text("# host-owned checks\n", encoding="utf-8")
+    command = (
+        'python -c "import subprocess,sys; from pathlib import Path; '
+        "subprocess.run([sys.executable,'checks.py'], check=True); "
+        "text=Path('REVIEW_RESPONSES.md').read_text(); "
+        "assert 'T1' in text and 'T2' in text\""
+    )
+
+    def fake_shell_run(*, root: Path, cmd: str, cwd: str | None = None, runner=None):
+        _ = cwd, runner
+        source = (root / "src" / "title.py").read_text(encoding="utf-8")
+        exit_code = 1 if ".lower()" in source else 0
+        return {
+            "cmd": cmd,
+            "effective_cmd": cmd,
+            "exit_code": exit_code,
+            "stdout": "",
+            "stderr": "AssertionError\n" if exit_code else "",
+        }
+
+    def silent_verify(
+        *,
+        root: Path,
+        commands: list[str],
+        artifact_path: Path,
+        cfg: AppConfig,
+    ) -> VerifyRunResult:
+        _ = root, cfg
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("", encoding="utf-8")
+        return VerifyRunResult(
+            commands=list(commands),
+            command_results=[
+                VerifyCommandResult(
+                    command=item,
+                    exit_code=0,
+                    output="",
+                    real_execution=True,
+                )
+                for item in commands
+            ],
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(agent_loop_mod, "shell_run", fake_shell_run)
+    monkeypatch.setattr(agent_loop_mod, "run_task_verification", silent_verify)
+    session_id = "required-output-silent-authoritative"
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=10,
+        no_log=False,
+        api_key_override="override-key",
+        one_shot_execution=True,
+        authoritative_verification_commands=[command],
+        session_log_dir_override=tmp_path / "sessions",
+        session_id_override=session_id,
+    )
+    final_text = "Preserved title case and resolved T1 and T2. Verification passed."
+    session.client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc1",
+                        name="fs_write",
+                        arguments={"path": "repro_title_case.py", "content": "assert False\n"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc2",
+                        name="shell_run",
+                        arguments={"cmd": "python repro_title_case.py"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc3",
+                        name="fs_write",
+                        arguments={
+                            "path": "src/title.py",
+                            "content": "def normalize_title(value):\n    return value.strip()\n",
+                        },
+                    ),
+                    ToolCall(
+                        id="tc4",
+                        name="fs_write",
+                        arguments={
+                            "path": "REVIEW_RESPONSES.md",
+                            "content": "# Review Responses\n\nT1 resolved.\nT2 resolved.\n",
+                        },
+                    ),
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc5",
+                        name="shell_run",
+                        arguments={"cmd": "python repro_title_case.py"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc6",
+                        name="fs_delete",
+                        arguments={"path": "repro_title_case.py"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc7",
+                        name="verify_run",
+                        arguments={"commands": [command]},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc8",
+                        name="shell_run",
+                        arguments={"cmd": "python checks.py"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(content=final_text, tool_calls=[], raw={}),
+        ]
+    )
+
+    try:
+        exit_code = session.run_turn(
+            "Fix normalize_title so it preserves case, run python checks.py, and write "
+            "REVIEW_RESPONSES.md mapping T1 and T2 to their resolutions."
+        )
+    finally:
+        session.close()
+
+    events = _events(tmp_path / "sessions", session_id)
+    finalizations = [event for event in events if event.get("type") == "turn_intent_finalized"]
+    verify_results = [
+        event
+        for event in events
+        if event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "verify_run"
+    ]
+
+    assert exit_code == 0
+    assert session.client.calls == 8
+    assert len(verify_results) == 1
+    assert len(finalizations) == 1
+    finalization = dict(finalizations[0].get("payload") or {})
+    state = dict(finalization.get("state") or {})
+    certificate = dict(state.get("completion_certificate") or {})
+    assert certificate.get("status") == "SUFFICIENT"
+    assert certificate.get("problems") == []
+    assert certificate.get("repro_artifacts_present") == []
+    assert set(certificate.get("covered_hard_criterion_ids") or []) == set(
+        certificate.get("hard_criterion_ids") or []
+    )
+    assert finalization.get("acceptance_problems") == []
+    criteria = list((finalization.get("acceptance_contract") or {}).get("criteria") or [])
+    assert {
+        criterion["kind"]: criterion["status"]
+        for criterion in criteria
+        if criterion["kind"]
+        in {
+            "required_artifact_path",
+            "explicit_host_user_verification_command",
+        }
+    } == {
+        "required_artifact_path": "PASSED",
+        "explicit_host_user_verification_command": "PASSED",
+    }
+    assert state.get("repro_artifact_paths") == ["repro_title_case.py"]
+    assert [run.get("artifact_paths") for run in state.get("repro_runs") or []] == [
+        ["repro_title_case.py"],
+        ["repro_title_case.py"],
+    ]
+    assert state.get("repro_surviving_artifacts") == []
+    assert state.get("last_verification_passed") is True
+    supplemental = list(state.get("supplemental_verification_evidence") or [])
+    assert supplemental[-1]["normalized_command"] == "python checks.py"
+    assert supplemental[-1]["observed_exit_code"] == 0
+    assert not any(event.get("type") == "one_shot_completion_gate_failed" for event in events)
+    assert not any(event.get("type") == "completion_gate_nudge" for event in events)
+    assert not any(
+        event.get("type") == "completion_gate_accepted_with_open_problems" for event in events
+    )
+    assert _final_text(tmp_path / "sessions", session_id) == final_text
 
 
 def test_scripted_run_without_reproduction_engagement_binds_no_repro_gate(

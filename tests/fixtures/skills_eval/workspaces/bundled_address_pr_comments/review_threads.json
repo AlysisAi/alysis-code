@@ -1,0 +1,16 @@
+[
+  {
+    "id": "T1",
+    "resolved": false,
+    "path": "src/title.py",
+    "line": 2,
+    "request": "Keep the user's letter case; normalization should trim only."
+  },
+  {
+    "id": "T2",
+    "resolved": false,
+    "path": "checks.py",
+    "line": 5,
+    "request": "Cover empty input in the focused check."
+  }
+]

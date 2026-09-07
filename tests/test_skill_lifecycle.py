@@ -188,7 +188,9 @@ def test_inaccessible_skill_bundle_is_reported_without_breaking_discovery(
     assert validation.valid is False
     assert len(validation.errors) == 1
     assert "Failed to inspect skill bundle" in validation.errors[0].message
-    assert discovered.skills == {}
+    assert "blocked" not in discovered.skills
+    assert len(discovered.skills) == 8
+    assert all(skill.source_scope == "bundled" for skill in discovered.ordered)
     assert len(discovered.issues) == 1
     assert "Failed to inspect skill bundle" in discovered.issues[0].message
 
@@ -455,7 +457,9 @@ def test_resolve_skill_catalog_applies_global_and_project_enable_disable(
         workspace_root=tmp_path,
         user_config_dir=user_cfg,
     )
-    assert not disabled_catalog.effective.ordered
+    assert "verification-playbook" not in disabled_catalog.effective.skills
+    assert len(disabled_catalog.effective.ordered) == 8
+    assert all(skill.source_scope == "bundled" for skill in disabled_catalog.effective.ordered)
 
     project_state = set_project_skill_override(
         disabled_catalog.project_state,
@@ -468,7 +472,8 @@ def test_resolve_skill_catalog_applies_global_and_project_enable_disable(
         workspace_root=tmp_path,
         user_config_dir=user_cfg,
     )
-    assert [skill.name for skill in enabled_catalog.effective.ordered] == ["verification-playbook"]
+    assert "verification-playbook" in enabled_catalog.effective.skills
+    assert len(enabled_catalog.effective.ordered) == 9
 
 
 def test_remove_managed_skill_deletes_bundle_and_state(
@@ -760,8 +765,9 @@ def test_create_session_uses_effective_enabled_skills(
         api_key_override="override-key",
     )
     try:
-        assert not session.skills_ordered
-        assert not session.skill_registry
+        assert "verification-playbook" not in session.skill_registry
+        assert len(session.skills_ordered) == 8
+        assert all(skill.source_scope == "bundled" for skill in session.skills_ordered)
     finally:
         session.close()
 
@@ -791,6 +797,8 @@ def test_create_session_tolerates_invalid_project_skill_state(
         api_key_override="override-key",
     )
     try:
-        assert [skill.name for skill in session.skills_ordered] == ["docs-consistency"]
+        assert session.skills_ordered[0].name == "docs-consistency"
+        assert len(session.skills_ordered) == 9
+        assert all(skill.source_scope == "bundled" for skill in session.skills_ordered[1:])
     finally:
         session.close()

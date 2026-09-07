@@ -288,6 +288,8 @@ def compute_execution_prompt_budget_inputs(
             subagents_enabled=prompt_context.resolved_subagents_enabled,
             subagent_depth=subagent_depth,
             subagent_registry=prompt_context.resolved_subagent_registry,
+            skills_enabled=prompt_context.resolved_skills_enabled,
+            skill_registry=prompt_context.discovered_skills.skills,
             session_log_dir_override=None,
         )
     finally:

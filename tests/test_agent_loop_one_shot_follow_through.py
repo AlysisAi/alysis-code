@@ -285,6 +285,65 @@ _VERIFY_GO_NO_TEST_FILES_COMMAND = "go test ./..."
 _VERIFY_GO_MIXED_OK_COMMAND = "go test ./mixed/..."
 
 
+def _record_authoritative_verify_result(
+    *,
+    root: Path,
+    state: TurnExecutionState,
+    command: str = _VERIFY_OK_COMMAND,
+    exit_code: int = 0,
+) -> None:
+    _record_tool_effect(
+        root=root,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": [command]},
+        status="ok",
+        result={
+            "commands": [command],
+            "command_results": [
+                {
+                    "command": command,
+                    "effective_command": command,
+                    "ok": exit_code == 0,
+                    "exit_code": exit_code,
+                    "real_execution": True,
+                    "output_preview": (
+                        "" if exit_code == 0 else "AssertionError: authoritative check failed\n"
+                    ),
+                }
+            ],
+            "all_passed": exit_code == 0,
+        },
+        known_verification_commands=[command],
+        verification_authoritative=True,
+    )
+
+
+def _record_supplemental_check(
+    *,
+    root: Path,
+    state: TurnExecutionState,
+    exit_code: int,
+    known_command: str = _VERIFY_OK_COMMAND,
+) -> None:
+    _record_tool_effect(
+        root=root,
+        state=state,
+        tool_name="shell_run",
+        arguments={"cmd": "python checks.py"},
+        status="ok",
+        result={
+            "cmd": "python checks.py",
+            "effective_cmd": "python checks.py",
+            "exit_code": exit_code,
+            "stdout": "",
+            "stderr": "AssertionError: task checker failed\n" if exit_code else "",
+        },
+        known_verification_commands=[known_command],
+        verification_authoritative=True,
+    )
+
+
 def test_run_turn_deadline_smoke_resolves_route_intent_before_deadline_callbacks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -736,6 +795,298 @@ def test_completion_gate_accepts_configured_pytest_no_tests_skip(
         require_material_edit_evidence=True,
     )
     assert problems == []
+
+
+def test_successful_supplemental_check_before_authority_stays_unverified(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands={_VERIFY_OK_COMMAND},
+    )
+
+    _record_supplemental_check(root=tmp_path, state=state, exit_code=0)
+
+    assert state.verification_attempt_count == 1
+    assert state.last_verification_passed is None
+    assert state.covered_verification_commands == set()
+    assert state.missing_verification_commands() == {_VERIFY_OK_COMMAND}
+    assert state.accepted_verification_evidence == []
+    assert len(state.supplemental_verification_evidence) == 1
+    assert "verification_failed" in _completion_gate_problems(
+        state=state,
+        final_text="Implemented and checked.",
+        blocked=False,
+        verification_expected=True,
+        require_material_edit_evidence=False,
+    )
+
+
+def test_successful_supplemental_check_preserves_authoritative_pass_state(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands={_VERIFY_OK_COMMAND},
+    )
+    _record_authoritative_verify_result(root=tmp_path, state=state)
+    assert state.last_verification_passed is True
+    assert state.last_verification_attempt_was_test_run is True
+
+    _record_supplemental_check(root=tmp_path, state=state, exit_code=0)
+
+    assert state.verification_attempt_count == 2
+    assert state.last_verification_passed is True
+    assert state.last_verification_failure_category == ""
+    assert state.last_verification_failure_snippet == ""
+    assert state.last_verification_attempt_was_test_run is True
+    assert len(state.accepted_verification_evidence) == 1
+    assert len(state.supplemental_verification_evidence) == 1
+    assert (
+        _completion_gate_problems(
+            state=state,
+            final_text="Implemented and verified.",
+            blocked=False,
+            verification_expected=True,
+            require_material_edit_evidence=False,
+        )
+        == []
+    )
+
+
+def test_failing_supplemental_check_overrides_authoritative_pass(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands={_VERIFY_OK_COMMAND},
+    )
+    _record_authoritative_verify_result(root=tmp_path, state=state)
+
+    _record_supplemental_check(root=tmp_path, state=state, exit_code=1)
+
+    assert state.last_verification_passed is False
+    assert state.last_verification_failure_category == "verification_failed"
+    assert "task checker failed" in state.last_verification_failure_snippet
+    assert len(state.accepted_verification_evidence) == 1
+    assert len(state.supplemental_verification_evidence) == 1
+    assert "verification_failed" in _completion_gate_problems(
+        state=state,
+        final_text="Implemented and verified.",
+        blocked=False,
+        verification_expected=True,
+        require_material_edit_evidence=False,
+    )
+
+
+def test_successful_supplemental_check_preserves_authoritative_failure_state(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands={_VERIFY_FAIL_COMMAND},
+    )
+    _record_authoritative_verify_result(
+        root=tmp_path,
+        state=state,
+        command=_VERIFY_FAIL_COMMAND,
+        exit_code=1,
+    )
+    prior_outcome = (
+        state.last_verification_passed,
+        state.last_verification_failure_category,
+        state.last_verification_failure_snippet,
+        state.last_verification_attempt_was_test_run,
+    )
+    assert prior_outcome[0] is False
+    assert prior_outcome[1] == "verification_failed"
+    assert "authoritative check failed" in prior_outcome[2]
+    assert prior_outcome[3] is True
+
+    _record_supplemental_check(
+        root=tmp_path,
+        state=state,
+        exit_code=0,
+        known_command=_VERIFY_FAIL_COMMAND,
+    )
+
+    assert (
+        state.last_verification_passed,
+        state.last_verification_failure_category,
+        state.last_verification_failure_snippet,
+        state.last_verification_attempt_was_test_run,
+    ) == prior_outcome
+    assert state.failed_verification_commands() == {_VERIFY_FAIL_COMMAND}
+    assert "verification_failed" in _completion_gate_problems(
+        state=state,
+        final_text="Implemented and checked.",
+        blocked=False,
+        verification_expected=True,
+        require_material_edit_evidence=False,
+    )
+
+
+def test_mixed_allowed_and_supplemental_verify_run_keeps_allowed_pass_decisive(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands={_VERIFY_OK_COMMAND},
+    )
+    commands = [_VERIFY_OK_COMMAND, "python checks.py"]
+
+    _record_tool_effect(
+        root=tmp_path,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": commands},
+        status="ok",
+        result={
+            "commands": commands,
+            "command_results": [
+                {
+                    "command": command,
+                    "effective_command": command,
+                    "ok": True,
+                    "exit_code": 0,
+                    "real_execution": True,
+                    "output_preview": "",
+                }
+                for command in commands
+            ],
+            "all_passed": True,
+        },
+        known_verification_commands=[_VERIFY_OK_COMMAND],
+        verification_authoritative=True,
+    )
+
+    assert state.last_verification_passed is True
+    assert state.covered_verification_commands == {_VERIFY_OK_COMMAND}
+    assert len(state.accepted_verification_evidence) == 1
+    assert len(state.supplemental_verification_evidence) == 1
+    assert (
+        _completion_gate_problems(
+            state=state,
+            final_text="Implemented and verified.",
+            blocked=False,
+            verification_expected=True,
+            require_material_edit_evidence=False,
+        )
+        == []
+    )
+
+
+def test_mixed_supplemental_and_rejected_verify_run_revokes_prior_pass(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "checks.py").write_text("# task checker\n", encoding="utf-8")
+    rejected_command = "python -c \"print('ok')\""
+    expected_commands = {_VERIFY_OK_COMMAND, rejected_command}
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands=expected_commands,
+    )
+    _record_authoritative_verify_result(root=tmp_path, state=state)
+    commands = ["python checks.py", rejected_command]
+
+    _record_tool_effect(
+        root=tmp_path,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": commands},
+        status="ok",
+        result={
+            "commands": commands,
+            "command_results": [
+                {
+                    "command": command,
+                    "effective_command": command,
+                    "ok": True,
+                    "exit_code": 0,
+                    "real_execution": True,
+                    "output_preview": "",
+                }
+                for command in commands
+            ],
+            "all_passed": True,
+        },
+        known_verification_commands=sorted(expected_commands),
+        verification_authoritative=True,
+    )
+
+    assert state.last_verification_passed is False
+    assert state.last_verification_failure_category == "verification_failed"
+    assert state.covered_verification_commands == {_VERIFY_OK_COMMAND}
+    assert state.missing_verification_commands() == {rejected_command}
+    assert len(state.supplemental_verification_evidence) == 1
+    assert len(state.rejected_verification_evidence) == 1
+    assert "verification_failed" in _completion_gate_problems(
+        state=state,
+        final_text="Implemented and checked.",
+        blocked=False,
+        verification_expected=True,
+        require_material_edit_evidence=False,
+    )
+
+
+@pytest.mark.parametrize("structured_results", [False, True])
+def test_rejected_passing_verify_command_does_not_grant_coverage(
+    tmp_path: Path,
+    structured_results: bool,
+) -> None:
+    command_a = "pytest tests/a.py -q"
+    command_b = "pytest tests/b.py -q"
+    commands = [command_a, command_b]
+    state = TurnExecutionState(
+        execution_requested=True,
+        expected_verification_commands=set(commands),
+    )
+    rejected_result: dict[str, Any] = {
+        "commands": [command_b],
+        "all_passed": True,
+        "touched_repo_paths": ["src/generated.py"],
+    }
+    if structured_results:
+        rejected_result["command_results"] = [
+            {
+                "command": command_b,
+                "effective_command": command_b,
+                "ok": True,
+                "exit_code": 0,
+                "real_execution": True,
+                "output_preview": "1 passed\n",
+            }
+        ]
+
+    _record_tool_effect(
+        root=tmp_path,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": [command_b]},
+        status="ok",
+        result=rejected_result,
+        known_verification_commands=commands,
+        verification_authoritative=True,
+    )
+    _record_authoritative_verify_result(root=tmp_path, state=state, command=command_a)
+
+    assert state.last_verification_passed is True
+    assert state.covered_verification_commands == {command_a}
+    assert state.missing_verification_commands() == {command_b}
+    problems = _completion_gate_problems(
+        state=state,
+        final_text="Implemented and verified.",
+        blocked=False,
+        verification_expected=True,
+        require_material_edit_evidence=False,
+    )
+    assert "verification_incomplete" in problems
+    assert "verification_failed" not in problems
 
 
 def test_shell_service_start_counts_as_material_work_and_durable_acceptance(
@@ -3783,6 +4134,106 @@ def test_one_shot_success_claim_is_blocked_until_fresh_test_execution(
     assert len(blocked) == 1
     assert (blocked[0].get("payload") or {}).get("claim_kind") == "tests"
     assert not any(event.get("type") == "execution_evidence_violation_forced" for event in events)
+
+
+def test_one_shot_silent_authoritative_verifier_finalizes_after_one_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_git_repo_with_commit(repo)
+    _commit_repo_file(repo, "src/app.py", "VALUE = 'old'\n")
+    sessions_dir = tmp_path / "sessions"
+    session_id = "one-shot-silent-verifier"
+
+    def silent_verify(
+        *,
+        root: Path,
+        commands: list[str],
+        artifact_path: Path,
+        cfg: AppConfig,
+    ) -> VerifyRunResult:
+        _ = root, cfg
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("", encoding="utf-8")
+        return VerifyRunResult(
+            commands=list(commands),
+            command_results=[
+                VerifyCommandResult(
+                    command=command,
+                    exit_code=0,
+                    output="",
+                    real_execution=True,
+                )
+                for command in commands
+            ],
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(agent_loop_mod, "run_task_verification", silent_verify)
+    session = create_session(
+        cfg=AppConfig(
+            model="test-model",
+            routing_mode="code_only",
+            verify_commands=[_VERIFY_OK_COMMAND],
+        ),
+        root=repo,
+        mode="auto",
+        yes=True,
+        max_steps=5,
+        no_log=False,
+        api_key_override="override-key",
+        one_shot_execution=True,
+        session_log_dir_override=sessions_dir,
+        session_id_override=session_id,
+    )
+    final_text = "Implemented the source fix. All tests passed."
+    session.client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc-write",
+                        name="fs_write",
+                        arguments={"path": "src/app.py", "content": "VALUE = 'fixed'\n"},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc-verify",
+                        name="verify_run",
+                        arguments={"commands": [_VERIFY_OK_COMMAND]},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(content=final_text, tool_calls=[], raw={}),
+        ]
+    )  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn("Fix the bug in src/app.py and run the tests.")
+    finally:
+        session.close()
+
+    events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
+    verify_results = [
+        event
+        for event in events
+        if event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "verify_run"
+    ]
+    assert exit_code == 0
+    assert len(verify_results) == 1
+    assert session.client.calls == 3
+    assert not any(
+        event.get("type") == "execution_evidence_finalization_blocked" for event in events
+    )
 
 
 def test_one_shot_existing_test_edit_correctives_are_capped_and_logged(

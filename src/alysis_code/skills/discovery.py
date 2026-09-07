@@ -6,6 +6,7 @@ from ..branding import canonical_user_config_dir
 from ..config import AppConfig
 from .loader import load_skill_bundle
 from .models import DiscoveredSkills, SkillBundle, SkillDiscoveryIssue
+from .paths import bundled_skill_root
 
 _PROJECT_SKILL_ROOT_SPECS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("native", (".alysis_skills",), ".alysis_skills"),
@@ -31,12 +32,19 @@ def resolve_skills_enabled(cfg: AppConfig | None) -> bool:
     return bool(getattr(cfg, "skills_enabled", True))
 
 
+def resolve_bundled_skills_enabled(cfg: AppConfig | None) -> bool:
+    if cfg is None:
+        return True
+    return bool(getattr(cfg, "bundled_skills_enabled", True))
+
+
 def discover_skills(
     *,
     focus_path: Path,
     workspace_root: Path | None = None,
     user_config_dir: Path | None = None,
     home_dir: Path | None = None,
+    cfg: AppConfig | None = None,
 ) -> DiscoveredSkills:
     resolved_focus = focus_path.expanduser().resolve()
     if resolved_focus.is_file():
@@ -129,6 +137,36 @@ def discover_skills(
             assert skill is not None
             if skill.name.casefold() in resolved:
                 continue
+            _consider(skill)
+
+    if resolve_bundled_skills_enabled(cfg):
+        root = bundled_skill_root()
+        try:
+            bundle_paths = (
+                sorted(child for child in root.iterdir() if child.is_dir())
+                if root.exists() and root.is_dir()
+                else []
+            )
+        except OSError as exc:
+            issues.append(
+                SkillDiscoveryIssue(
+                    source_path=root,
+                    message=f"failed to scan bundled skill root: {exc}",
+                )
+            )
+            bundle_paths = []
+        for bundle_path in bundle_paths:
+            skill, issue = load_skill_bundle(
+                bundle_path=bundle_path,
+                source_scope="bundled",
+                source_kind="bundled",
+                source_family="bundled",
+                ancestor_distance=None,
+            )
+            if issue is not None:
+                issues.append(issue)
+                continue
+            assert skill is not None
             _consider(skill)
 
     return DiscoveredSkills(

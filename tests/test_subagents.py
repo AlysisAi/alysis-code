@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from alysis_code import agent_loop
+from alysis_code.agent import prompt_context as agent_prompt_context
 from alysis_code.agent import session as agent_session
 from alysis_code.agent import subagent_execution, tools_assembly
 from alysis_code.agent.steering import SteerInbox
@@ -513,6 +514,7 @@ def _build_main_tools(
     managed_browser_owner_id: str | None = None,
     managed_browser_cancel_check: Any | None = None,
     parent_steer_inbox: SteerInbox | None = None,
+    skills_enabled: bool = True,
 ) -> dict[str, ToolDef]:
     recording_store = store or _RecordingStore()
     effective_cfg = cfg or AppConfig(model="test-model")
@@ -526,6 +528,7 @@ def _build_main_tools(
         cfg=effective_cfg,
         api_key=api_key,
         max_steps=max_steps,
+        skills_enabled=skills_enabled,
         subagents_enabled=subagents_enabled,
         subagent_depth=subagent_depth,
         subagent_registry=subagent_registry,
@@ -3787,6 +3790,135 @@ def test_subagent_recursion_is_blocked_and_unregistered_for_nested_depth(tmp_pat
     launcher.subagent_depth = 1
     result = subagent_run({"name": "explorer", "task": "Inspect files"})
     assert result == {"error": "Subagents cannot invoke subagents (nesting is blocked)."}
+
+
+def test_subagent_child_preserves_resolved_skills_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_cfg: list[AppConfig] = []
+
+    def _create_child(**kwargs: Any) -> _FakeSubSession:
+        captured_cfg.append(kwargs["cfg"])
+        return _FakeSubSession(tools=_readonly_subagent_tools())
+
+    monkeypatch.setattr(agent_loop, "create_session", _create_child)
+    cfg = AppConfig(
+        model="test-model",
+        web_search_mode="off",
+        web_tools_enabled=False,
+        skills_enabled=True,
+        bundled_skills_enabled=True,
+    )
+    tools = _build_main_tools(
+        tmp_path=tmp_path,
+        subagents_enabled=True,
+        subagent_registry={
+            "explorer": SubagentDefinition(
+                name="explorer",
+                description="readonly explorer",
+                system_prompt="Inspect the repository.",
+                mode="readonly",
+                allow_tools=("fs_read",),
+            )
+        },
+        cfg=cfg,
+        skills_enabled=False,
+    )
+
+    result = tools["subagent_run"].run(
+        {"name": "explorer", "task": "Inspect without loading any skills."}
+    )
+
+    assert "error" not in result
+    assert result["result"] == "subagent final"
+    assert captured_cfg[0].skills_enabled is False
+    assert captured_cfg[0].bundled_skills_enabled is True
+
+
+def test_real_subagent_session_omits_skills_when_parent_resolved_them_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_root = tmp_path / ".alysis_skills" / "child-probe"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\n"
+        "name: child-probe\n"
+        "description: A skill that would be advertised to the child if discovery ran.\n"
+        "---\n\n"
+        "Child-only probe instructions.\n",
+        encoding="utf-8",
+    )
+    child_sessions: list[agent_session.AgentSession] = []
+
+    def _complete_real_child(
+        child: agent_session.AgentSession,
+        task: str,
+        *,
+        cancellation_token: Any | None = None,
+        **_kwargs: Any,
+    ) -> int:
+        _ = task, cancellation_token
+        child_sessions.append(child)
+        final_text = "Skills-disabled child completed."
+        child.messages.append({"role": "assistant", "content": final_text})
+        child.store.append("final", {"content": final_text})
+        return 0
+
+    def _unexpected_skill_discovery(**_kwargs: Any) -> None:
+        raise AssertionError("skills-disabled child attempted skill discovery")
+
+    monkeypatch.setattr(agent_session.AgentSession, "run_turn", _complete_real_child)
+    monkeypatch.setattr(
+        agent_prompt_context,
+        "discover_skills",
+        _unexpected_skill_discovery,
+    )
+    cfg = AppConfig(
+        model="test-model",
+        web_search_mode="off",
+        web_tools_enabled=False,
+        skills_enabled=True,
+        bundled_skills_enabled=True,
+    )
+    tools = _build_main_tools(
+        tmp_path=tmp_path,
+        subagents_enabled=True,
+        subagent_registry={
+            "explorer": SubagentDefinition(
+                name="explorer",
+                description="readonly explorer",
+                system_prompt="Inspect the repository.",
+                mode="readonly",
+                allow_tools=("fs_read",),
+            )
+        },
+        cfg=cfg,
+        skills_enabled=False,
+    )
+
+    result = tools["subagent_run"].run(
+        {"name": "explorer", "task": "Inspect without loading any skills."}
+    )
+
+    assert "error" not in result
+    assert result["result"] == "Skills-disabled child completed."
+    assert len(child_sessions) == 1
+    child = child_sessions[0]
+    prompt_text = "\n".join(
+        str(message.get("content") or "") for message in child.messages if isinstance(message, dict)
+    )
+    assert child.cfg.skills_enabled is False
+    assert child.cfg.bundled_skills_enabled is True
+    assert child.skills_enabled is False
+    assert child.skill_registry == {}
+    assert child.skills_ordered == ()
+    assert child.skill_catalog_entries == ()
+    assert "<skill_context>" not in prompt_text
+    assert "Skills and skill_read" not in prompt_text
+    assert "child-probe" not in prompt_text
+    assert "skill_read" not in child.tools
 
 
 def test_subagent_allowlist_denylist_and_default_readonly_mode(

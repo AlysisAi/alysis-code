@@ -95,7 +95,14 @@ def test_exit_words_are_blocked_not_delivered_to_the_model(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["actually use pytest", "no, the other file", "stop and explain", ""]
+    "text",
+    [
+        "actually use pytest",
+        "no, the other file",
+        "stop and explain",
+        "$code-review inspect this change",
+        "",
+    ],
 )
 def test_prose_is_delivered_as_a_message(text: str) -> None:
     assert classify_mid_turn(text) is MidTurnAction.MESSAGE
@@ -139,6 +146,7 @@ def test_is_command_distinguishes_commands_from_prose() -> None:
     assert is_command("/help")
     assert is_command(":forge")
     assert is_command("exit")
+    assert not is_command("$code-review inspect this change")
     assert not is_command("please fix the parser")
     assert not is_command("")
 

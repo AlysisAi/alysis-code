@@ -276,6 +276,15 @@ def test_build_tools_registers_all_non_optional_catalogued_builtin_tools(tmp_pat
     assert set(tools) == catalog_names - {"web_search", "skill_read"}
 
 
+def test_skill_read_schema_states_semantic_selection_boundary() -> None:
+    description = get_builtin_tool_metadata("skill_read").description
+
+    assert "requested actions" in description
+    assert "concept mentions" in description
+    assert "explicit exclusions" in description
+    assert "most specific" in description
+
+
 def test_optional_unavailable_tool_returns_structured_non_error_result_and_logs_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

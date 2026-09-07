@@ -1,11 +1,11 @@
-"""Unified turn path: no pre-turn routing, mode-derived posture.
+"""Unified turn path: no legacy pre-turn routing, mode-derived posture.
 
-The legacy pre-turn semantic router is deleted. No router client is ever
-provisioned, every text turn goes straight to the main model with the full
-per-mode agent surface, and execution posture derives from the execution
-mode. ``unified_turn_path_enabled`` (and ``ALYSIS_UNIFIED_TURN_PATH``)
-remain accepted for one release but are ignored: flag-off behaves identically
-to flag-on.
+The legacy pre-turn semantic router is deleted. Every text turn goes straight
+to the main model with the full per-mode agent surface, and execution posture
+derives from the execution mode. A router-role client may independently serve
+automatic skill selection. ``unified_turn_path_enabled`` (and
+``ALYSIS_UNIFIED_TURN_PATH``) remain accepted for one release but are ignored:
+flag-off behaves identically to flag-on.
 """
 
 from __future__ import annotations
@@ -102,7 +102,11 @@ def _event_payloads(path: Path, event_type: str) -> list[dict[str, Any]]:
 
 
 def _unified_session(tmp_path: Path, *, mode: str = "review") -> Any:
-    cfg = AppConfig(model="test-model", unified_turn_path_enabled=True)
+    cfg = AppConfig(
+        model="test-model",
+        unified_turn_path_enabled=True,
+        skills_enabled=False,
+    )
     return create_session(
         cfg=cfg,
         root=tmp_path,
@@ -171,7 +175,7 @@ def test_set_config_value_roundtrips_unified_turn_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unified_session_provisions_no_router_client(tmp_path: Path) -> None:
+def test_unified_session_without_skills_provisions_no_selector_client(tmp_path: Path) -> None:
     session = _unified_session(tmp_path)
     try:
         assert session.router_client is None
@@ -181,7 +185,7 @@ def test_unified_session_provisions_no_router_client(tmp_path: Path) -> None:
 
 def test_default_session_provisions_no_router_client(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
-    cfg = AppConfig(model="test-model")
+    cfg = AppConfig(model="test-model", skills_enabled=False)
     session = create_session(
         cfg=cfg,
         root=tmp_path,
@@ -201,7 +205,11 @@ def test_flag_off_session_provisions_no_router_client(tmp_path: Path, monkeypatc
     # The flag is accepted-and-ignored: turning it off provisions exactly the
     # same router-free session as the default.
     monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
-    cfg = AppConfig(model="test-model", unified_turn_path_enabled=False)
+    cfg = AppConfig(
+        model="test-model",
+        unified_turn_path_enabled=False,
+        skills_enabled=False,
+    )
     session = create_session(
         cfg=cfg,
         root=tmp_path,
@@ -620,7 +628,12 @@ def test_flag_off_behaves_identically_to_flag_on(tmp_path: Path, monkeypatch) ->
     # takes the unified path (no routing call, one main-model call, and the
     # turn-intent payload records the unified path).
     monkeypatch.delenv("ALYSIS_UNIFIED_TURN_PATH", raising=False)
-    cfg = AppConfig(model="test-model", routing_mode="auto", unified_turn_path_enabled=False)
+    cfg = AppConfig(
+        model="test-model",
+        routing_mode="auto",
+        unified_turn_path_enabled=False,
+        skills_enabled=False,
+    )
     session = create_session(
         cfg=cfg,
         root=tmp_path,

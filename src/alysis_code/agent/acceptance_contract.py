@@ -777,7 +777,7 @@ def record_acceptance_tool_effect(
             if durable_criterion_ids
             else _block_session_owned_service_criteria(contract=contract)
         )
-    if not criterion_ids and normalized_tool in {"verify_run", "shell_run"}:
+    if normalized_tool in {"verify_run", "shell_run"}:
         criterion_ids.extend(
             _update_repo_surface_criteria(
                 contract=contract,
@@ -1031,6 +1031,33 @@ def _clause_path_role(clause: str) -> AcceptancePathRole:
     return AcceptancePathRole.UNKNOWN_REFERENCE
 
 
+def _path_role(
+    clause: str,
+    path_match: re.Match[str],
+) -> AcceptancePathRole:
+    path_start = path_match.start(1)
+    preservation = None
+    for candidate in _PRESERVATION_ROLE_RE.finditer(clause):
+        if candidate.start() >= path_start:
+            break
+        preservation = candidate
+    if preservation is None:
+        return _clause_path_role(clause)
+    if path_start < preservation.end():
+        return AcceptancePathRole.PRESERVATION_TARGET
+
+    boundary = clause.rfind(",", preservation.end(), path_start)
+    if boundary < 0:
+        return AcceptancePathRole.PRESERVATION_TARGET
+    scope_is_complete = bool(re.search(r"\b(?:unchanged|intact)\s*$", preservation.group(0), re.I))
+    prior_path = _PATH_RE.search(clause, preservation.end(), boundary)
+    # A completed state phrase ends at the comma. An open direct-object phrase
+    # carries across it only after binding a path, which preserves path lists.
+    if not scope_is_complete and prior_path is not None:
+        return AcceptancePathRole.PRESERVATION_TARGET
+    return _clause_path_role(clause[boundary + 1 :])
+
+
 def _clean_path_token(path: str) -> str:
     cleaned = str(path or "").strip().strip("`'\"").replace("\\", "/")
     cleaned = cleaned.rstrip(".,;:!?)]}")
@@ -1043,8 +1070,8 @@ def _extract_path_refs(*, root: Path, texts: list[str]) -> list[AcceptancePathRe
     refs: list[AcceptancePathRef] = []
     seen: set[tuple[str, str, str]] = set()
     for clause in _iter_clauses(texts):
-        role = _clause_path_role(clause)
         for match in _PATH_RE.finditer(clause):
+            role = _path_role(clause, match)
             path_ref = _resolve_acceptance_path(
                 root=root,
                 raw_text=match.group(1),
@@ -1897,6 +1924,7 @@ def _update_repo_surface_criteria(
             criterion.failure_summary = "Verification evidence was supplemental or unsafe"
         elif passed is True:
             criterion.status = AcceptanceCriterionStatus.PASSED
+            criterion.failure_summary = ""
         elif passed is False:
             criterion.status = AcceptanceCriterionStatus.FAILED
             criterion.failure_summary = f"Verification command failed: {command}"

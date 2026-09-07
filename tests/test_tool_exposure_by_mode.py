@@ -156,6 +156,7 @@ def _build_tools(
     surface: object | None = None,
     cfg: AppConfig | None = None,
     yes: bool = True,
+    skills_enabled: bool = True,
 ) -> dict[str, object]:
     _fake_git_repo(tmp_path)
     return build_tools(
@@ -176,6 +177,7 @@ def _build_tools(
         deny_write_prefixes=deny_write_prefixes,
         allow_write_globs=allow_write_globs,
         verification_enabled=True,
+        skills_enabled=skills_enabled,
         subagents_enabled=True,
         subagent_registry={},
         runtime_kind=runtime_kind,

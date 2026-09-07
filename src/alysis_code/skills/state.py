@@ -180,10 +180,16 @@ def resolve_skill_catalog(
         key = normalize_skill_name(skill.name)
         global_record = global_state.managed_installs.get(key)
         project_record = project_state.managed_installs.get(key)
-        install_record = project_record if skill.source_scope == "project" else global_record
+        install_record = (
+            project_record
+            if skill.source_scope == "project"
+            else global_record
+            if skill.source_scope == "user"
+            else None
+        )
         enabled = True
         disabled_by: str | None = None
-        if skill.source_scope == "user" and key in global_state.disabled_names:
+        if skill.source_scope in {"user", "bundled"} and key in global_state.disabled_names:
             enabled = False
             disabled_by = "global"
         if key in project_state.enabled_names:

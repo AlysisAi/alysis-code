@@ -25,10 +25,17 @@ def load_repo_conventions(
     while True:
         for filename in _CONVENTION_FILENAMES:
             candidate = current / filename
-            if not candidate.exists() or not candidate.is_file():
+            try:
+                resolved_candidate = candidate.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if (
+                not resolved_candidate.is_relative_to(resolved_workspace_root)
+                or not resolved_candidate.is_file()
+            ):
                 continue
             try:
-                content = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                content = resolved_candidate.read_text(encoding="utf-8", errors="replace").strip()
             except OSError:
                 continue
             if not content:

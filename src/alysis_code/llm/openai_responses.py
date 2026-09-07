@@ -5,13 +5,16 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
 import httpx
 
+from ..cancellation import raise_if_cancelled
 from ..error_text import sanitize_error_text_for_output
+from ..execution_deadline import DeadlineExhausted
 from ..provider_auth import ProviderAuthAdapter
 from ..provider_telemetry import ProviderCallTelemetryRecorder
 from ..request_estimation import estimate_provider_payload_tokens
@@ -37,12 +40,19 @@ from .provider_limits import (
 )
 from .request_plan import LLMRequestPlan, RequestCachePlan
 from .request_shape import build_request_shape_report
-from .streaming import SSEFrame, iter_sse_frames, parse_sse_json_frame
+from .streaming import (
+    SSEFrame,
+    decode_text_chunks,
+    iter_lines_from_text_chunks,
+    iter_sse_frames,
+    parse_sse_json_frame,
+)
 from .types import (
     AssistantResponsePhase,
     InputTokenCount,
     LLMError,
     LLMResponse,
+    LLMStreamNoProgressError,
     LLMUsage,
     ReasoningOutput,
     ReasoningOutputKind,
@@ -1222,6 +1232,10 @@ class _OpenAIResponsesStreamAccumulator:
         self.text_delta_seen = False
         self.seen_final = False
         self.final_response: dict[str, Any] | None = None
+        self.progress_revision = 0
+
+    def _mark_progress(self) -> None:
+        self.progress_revision += 1
 
     def handle(self, frame: SSEFrame, data: dict[str, Any]) -> None:
         event_type = str(data.get("type") or frame.event or "").strip()
@@ -1318,7 +1332,12 @@ class _OpenAIResponsesStreamAccumulator:
             return
         response = copy.deepcopy(raw_response)
         output = response.pop("output", None)
-        self.response.update(response)
+        if any(
+            key not in self.response or self.response[key] != value
+            for key, value in response.items()
+        ):
+            self.response.update(response)
+            self._mark_progress()
         if isinstance(output, list):
             for index, item in enumerate(output):
                 if isinstance(item, dict):
@@ -1327,9 +1346,12 @@ class _OpenAIResponsesStreamAccumulator:
     def _handle_final_response(self, data: dict[str, Any]) -> None:
         self._merge_response(data.get("response"))
         response = data.get("response")
-        self.final_response = (
+        final_response = (
             copy.deepcopy(response) if isinstance(response, dict) else copy.deepcopy(self.response)
         )
+        if not self.seen_final or self.final_response != final_response:
+            self._mark_progress()
+        self.final_response = final_response
         self.seen_final = True
 
     def _handle_output_item(self, data: dict[str, Any]) -> None:
@@ -1339,15 +1361,16 @@ class _OpenAIResponsesStreamAccumulator:
             return
         self._set_output_item(index, item)
 
-    def _set_output_item(self, index: int, item: dict[str, Any]) -> dict[str, Any]:
+    def _set_output_item(self, index: int, item: dict[str, Any]) -> None:
         copied = copy.deepcopy(item)
         existing = self.output_items.get(index)
         if existing is not None:
             merged = copy.deepcopy(existing)
             merged.update(copied)
             copied = merged
-        self.output_items[index] = copied
-        return copied
+        if existing != copied:
+            self.output_items[index] = copied
+            self._mark_progress()
 
     def _ensure_message_item(self, output_index: int, item_id: str | None = None) -> dict[str, Any]:
         item = self.output_items.get(output_index)
@@ -1360,14 +1383,24 @@ class _OpenAIResponsesStreamAccumulator:
             if item_id:
                 item["id"] = item_id
             self.output_items[output_index] = item
+            self._mark_progress()
         else:
+            changed = False
+            if "type" not in item:
+                changed = True
             item.setdefault("type", "message")
+            if "role" not in item:
+                changed = True
             item.setdefault("role", "assistant")
             if item_id and not item.get("id"):
                 item["id"] = item_id
+                changed = True
             content = item.get("content")
             if not isinstance(content, list):
                 item["content"] = []
+                changed = True
+            if changed:
+                self._mark_progress()
         return item
 
     def _ensure_text_part(
@@ -1384,6 +1417,7 @@ class _OpenAIResponsesStreamAccumulator:
                 while len(content) <= content_index:
                     content.append({"type": "output_text", "text": ""})
                 content[content_index] = part
+            self._mark_progress()
         return part
 
     def _handle_content_part(self, data: dict[str, Any]) -> None:
@@ -1398,14 +1432,19 @@ class _OpenAIResponsesStreamAccumulator:
         if not isinstance(content, list):
             content = []
             item["content"] = content
+            self._mark_progress()
         while len(content) <= content_index:
             content.append({"type": "output_text", "text": ""})
+            self._mark_progress()
         part = copy.deepcopy(raw_part)
         if str(part.get("type") or "") in {"text", "output_text"}:
             part["type"] = "output_text"
             part.setdefault("text", "")
             self.text_parts[(output_index, content_index)] = part
+        changed = content[content_index] != part
         content[content_index] = part
+        if changed:
+            self._mark_progress()
 
     def _handle_output_text_delta(self, data: dict[str, Any]) -> None:
         output_index = _event_output_index(data, event_type="response.output_text.delta")
@@ -1418,6 +1457,7 @@ class _OpenAIResponsesStreamAccumulator:
         existing = part.get("text")
         part["text"] = (existing if isinstance(existing, str) else "") + delta
         self.text_delta_seen = True
+        self._mark_progress()
         if self.on_text_delta is not None:
             self.on_text_delta(delta)
 
@@ -1429,8 +1469,10 @@ class _OpenAIResponsesStreamAccumulator:
         if not isinstance(text, str):
             return
         part = self._ensure_text_part(output_index, content_index, item_id)
-        part["text"] = text
-        part["type"] = "output_text"
+        if part.get("text") != text or part.get("type") != "output_text":
+            part["text"] = text
+            part["type"] = "output_text"
+            self._mark_progress()
 
     def _handle_output_text_annotation(self, data: dict[str, Any]) -> None:
         output_index = _event_output_index(
@@ -1446,6 +1488,7 @@ class _OpenAIResponsesStreamAccumulator:
         annotations = part.setdefault("annotations", [])
         if isinstance(annotations, list):
             annotations.append(copy.deepcopy(annotation))
+            self._mark_progress()
 
     @staticmethod
     def _reasoning_indices(data: dict[str, Any]) -> tuple[int, int] | None:
@@ -1498,6 +1541,7 @@ class _OpenAIResponsesStreamAccumulator:
             part.setdefault("type", "summary_text")
             part.setdefault("text", "")
         self.reasoning_summary_parts[key] = part
+        self._mark_progress()
         return part
 
     def _reasoning_part_for_event(self, data: dict[str, Any]) -> dict[str, Any] | None:
@@ -1521,6 +1565,7 @@ class _OpenAIResponsesStreamAccumulator:
             existing = part.get("text")
             part["text"] = (existing if isinstance(existing, str) else "") + delta
         self.reasoning_delta_keys.add(key)
+        self._mark_progress()
         if self.on_reasoning_delta is not None:
             self.on_reasoning_delta(delta)
 
@@ -1531,8 +1576,10 @@ class _OpenAIResponsesStreamAccumulator:
         key = self._reasoning_indices(data)
         part = self._reasoning_part_for_event(data)
         if part is not None:
-            part["type"] = "summary_text"
-            part["text"] = text
+            if part.get("type") != "summary_text" or part.get("text") != text:
+                part["type"] = "summary_text"
+                part["text"] = text
+                self._mark_progress()
         # Some compatible providers send only the completed summary event. It is
         # still genuine provider output, so surface it once, but never inject it
         # after visible answer text has already started or duplicate prior deltas.
@@ -1544,6 +1591,7 @@ class _OpenAIResponsesStreamAccumulator:
             and not self.text_delta_seen
         ):
             self.reasoning_delta_keys.add(key)
+            self._mark_progress()
             self.on_reasoning_delta(text)
 
     def _handle_reasoning_summary_part(self, data: dict[str, Any], *, done: bool) -> None:
@@ -1553,8 +1601,13 @@ class _OpenAIResponsesStreamAccumulator:
         part = self._reasoning_part_for_event(data)
         if part is None:
             return
-        part.update(copy.deepcopy(raw_part))
-        part["type"] = "summary_text"
+        updated = copy.deepcopy(part)
+        updated.update(copy.deepcopy(raw_part))
+        updated["type"] = "summary_text"
+        if part != updated:
+            part.clear()
+            part.update(updated)
+            self._mark_progress()
         text = raw_part.get("text")
         if done and isinstance(text, str):
             completed = dict(data)
@@ -1575,6 +1628,8 @@ class _OpenAIResponsesStreamAccumulator:
             item["arguments"] = (existing if isinstance(existing, str) else "") + (
                 delta if isinstance(delta, str) else ""
             )
+        if isinstance(delta, str) and delta:
+            self._mark_progress()
 
     def _handle_function_arguments_done(self, data: dict[str, Any]) -> None:
         output_index = _event_output_index(
@@ -1582,6 +1637,7 @@ class _OpenAIResponsesStreamAccumulator:
             event_type="response.function_call_arguments.done",
         )
         item = self.output_items.get(output_index)
+        before = copy.deepcopy(item) if isinstance(item, dict) else None
         if not isinstance(item, dict):
             item = {"type": "function_call"}
             self.output_items[output_index] = item
@@ -1595,6 +1651,8 @@ class _OpenAIResponsesStreamAccumulator:
             item["arguments"] = arguments
         elif output_index in self.argument_chunks:
             item["arguments"] = "".join(self.argument_chunks[output_index])
+        if before != item:
+            self._mark_progress()
 
     def _handle_web_search_call_state(self, event_type: str, data: dict[str, Any]) -> None:
         try:
@@ -1603,6 +1661,7 @@ class _OpenAIResponsesStreamAccumulator:
             self._append_unknown(frame=SSEFrame(event=event_type, data=json.dumps(data)), data=data)
             return
         item = self.output_items.get(output_index)
+        before = copy.deepcopy(item) if isinstance(item, dict) else None
         if not isinstance(item, dict):
             item = {"type": "web_search_call"}
             self.output_items[output_index] = item
@@ -1617,6 +1676,8 @@ class _OpenAIResponsesStreamAccumulator:
             value = data.get(key)
             if value is not None:
                 item[key] = copy.deepcopy(value)
+        if before != item:
+            self._mark_progress()
 
     def _ordered_output_items(self) -> list[dict[str, Any]]:
         return [
@@ -1688,6 +1749,9 @@ class OpenAIResponsesClient:
         session_id: str | None = None,
         usage_contract: UsageContract | None = None,
         route_identity: ProviderRouteIdentity | None = None,
+        stream_no_progress_timeout_s: float = 240.0,
+        stream_progress_clock: Callable[[], float] | None = None,
+        inflight_deadline_grace_s: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -1734,6 +1798,15 @@ class OpenAIResponsesClient:
         self.usage_counts_authoritative = self.usage_contract.response_usage_authoritative
         self._input_token_count_available: bool | None = None
         self._reasoning_summary_support_by_model: dict[str, bool] = {}
+        self.stream_no_progress_timeout_s = max(
+            0.001,
+            float(stream_no_progress_timeout_s),
+        )
+        self._stream_progress_clock = stream_progress_clock or monotonic
+        self.inflight_deadline_grace_s = max(
+            0.0,
+            float(inflight_deadline_grace_s),
+        )
         self._provider_retry_wall_clock_cap_seconds = _PROVIDER_RETRY_WALL_CLOCK_CAP_SECONDS
 
     def _reasoning_summary_support_key(self) -> str:
@@ -1935,6 +2008,7 @@ class OpenAIResponsesClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         request_plan: LLMRequestPlan | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
         default_cache = RequestCachePlan(
             strategy=(
@@ -2316,6 +2390,7 @@ class OpenAIResponsesClient:
                                             if public_stream and on_reasoning_delta is not None
                                             else None
                                         ),
+                                        cancellation_token=cancellation_token,
                                     )
                                 )
                         response = client.post(
@@ -2331,6 +2406,8 @@ class OpenAIResponsesClient:
                     if stream and public_output_emitted:
                         mark_provider_call_non_retryable(err)
                     raise err from e
+                except DeadlineExhausted:
+                    raise
                 except Exception as e:  # noqa: BLE001
                     if isinstance(e, LLMError):
                         if stream and public_output_emitted:
@@ -2404,24 +2481,53 @@ class OpenAIResponsesClient:
             self.route_identity,
         )
 
-    @staticmethod
     def _parse_stream_response(
+        self,
         response: httpx.Response,
         *,
         on_text_delta: Callable[[str], None] | None,
         on_reasoning_delta: Callable[[str], None] | None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
         accumulator = _OpenAIResponsesStreamAccumulator(
             on_text_delta=on_text_delta,
             on_reasoning_delta=on_reasoning_delta,
         )
-        for frame in iter_sse_frames(response.iter_lines()):
+        progress_clock = self._stream_progress_clock
+        last_meaningful_progress = progress_clock()
+
+        def _observed_byte_chunks() -> Iterator[bytes]:
+            for chunk in response.iter_bytes():
+                raise_if_cancelled(cancellation_token)
+                stream_deadline_exhausted = getattr(
+                    self,
+                    "_stream_deadline_exhausted",
+                    None,
+                )
+                if callable(stream_deadline_exhausted) and stream_deadline_exhausted():
+                    raise DeadlineExhausted("run deadline and in-flight provider grace elapsed")
+                progress_now = progress_clock()
+                if progress_now - last_meaningful_progress >= self.stream_no_progress_timeout_s:
+                    raise LLMStreamNoProgressError(
+                        "LLM stream produced no meaningful payload within "
+                        f"{self.stream_no_progress_timeout_s:g}s."
+                    )
+                yield chunk
+
+        text_chunks = decode_text_chunks(
+            _observed_byte_chunks(),
+            encoding=response.encoding or "utf-8",
+        )
+        for frame in iter_sse_frames(iter_lines_from_text_chunks(text_chunks)):
             raw_event = parse_sse_json_frame(frame, stream_name="OpenAI Responses stream")
             if not isinstance(raw_event, dict):
                 raise LLMError("OpenAI Responses stream emitted non-object JSON event")
+            progress_revision = accumulator.progress_revision
             accumulator.handle(frame, raw_event)
+            if accumulator.progress_revision != progress_revision:
+                last_meaningful_progress = progress_clock()
         data = accumulator.finish()
-        return OpenAIResponsesClient._parse_chat_response(_response_from_json(data))
+        return self._parse_chat_response(_response_from_json(data))
 
     @staticmethod
     def _parse_chat_response(response: httpx.Response) -> LLMResponse:

@@ -246,20 +246,32 @@ def test_create_session_skips_repo_scan_when_normal_chat_does_not_need_it(
         session.close()
 
 
-def test_create_session_uses_resolved_llm_timeout_for_main_and_compactor(
+@pytest.mark.parametrize(
+    ("resolved_timeout_s", "expected_selector_timeout_s"),
+    [(44.0, 15.0), (7.0, 7.0)],
+)
+def test_create_session_bounds_selector_independently_from_main_and_compactor(
     tmp_path: Path,
     monkeypatch,
+    resolved_timeout_s: float,
+    expected_selector_timeout_s: float,
 ) -> None:
-    # Router-free path: only the main and compactor clients are provisioned.
+    # The main and compactor use the resolved timeout while automatic skill
+    # selection gets an independent ceiling, including forced-SSE transports.
     captured: list[dict[str, Any]] = []
-    monkeypatch.setenv("ALYSIS_LLM_TIMEOUT_S", "44.0")
+    monkeypatch.setenv("ALYSIS_LLM_TIMEOUT_S", str(resolved_timeout_s))
 
     class FakeClient:
+        # Provisioning happens before runtime protocol compatibility is known;
+        # a no-tool main route must not suppress the independent selector.
+        supports_tool_calling = False
+
         def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
             self.api_key = kwargs["api_key"]
             self.model = kwargs["model"]
             self.temperature = kwargs["temperature"]
             self.timeout_s = kwargs["timeout_s"]
+            self.stream_no_progress_timeout_s = 240.0
             captured.append(dict(kwargs))
 
         def chat(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -279,8 +291,14 @@ def test_create_session_uses_resolved_llm_timeout_for_main_and_compactor(
         session_log_dir_override=tmp_path / "sessions",
     )
     try:
-        assert len(captured) == 2
-        assert {item["timeout_s"] for item in captured} == {44.0}
+        assert len(captured) == 3
+        selector = next(item for item in captured if item["temperature"] == 0.0)
+        non_selectors = [item for item in captured if item is not selector]
+        assert selector["timeout_s"] == expected_selector_timeout_s
+        assert {item["timeout_s"] for item in non_selectors} == {resolved_timeout_s}
+        assert session.router_client.stream_no_progress_timeout_s == expected_selector_timeout_s
+        assert selector["enable_thinking"] is False
+        assert selector["reasoning_effort"] == ""
     finally:
         session.close()
 
@@ -400,8 +418,8 @@ def test_create_session_records_model_metadata_diagnostics_and_dedupes_same_mode
     surface = _Surface()
     session_id = "metadata-warn"
     sessions_dir = tmp_path / "sessions"
-    # Router-free path: the compactor (sharing the main model) is the second
-    # role that exercises the same-model warning dedupe.
+    # The selector and compactor share the main model, exercising warning
+    # deduplication across all three active roles.
     session = create_session(
         cfg=AppConfig(model="unknown-model-xyz"),
         root=tmp_path,
@@ -425,7 +443,7 @@ def test_create_session_records_model_metadata_diagnostics_and_dedupes_same_mode
     payload = dict(session_start.get("payload") or {})
     diagnostics = list(payload.get("model_metadata_diagnostics") or [])
     assert payload["model_metadata_policy"] == "warn"
-    assert {item["role"] for item in diagnostics} == {"coding", "compactor"}
+    assert {item["role"] for item in diagnostics} == {"coding", "router", "compactor"}
     assert all(item["fallback_capacity_active"] is True for item in diagnostics)
     assert all("context_window_tokens" in item["fallback_capacity_fields"] for item in diagnostics)
     assert all("max_output_tokens" in item["fallback_capacity_fields"] for item in diagnostics)

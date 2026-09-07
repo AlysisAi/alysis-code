@@ -1,11 +1,78 @@
 from __future__ import annotations
 
+import codecs
 import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 from .types import LLMError
+
+
+def iter_lines_from_text_chunks(chunks: Iterator[str]) -> Iterator[str]:
+    """Frame decoded chunks in linear time while preserving CR/LF boundaries."""
+
+    fragments: list[str] = []
+    pending_cr = False
+    for chunk in chunks:
+        if pending_cr:
+            if chunk.startswith("\n"):
+                fragments.append("\r\n")
+                yield "".join(fragments)
+                fragments.clear()
+                chunk = chunk[1:]
+            else:
+                fragments.append("\r")
+                yield "".join(fragments)
+                fragments.clear()
+            pending_cr = False
+
+        start = 0
+        index = 0
+        while index < len(chunk):
+            char = chunk[index]
+            if char == "\n":
+                end = index + 1
+            elif char == "\r":
+                fragments.append(chunk[start:index])
+                if index + 1 == len(chunk):
+                    pending_cr = True
+                    start = len(chunk)
+                    break
+                end = index + 2 if chunk[index + 1] == "\n" else index + 1
+                fragments.append(chunk[index:end])
+                yield "".join(fragments)
+                fragments.clear()
+                start = end
+                index = end
+                continue
+            else:
+                index += 1
+                continue
+            fragments.append(chunk[start:end])
+            yield "".join(fragments)
+            fragments.clear()
+            start = end
+            index = end
+        if start < len(chunk):
+            fragments.append(chunk[start:])
+    if pending_cr:
+        fragments.append("\r")
+    if fragments:
+        yield "".join(fragments)
+
+
+def decode_text_chunks(chunks: Iterator[bytes], *, encoding: str) -> Iterator[str]:
+    """Incrementally decode byte chunks without splitting multi-byte characters."""
+
+    decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
+    for chunk in chunks:
+        text = decoder.decode(chunk)
+        if text:
+            yield text
+    trailing = decoder.decode(b"", final=True)
+    if trailing:
+        yield trailing
 
 
 @dataclass(frozen=True)

@@ -88,6 +88,9 @@ class ProviderRetrySettings:
     max_retries: int = DEFAULT_PROVIDER_RETRY_MAX_RETRIES
     base_delay_seconds: float = DEFAULT_PROVIDER_RETRY_BASE_DELAY_SECONDS
     max_delay_seconds: float = DEFAULT_PROVIDER_RETRY_MAX_DELAY_SECONDS
+    # Optional control-plane calls can prefer immediate caller-level fallback
+    # over every retry class, including the separate connection-drop budget.
+    disable_retries: bool = False
 
 
 def canonical_provider_key(provider_key: str | None) -> str | None:
@@ -191,6 +194,8 @@ def run_provider_limited_call(
             return call()
         except Exception as exc:
             retry_reason = _provider_retry_reason(exc)
+            if settings.disable_retries:
+                raise
             # A connection dropped mid-response gets a budget of its own. It is
             # the one failure class that costs nothing to retry -- the body
             # never arrived, so no completed response work is repeated -- and
@@ -295,6 +300,7 @@ def _retry_wall_clock_cap_blocks(
     if (
         retry_reason
         not in {
+            "provider_no_progress",
             "provider_unavailable",
             "provider_stream_truncated",
             # The larger connection-drop budget is still subject to any

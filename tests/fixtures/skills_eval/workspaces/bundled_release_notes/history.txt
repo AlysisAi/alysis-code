@@ -1,0 +1,5 @@
+range: v1.4.0..HEAD
+feat(parser): accept quoted fields (#21)
+fix(cli): preserve command exit status (#22)
+feat!: remove legacy --old flag (#23)
+docs: document parser examples (#24)

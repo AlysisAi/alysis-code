@@ -6,9 +6,10 @@ about routing — usage accounting and HUD anchoring, provider-metadata
 preservation, streaming/reasoning-trace display capability, LLM error
 propagation and sanitization, web-search tool exposure and failure handling,
 bounded ``/chat`` history, and session client provisioning — re-expressed on
-the router-free unified turn path (``unified_turn_path_enabled=True`` is the
-default: sessions get ``session.router_client is None``, ``run_turn`` never
-routes, and posture derives from the execution mode).
+the unified turn path (``unified_turn_path_enabled=True`` is the default:
+``run_turn`` never performs legacy pre-turn routing, and posture derives from
+the execution mode). A dedicated reasoning-off router-role client may still be
+provisioned for automatic skill selection.
 
 Every test carries a "Salvages:" comment naming the original test whose
 assertion intent it preserves.
@@ -82,6 +83,7 @@ from typing import Any
 
 import pytest
 
+import alysis_code.agent.prompt_context as prompt_context_mod
 from alysis_code.agent.llm_calls import _is_fatal_non_repo_llm_error
 from alysis_code.agent.prompt_context import (
     _NON_REPO_MAX_RECENT_VISIBLE_HISTORY_CHARS,
@@ -103,6 +105,7 @@ from alysis_code.request_estimation import (
     estimate_request_token_breakdown,
 )
 from alysis_code.session_store import read_session_events
+from alysis_code.skills.models import DiscoveredSkills
 from alysis_code.surface.noop_surface import NoopSurface
 from alysis_code.tools.availability import WEB_UNAVAILABLE_OBSERVATION
 from alysis_code.tools.web_search import WebSearchError
@@ -1364,9 +1367,7 @@ def test_chat_only_turn_uses_small_visible_history_only(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Salvages: test_create_session_uses_role_temperatures_for_clients (router-role
-# assertions dropped with the router: unified sessions provision no router
-# client and record an empty router model)
+# Salvages: test_create_session_uses_role_temperatures_for_clients.
 def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> None:
     secret_base_url = "https://route-user:route-password@api.example.test/private/token"
     cfg = AppConfig(
@@ -1376,6 +1377,7 @@ def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> No
         compactor_temperature=0.31,
     )
     cfg.extra_fields = {
+        "role_models": {"router": "selector-model"},
         "compaction": {
             "enabled": True,
             "summarize_conversation": True,
@@ -1386,9 +1388,24 @@ def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> No
     try:
         assert session.client.temperature == 0.23
         assert session.client.model == "test-model"
-        assert session.router_client is None
+        assert session.router_client is not None
+        assert session.router_client.model == "selector-model"
+        assert session.router_client.temperature == 0.0
+        assert session.router_client.timeout_s == 15.0
+        assert session.router_client.stream_no_progress_timeout_s == 15.0
+        assert session.router_client.enable_thinking is False
+        assert session.router_client.reasoning_effort == ""
+        assert session.router_client.provider_retry_settings.disable_retries is True
+        assert session.client.provider_retry_settings.disable_retries is False
+        assert session._semantic_router_bound_client is session.client
+        assert session._provisioned_router_client is session.router_client
         session_start_payload = _event_payloads(session.store.path, "session_start")[0]
-        assert session_start_payload["router_model"] in ("", None)
+        assert session_start_payload["router_model"] == "selector-model"
+        assert {item["role"] for item in session_start_payload["model_metadata_diagnostics"]} >= {
+            "coding",
+            "router",
+            "compactor",
+        }
         assert session_start_payload["base_url_descriptor"] == endpoint_descriptor(secret_base_url)
         assert session_start_payload["provider_base_url_descriptor"] == endpoint_descriptor(
             secret_base_url
@@ -1401,5 +1418,48 @@ def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> No
         assert "private/token" not in serialized_session_start
         assert session.conversation_compactor is not None
         assert session.conversation_compactor.compactor_client.temperature == 0.31
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        AppConfig(model="test-model", skills_enabled=False),
+        AppConfig(model="test-model", skills_auto_invoke=False),
+    ],
+)
+def test_skill_selector_client_requires_enabled_auto_skills(
+    tmp_path: Path,
+    cfg: AppConfig,
+) -> None:
+    session = _session(tmp_path, cfg=cfg)
+
+    try:
+        assert session.router_client is None
+        assert session._semantic_router_bound_client is session.client
+        assert session._provisioned_router_client is None
+    finally:
+        session.close()
+
+
+def test_skill_selector_client_requires_nonempty_skill_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        prompt_context_mod,
+        "discover_skills",
+        lambda **_kwargs: DiscoveredSkills(skills={}, ordered=(), issues=()),
+    )
+    session = _session(
+        tmp_path,
+        cfg=AppConfig(model="test-model", bundled_skills_enabled=False),
+    )
+
+    try:
+        assert session.skills_ordered == ()
+        assert session.router_client is None
+        assert session._provisioned_router_client is None
     finally:
         session.close()

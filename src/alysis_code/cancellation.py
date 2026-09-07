@@ -14,6 +14,7 @@ Both behaviors are provided here.
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 
 class CooperativeCancellationError(Exception):
@@ -39,3 +40,14 @@ class EventCancellationToken:
     def throw_if_cancelled(self, reason: str = "cancelled_by_user") -> None:
         if self.is_cancelled:
             raise self.error_class(reason)
+
+
+def raise_if_cancelled(cancellation_token: Any | None) -> None:
+    """Raise the token's native cancellation outcome when it is cancelled."""
+
+    if cancellation_token is None or not bool(getattr(cancellation_token, "is_cancelled", False)):
+        return
+    throw_if_cancelled = getattr(cancellation_token, "throw_if_cancelled", None)
+    if callable(throw_if_cancelled):
+        throw_if_cancelled("cancelled_by_user")
+    raise KeyboardInterrupt("cancelled_by_user")

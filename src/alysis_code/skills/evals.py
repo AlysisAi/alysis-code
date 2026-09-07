@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from time import monotonic
+from typing import Any, Protocol, cast
 
 from .discovery import project_skill_root_relative_paths
 from .eval_models import (
@@ -20,8 +24,17 @@ from .eval_models import (
     SkillsEvalExecutionResult,
     SkillsEvalMode,
     SkillsEvalRecord,
+    SkillsEvalSessionMode,
     SkillsEvalVerificationResult,
 )
+
+_VERIFICATION_PLATFORM_NAME = os.name
+_WINDOWS_CREATE_NEW_PROCESS_GROUP = getattr(
+    subprocess,
+    "CREATE_NEW_PROCESS_GROUP",
+    0x00000200,
+)
+_PROCESS_TREE_TERMINATION_TIMEOUT_SECONDS = 1.0
 
 _CONVENTION_FILENAMES = {"AGENTS.md", "CLAUDE.md", "CONVENTIONS.md"}
 _WORKSPACE_COPY_IGNORE_NAMES = {
@@ -82,6 +95,7 @@ _SKILL_LIFECYCLE_COMMAND_PATTERN = re.compile(
     r"(init|create|validate|install|enable|disable|remove|uninstall)\b"
 )
 _COMPLETION_GATE_FAILURE_EVENTS = {
+    "execution_evidence_finalization_blocked",
     "one_shot_completion_gate_failed",
     "interactive_completion_gate_failed",
 }
@@ -96,12 +110,14 @@ _VERIFICATION_CREDIT_MISS_STAGES = {
 _FORCED_FINAL_SUMMARY_EVENT = "forced_final_summary_requested"
 DEFAULT_SKILLS_LAUNCH_GATES: dict[str, float] = {
     "pass_rate_min": 0.80,
+    "false_positive_rate_max": 0.0,
     "completion_gate_failure_rate_max": 0.05,
     "completion_gate_incomplete_after_retries_rate_max": 0.01,
     "forced_final_summary_rate_max": 0.01,
     "verification_credit_miss_rate_max": 0.05,
     "relevant_skill_usage_rate_min": 0.90,
     "explicit_skill_success_rate_min": 1.0,
+    "automatic_selection_exact_match_rate_min": 1.0,
 }
 _SKILLS_EVAL_MODE_BY_NAME = {mode.name: mode for mode in DEFAULT_SKILLS_EVAL_MODES}
 _MANUAL_LAUNCH_MODE_NAMES = ("skills_manual_only", "combined_manual")
@@ -113,7 +129,13 @@ class SkillsEvalExecutor(Protocol):
 
 
 class SkillsEvalVerificationRunner(Protocol):
-    def __call__(self, *, workspace: Path, command: str) -> SkillsEvalVerificationResult: ...
+    def __call__(
+        self,
+        *,
+        workspace: Path,
+        command: str,
+        timeout_seconds: float | None,
+    ) -> SkillsEvalVerificationResult: ...
 
 
 def load_skills_eval_cases(manifest_path: Path) -> tuple[SkillsEvalCase, ...]:
@@ -145,6 +167,10 @@ def load_skills_eval_cases(manifest_path: Path) -> tuple[SkillsEvalCase, ...]:
         if not workspace_raw:
             raise ValueError(f"skills eval case '{case_id}' is missing 'workspace'")
         workspace = (resolved_manifest.parent / workspace_raw).resolve()
+        if not workspace.is_relative_to(resolved_manifest.parent):
+            raise ValueError(
+                f"skills eval case '{case_id}' workspace resolves outside the manifest directory"
+            )
 
         task = str(item.get("task") or "").strip()
         if not task:
@@ -163,6 +189,12 @@ def load_skills_eval_cases(manifest_path: Path) -> tuple[SkillsEvalCase, ...]:
         if invocation_mode == "normal":
             explicit_skill_name = None
 
+        session_mode = str(item.get("session_mode") or "").strip().casefold() or None
+        if session_mode not in {None, "readonly"}:
+            raise ValueError(
+                f"skills eval case '{case_id}' has unsupported session_mode: {session_mode}"
+            )
+
         cases.append(
             SkillsEvalCase(
                 id=case_id,
@@ -172,6 +204,7 @@ def load_skills_eval_cases(manifest_path: Path) -> tuple[SkillsEvalCase, ...]:
                 explicit_skill_name=explicit_skill_name,
                 expected_skills=_normalized_string_tuple(item.get("expected_skills")),
                 verification_command=_normalized_optional_string(item.get("verification_command")),
+                session_mode=cast(SkillsEvalSessionMode | None, session_mode),
                 tags=_normalized_string_tuple(item.get("tags")),
                 notes=str(item.get("notes") or "").strip(),
             )
@@ -238,18 +271,89 @@ def extract_skills_eval_metrics(
     *,
     workspace_root: Path | None = None,
 ) -> dict[str, object]:
+    event_list = list(events)
     matched_skill_names: list[str] = []
     skill_read_names: list[str] = []
+    successful_skill_read_names: list[str] = []
     lifecycle_cli_commands: list[str] = []
     manual_skill_bundle_names: list[str] = []
     manual_skill_bundle_access_count = 0
     tool_call_count = 0
+    successful_skill_read_count = 0
+    skill_selection_status: str | None = None
+    skill_selection_selected_names: list[str] = []
+    skill_selection_call_count = 0
+    skill_selection_failure_kinds: list[str] = []
+    skill_selection_blocked_count = 0
+    skill_selection_blocked_reasons: list[str] = []
+    skill_selection_unhonored_count = 0
     completion_gate_failure_count = 0
     completion_gate_incomplete_after_retries_count = 0
     forced_final_summary_count = 0
     verification_credit_miss_count = 0
 
-    for event in events:
+    blocked_tool_call_ids: set[str] = set()
+    successful_skill_read_call_ids: set[str] = set()
+    satisfied_skill_names_by_call_id: dict[str, str] = {}
+    successful_result_names_by_call_id: dict[str, str] = {}
+
+    for event in event_list:
+        event_type = str(event.get("type") or "")
+        payload_obj = event.get("payload")
+        payload = payload_obj if isinstance(payload_obj, Mapping) else {}
+        if event_type == "skill_selection":
+            skill_selection_call_count += 1
+            raw_status = str(payload.get("status") or "").strip()
+            skill_selection_status = (
+                raw_status if raw_status in {"selected", "no_match", "unavailable"} else None
+            )
+            selected_obj = payload.get("selected_names")
+            skill_selection_selected_names = (
+                [str(item or "").strip() for item in selected_obj if str(item or "").strip()]
+                if isinstance(selected_obj, list)
+                else []
+            )
+            failure_kind = str(payload.get("failure_kind") or "").strip()
+            if failure_kind:
+                skill_selection_failure_kinds.append(failure_kind)
+        elif event_type == "skill_selection_mismatch_blocked":
+            skill_selection_blocked_count += 1
+            tool_call_id = str(payload.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                blocked_tool_call_ids.add(tool_call_id)
+            reason = str(payload.get("reason") or "").strip()
+            if reason:
+                skill_selection_blocked_reasons.append(reason)
+        elif event_type == "skill_selection_read_satisfied":
+            tool_call_id = str(payload.get("tool_call_id") or "").strip()
+            name = str(payload.get("name") or "").strip()
+            if tool_call_id:
+                successful_skill_read_call_ids.add(tool_call_id)
+                if name:
+                    satisfied_skill_names_by_call_id[tool_call_id] = name
+            elif name:
+                successful_skill_read_names.append(name)
+                successful_skill_read_count += 1
+        elif event_type == "skill_selection_unhonored":
+            skill_selection_unhonored_count += 1
+        elif event_type == "tool_result":
+            tool_name = str(payload.get("name") or "").strip()
+            tool_call_id = str(payload.get("tool_call_id") or "").strip()
+            result_obj = payload.get("result")
+            result = result_obj if isinstance(result_obj, Mapping) else {}
+            if (
+                tool_name == "skill_read"
+                and tool_call_id
+                and isinstance(result_obj, Mapping)
+                and "error" not in result
+            ):
+                successful_skill_read_call_ids.add(tool_call_id)
+                name = str(result.get("name") or "").strip()
+                if name:
+                    successful_result_names_by_call_id[tool_call_id] = name
+
+    processed_successful_call_ids: set[str] = set()
+    for event in event_list:
         event_type = str(event.get("type") or "")
         payload_obj = event.get("payload")
         payload = payload_obj if isinstance(payload_obj, Mapping) else {}
@@ -273,12 +377,29 @@ def extract_skills_eval_metrics(
         if event_type == "tool_call":
             tool_call_count += 1
             tool_name = str(payload.get("name") or "").strip()
+            tool_call_id = str(payload.get("tool_call_id") or "").strip()
             arguments_obj = payload.get("arguments")
             arguments = arguments_obj if isinstance(arguments_obj, Mapping) else {}
             if tool_name == "skill_read":
                 name = str(arguments.get("name") or "").strip()
                 if name:
                     skill_read_names.append(name)
+                if (
+                    tool_call_id
+                    and tool_call_id not in blocked_tool_call_ids
+                    and tool_call_id in successful_skill_read_call_ids
+                ):
+                    successful_name = (
+                        satisfied_skill_names_by_call_id.get(tool_call_id)
+                        or successful_result_names_by_call_id.get(tool_call_id)
+                        or name
+                    )
+                    if successful_name:
+                        successful_skill_read_names.append(successful_name)
+                    successful_skill_read_count += 1
+                    processed_successful_call_ids.add(tool_call_id)
+                continue
+            if tool_call_id and tool_call_id in blocked_tool_call_ids:
                 continue
             lifecycle_cli_commands.extend(
                 _extract_skill_lifecycle_cli_commands_from_tool_call(
@@ -296,8 +417,19 @@ def extract_skills_eval_metrics(
             if bundle_name:
                 manual_skill_bundle_names.append(bundle_name)
 
+    for tool_call_id in successful_skill_read_call_ids - processed_successful_call_ids:
+        if tool_call_id in blocked_tool_call_ids:
+            continue
+        successful_name = satisfied_skill_names_by_call_id.get(
+            tool_call_id
+        ) or successful_result_names_by_call_id.get(tool_call_id)
+        if successful_name:
+            successful_skill_read_names.append(successful_name)
+            successful_skill_read_count += 1
+
     matched_unique = _ordered_unique_strings(matched_skill_names)
     skill_read_unique = _ordered_unique_strings(skill_read_names)
+    successful_skill_read_unique = _ordered_unique_strings(successful_skill_read_names)
     lifecycle_cli_unique = _ordered_unique_strings(lifecycle_cli_commands)
     manual_unique = _ordered_unique_strings(manual_skill_bundle_names)
     return {
@@ -306,6 +438,21 @@ def extract_skills_eval_metrics(
         "skill_read_called": bool(skill_read_names),
         "skill_read_names": tuple(skill_read_unique),
         "skill_read_call_count": len(skill_read_names),
+        "successful_skill_read_names": tuple(successful_skill_read_unique),
+        "successful_skill_read_count": successful_skill_read_count,
+        "skill_selection_status": skill_selection_status,
+        "skill_selection_selected_names": tuple(
+            _ordered_unique_strings(skill_selection_selected_names)
+        ),
+        "skill_selection_call_count": skill_selection_call_count,
+        "skill_selection_failure_kinds": tuple(
+            _ordered_unique_strings(skill_selection_failure_kinds)
+        ),
+        "skill_selection_blocked_count": skill_selection_blocked_count,
+        "skill_selection_blocked_reasons": tuple(
+            _ordered_unique_strings(skill_selection_blocked_reasons)
+        ),
+        "skill_selection_unhonored_count": skill_selection_unhonored_count,
         "skill_lifecycle_cli_used": bool(lifecycle_cli_commands),
         "skill_lifecycle_cli_commands": tuple(lifecycle_cli_unique),
         "skill_lifecycle_cli_call_count": len(lifecycle_cli_commands),
@@ -400,7 +547,40 @@ def aggregate_skills_eval_records(
             int(record.skill_lifecycle_cli_call_count or 0) for record in executed
         )
         explicit_success_count = sum(1 for record in explicit_cases if record.passed is True)
+        bundled_expected_records = [
+            record
+            for record in expected
+            if any(tag.casefold() == "bundled-pack" for tag in record.tags)
+        ]
+        bundled_expected_skill_names = sorted(
+            {skill for record in bundled_expected_records for skill in record.expected_skills},
+            key=str.casefold,
+        )
+        bundled_normal_records = [
+            record for record in bundled_expected_records if record.invocation_mode == "normal"
+        ]
+        bundled_normal_skill_activation: dict[str, dict[str, int]] = {}
+        for skill_name in bundled_expected_skill_names:
+            skill_key = skill_name.casefold()
+            skill_records = [
+                record
+                for record in bundled_normal_records
+                if any(expected.casefold() == skill_key for expected in record.expected_skills)
+            ]
+            bundled_normal_skill_activation[skill_name] = {
+                "runs": len(skill_records),
+                "successful_runs": sum(
+                    1
+                    for record in skill_records
+                    if record.passed is True
+                    and any(
+                        observed.casefold() == skill_key
+                        for observed in record.observed_skill_names()
+                    )
+                ),
+            }
         launch_runtime = _launch_runtime_summary(executed)
+        selection_summary = _skill_selection_summary(executed)
         per_mode[mode_name] = {
             "total_runs": len(mode_records),
             "executed_runs": len(executed),
@@ -417,6 +597,8 @@ def aggregate_skills_eval_records(
             "pass_rate": _rate(passed_count, len(executed)),
             "expected_skill_runs": len(expected),
             "relevant_skill_usage_count": matched_trigger_count,
+            "negative_control_runs": len(negative_controls),
+            "false_positive_count": false_positive_count,
             "skill_trigger_rate": _rate(matched_trigger_count, len(expected)),
             "skill_read_rate": _rate(skill_read_count, len(executed)),
             "skill_lifecycle_cli_rate": _rate(lifecycle_cli_count, len(executed)),
@@ -430,6 +612,9 @@ def aggregate_skills_eval_records(
                 explicit_success_count,
                 len(explicit_cases),
             ),
+            "bundled_expected_skills": bundled_expected_skill_names,
+            "bundled_normal_skill_activation": bundled_normal_skill_activation,
+            **selection_summary,
             **launch_runtime,
         }
 
@@ -476,6 +661,8 @@ def aggregate_skills_eval_records(
         "skill_enabled_executed_runs": len(skill_enabled_records),
         "pass_rate_skill_enabled": _rate(skill_enabled_passed_count, len(skill_enabled_records)),
         "expected_skill_runs": len(overall_expected),
+        "negative_control_runs": len(overall_negative_controls),
+        "false_positive_count": overall_false_positive_count,
         "skill_eligible_runs": len(skill_enabled_expected),
         "relevant_skill_usage_count": overall_relevant_skill_usage_count,
         "relevant_skill_usage_count_all_modes": overall_relevant_skill_usage_count,
@@ -510,6 +697,7 @@ def aggregate_skills_eval_records(
             overall_explicit_success_count,
             len(overall_explicit_cases),
         ),
+        **_skill_selection_summary(executed_records),
         **_launch_runtime_summary(executed_records),
         "modes": per_mode,
         "per_skill": per_skill,
@@ -563,13 +751,90 @@ def summarize_skills_launch_candidate_metrics(
 
     launch_executed_runs = _sum_mode_counts(launch_mode_names, "executed_runs")
     launch_passed_runs = _sum_mode_counts(launch_mode_names, "passed_runs")
+    launch_failed_runs = _sum_mode_counts(launch_mode_names, "failed_runs")
     launch_skill_eligible_runs = _sum_mode_counts(launch_mode_names, "expected_skill_runs")
     launch_relevant_skill_usage_count = _sum_mode_counts(
         launch_mode_names, "relevant_skill_usage_count"
     )
+    launch_negative_control_runs = _sum_mode_counts(launch_mode_names, "negative_control_runs")
+    launch_false_positive_count = _sum_mode_counts(launch_mode_names, "false_positive_count")
     launch_explicit_skill_runs = _sum_mode_counts(launch_mode_names, "explicit_skill_runs")
     launch_explicit_skill_success_count = _sum_mode_counts(
         launch_mode_names, "explicit_skill_success_count"
+    )
+    launch_automatic_selection_runs = _sum_mode_counts(
+        launch_mode_names, "automatic_selection_runs"
+    )
+    launch_automatic_selection_exact_match_count = _sum_mode_counts(
+        launch_mode_names, "automatic_selection_exact_match_count"
+    )
+    launch_selector_available_run_count = _sum_mode_counts(
+        launch_mode_names, "selector_available_run_count"
+    )
+    launch_selector_unavailable_run_count = _sum_mode_counts(
+        launch_mode_names, "selector_unavailable_run_count"
+    )
+    launch_skill_selection_blocked_count = _sum_mode_counts(
+        launch_mode_names, "skill_selection_blocked_count"
+    )
+    launch_skill_selection_blocked_run_count = _sum_mode_counts(
+        launch_mode_names, "skill_selection_blocked_run_count"
+    )
+    launch_skill_selection_unhonored_count = _sum_mode_counts(
+        launch_mode_names, "skill_selection_unhonored_count"
+    )
+    launch_skill_selection_unhonored_run_count = _sum_mode_counts(
+        launch_mode_names, "skill_selection_unhonored_run_count"
+    )
+    launch_runtime_rates: dict[str, float | None] = {}
+    for metric_name in (
+        "completion_gate_failure",
+        "completion_gate_incomplete_after_retries",
+        "forced_final_summary",
+        "verification_credit_miss",
+    ):
+        run_count = _sum_mode_counts(launch_mode_names, f"{metric_name}_run_count")
+        launch_runtime_rates[f"{metric_name}_rate_launch_modes"] = _rate(
+            run_count,
+            launch_executed_runs,
+        )
+
+    bundled_expected_skill_names: set[str] = set()
+    bundled_normal_skill_activation: dict[str, dict[str, int]] = {}
+    for mode_name in launch_mode_names:
+        payload_obj = modes.get(mode_name)
+        payload = payload_obj if isinstance(payload_obj, Mapping) else {}
+        expected_skills_obj = payload.get("bundled_expected_skills")
+        if isinstance(expected_skills_obj, Sequence) and not isinstance(
+            expected_skills_obj, (str, bytes)
+        ):
+            bundled_expected_skill_names.update(
+                skill_name
+                for raw_skill_name in expected_skills_obj
+                if (skill_name := str(raw_skill_name or "").strip())
+            )
+        per_skill_obj = payload.get("bundled_normal_skill_activation")
+        per_skill = per_skill_obj if isinstance(per_skill_obj, Mapping) else {}
+        for raw_skill_name, stats_obj in per_skill.items():
+            skill_name = str(raw_skill_name or "").strip()
+            stats = stats_obj if isinstance(stats_obj, Mapping) else {}
+            if not skill_name:
+                continue
+            bundled_expected_skill_names.add(skill_name)
+            combined = bundled_normal_skill_activation.setdefault(
+                skill_name,
+                {"runs": 0, "successful_runs": 0},
+            )
+            combined["runs"] += int(stats.get("runs") or 0)
+            combined["successful_runs"] += int(stats.get("successful_runs") or 0)
+    missing_bundled_normal_skill_activations = sorted(
+        (
+            skill_name
+            for skill_name in bundled_expected_skill_names
+            if int(bundled_normal_skill_activation.get(skill_name, {}).get("successful_runs") or 0)
+            <= 0
+        ),
+        key=str.casefold,
     )
 
     return {
@@ -582,6 +847,7 @@ def summarize_skills_launch_candidate_metrics(
         "skill_enabled_mode_names": list(skill_enabled_mode_names),
         "launch_mode_executed_runs": launch_executed_runs,
         "launch_mode_passed_runs": launch_passed_runs,
+        "launch_mode_failed_runs": launch_failed_runs,
         "pass_rate_launch_modes": _rate(launch_passed_runs, launch_executed_runs),
         "launch_skill_eligible_runs": launch_skill_eligible_runs,
         "relevant_skill_usage_count_launch_modes": launch_relevant_skill_usage_count,
@@ -589,12 +855,51 @@ def summarize_skills_launch_candidate_metrics(
             launch_relevant_skill_usage_count,
             launch_skill_eligible_runs,
         ),
+        "negative_control_runs_launch_modes": launch_negative_control_runs,
+        "false_positive_count_launch_modes": launch_false_positive_count,
+        "false_positive_rate_launch_modes": _rate(
+            launch_false_positive_count,
+            launch_negative_control_runs,
+        ),
         "explicit_skill_runs_launch_modes": launch_explicit_skill_runs,
         "explicit_skill_success_count_launch_modes": launch_explicit_skill_success_count,
         "explicit_invocation_success_rate_launch_modes": _rate(
             launch_explicit_skill_success_count,
             launch_explicit_skill_runs,
         ),
+        "automatic_selection_runs_launch_modes": launch_automatic_selection_runs,
+        "automatic_selection_exact_match_count_launch_modes": (
+            launch_automatic_selection_exact_match_count
+        ),
+        "automatic_selection_exact_match_rate_launch_modes": _rate(
+            launch_automatic_selection_exact_match_count,
+            launch_automatic_selection_runs,
+        ),
+        "selector_available_run_count_launch_modes": launch_selector_available_run_count,
+        "selector_unavailable_run_count_launch_modes": launch_selector_unavailable_run_count,
+        "selector_unavailable_rate_launch_modes": _rate(
+            launch_selector_unavailable_run_count,
+            launch_automatic_selection_runs,
+        ),
+        "skill_selection_blocked_count_launch_modes": launch_skill_selection_blocked_count,
+        "skill_selection_blocked_run_count_launch_modes": (
+            launch_skill_selection_blocked_run_count
+        ),
+        "skill_selection_blocked_rate_launch_modes": _rate(
+            launch_skill_selection_blocked_run_count,
+            launch_automatic_selection_runs,
+        ),
+        "skill_selection_unhonored_count_launch_modes": (launch_skill_selection_unhonored_count),
+        "skill_selection_unhonored_run_count_launch_modes": (
+            launch_skill_selection_unhonored_run_count
+        ),
+        "skill_selection_unhonored_rate_launch_modes": _rate(
+            launch_skill_selection_unhonored_run_count,
+            launch_automatic_selection_runs,
+        ),
+        "bundled_normal_skill_activation_launch_modes": bundled_normal_skill_activation,
+        "missing_bundled_normal_skill_activations": (missing_bundled_normal_skill_activations),
+        **launch_runtime_rates,
     }
 
 
@@ -626,13 +931,42 @@ def evaluate_skills_launch_readiness(
         relevant_skill_usage_actual = summary.get("relevant_skill_usage_rate_skill_enabled")
     if relevant_skill_usage_actual is None:
         relevant_skill_usage_actual = summary.get("relevant_skill_usage_rate")
+    false_positive_actual = launch_metrics.get("false_positive_rate_launch_modes")
+    if false_positive_actual is None:
+        false_positive_actual = summary.get("false_positive_rate")
     explicit_skill_success_actual = launch_metrics.get(
         "explicit_invocation_success_rate_launch_modes"
     )
     if explicit_skill_success_actual is None:
         explicit_skill_success_actual = summary.get("explicit_invocation_success_rate")
+    failed_selected_records_actual = summary.get("failed_selected_record_count")
+    if failed_selected_records_actual is None:
+        failed_selected_records_actual = launch_metrics.get("launch_mode_failed_runs")
+    missing_bundled_normal_skills = list(
+        launch_metrics.get("missing_bundled_normal_skill_activations") or ()
+    )
+    default_skills_auto_invoke = None
+    if isinstance(config_snapshot, Mapping):
+        default_skills_auto_invoke = config_snapshot.get("skills_auto_invoke")
+    automatic_selection_gates_enabled = default_skills_auto_invoke is True
+    automatic_selection_runs = int(launch_metrics.get("automatic_selection_runs_launch_modes") or 0)
+    automatic_selection_exact_actual = launch_metrics.get(
+        "automatic_selection_exact_match_rate_launch_modes"
+    )
+    selector_unavailable_actual = int(
+        launch_metrics.get("selector_unavailable_run_count_launch_modes") or 0
+    )
+
+    def _launch_runtime_rate(metric_name: str) -> object:
+        launch_value = launch_metrics.get(f"{metric_name}_launch_modes")
+        return summary.get(metric_name) if launch_value is None else launch_value
 
     gates = {
+        "failed_selected_records": _max_count_gate(
+            actual=failed_selected_records_actual,
+            threshold=0,
+            description="Every selected deterministic launch record must pass.",
+        ),
         "pass_rate": _min_rate_gate(
             actual=pass_rate_actual,
             threshold=effective_thresholds["pass_rate_min"],
@@ -640,13 +974,18 @@ def evaluate_skills_launch_readiness(
                 f"Pass rate across the current launch-candidate modes ({launch_label}) must stay strong on the launch suite."
             ),
         ),
+        "false_positive_rate": _max_rate_gate(
+            actual=false_positive_actual,
+            threshold=effective_thresholds["false_positive_rate_max"],
+            description="Launch-candidate negative controls must not activate skills.",
+        ),
         "completion_gate_failure_rate": _max_rate_gate(
-            actual=summary.get("completion_gate_failure_rate"),
+            actual=_launch_runtime_rate("completion_gate_failure_rate"),
             threshold=effective_thresholds["completion_gate_failure_rate_max"],
             description="Completion-gate failure rate must stay below the public-launch bar.",
         ),
         "completion_gate_incomplete_after_retries_rate": _max_rate_gate(
-            actual=summary.get("completion_gate_incomplete_after_retries_rate"),
+            actual=_launch_runtime_rate("completion_gate_incomplete_after_retries_rate"),
             threshold=effective_thresholds["completion_gate_incomplete_after_retries_rate_max"],
             description=(
                 "Completion-gate incomplete-after-retries should be essentially absent in a "
@@ -654,12 +993,12 @@ def evaluate_skills_launch_readiness(
             ),
         ),
         "forced_final_summary_rate": _max_rate_gate(
-            actual=summary.get("forced_final_summary_rate"),
+            actual=_launch_runtime_rate("forced_final_summary_rate"),
             threshold=effective_thresholds["forced_final_summary_rate_max"],
             description="Forced-final-summary fallback must stay rare on the launch suite.",
         ),
         "verification_credit_miss_rate": _max_rate_gate(
-            actual=summary.get("verification_credit_miss_rate"),
+            actual=_launch_runtime_rate("verification_credit_miss_rate"),
             threshold=effective_thresholds["verification_credit_miss_rate_max"],
             description="Equivalent real verification commands must be credited consistently.",
         ),
@@ -676,11 +1015,35 @@ def evaluate_skills_launch_readiness(
             threshold=effective_thresholds["explicit_skill_success_rate_min"],
             description="Explicit /skill flows must complete successfully on the launch suite.",
         ),
+        "automatic_selection_exact_match_rate": _min_rate_gate(
+            actual=(
+                automatic_selection_exact_actual
+                if automatic_selection_gates_enabled and automatic_selection_runs > 0
+                else (0.0 if automatic_selection_gates_enabled else 1.0)
+            ),
+            threshold=effective_thresholds["automatic_selection_exact_match_rate_min"],
+            description=(
+                "Normal automatic cases must select exactly the expected set, while negative "
+                "controls must return NONE."
+            ),
+        ),
+        "selector_unavailable_runs": _max_count_gate(
+            actual=(selector_unavailable_actual if automatic_selection_gates_enabled else 0),
+            threshold=0,
+            description="The automatic selector must be available for every eligible launch run.",
+        ),
+        "bundled_normal_skill_activation": {
+            **_max_count_gate(
+                actual=len(missing_bundled_normal_skills),
+                threshold=0,
+                description=(
+                    "Every expected bundled skill must have a passing normal case with relevant "
+                    "skill activation."
+                ),
+            ),
+            "missing_skills": missing_bundled_normal_skills,
+        },
     }
-
-    default_skills_auto_invoke = None
-    if isinstance(config_snapshot, Mapping):
-        default_skills_auto_invoke = config_snapshot.get("skills_auto_invoke")
 
     failing_gates = [
         gate_name
@@ -855,6 +1218,7 @@ def run_skills_eval_suite(
     manifest_path: Path | None = None,
     max_steps: int = 25,
     temp_base_dir: Path | None = None,
+    deadline_seconds: float | None = None,
 ) -> SkillsEvalArtifacts:
     results: list[SkillsEvalRecord] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -863,6 +1227,9 @@ def run_skills_eval_suite(
 
     for case_idx, case in enumerate(cases, start=1):
         for mode in modes:
+            automatic_selection_required = bool(
+                mode.skills_enabled and mode.skills_auto_invoke and case.invocation_mode == "normal"
+            )
             if case.invocation_mode == "explicit_skill" and not mode.skills_enabled:
                 results.append(
                     SkillsEvalRecord(
@@ -897,6 +1264,7 @@ def run_skills_eval_suite(
                         manual_skill_bundle_names=(),
                         manual_skill_bundle_access_count=0,
                         tool_call_count=0,
+                        automatic_selection_required=automatic_selection_required,
                         session_log_path=None,
                         session_artifact_root=None,
                     )
@@ -920,13 +1288,31 @@ def run_skills_eval_suite(
                         ),
                         max_steps=max_steps,
                     )
+                    run_started_at = monotonic() if deadline_seconds is not None else None
                     execution = executor.execute(request)
                     verification = None
                     if case.verification_command:
-                        verification = verification_runner(
-                            workspace=run_workspace,
-                            command=case.verification_command,
+                        verification_timeout_seconds = _remaining_eval_run_seconds(
+                            deadline_seconds=deadline_seconds,
+                            run_started_at=run_started_at,
                         )
+                        if (
+                            verification_timeout_seconds is not None
+                            and verification_timeout_seconds <= 0
+                        ):
+                            verification = SkillsEvalVerificationResult(
+                                exit_code=124,
+                                output_preview=(
+                                    "Verification not started: the per-run deadline was exhausted "
+                                    "before the manifest verification command."
+                                ),
+                            )
+                        else:
+                            verification = verification_runner(
+                                workspace=run_workspace,
+                                command=case.verification_command,
+                                timeout_seconds=verification_timeout_seconds,
+                            )
             except Exception as exc:  # noqa: BLE001
                 results.append(
                     SkillsEvalRecord(
@@ -961,6 +1347,7 @@ def run_skills_eval_suite(
                         manual_skill_bundle_names=(),
                         manual_skill_bundle_access_count=0,
                         tool_call_count=0,
+                        automatic_selection_required=automatic_selection_required,
                         session_log_path=None,
                         session_artifact_root=None,
                         error=str(exc),
@@ -972,6 +1359,7 @@ def run_skills_eval_suite(
             status = (
                 "passed"
                 if execution.agent_exit_code == 0
+                and execution.error is None
                 and (verification_exit_code is None or verification_exit_code == 0)
                 else "failed"
             )
@@ -1016,6 +1404,16 @@ def run_skills_eval_suite(
                     ),
                     forced_final_summary_count=execution.forced_final_summary_count,
                     verification_credit_miss_count=execution.verification_credit_miss_count,
+                    automatic_selection_required=automatic_selection_required,
+                    successful_skill_read_names=execution.successful_skill_read_names,
+                    successful_skill_read_count=execution.successful_skill_read_count,
+                    skill_selection_status=execution.skill_selection_status,
+                    skill_selection_selected_names=execution.skill_selection_selected_names,
+                    skill_selection_call_count=execution.skill_selection_call_count,
+                    skill_selection_failure_kinds=execution.skill_selection_failure_kinds,
+                    skill_selection_blocked_count=execution.skill_selection_blocked_count,
+                    skill_selection_blocked_reasons=execution.skill_selection_blocked_reasons,
+                    skill_selection_unhonored_count=execution.skill_selection_unhonored_count,
                     session_log_path=execution.session_log_path,
                     session_artifact_root=execution.session_artifact_root,
                     error=execution.error,
@@ -1036,18 +1434,123 @@ def run_shell_verification_command(
     *,
     workspace: Path,
     command: str,
+    timeout_seconds: float | None = None,
 ) -> SkillsEvalVerificationResult:
-    proc = subprocess.run(
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        return SkillsEvalVerificationResult(
+            exit_code=124,
+            output_preview="Verification command timed out before execution.",
+        )
+    env = os.environ.copy()
+    env.pop("PYTHONOPTIMIZE", None)
+    interpreter_dir = str(Path(sys.executable).parent)
+    current_path = str(env.get("PATH") or "")
+    env["PATH"] = os.pathsep.join(part for part in (interpreter_dir, current_path) if part)
+    process_group_kwargs: dict[str, Any] = {}
+    if _VERIFICATION_PLATFORM_NAME == "posix":
+        process_group_kwargs["start_new_session"] = True
+    elif _VERIFICATION_PLATFORM_NAME == "nt":
+        process_group_kwargs["creationflags"] = _WINDOWS_CREATE_NEW_PROCESS_GROUP
+    proc = subprocess.Popen(
         command,
         shell=True,
         cwd=workspace,
-        capture_output=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
+        **process_group_kwargs,
     )
-    output = (str(proc.stdout or "") + str(proc.stderr or "")).strip()
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_verification_process_tree(proc)
+        stdout, stderr = _reap_verification_process(
+            proc,
+            fallback_stdout=exc.stdout,
+            fallback_stderr=exc.stderr,
+        )
+        timeout_label = f"{float(timeout_seconds):g}s"
+        partial_output = (
+            _verification_process_output(stdout) + _verification_process_output(stderr)
+        ).strip()
+        output = f"Verification command timed out after {timeout_label}."
+        if partial_output:
+            output += f"\n{partial_output}"
+        return SkillsEvalVerificationResult(exit_code=124, output_preview=output[:500])
+    except BaseException:
+        _terminate_verification_process_tree(proc)
+        _reap_verification_process(proc)
+        raise
+    output = (_verification_process_output(stdout) + _verification_process_output(stderr)).strip()
     preview = output[:500]
     return SkillsEvalVerificationResult(exit_code=proc.returncode, output_preview=preview)
+
+
+def _terminate_verification_process_tree(proc: subprocess.Popen[str]) -> None:
+    if _VERIFICATION_PLATFORM_NAME == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return
+    if _VERIFICATION_PLATFORM_NAME == "nt":
+        try:
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=_PROCESS_TREE_TERMINATION_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            _kill_verification_process(proc)
+        else:
+            if completed.returncode != 0:
+                _kill_verification_process(proc)
+        return
+    _kill_verification_process(proc)
+
+
+def _kill_verification_process(proc: subprocess.Popen[str]) -> None:
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _reap_verification_process(
+    proc: subprocess.Popen[str],
+    *,
+    fallback_stdout: str | bytes | None = None,
+    fallback_stderr: str | bytes | None = None,
+) -> tuple[str | bytes | None, str | bytes | None]:
+    try:
+        return proc.communicate(timeout=_PROCESS_TREE_TERMINATION_TIMEOUT_SECONDS)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        _kill_verification_process(proc)
+        try:
+            proc.wait(timeout=_PROCESS_TREE_TERMINATION_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return fallback_stdout, fallback_stderr
+
+
+def _remaining_eval_run_seconds(
+    *,
+    deadline_seconds: float | None,
+    run_started_at: float | None,
+) -> float | None:
+    if deadline_seconds is None or run_started_at is None:
+        return None
+    elapsed = max(0.0, monotonic() - run_started_at)
+    return max(0.0, float(deadline_seconds) - elapsed)
+
+
+def _verification_process_output(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
 
 
 def default_skills_eval_output_dir(*, root: Path | None = None) -> Path:
@@ -1235,6 +1738,7 @@ def _case_to_payload(case: SkillsEvalCase) -> dict[str, object]:
         "explicit_skill_name": case.explicit_skill_name,
         "expected_skills": list(case.expected_skills),
         "verification_command": case.verification_command,
+        "session_mode": case.session_mode,
         "tags": list(case.tags),
         "notes": case.notes,
     }
@@ -1269,6 +1773,43 @@ def _launch_runtime_summary(records: Sequence[SkillsEvalRecord]) -> dict[str, ob
             "verification_credit_miss_count",
         ),
     )
+
+
+def _skill_selection_summary(records: Sequence[SkillsEvalRecord]) -> dict[str, object]:
+    executed = [record for record in records if record.status != "skipped"]
+    automatic = [record for record in executed if record.automatic_selection_required]
+    exact_count = sum(1 for record in automatic if record.automatic_selection_exact_match() is True)
+    available_count = sum(1 for record in automatic if record.selector_available() is True)
+    unavailable_count = len(automatic) - available_count
+    blocked_count = sum(int(record.skill_selection_blocked_count or 0) for record in automatic)
+    blocked_run_count = sum(
+        1 for record in automatic if int(record.skill_selection_blocked_count or 0) > 0
+    )
+    unhonored_count = sum(int(record.skill_selection_unhonored_count or 0) for record in automatic)
+    unhonored_run_count = sum(
+        1 for record in automatic if int(record.skill_selection_unhonored_count or 0) > 0
+    )
+    successful_read_count = sum(int(record.successful_skill_read_count or 0) for record in executed)
+    successful_read_run_count = sum(
+        1 for record in executed if int(record.successful_skill_read_count or 0) > 0
+    )
+    return {
+        "automatic_selection_runs": len(automatic),
+        "automatic_selection_exact_match_count": exact_count,
+        "automatic_selection_exact_match_rate": _rate(exact_count, len(automatic)),
+        "selector_available_run_count": available_count,
+        "selector_unavailable_run_count": unavailable_count,
+        "selector_unavailable_rate": _rate(unavailable_count, len(automatic)),
+        "skill_selection_blocked_count": blocked_count,
+        "skill_selection_blocked_run_count": blocked_run_count,
+        "skill_selection_blocked_rate": _rate(blocked_run_count, len(automatic)),
+        "skill_selection_unhonored_count": unhonored_count,
+        "skill_selection_unhonored_run_count": unhonored_run_count,
+        "skill_selection_unhonored_rate": _rate(unhonored_run_count, len(automatic)),
+        "successful_skill_read_count": successful_read_count,
+        "successful_skill_read_run_count": successful_read_run_count,
+        "successful_skill_read_rate": _rate(successful_read_run_count, len(executed)),
+    }
 
 
 def _counter_rate_summary(
@@ -1309,6 +1850,20 @@ def _max_rate_gate(*, actual: object, threshold: float, description: str) -> dic
     return {
         "status": status,
         "actual": actual_rate,
+        "max_allowed": threshold,
+        "description": description,
+    }
+
+
+def _max_count_gate(*, actual: object, threshold: int, description: str) -> dict[str, object]:
+    try:
+        actual_count = int(actual)
+    except (TypeError, ValueError):
+        actual_count = None
+    status = "fail" if actual_count is None or actual_count > threshold else "pass"
+    return {
+        "status": status,
+        "actual": actual_count,
         "max_allowed": threshold,
         "description": description,
     }

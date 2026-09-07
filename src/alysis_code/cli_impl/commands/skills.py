@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 import typer
 
+from ...config import load_config
 from ...skills import (
     discover_skills,
     install_skill_bundle,
@@ -47,6 +48,7 @@ def _discover_skills_for_path(
     return discover_skills(
         focus_path=workspace_context.focus_path,
         workspace_root=workspace_context.workspace_root,
+        cfg=_patchable("load_config", load_config)(),
     )
 
 
@@ -61,6 +63,7 @@ def _resolve_skill_catalog_for_path(
     discovered = discover_skills(
         focus_path=workspace_context.focus_path,
         workspace_root=workspace_context.workspace_root,
+        cfg=_patchable("load_config", load_config)(),
     )
     catalog = resolve_skill_catalog(
         discovered=discovered,
@@ -91,8 +94,11 @@ def _skills_table(*, skills: list[Any] | tuple[Any, ...], title: str) -> Table:
         enabled = getattr(skill, "enabled", None)
         managed = getattr(skill, "managed", None)
         bundle = getattr(skill, "skill", skill)
+        name = str(getattr(bundle, "name", ""))
+        if str(getattr(bundle, "source_scope", "")) == "bundled":
+            name = f"{name} (bundled)"
         table.add_row(
-            str(getattr(bundle, "name", "")),
+            name,
             "-" if enabled is None else ("yes" if enabled else "no"),
             "-" if managed is None else ("yes" if managed else "no"),
             str(getattr(bundle, "description", "")),
@@ -338,16 +344,16 @@ def _set_skill_enabled_state(
             )
             return
         global_state = load_global_skill_state()
-        visible_user_skill = next(
+        visible_global_skill = next(
             (
                 entry
                 for entry in catalog.entries
-                if str(getattr(entry.skill, "source_scope", "")) == "user"
+                if str(getattr(entry.skill, "source_scope", "")) in {"user", "bundled"}
                 and key in entry.skill.lookup_keys()
             ),
             None,
         )
-        if visible_user_skill is None and key not in global_state.managed_installs:
+        if visible_global_skill is None and key not in global_state.managed_installs:
             raise RuntimeError(f"Global skill not found: {name}")
         state = set_global_skill_disabled(
             global_state,

@@ -765,6 +765,7 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
                     "/skill",
                     "no args lists; <name> shows info; <name> <task> attaches",
                 ),
+                ("$<name> [task]", "show skill info or attach it for one turn"),
                 ("/image [path]", "add image (path, clipboard, Ctrl+Alt+V)"),
                 ("/assets", "open assets for the current Forge run pointer"),
                 (

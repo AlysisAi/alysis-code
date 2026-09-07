@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text, to_formatted_text
 
@@ -11,6 +12,7 @@ from alysis_code.cli_impl.chat_slash_completer import (
     get_forge_specs,
     max_completions_for_mode,
 )
+from alysis_code.skills import discover_skills, resolve_skill_catalog
 
 
 def _completion_names(completer: ChatSlashCompleter, text: str) -> list[str]:
@@ -124,6 +126,77 @@ def test_nested_chat_completions_cover_usage_and_skill_names() -> None:
         "stream status",
     ]
     assert _completion_names(completer, "/skill ") == ["skill python", "skill docker"]
+    assert _completion_names(completer, "/skill py") == ["skill python"]
+    assert _completion_names(completer, "/skill python task") == []
+    assert _completion_names(completer, "$") == ["$python", "$docker"]
+    assert _completion_names(completer, "$py") == ["$python"]
+
+
+def test_dollar_skill_completion_only_applies_at_input_token_start() -> None:
+    completer = ChatSlashCompleter(
+        mode_provider=lambda: "chat",
+        skill_names_provider=lambda: ["code-review"],
+    )
+
+    assert _completion_names(completer, "$") == ["$code-review"]
+    assert _completion_names(completer, "$code-review task") == []
+    assert _completion_names(completer, "review with $") == []
+
+
+def test_dollar_skill_completion_excludes_disabled_bundled_skill(tmp_path: Path) -> None:
+    user_config_dir = tmp_path / "usercfg"
+    user_config_dir.mkdir()
+    (user_config_dir / "skills.json").write_text(
+        '{"version": 1, "disabled_names": ["code-review"]}',
+        encoding="utf-8",
+    )
+    discovered = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=user_config_dir,
+        home_dir=tmp_path / "empty-home",
+    )
+    catalog = resolve_skill_catalog(
+        discovered=discovered,
+        workspace_root=tmp_path,
+        user_config_dir=user_config_dir,
+    )
+    completer = ChatSlashCompleter(
+        mode_provider=lambda: "chat",
+        skill_names_provider=lambda: sorted(catalog.effective.skills),
+    )
+
+    completions = _completion_names(completer, "$")
+    assert "$commit" in completions
+    assert "$code-review" not in completions
+
+
+def test_slash_skill_completion_excludes_disabled_bundled_skill(tmp_path: Path) -> None:
+    user_config_dir = tmp_path / "usercfg"
+    user_config_dir.mkdir()
+    (user_config_dir / "skills.json").write_text(
+        '{"version": 1, "disabled_names": ["code-review"]}',
+        encoding="utf-8",
+    )
+    discovered = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=user_config_dir,
+        home_dir=tmp_path / "empty-home",
+    )
+    catalog = resolve_skill_catalog(
+        discovered=discovered,
+        workspace_root=tmp_path,
+        user_config_dir=user_config_dir,
+    )
+    completer = ChatSlashCompleter(
+        mode_provider=lambda: "chat",
+        skill_names_provider=lambda: sorted(catalog.effective.skills),
+    )
+
+    completions = _completion_names(completer, "/skill ")
+    assert "skill commit" in completions
+    assert "skill code-review" not in completions
 
 
 def test_no_completions_for_plain_text() -> None:
@@ -144,7 +217,8 @@ def test_completion_carries_usage_and_description() -> None:
     assert _display_text(usage_completion.display_meta) == ""
 
 
-def test_completion_display_rows_are_bounded() -> None:
+@pytest.mark.parametrize("text", ["$", "/skill "])
+def test_completion_display_rows_are_bounded(text: str) -> None:
     completer = ChatSlashCompleter(
         mode_provider=lambda: "chat",
         skill_names_provider=lambda: ["skill-with-a-very-long-name-that-keeps-going"],
@@ -152,7 +226,7 @@ def test_completion_display_rows_are_bounded() -> None:
 
     rows = [
         _display_text(completion.display)
-        for completion in completer.get_completions(Document(text="/skill "), None)
+        for completion in completer.get_completions(Document(text=text), None)
     ]
 
     assert rows

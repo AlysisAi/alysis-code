@@ -549,6 +549,7 @@ class AppConfig(BaseModel):
     )
     subagents_enabled: bool = True
     skills_enabled: bool = True
+    bundled_skills_enabled: bool = True
     skills_auto_invoke: bool = Field(
         default=True,
         description=(
@@ -1616,6 +1617,7 @@ _SETTABLE_KEYS: set[str] = {
     "step_budget_policy",
     "subagents_enabled",
     "skills_enabled",
+    "bundled_skills_enabled",
     "skills_auto_invoke",
     "experimental_gemini_interactions_enabled",
     "custom_tools_enabled",
@@ -3157,6 +3159,16 @@ def set_config_value(
             cfg.skills_enabled = False
             return cfg
         raise ConfigError("skills_enabled must be true/false")
+
+    if key == "bundled_skills_enabled":
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            cfg.bundled_skills_enabled = True
+            return cfg
+        if v in {"0", "false", "no", "off"}:
+            cfg.bundled_skills_enabled = False
+            return cfg
+        raise ConfigError("bundled_skills_enabled must be true/false")
 
     if key == "skills_auto_invoke":
         v = value.strip().lower()

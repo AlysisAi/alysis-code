@@ -7,6 +7,7 @@ import ssl
 import httpx
 import pytest
 
+from alysis_code.execution_deadline import DeadlineExhausted
 from alysis_code.llm import openai_compat as openai_compat_mod
 from alysis_code.llm import types as shared_types
 from alysis_code.llm.base import effective_tools_for_client
@@ -33,6 +34,7 @@ from alysis_code.llm.openai_compat import (
     attach_provider_metadata_to_assistant_message,
 )
 from alysis_code.llm.provider_limits import ProviderRetrySettings
+from alysis_code.llm.types import LLMStreamNoProgressError
 from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     reset_provider_telemetry_for_tests,
@@ -4758,6 +4760,326 @@ class _KeepaliveOnlySseStream(httpx.SyncByteStream):
     def __iter__(self):  # type: ignore[no-untyped-def]
         while True:
             yield b": keepalive\n\n"
+
+
+class _StepClock:
+    def __init__(self, step: float = 1.0) -> None:
+        self.now = 0.0
+        self.step = step
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+class _TrackedCompatSseStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes], *, fail_on_exhaustion: bool = False) -> None:
+        self.chunks = chunks
+        self.chunk_count = 0
+        self.exhausted = False
+        self.fail_on_exhaustion = fail_on_exhaustion
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for chunk in self.chunks:
+            self.chunk_count += 1
+            yield chunk
+        self.exhausted = True
+        if self.fail_on_exhaustion:
+            raise AssertionError("stream parser failed to stop before transport exhaustion")
+
+
+def _compat_sse_chunk(event: object) -> bytes:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+
+def test_stream_parser_clears_abort_callback_when_parsing_fails() -> None:
+    class _Token:
+        is_cancelled = False
+
+        def __init__(self) -> None:
+            self.abort_callback = None
+            self.clear_calls = 0
+
+        def set_abort_callback(self, callback):  # type: ignore[no-untyped-def]
+            self.abort_callback = callback
+
+        def clear_abort_callback(self) -> None:
+            self.clear_calls += 1
+            self.abort_callback = None
+
+    token = _Token()
+    response = httpx.Response(200, content=b": keepalive\n\n")
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+    )
+
+    with pytest.raises(LLMError, match="truncated"):
+        client._parse_stream_response(
+            response,
+            on_text_delta=None,
+            provider_key=None,
+            cancellation_token=token,
+        )
+
+    assert token.abort_callback is None
+    assert token.clear_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("chunks", "timeout"),
+    [
+        pytest.param([b"x"] * 20, 2.0, id="newline-free-trickle"),
+        pytest.param(
+            [
+                b": keepalive\n\n",
+                b"data: not-json\n\n",
+                b"data: {}\n\n",
+                _compat_sse_chunk(
+                    {
+                        "id": "chatcmpl-stalled",
+                        "object": "chat.completion.chunk",
+                        "model": "test-model",
+                        "choices": [],
+                    }
+                ),
+                _compat_sse_chunk({"choices": [{"delta": {}}]}),
+            ]
+            * 10,
+            10.0,
+            id="comments-malformed-and-empty-events",
+        ),
+        pytest.param(
+            [
+                _compat_sse_chunk(
+                    {
+                        "model": "test-model",
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content": "same",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_1",
+                                            "function": {
+                                                "name": "lookup",
+                                                "arguments": '{"q":"same"}',
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ],
+                    }
+                )
+            ]
+            * 50,
+            10.0,
+            id="duplicate-content-and-tool-state",
+        ),
+    ],
+)
+def test_stream_watchdog_rejects_nonprogress_traffic(
+    chunks: list[bytes],
+    timeout: float,
+) -> None:
+    clock = _StepClock()
+    stream = _TrackedCompatSseStream(chunks, fail_on_exhaustion=True)
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+        stream_no_progress_timeout_s=timeout,
+        stream_progress_clock=clock,
+    )
+
+    with pytest.raises(LLMStreamNoProgressError, match="meaningful payload"):
+        client._parse_stream_response(
+            httpx.Response(200, stream=stream),
+            on_text_delta=None,
+            provider_key=None,
+        )
+
+    assert not stream.exhausted
+
+
+def test_stream_parser_reconstructs_split_crlf_and_utf8_chunks() -> None:
+    event = json.dumps(
+        {
+            "model": "test-model",
+            "choices": [{"delta": {"content": "café"}}],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    utf8_split = event.index("é".encode()) + 1
+    response = httpx.Response(
+        200,
+        stream=_TrackedCompatSseStream(
+            [
+                b"data: " + event[:utf8_split],
+                event[utf8_split:] + b"\r",
+                b"\n\r",
+                b"\ndata: [DONE]\r",
+                b"\n\r",
+                b"\n",
+            ]
+        ),
+    )
+
+    parsed = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+    )._parse_stream_response(
+        response,
+        on_text_delta=None,
+        provider_key=None,
+    )
+
+    assert parsed.content == "café"
+
+
+def test_stream_watchdog_checks_cancellation_before_buffered_newline() -> None:
+    from alysis_code.cli_impl.tui.app import _Cancellation
+
+    token = _Cancellation()
+    token.cancel()
+    stream = _TrackedCompatSseStream([b"x"], fail_on_exhaustion=True)
+    response = httpx.Response(200, stream=stream)
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="cancelled_by_user"):
+        client._parse_stream_response(
+            response,
+            on_text_delta=None,
+            provider_key=None,
+            cancellation_token=token,
+        )
+
+    assert not stream.exhausted
+
+
+def test_stream_watchdog_checks_deadline_before_buffered_newline() -> None:
+    stream = _TrackedCompatSseStream([b"x"], fail_on_exhaustion=True)
+    response = httpx.Response(200, stream=stream)
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+    )
+    client._stream_deadline_exhausted = lambda: True
+
+    with pytest.raises(DeadlineExhausted, match="run deadline"):
+        client._parse_stream_response(
+            response,
+            on_text_delta=None,
+            provider_key=None,
+        )
+
+    assert not stream.exhausted
+
+
+def test_stream_watchdog_resets_for_reasoning_and_tool_progress() -> None:
+    clock = _StepClock()
+    reasoning_delta = {
+        "reasoning_content": "inspect",
+        "reasoning_details": [
+            {
+                "id": "summary_1",
+                "type": "reasoning.summary",
+                "summary": "checked",
+            }
+        ],
+    }
+    events = [
+        {"choices": [{"delta": reasoning_delta}]},
+        {"choices": [{"delta": reasoning_delta}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "lookup", "arguments": '{"q":'},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"skills"}'}}]}}
+            ]
+        },
+    ]
+    chunks = [
+        *(f"data: {json.dumps(event)}\n\n".encode() for event in events),
+        b"data: [DONE]\n\n",
+    ]
+
+    response = httpx.Response(200, stream=_TrackedCompatSseStream(chunks))
+    client = OpenAICompatClient(
+        base_url="https://api.deepseek.com/v1",
+        api_key="test",
+        model="deepseek-chat",
+        stream_no_progress_timeout_s=2.5,
+        stream_progress_clock=clock,
+    )
+
+    parsed = client._parse_stream_response(
+        response,
+        on_text_delta=None,
+        provider_key="deepseek",
+    )
+
+    assert parsed.tool_calls[0].name == "lookup"
+    assert parsed.tool_calls[0].arguments == {"q": "skills"}
+    assert parsed.provider_metadata is not None
+    assert parsed.provider_metadata["deepseek"]["reasoning_content"] == "inspectinspect"
+    assert [output.text for output in parsed.reasoning] == ["checked"]
+    assert clock.now > client.stream_no_progress_timeout_s
+
+
+def test_openai_compat_retries_are_bounded_by_default_wall_clock_cap() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(
+            max_retries=5,
+            base_delay_seconds=61.0,
+            max_delay_seconds=61.0,
+        ),
+        provider_sleep_fn=sleeps.append,
+        provider_random_fn=lambda: 0.5,
+    )
+
+    with pytest.raises(LLMError, match="read timed out"):
+        client.chat(messages=[{"role": "user", "content": "hello"}])
+
+    assert client._provider_retry_wall_clock_cap_seconds == 60.0
+    assert attempts == 1
+    assert sleeps == []
 
 
 def test_stream_meaningful_progress_watchdog_retries_then_fails_at_cap() -> None:

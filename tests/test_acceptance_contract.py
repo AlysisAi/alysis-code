@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from alysis_code.agent.acceptance_contract import (
     AcceptanceCriterionConfidence,
     AcceptanceCriterionEnforcement,
@@ -169,6 +171,130 @@ def test_preservation_clause_keeps_dotted_filename_and_does_not_require_output()
         for criterion in contract.criteria
         if criterion.kind == AcceptanceCriterionKind.CONTENT_FORMAT_SCHEMA
     ]
+
+
+def test_preservation_role_does_not_cross_into_coordinated_report_clause(
+    tmp_path: Path,
+) -> None:
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction=(
+            "Audit proposed.diff for exploitable risks, preserve the source unchanged, "
+            "and record severity, evidence, and remediation in SECURITY_REPORT.md."
+        ),
+    )
+
+    report_ref = next(
+        path_ref for path_ref in contract.path_refs if path_ref.display_path == "SECURITY_REPORT.md"
+    )
+    preservation_paths = {
+        path
+        for criterion in contract.criteria
+        if criterion.kind == AcceptanceCriterionKind.PRESERVATION_UNCHANGED_PATH
+        for path in criterion.paths
+    }
+
+    assert report_ref.role == AcceptancePathRole.UNKNOWN_REFERENCE
+    assert "SECURITY_REPORT.md" not in preservation_paths
+    finalize_acceptance_contract(
+        contract=contract,
+        root=tmp_path,
+        touched_paths={"SECURITY_REPORT.md"},
+    )
+    assert "unexpected_scope_changes" not in contract.problem_names()
+
+
+def test_preserved_path_does_not_make_later_report_a_preservation_target(
+    tmp_path: Path,
+) -> None:
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction=(
+            "Preserve src/loader.py unchanged, and record findings in SECURITY_REPORT.md."
+        ),
+    )
+
+    roles = {path_ref.display_path: path_ref.role for path_ref in contract.path_refs}
+
+    assert roles == {
+        "src/loader.py": AcceptancePathRole.PRESERVATION_TARGET,
+        "SECURITY_REPORT.md": AcceptancePathRole.UNKNOWN_REFERENCE,
+    }
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected_roles"),
+    [
+        (
+            "Preserve source.py unchanged, update REPORT.md.",
+            {
+                "source.py": AcceptancePathRole.PRESERVATION_TARGET,
+                "REPORT.md": AcceptancePathRole.UNKNOWN_REFERENCE,
+            },
+        ),
+        (
+            "Preserve source.py unchanged, record REPORT.md.",
+            {
+                "source.py": AcceptancePathRole.PRESERVATION_TARGET,
+                "REPORT.md": AcceptancePathRole.UNKNOWN_REFERENCE,
+            },
+        ),
+        (
+            "Do not modify README.md, as well as LICENSE.md.",
+            {
+                "README.md": AcceptancePathRole.PRESERVATION_TARGET,
+                "LICENSE.md": AcceptancePathRole.PRESERVATION_TARGET,
+            },
+        ),
+        (
+            "Do not modify README.md, the generated LICENSE.md.",
+            {
+                "README.md": AcceptancePathRole.PRESERVATION_TARGET,
+                "LICENSE.md": AcceptancePathRole.PRESERVATION_TARGET,
+            },
+        ),
+    ],
+)
+def test_preservation_role_uses_phrase_scope_across_comma(
+    tmp_path: Path,
+    instruction: str,
+    expected_roles: dict[str, AcceptancePathRole],
+) -> None:
+    contract = build_acceptance_contract(root=tmp_path, instruction=instruction)
+
+    assert {
+        path_ref.display_path: path_ref.role for path_ref in contract.path_refs
+    } == expected_roles
+
+
+def test_preservation_role_still_covers_coordinated_path_list(tmp_path: Path) -> None:
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction="Do not modify README.md, LICENSE.md, and SECURITY.md.",
+    )
+
+    assert {
+        path_ref.display_path
+        for path_ref in contract.path_refs
+        if path_ref.role == AcceptancePathRole.PRESERVATION_TARGET
+    } == {"README.md", "LICENSE.md", "SECURITY.md"}
+
+
+def test_coordinated_preservation_and_supported_output_keep_distinct_roles(
+    tmp_path: Path,
+) -> None:
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction="Preserve source.txt unchanged, and write SECURITY_REPORT.md.",
+    )
+
+    roles = {path_ref.display_path: path_ref.role for path_ref in contract.path_refs}
+
+    assert roles == {
+        "source.txt": AcceptancePathRole.PRESERVATION_TARGET,
+        "SECURITY_REPORT.md": AcceptancePathRole.REQUIRED_OUTPUT,
+    }
+    assert contract.allowed_output_paths == {"SECURITY_REPORT.md"}
 
 
 def test_input_paths_are_advisory_references_not_required_outputs(tmp_path: Path) -> None:
@@ -361,6 +487,121 @@ def test_preexisting_repo_native_check_can_provide_primary_evidence(tmp_path: Pa
     criterion = _first_criterion(contract, AcceptanceCriterionKind.PREEXISTING_REPO_CHECK_SURFACE)
     assert contract.evidence[-1].origin == EvidenceOrigin.PREEXISTING_REPO_NATIVE
     assert criterion.status == AcceptanceCriterionStatus.PASSED
+
+
+def test_authoritative_check_updates_host_criterion_alongside_required_output(
+    tmp_path: Path,
+) -> None:
+    command = (
+        'python -c "from pathlib import Path; '
+        "text=Path('REVIEW_RESPONSES.md').read_text(); assert 'T1' in text\""
+    )
+    (tmp_path / "REVIEW_RESPONSES.md").write_text("T1 resolved\n", encoding="utf-8")
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction="Write REVIEW_RESPONSES.md mapping T1 to its resolution.",
+        authoritative_verification_commands=[command],
+    )
+
+    record_acceptance_tool_effect(
+        contract=contract,
+        root=tmp_path,
+        tool_name="verify_run",
+        arguments={"commands": [command]},
+        status="ok",
+        result={
+            "commands": [command],
+            "all_passed": True,
+            "command_results": [
+                {
+                    "command": command,
+                    "exit_code": 0,
+                    "ok": True,
+                    "output": "",
+                }
+            ],
+        },
+        touched_paths=set(),
+        known_verification_commands=[command],
+        verification_authoritative=True,
+        evidence_allowed=True,
+    )
+
+    output = _first_criterion(contract, AcceptanceCriterionKind.REQUIRED_ARTIFACT_PATH)
+    verifier = _first_criterion(
+        contract,
+        AcceptanceCriterionKind.EXPLICIT_HOST_USER_VERIFICATION_COMMAND,
+    )
+    evidence = contract.evidence[-1]
+
+    assert output.status == AcceptanceCriterionStatus.PASSED
+    assert verifier.status == AcceptanceCriterionStatus.PASSED
+    assert set(evidence.criterion_ids) == {output.criterion_id, verifier.criterion_id}
+    assert evidence.origin == EvidenceOrigin.HOST_AUTHORITATIVE
+
+
+def test_allowed_host_evidence_clears_stale_unsafe_failure_with_required_output(
+    tmp_path: Path,
+) -> None:
+    command = "python -c \"from pathlib import Path; assert Path('REVIEW_RESPONSES.md').exists()\""
+    (tmp_path / "REVIEW_RESPONSES.md").write_text("T1 resolved\n", encoding="utf-8")
+    contract = build_acceptance_contract(
+        root=tmp_path,
+        instruction="Write REVIEW_RESPONSES.md mapping T1 to its resolution.",
+        authoritative_verification_commands=[command],
+    )
+
+    record_acceptance_tool_effect(
+        contract=contract,
+        root=tmp_path,
+        tool_name="verify_run",
+        arguments={"commands": [command]},
+        status="ok",
+        result={
+            "commands": [command],
+            "all_passed": True,
+            "command_results": [{"command": command, "exit_code": 0, "ok": True, "output": ""}],
+        },
+        touched_paths=set(),
+        known_verification_commands=[command],
+        verification_authoritative=True,
+        evidence_allowed=False,
+    )
+
+    output = _first_criterion(contract, AcceptanceCriterionKind.REQUIRED_ARTIFACT_PATH)
+    verifier = _first_criterion(
+        contract,
+        AcceptanceCriterionKind.EXPLICIT_HOST_USER_VERIFICATION_COMMAND,
+    )
+    evidence = contract.evidence[-1]
+
+    assert output.status == AcceptanceCriterionStatus.PASSED
+    assert verifier.status == AcceptanceCriterionStatus.BLOCKED
+    assert verifier.failure_summary == "Verification evidence was supplemental or unsafe"
+    assert evidence.criterion_ids.count(output.criterion_id) == 1
+    assert evidence.criterion_ids.count(verifier.criterion_id) == 1
+
+    record_acceptance_tool_effect(
+        contract=contract,
+        root=tmp_path,
+        tool_name="verify_run",
+        arguments={"commands": [command]},
+        status="ok",
+        result={
+            "commands": [command],
+            "all_passed": True,
+            "command_results": [{"command": command, "exit_code": 0, "ok": True, "output": ""}],
+        },
+        touched_paths=set(),
+        known_verification_commands=[command],
+        verification_authoritative=True,
+        evidence_allowed=True,
+    )
+
+    assert verifier.status == AcceptanceCriterionStatus.PASSED
+    assert verifier.failure_summary == ""
+    assert len(verifier.evidence_ids) == 2
+    assert len(set(verifier.evidence_ids)) == 2
 
 
 def test_threshold_failure_blocks_and_self_authored_pass_does_not_override(

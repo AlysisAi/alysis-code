@@ -2382,7 +2382,11 @@ def _select_project_tool_entry(
 
 def _skill_catalog(params: dict[str, Any], *, request_id: RequestId) -> tuple[Path, Any]:
     workspace_root = _workspace_root_from_params(params, request_id=request_id, required=True)
-    discovered = discover_skills(focus_path=workspace_root, workspace_root=workspace_root)
+    discovered = discover_skills(
+        focus_path=workspace_root,
+        workspace_root=workspace_root,
+        cfg=load_config(),
+    )
     catalog = resolve_skill_catalog(discovered=discovered, workspace_root=workspace_root)
     return workspace_root, catalog
 

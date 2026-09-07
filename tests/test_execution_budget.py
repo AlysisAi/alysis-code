@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alysis_code.agent_loop import create_session
 from alysis_code.config import AppConfig
 from alysis_code.execution_budget import (
@@ -46,14 +48,17 @@ def _dense_execution_plan() -> dict:
     }
 
 
+@pytest.mark.parametrize("skills_enabled", [True, False])
 def test_compute_execution_prompt_budget_matches_real_session_prefix_and_tools(
     tmp_path,
+    skills_enabled: bool,
 ) -> None:
     (tmp_path / "CONVENTIONS.md").write_text("Prefer minimal diffs.\n", encoding="utf-8")
     cfg = AppConfig(
         model="budget-model",
         verify_commands=["pytest -q"],
         subagents_enabled=True,
+        skills_enabled=skills_enabled,
     )
     cfg.extra_fields = {
         "model_metadata_overrides": {
@@ -145,7 +150,7 @@ def test_compute_execution_prompt_budget_matches_real_session_prefix_and_tools(
 
 
 def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(tmp_path) -> None:
-    cfg = AppConfig(model="budget-model")
+    cfg = AppConfig(model="budget-model", skills_enabled=False)
     cfg.extra_fields = {
         "model_metadata_overrides": {
             "models": {

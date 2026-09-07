@@ -235,6 +235,8 @@ def make_llm_client(
                 session_id=session_id,
                 usage_contract=usage_contract,
                 route_identity=route_identity,
+                stream_no_progress_timeout_s=cfg.llm_stream_no_progress_timeout_s,
+                inflight_deadline_grace_s=(cfg.subagent_orchestration.inflight_deadline_grace_s),
             ),
             reasoning_trace_capability,
         )

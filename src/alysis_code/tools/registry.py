@@ -1785,8 +1785,9 @@ _BUILTIN_TOOL_METADATA: tuple[BuiltinToolMetadata, ...] = (
     BuiltinToolMetadata(
         name="skill_read",
         description=(
-            "Read a discovered skill bundle entrypoint or one specific file within that skill bundle. "
-            "Use this to inspect SKILL.md or targeted references/scripts/assets before applying a skill."
+            "Read a discovered skill's instructions or bundle file. With automatic skill "
+            "selection, use only for requested actions, not concept mentions; honor explicit "
+            "exclusions and prefer the most specific fit. Call before any other task tool."
         ),
         parameters={
             "type": "object",

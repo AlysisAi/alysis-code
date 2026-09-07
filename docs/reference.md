@@ -144,6 +144,7 @@ Common interactive commands:
 - `/image <path>`: attach an image to the next turn
 - `/subagents`: open the active-subagent picker and select a run for the live pane
 - `/skill`: list discovered skills
+- `$<skill> [task]`: at an idle prompt, show skill info or attach it for one turn
 - `/plan <task>`: draft a plan for review and approval
 - `/forge [resume]`: enter or resume Forge for the workspace
 - `/report [text]`: create a local feedback bundle

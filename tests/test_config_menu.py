@@ -1089,7 +1089,7 @@ def test_config_reload_updates_gemini_cached_content_settings(
     ("fixed_step_override", "expected_max_steps"),
     [(None, 73), (19, 19)],
 )
-def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
+def test_config_reload_updates_main_and_skill_selector_routes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fixed_step_override: int | None,
@@ -1098,7 +1098,8 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
     monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
     monkeypatch.delenv("ALYSIS_ROUTING_MODE", raising=False)
-    cfg = AppConfig(model="coding-v2", routing_mode="auto", max_steps=73)
+    monkeypatch.delenv("ALYSIS_LLM_TIMEOUT_S", raising=False)
+    cfg = AppConfig(model="coding-v2", routing_mode="auto", max_steps=73, llm_timeout_s=90.0)
     cfg.extra_fields = {"role_models": {"router": "router-v2"}}
     client = SimpleNamespace(
         base_url="",
@@ -1129,6 +1130,7 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
         provider_key=None,
         provider_concurrency_caps={},
         provider_retry_settings=None,
+        stream_no_progress_timeout_s=240.0,
     )
     session = SimpleNamespace(
         cfg=AppConfig(model="coding-v1", routing_mode="auto", max_steps=25),
@@ -1163,13 +1165,15 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=cfg)
 
     assert client.model == "coding-v2"
-    # Router-free path: no router client participates in config reload; an
-    # embedder-supplied one is left exactly as it was.
-    assert router_client.model == "router-v1"
-    assert router_client.temperature == 0.8
-    assert router_client.enable_thinking is True
-    assert router_client.reasoning_effort == "high"
-    assert not hasattr(router_client, "route_identity")
+    assert router_client.model == "router-v2"
+    assert router_client.temperature == 0.0
+    assert router_client.timeout_s == 15.0
+    assert router_client.stream_no_progress_timeout_s == 15.0
+    assert router_client.enable_thinking is False
+    assert router_client.reasoning_effort == ""
+    assert router_client.provider_retry_settings.disable_retries is True
+    assert client.provider_retry_settings.disable_retries is False
+    assert router_client.route_identity.model == "router-v2"
     assert session.routing_mode == "auto"
     assert session.max_steps == expected_max_steps
 
@@ -1178,7 +1182,12 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
     assert first_main_route.credential_scope
 
     monkeypatch.setenv("ALYSIS_API_KEY", "sk-next-credential")
-    next_cfg = AppConfig(model="coding-v3", routing_mode="auto", max_steps=73)
+    next_cfg = AppConfig(
+        model="coding-v3",
+        routing_mode="auto",
+        max_steps=73,
+        llm_timeout_s=9.0,
+    )
     next_cfg.extra_fields = {"role_models": {"router": "router-v3"}}
     add_profile(
         next_cfg,
@@ -1191,12 +1200,20 @@ def test_config_reload_updates_main_model_and_leaves_router_client_untouched(
         ),
     )
     set_active_profile(next_cfg, "alternate-route")
+    next_cfg.extra_fields["role_models"] = {"router": "router-v3"}
 
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=next_cfg)
 
     assert client.route_identity.model == "coding-v3"
-    assert not hasattr(router_client, "route_identity")
-    assert router_client.model == "router-v1"
+    assert router_client.route_identity.model == "router-v3"
+    assert router_client.model == "router-v3"
+    assert router_client.timeout_s == 9.0
+    assert router_client.stream_no_progress_timeout_s == 9.0
+    assert router_client.provider_retry_settings.disable_retries is True
+    assert client.provider_retry_settings.disable_retries is False
+    assert router_client.route_identity.profile_name == "alternate-route"
+    assert router_client.route_identity.base_url == "https://openrouter.ai/api/v1"
+    assert router_client.route_identity.provider_key == "openrouter"
     assert client.route_identity.profile_name == "alternate-route"
     assert client.route_identity.base_url == "https://openrouter.ai/api/v1"
     assert client.route_identity.provider_key == "openrouter"
@@ -1435,8 +1452,11 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
             route_client.base_url,
             route_client.api_key,
             route_client.model,
+            route_client.timeout_s,
+            route_client.stream_no_progress_timeout_s,
             route_client.route_identity,
             dict(route_client.extra_headers),
+            route_client.provider_retry_settings,
             set(route_client._disabled_prompt_cache_fields),
         )
 
@@ -1456,19 +1476,19 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
     original_get = ModelRegistry.get
     get_calls = 0
 
-    def fail_during_router_refresh(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def fail_after_router_refresh(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         nonlocal get_calls
         get_calls += 1
-        if get_calls == 2:
+        if get_calls == 3:
             raise RuntimeError("injected route refresh failure")
         return original_get(self, *args, **kwargs)
 
-    monkeypatch.setattr(ModelRegistry, "get", fail_during_router_refresh)
+    monkeypatch.setattr(ModelRegistry, "get", fail_after_router_refresh)
 
     with pytest.raises(RuntimeError, match="injected route refresh failure"):
         chat_loop._apply_config_menu_changes_to_session(session=session, cfg=next_cfg)
 
-    assert get_calls == 2
+    assert get_calls == 3
     assert session.cfg is old_cfg
     assert session.routing_mode == "auto"
     assert session.max_steps == 25
@@ -1513,6 +1533,8 @@ def test_config_reload_applies_routing_mode_change_in_place(
         provider_concurrency_caps={},
         provider_retry_settings=None,
     )
+    if router_client is not None:
+        router_client = SimpleNamespace(**vars(client))
     session = SimpleNamespace(
         cfg=current_cfg,
         client=client,

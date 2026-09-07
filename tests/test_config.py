@@ -942,16 +942,21 @@ def test_set_skills_flags_validation() -> None:
     cfg = AppConfig()
     assert cfg.skills_enabled is True
     assert cfg.skills_auto_invoke is True
+    assert cfg.bundled_skills_enabled is True
 
     cfg = set_config_value(cfg, "skills_enabled", "false")
     assert cfg.skills_enabled is False
     cfg = set_config_value(cfg, "skills_auto_invoke", "on")
     assert cfg.skills_auto_invoke is True
+    cfg = set_config_value(cfg, "bundled_skills_enabled", "off")
+    assert cfg.bundled_skills_enabled is False
 
     with pytest.raises(ConfigError):
         set_config_value(cfg, "skills_enabled", "maybe")
     with pytest.raises(ConfigError):
         set_config_value(cfg, "skills_auto_invoke", "maybe")
+    with pytest.raises(ConfigError):
+        set_config_value(cfg, "bundled_skills_enabled", "maybe")
 
 
 def test_load_config_defaults_missing_skills_auto_invoke_to_true_and_preserves_false(

@@ -1,0 +1,6 @@
+diff --git a/src/loader.py b/src/loader.py
+--- /dev/null
++++ b/src/loader.py
+@@ -0,0 +1,2 @@
++def load_payload(payload: str) -> object:
++    return eval(payload)

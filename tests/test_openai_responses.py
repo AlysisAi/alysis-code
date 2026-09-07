@@ -5,6 +5,8 @@ import json
 import httpx
 import pytest
 
+from alysis_code.cli_impl.tui.app import _Cancellation
+from alysis_code.execution_deadline import DeadlineExhausted
 from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     attach_provider_metadata_to_assistant_message,
@@ -20,7 +22,7 @@ from alysis_code.llm.protocols import (
     resolve_reasoning_trace_capability,
 )
 from alysis_code.llm.provider_limits import ProviderRetrySettings
-from alysis_code.llm.types import LLMError, ReasoningOutputKind
+from alysis_code.llm.types import LLMError, LLMStreamNoProgressError, ReasoningOutputKind
 from alysis_code.provider_telemetry import (
     last_provider_call_summary,
     reset_provider_telemetry_for_tests,
@@ -74,6 +76,58 @@ class _TruncatedResponsesSummaryStream(httpx.SyncByteStream):
         raise httpx.RemoteProtocolError("stream closed after partial summary")
 
 
+class _KeepaliveOnlyResponsesStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.chunk_count = 0
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for _ in range(20):
+            self.chunk_count += 1
+            yield b": keepalive\n\n"
+        raise AssertionError("stream watchdog did not stop comment-only keepalives")
+
+
+class _PartialLineResponsesStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.chunk_count = 0
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for _ in range(20):
+            self.chunk_count += 1
+            yield b"x"
+        raise AssertionError("stream watchdog did not stop a newline-free byte trickle")
+
+
+class _RepeatedEventResponsesStream(httpx.SyncByteStream):
+    def __init__(self, event_type: str, data: dict[str, object]) -> None:
+        self.event_type = event_type
+        self.data = data
+        self.chunk_count = 0
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for _ in range(20):
+            self.chunk_count += 1
+            yield _sse_event(self.event_type, self.data)
+        raise AssertionError("stream watchdog did not stop non-progress JSON events")
+
+
+class _EventChunksResponsesStream(httpx.SyncByteStream):
+    def __init__(self, events: list[tuple[str, dict[str, object]]]) -> None:
+        self.events = events
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        for event_type, data in self.events:
+            yield _sse_event(event_type, data)
+
+
+class _FragmentedResponsesStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        yield from self.chunks
+
+
 def test_stream_does_not_retry_after_public_reasoning_summary() -> None:
     attempts = 0
     summaries: list[str] = []
@@ -105,6 +159,282 @@ def test_stream_does_not_retry_after_public_reasoning_summary() -> None:
 
     assert attempts == 1
     assert summaries == ["Safe partial summary."]
+
+
+def test_stream_meaningful_progress_watchdog_rejects_comment_only_keepalives() -> None:
+    now = 0.0
+    stream = _KeepaliveOnlyResponsesStream()
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.1
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+        stream_no_progress_timeout_s=2.0,
+        stream_progress_clock=clock,
+    )
+
+    with pytest.raises(LLMStreamNoProgressError, match="meaningful payload"):
+        client.chat(
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+        )
+
+    assert stream.chunk_count < 20
+
+
+def test_stream_meaningful_progress_watchdog_rejects_partial_line_trickle() -> None:
+    now = 0.0
+    stream = _PartialLineResponsesStream()
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.1
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+        stream_no_progress_timeout_s=2.0,
+        stream_progress_clock=clock,
+    )
+
+    with pytest.raises(LLMStreamNoProgressError, match="meaningful payload"):
+        client.chat(
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+        )
+
+    assert stream.chunk_count < 20
+
+
+@pytest.mark.parametrize(
+    ("event_type", "data"),
+    [
+        ("message", {}),
+        ("ping", {"type": "ping"}),
+        (
+            "response.in_progress",
+            {
+                "type": "response.in_progress",
+                "response": {
+                    "id": "resp_stalled",
+                    "status": "in_progress",
+                    "output": [],
+                },
+            },
+        ),
+    ],
+)
+def test_stream_watchdog_rejects_json_events_without_state_progress(
+    event_type: str,
+    data: dict[str, object],
+) -> None:
+    now = 0.0
+    stream = _RepeatedEventResponsesStream(event_type, data)
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.0
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+        stream_no_progress_timeout_s=4.5,
+        stream_progress_clock=clock,
+    )
+
+    with pytest.raises(LLMStreamNoProgressError, match="meaningful payload"):
+        client.chat(
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+        )
+
+    assert stream.chunk_count < 20
+
+
+def test_stream_meaningful_progress_watchdog_resets_for_valid_events() -> None:
+    now = 0.0
+
+    def clock() -> float:
+        nonlocal now
+        now += 1.0
+        return now
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_EventChunksResponsesStream(
+                [
+                    (
+                        "response.created",
+                        {
+                            "type": "response.created",
+                            "response": {
+                                "id": "resp_slow",
+                                "model": "search-model",
+                                "status": "in_progress",
+                                "output": [],
+                            },
+                        },
+                    ),
+                    (
+                        "response.completed",
+                        {
+                            "type": "response.completed",
+                            "response": {
+                                "id": "resp_slow",
+                                "model": "search-model",
+                                "status": "completed",
+                                "output_text": "ok",
+                                "output": [],
+                            },
+                        },
+                    ),
+                ]
+            ),
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+        stream_no_progress_timeout_s=4.5,
+        stream_progress_clock=clock,
+    )
+
+    response = client.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+    )
+
+    assert response.content == "ok"
+    assert now > client.stream_no_progress_timeout_s
+
+
+def test_stream_parser_reconstructs_split_crlf_and_utf8_chunks() -> None:
+    completed = json.dumps(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_fragmented",
+                "model": "search-model",
+                "status": "completed",
+                "output_text": "café",
+                "output": [],
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    utf8_split = completed.index("é".encode()) + 1
+    stream = _FragmentedResponsesStream(
+        [
+            b"event: response.completed\r",
+            b"\ndata: " + completed[:utf8_split],
+            completed[utf8_split:] + b"\r",
+            b"\n\r",
+            b"\n",
+        ]
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    response = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+    ).chat(
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+    )
+
+    assert response.content == "café"
+
+
+def test_stream_watchdog_checks_active_run_deadline() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b": keepalive\n\n",
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+        transport=httpx.MockTransport(handler),
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+    )
+    client._stream_deadline_exhausted = lambda: True
+
+    with pytest.raises(DeadlineExhausted, match="run deadline"):
+        client.chat(
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+        )
+
+
+def test_stream_watchdog_checks_cancellation_between_keepalives() -> None:
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="search-model",
+    )
+    token = _Cancellation()
+    token.cancel()
+    response = httpx.Response(200, content=b": keepalive\n\n")
+
+    with pytest.raises(KeyboardInterrupt, match="cancelled_by_user"):
+        client._parse_stream_response(
+            response,
+            on_text_delta=None,
+            on_reasoning_delta=None,
+            cancellation_token=token,
+        )
 
 
 def test_count_input_tokens_uses_provider_endpoint_with_full_request_shape() -> None:

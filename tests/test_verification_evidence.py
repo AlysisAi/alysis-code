@@ -9,6 +9,7 @@ from alysis_code.agent.acceptance_contract import (
     build_acceptance_contract,
     classify_evidence_origin,
 )
+from alysis_code.agent.verification import _verification_evidence_observation
 from alysis_code.agent_loop import (
     TurnExecutionState,
     VerificationEvidenceCategory,
@@ -385,6 +386,113 @@ def test_successful_test_claim_accepts_fresh_observed_execution_evidence() -> No
 
     assert _successful_verification_claim_kind("All tests passed.") == "tests"
     assert _fresh_executed_evidence_for_claim(state, claim_kind="tests")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result"),
+    [
+        (
+            "shell_run",
+            {
+                "effective_cmd": "python check.py",
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+            },
+        ),
+        (
+            "verify_run",
+            {
+                "status": "passed",
+                "command_results": [
+                    {
+                        "command": "python check.py",
+                        "effective_command": "python check.py",
+                        "exit_code": 0,
+                        "real_execution": True,
+                        "output_preview": "",
+                        "output_chars": 0,
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_silent_successful_execution_has_observed_output_capture(
+    tool_name: str,
+    result: dict[str, object],
+) -> None:
+    evidence = classify_verification_evidence(
+        "python check.py",
+        known_verification_commands=["python check.py"],
+        authoritative=True,
+        exit_code=0,
+        output="",
+        real_execution=True,
+    )
+
+    observation = _verification_evidence_observation(
+        tool_name=tool_name,
+        evidence=evidence,
+        result=result,
+    )
+    assert observation == (0, True)
+
+    state = TurnExecutionState(execution_requested=True)
+    state.note_verification_relevant_edit()
+    state.record_verification_evidence(
+        evidence,
+        accepted=evidence.allowed_to_satisfy_contract,
+        observed_exit_code=observation[0],
+        observed_output=observation[1],
+    )
+    assert _fresh_executed_evidence_for_claim(state, claim_kind="verification")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result"),
+    [
+        (
+            "shell_run",
+            {
+                "effective_cmd": "python check.py",
+                "exit_code": 0,
+            },
+        ),
+        (
+            "verify_run",
+            {
+                "status": "passed",
+                "command_results": [
+                    {
+                        "command": "python check.py",
+                        "effective_command": "python check.py",
+                        "exit_code": 0,
+                        "real_execution": True,
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_successful_execution_without_output_capture_is_unobserved(
+    tool_name: str,
+    result: dict[str, object],
+) -> None:
+    evidence = classify_verification_evidence(
+        "python check.py",
+        known_verification_commands=["python check.py"],
+        authoritative=True,
+        exit_code=0,
+        output="",
+        real_execution=True,
+    )
+
+    assert _verification_evidence_observation(
+        tool_name=tool_name,
+        evidence=evidence,
+        result=result,
+    ) == (0, False)
 
 
 def test_successful_test_claim_rejects_stale_or_unobserved_execution_evidence() -> None:

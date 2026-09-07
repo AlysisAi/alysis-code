@@ -202,6 +202,54 @@ def _sync_command_globals(source_globals: dict[str, Any]) -> None:
         _SYNCED_COMMAND_GLOBAL_VALUES[name] = value
 
 
+def _handle_idle_skill_invocation(
+    *,
+    input_text: str,
+    root: Path,
+    session: Any,
+    pending_images: list[str],
+    console: Console,
+    forge_state: _ForgeChatState,
+    plan_mode_state: _ChatPlanModeState,
+    plan_mode_escape_supported: bool = False,
+    plan_mode_action_prompt: Any | None = None,
+    forge_planner_reply_sink: Any | None = None,
+    forge_execution_report_sink: Any | None = None,
+) -> str | _ChatExecutionRequest | None:
+    """Route an idle ``$name [task]`` submission through the existing skill flow."""
+
+    trimmed = str(input_text or "").strip()
+    if not trimmed.startswith("$"):
+        return None
+    parts = trimmed.split(maxsplit=1)
+    skill_name = parts[0][1:].strip()
+    if not skill_name:
+        return None
+    ordered_skills = tuple(getattr(session, "skills_ordered", ()) or ())
+    registry_obj = getattr(session, "skill_registry", None)
+    registry = registry_obj if isinstance(registry_obj, dict) else {}
+    if not registry and ordered_skills:
+        registry = {str(getattr(skill, "name", "")).casefold(): skill for skill in ordered_skills}
+    if registry.get(skill_name.casefold()) is None:
+        return None
+    skill_arg = skill_name
+    if len(parts) > 1 and parts[1].strip():
+        skill_arg = f"{skill_arg} {parts[1].strip()}"
+    return _handle_chat_command(
+        input_text=f"/skill {skill_arg}",
+        root=root,
+        session=session,
+        pending_images=pending_images,
+        console=console,
+        forge_state=forge_state,
+        plan_mode_state=plan_mode_state,
+        plan_mode_escape_supported=plan_mode_escape_supported,
+        plan_mode_action_prompt=plan_mode_action_prompt,
+        forge_planner_reply_sink=forge_planner_reply_sink,
+        forge_execution_report_sink=forge_execution_report_sink,
+    )
+
+
 def _handle_chat_command(
     *,
     input_text: str,

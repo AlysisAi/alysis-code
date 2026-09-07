@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..branding import env_get
+from ..verification_command_analysis import analyze_verification_command
 from .turn_contract import TurnSemantics, TurnTaskShape
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,8 @@ def _normalize_artifact_path(path: str) -> str:
 
 
 def _command_path_tokens(command: str) -> list[str]:
+    if analyze_verification_command(command, trusted=True).uses_opaque_inline_code:
+        return []
     tokens: list[str] = []
     for raw in _COMMAND_TOKEN_SPLIT_RE.split(str(command or "")):
         token = raw.strip().strip("`'\"").rstrip(_TOKEN_TRAILING_JUNK)

@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from alysis_code import cli as cli_mod
+from alysis_code.skills import discover_skills, resolve_skill_catalog
 from alysis_code.workspace_context import WorkspaceContext
 
 
@@ -150,6 +151,59 @@ def test_cli_skill_install_enable_disable_remove_smoke(
     assert not (user_cfg / "skills" / "docs-consistency").exists()
 
 
+def test_cli_disable_enable_bundled_skill_persists_in_global_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    user_cfg = tmp_path / "usercfg"
+    _patch_user_config_dir(monkeypatch, user_cfg)
+
+    disable = runner.invoke(
+        cli_mod.app,
+        ["skill", "disable", "code-review", "--path", str(tmp_path)],
+    )
+    after_disable = resolve_skill_catalog(
+        discovered=discover_skills(
+            focus_path=tmp_path,
+            workspace_root=tmp_path,
+            user_config_dir=user_cfg,
+            home_dir=tmp_path / "empty-home",
+        ),
+        workspace_root=tmp_path,
+        user_config_dir=user_cfg,
+    )
+    disabled_state_text = (user_cfg / "skills.json").read_text(encoding="utf-8")
+    enable = runner.invoke(
+        cli_mod.app,
+        ["skill", "enable", "code-review", "--path", str(tmp_path)],
+    )
+    after_enable = resolve_skill_catalog(
+        discovered=discover_skills(
+            focus_path=tmp_path,
+            workspace_root=tmp_path,
+            user_config_dir=user_cfg,
+            home_dir=tmp_path / "empty-home",
+        ),
+        workspace_root=tmp_path,
+        user_config_dir=user_cfg,
+    )
+    bundled_path = after_enable.effective.skills["code-review"].source_path
+    remove = runner.invoke(
+        cli_mod.app,
+        ["skill", "remove", "code-review", "--path", str(tmp_path)],
+    )
+
+    assert disable.exit_code == 0
+    assert "code-review" not in after_disable.effective.skills
+    assert '"code-review"' in disabled_state_text
+    assert enable.exit_code == 0
+    assert "code-review" in after_enable.effective.skills
+    assert remove.exit_code == 1
+    assert "Managed user skill not found" in remove.output
+    assert (bundled_path / "SKILL.md").is_file()
+
+
 def test_cli_skill_install_rejects_zip_traversal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -182,7 +236,7 @@ def test_cli_skill_list_warns_on_invalid_project_state(tmp_path: Path) -> None:
     result = runner.invoke(cli_mod.app, ["skill", "list", "--path", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "Skills (1)" in result.output
+    assert "Skills (9)" in result.output
     assert "Lifecycle state warning:" in result.output
 
 

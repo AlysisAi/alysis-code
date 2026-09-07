@@ -1298,13 +1298,20 @@ def test_sticky_persona_model_swaps_and_restores(tmp_path: Path) -> None:
     )
     try:
         base_client = session.client
+        selector_client = session.router_client
+        assert selector_client is not None
+        assert session._semantic_router_bound_client is base_client
         assert str(base_client.model) == "test-model"
         chat_facade._apply_chat_persona(session=session, persona="architect")
         assert str(session.client.model) == "planner-model"
         assert session.client is not base_client
+        assert session.router_client is selector_client
+        assert session._semantic_router_bound_client is session.client
+        assert session._provisioned_router_client is selector_client
         chat_facade._apply_chat_persona(session=session, persona="code")
         # The base client object itself is restored from the cache.
         assert session.client is base_client
+        assert session._semantic_router_bound_client is base_client
     finally:
         session.close()
 

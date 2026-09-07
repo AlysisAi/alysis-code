@@ -859,6 +859,7 @@ class SubagentLauncher:
         non_interactive: bool,
         verification_enabled: bool,
         authoritative_verification_commands: list[str] | None,
+        skills_enabled: bool,
         subagents_enabled: bool,
         subagent_depth: int,
         subagent_registry: dict[str, SubagentDefinition] | None,
@@ -898,6 +899,7 @@ class SubagentLauncher:
         self.non_interactive = non_interactive
         self.verification_enabled = verification_enabled
         self.authoritative_verification_commands = authoritative_verification_commands
+        self.skills_enabled = bool(skills_enabled)
         self.subagents_enabled = subagents_enabled
         self.subagent_depth = subagent_depth
         self.subagent_registry = subagent_registry
@@ -1833,6 +1835,11 @@ class SubagentLauncher:
             return {"error": f"Subagent model resolution failed: {e}"}
         subagent_cfg.model = selected_model
         subagent_cfg.routing_mode = _ROUTING_MODE_CODE_ONLY
+        # Skills are an independent session capability, not an implicit part of
+        # delegation. Preserve the parent's resolved master switch explicitly;
+        # bundled/custom discovery in the child continues to follow normal skill
+        # configuration only when that switch is enabled.
+        subagent_cfg.skills_enabled = self.skills_enabled
         resolved_temperature = resolve_role_temperature(subagent_cfg, role=temperature_role)
         subagent_cfg.temperature = resolved_temperature
         subagent_cfg.coding_temperature = resolved_temperature

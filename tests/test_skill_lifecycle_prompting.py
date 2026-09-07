@@ -85,7 +85,7 @@ def test_run_turn_uses_canonical_skill_lifecycle_guidance_for_first_skill_reques
         for item in client.calls[0]["tools"] or []
         if isinstance(item, dict)
     }
-    assert "skill_read" not in tool_names
+    assert "skill_read" in tool_names
     system_messages = [
         str(message.get("content") or "")
         for message in client.calls[0]["messages"]

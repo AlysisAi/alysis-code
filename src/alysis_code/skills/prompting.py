@@ -26,18 +26,34 @@ EXPLICIT_SKILL_SOURCE_PATH_DISPLAY_MAX_CHARS = 320
 def build_skill_advertise_block(
     *,
     skills: list[SkillBundle] | tuple[SkillBundle, ...],
+    skills_auto_invoke: bool,
     max_chars: int = SKILL_ADVERTISE_FALLBACK_MAX_CHARS,
     max_items: int = SKILL_ADVERTISE_MAX_ITEMS,
 ) -> str | None:
     if not skills:
         return None
+    usage_lines = (
+        [
+            "- Compare all descriptions with the requested outcome and workflow, not shared "
+            "steps or concept mentions; honor exclusions. Choose the narrowest fit; broad "
+            "skills are fallbacks.",
+            "- For each match, call skill_read(name) before any other task action; "
+            "otherwise continue without a skill.",
+            "- skill_read only loads instructions; it never executes them. Use "
+            "skill_read(name, path) for bundle files.",
+        ]
+        if skills_auto_invoke
+        else [
+            "- Skills are optional attachable context, not auto-executed workflows.",
+            "- Use skill_read(name) to inspect SKILL.md before relying on a skill.",
+            "- Use skill_read(name, path) for specific files under that skill bundle.",
+        ]
+    )
     lines = [
         "<skill_context>",
         "source: discovered skill bundles",
         "usage:",
-        "- Skills are optional attachable context, not auto-executed workflows.",
-        "- Use skill_read(name) to inspect SKILL.md before relying on a skill.",
-        "- Use skill_read(name, path) for specific files under that skill bundle.",
+        *usage_lines,
         "available_skills:",
     ]
     truncated = False

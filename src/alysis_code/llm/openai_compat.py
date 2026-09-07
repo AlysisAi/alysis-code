@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from ..cancellation import raise_if_cancelled
 from ..error_text import sanitize_error_text_for_output
 from ..execution_deadline import DeadlineExhausted
 from ..failure_category import provider_unavailable_retry_reason
@@ -93,6 +94,7 @@ from .provider_limits import (
 )
 from .request_plan import LLMRequestPlan, RequestCachePlan
 from .request_shape import build_request_shape_report
+from .streaming import decode_text_chunks, iter_lines_from_text_chunks
 from .temperature_compat import documented_temperature_omit_reason
 from .types import (
     InputTokenCount,
@@ -203,7 +205,7 @@ _TOOL_CALLING_REJECTION_TERMS = (
     "function_call",
     "model",
 )
-_PROVIDER_RETRY_WALL_CLOCK_CAP_SECONDS: float | None = None
+_PROVIDER_RETRY_WALL_CLOCK_CAP_SECONDS = 60.0
 _ERROR_BODY_DISPLAY_LIMIT = 1000
 
 
@@ -1021,7 +1023,7 @@ def _normalize_assistant_content_to_text(raw: Any) -> str:
     return ""
 
 
-def _append_mistral_stream_content(chunks: list[dict[str, Any]], raw: Any) -> None:
+def _append_mistral_stream_content(chunks: list[dict[str, Any]], raw: Any) -> bool:
     """Reconstruct replayable Mistral content without exposing ThinkChunk text."""
 
     if isinstance(raw, str):
@@ -1029,8 +1031,9 @@ def _append_mistral_stream_content(chunks: list[dict[str, Any]], raw: Any) -> No
     elif isinstance(raw, list):
         incoming = raw
     else:
-        return
+        return False
 
+    changed = False
     for item in incoming:
         if not isinstance(item, dict):
             continue
@@ -1046,6 +1049,7 @@ def _append_mistral_stream_content(chunks: list[dict[str, Any]], raw: Any) -> No
                 and isinstance(incoming_text, str)
             ):
                 previous["text"] = previous_text + incoming_text
+                changed = bool(incoming_text) or changed
                 continue
         if item_type == "thinking" and chunks:
             previous = chunks[-1]
@@ -1057,19 +1061,26 @@ def _append_mistral_stream_content(chunks: list[dict[str, Any]], raw: Any) -> No
             ):
                 if isinstance(previous_thinking, list) and isinstance(incoming_thinking, list):
                     previous["thinking"] = previous_thinking + incoming_thinking
+                    changed = bool(incoming_thinking) or changed
                 elif isinstance(previous_thinking, str) and isinstance(incoming_thinking, str):
                     previous["thinking"] = previous_thinking + incoming_thinking
+                    changed = bool(incoming_thinking) or changed
                 else:
                     chunks.append(copied)
+                    changed = True
                     continue
                 for key, value in copied.items():
                     if key == "thinking":
                         continue
                     if key == "signature" and value is None:
                         continue
+                    if previous.get(key) != value:
+                        changed = True
                     previous[key] = value
                 continue
         chunks.append(copied)
+        changed = True
+    return changed
 
 
 def _parse_arguments(args_s: str) -> dict[str, Any]:
@@ -2758,30 +2769,13 @@ class OpenAICompatClient:
         progress_clock = self._stream_progress_clock
         last_meaningful_progress = progress_clock()
 
-        # Make the (possibly long) initial read interruptible: register the live
-        # response's close so a cancel from another thread unblocks iter_lines, and
-        # re-check the flag per line. A close mid-read surfaces as a read error that
-        # we translate into a clean interrupt below.
         _set_abort = getattr(cancellation_token, "set_abort_callback", None)
         _clear_abort = getattr(cancellation_token, "clear_abort_callback", None)
         if callable(_set_abort):
             _set_abort(resp.close)
-        _stream_iter = resp.iter_lines()
-        while True:
-            try:
-                line = next(_stream_iter)
-            except StopIteration:
-                break
-            except Exception:
-                if cancellation_token is not None and getattr(
-                    cancellation_token, "is_cancelled", False
-                ):
-                    raise KeyboardInterrupt("cancelled_by_user") from None
-                raise
-            if cancellation_token is not None and getattr(
-                cancellation_token, "is_cancelled", False
-            ):
-                raise KeyboardInterrupt("cancelled_by_user")
+
+        def _check_stream_liveness(*, check_progress: bool) -> None:
+            raise_if_cancelled(cancellation_token)
             stream_deadline_exhausted = getattr(
                 self,
                 "_stream_deadline_exhausted",
@@ -2789,141 +2783,185 @@ class OpenAICompatClient:
             )
             if callable(stream_deadline_exhausted) and stream_deadline_exhausted():
                 raise DeadlineExhausted("run deadline and in-flight provider grace elapsed")
+            if not check_progress:
+                return
             progress_now = progress_clock()
             if progress_now - last_meaningful_progress >= self.stream_no_progress_timeout_s:
                 raise LLMStreamNoProgressError(
                     "LLM stream produced no meaningful payload within "
                     f"{self.stream_no_progress_timeout_s:g}s."
                 )
-            if not line:
-                continue
-            if isinstance(line, bytes):
-                text = line.decode("utf-8", errors="ignore")
-            else:
-                text = line
-            if not text.startswith("data:"):
-                continue
-            payload = text[5:].strip()
-            if not payload:
-                continue
-            if payload == "[DONE]":
-                last_meaningful_progress = progress_now
-                saw_done = True
-                break
 
-            try:
-                event = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            last_meaningful_progress = progress_now
-            event_count += 1
-            model = event.get("model")
-            if isinstance(model, str) and model:
-                response_model = model
-            chunk_fingerprint = event.get("system_fingerprint")
-            if isinstance(chunk_fingerprint, str) and chunk_fingerprint:
-                system_fingerprint = chunk_fingerprint
-            parsed_usage = _parse_usage(event.get("usage"), provider_key=provider_key)
-            if parsed_usage is not None:
-                usage = parsed_usage
+        def _observed_byte_chunks() -> Iterator[bytes]:
+            for chunk in resp.iter_bytes():
+                _check_stream_liveness(check_progress=True)
+                yield chunk
 
-            choices = event.get("choices") or []
-            if not isinstance(choices, list) or not choices:
-                continue
-            choice0 = choices[0]
-            if not isinstance(choice0, dict):
-                continue
-            delta = choice0.get("delta") or {}
-            if not isinstance(delta, dict):
-                continue
-
-            reasoning_delta = delta.get(_DEEPSEEK_REASONING_CONTENT_KEY)
-            if not isinstance(reasoning_delta, str):
-                reasoning_delta = delta.get(_OPENROUTER_REASONING_KEY)
-            if isinstance(reasoning_delta, str) and reasoning_delta:
-                reasoning_parts.append(reasoning_delta)
-            details_delta = delta.get(_OPENROUTER_REASONING_DETAILS_KEY)
-            if isinstance(details_delta, list) and details_delta:
-                reasoning_details.extend(details_delta)
-                for detail_index, detail in enumerate(details_delta):
-                    parsed = (
-                        _text_from_reasoning_detail(detail) if isinstance(detail, dict) else None
-                    )
-                    if parsed is None:
-                        continue
-                    detail_text, detail_kind = parsed
-                    if detail_kind != ReasoningOutputKind.SUMMARY:
-                        continue
-                    key = str(detail.get("id") or detail.get("index") or f"summary_{detail_index}")
-                    previous = reasoning_summary_parts.get(key, "")
-                    suffix = _stream_delta_suffix(previous=previous, incoming=detail_text)
-                    if not suffix:
-                        continue
-                    reasoning_summary_parts[key] = previous + suffix
-                    if on_reasoning_delta is not None:
-                        on_reasoning_delta(suffix)
-
-            raw_content_delta = delta.get("content")
-            if _is_mistral_provider(provider_key):
-                _append_mistral_stream_content(mistral_content_chunks, raw_content_delta)
-            content_delta = _normalize_assistant_content_to_text(raw_content_delta)
-            if content_delta:
-                content_suffix = _stream_delta_suffix(
-                    previous=accumulated_content,
-                    incoming=content_delta,
-                )
-                if content_suffix:
-                    content_parts.append(content_suffix)
-                    accumulated_content += content_suffix
-                    if on_text_delta is not None:
-                        on_text_delta(content_suffix)
-
-            tc_delta = delta.get("tool_calls") or []
-            if not isinstance(tc_delta, list):
-                continue
-            for raw_tc in tc_delta:
-                if not isinstance(raw_tc, dict):
+        text_chunks = decode_text_chunks(
+            _observed_byte_chunks(),
+            encoding=resp.encoding or "utf-8",
+        )
+        try:
+            for text in iter_lines_from_text_chunks(text_chunks):
+                _check_stream_liveness(check_progress=False)
+                if not text.startswith("data:"):
                     continue
-                idx = raw_tc.get("index")
-                if not isinstance(idx, int):
+                payload = text[5:].strip()
+                if not payload:
                     continue
-                entry = tool_chunks.setdefault(
-                    idx,
-                    {"id": "", "name": "", "arguments": "", "provider_metadata": None},
-                )
+                if payload == "[DONE]":
+                    last_meaningful_progress = progress_clock()
+                    saw_done = True
+                    break
 
-                tc_id = raw_tc.get("id")
-                if isinstance(tc_id, str) and tc_id:
-                    entry["id"] = tc_id
-
-                provider_metadata = _gemini_tool_call_provider_metadata(raw_tc)
-                if provider_metadata:
-                    existing_metadata = entry.get("provider_metadata")
-                    entry["provider_metadata"] = _merge_provider_metadata(
-                        existing_metadata if isinstance(existing_metadata, dict) else None,
-                        provider_metadata,
-                    )
-
-                fn = raw_tc.get("function")
-                if not isinstance(fn, dict):
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
                     continue
-                name = fn.get("name")
-                if isinstance(name, str) and name:
-                    entry["name"] = name
-                args_piece = fn.get("arguments")
-                if isinstance(args_piece, str):
-                    entry["arguments"] += _stream_delta_suffix(
-                        previous=entry["arguments"],
-                        incoming=args_piece,
-                    )
+                if not isinstance(event, dict):
+                    continue
 
-        if callable(_clear_abort):
-            _clear_abort()
-        if cancellation_token is not None and getattr(cancellation_token, "is_cancelled", False):
-            # Stream ended because the abort closed it (clean EOF, not an error).
-            raise KeyboardInterrupt("cancelled_by_user")
+                event_progress = False
+                event_count += 1
+                model = event.get("model")
+                if isinstance(model, str) and model and model != response_model:
+                    response_model = model
+                    event_progress = True
+                chunk_fingerprint = event.get("system_fingerprint")
+                if (
+                    isinstance(chunk_fingerprint, str)
+                    and chunk_fingerprint
+                    and chunk_fingerprint != system_fingerprint
+                ):
+                    system_fingerprint = chunk_fingerprint
+                    event_progress = True
+                parsed_usage = _parse_usage(event.get("usage"), provider_key=provider_key)
+                if parsed_usage is not None and parsed_usage != usage:
+                    usage = parsed_usage
+                    event_progress = True
+
+                choices = event.get("choices") or []
+                choice0 = choices[0] if isinstance(choices, list) and choices else None
+                delta = choice0.get("delta") if isinstance(choice0, dict) else None
+                if isinstance(delta, dict):
+                    reasoning_delta = delta.get(_DEEPSEEK_REASONING_CONTENT_KEY)
+                    if not isinstance(reasoning_delta, str):
+                        reasoning_delta = delta.get(_OPENROUTER_REASONING_KEY)
+                    if isinstance(reasoning_delta, str) and reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        event_progress = True
+                    details_delta = delta.get(_OPENROUTER_REASONING_DETAILS_KEY)
+                    if isinstance(details_delta, list) and details_delta:
+                        reasoning_details.extend(details_delta)
+                        event_progress = True
+                        for detail_index, detail in enumerate(details_delta):
+                            parsed = (
+                                _text_from_reasoning_detail(detail)
+                                if isinstance(detail, dict)
+                                else None
+                            )
+                            if parsed is None:
+                                continue
+                            detail_text, detail_kind = parsed
+                            if detail_kind != ReasoningOutputKind.SUMMARY:
+                                continue
+                            key = str(
+                                detail.get("id") or detail.get("index") or f"summary_{detail_index}"
+                            )
+                            previous = reasoning_summary_parts.get(key, "")
+                            suffix = _stream_delta_suffix(
+                                previous=previous,
+                                incoming=detail_text,
+                            )
+                            if not suffix:
+                                continue
+                            reasoning_summary_parts[key] = previous + suffix
+                            if on_reasoning_delta is not None:
+                                on_reasoning_delta(suffix)
+
+                    raw_content_delta = delta.get("content")
+                    if _is_mistral_provider(provider_key) and _append_mistral_stream_content(
+                        mistral_content_chunks,
+                        raw_content_delta,
+                    ):
+                        event_progress = True
+                    content_delta = _normalize_assistant_content_to_text(raw_content_delta)
+                    if content_delta:
+                        content_suffix = _stream_delta_suffix(
+                            previous=accumulated_content,
+                            incoming=content_delta,
+                        )
+                        if content_suffix:
+                            content_parts.append(content_suffix)
+                            accumulated_content += content_suffix
+                            event_progress = True
+                            if on_text_delta is not None:
+                                on_text_delta(content_suffix)
+
+                    tc_delta = delta.get("tool_calls") or []
+                    if isinstance(tc_delta, list):
+                        for raw_tc in tc_delta:
+                            if not isinstance(raw_tc, dict):
+                                continue
+                            idx = raw_tc.get("index")
+                            if not isinstance(idx, int):
+                                continue
+                            entry = tool_chunks.setdefault(
+                                idx,
+                                {
+                                    "id": "",
+                                    "name": "",
+                                    "arguments": "",
+                                    "provider_metadata": None,
+                                },
+                            )
+
+                            tc_id = raw_tc.get("id")
+                            if isinstance(tc_id, str) and tc_id and tc_id != entry["id"]:
+                                entry["id"] = tc_id
+                                event_progress = True
+
+                            provider_metadata = _gemini_tool_call_provider_metadata(raw_tc)
+                            if provider_metadata:
+                                existing_metadata = entry.get("provider_metadata")
+                                merged_metadata = _merge_provider_metadata(
+                                    existing_metadata
+                                    if isinstance(existing_metadata, dict)
+                                    else None,
+                                    provider_metadata,
+                                )
+                                if merged_metadata != existing_metadata:
+                                    entry["provider_metadata"] = merged_metadata
+                                    event_progress = True
+
+                            fn = raw_tc.get("function")
+                            if not isinstance(fn, dict):
+                                continue
+                            name = fn.get("name")
+                            if isinstance(name, str) and name and name != entry["name"]:
+                                entry["name"] = name
+                                event_progress = True
+                            args_piece = fn.get("arguments")
+                            if isinstance(args_piece, str):
+                                args_suffix = _stream_delta_suffix(
+                                    previous=entry["arguments"],
+                                    incoming=args_piece,
+                                )
+                                if args_suffix:
+                                    entry["arguments"] += args_suffix
+                                    event_progress = True
+
+                if event_progress:
+                    last_meaningful_progress = progress_clock()
+        except Exception:
+            raise_if_cancelled(cancellation_token)
+            raise
+        finally:
+            if callable(_clear_abort):
+                _clear_abort()
+
+        # A transport abort can end the stream as clean EOF instead of raising.
+        _check_stream_liveness(check_progress=False)
         if not saw_done:
             raise LLMError("LLM stream truncated before [DONE]")
         streamed_tool_calls = _parse_stream_tool_calls(tool_chunks)

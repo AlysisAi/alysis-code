@@ -23,6 +23,10 @@ def global_managed_skill_root(*, user_config_dir: Path | None = None) -> Path:
     return base / "skills"
 
 
+def bundled_skill_root() -> Path:
+    return Path(__file__).resolve().parent / "bundled"
+
+
 def global_skills_state_path(*, user_config_dir: Path | None = None) -> Path:
     base = (
         user_config_dir.expanduser().resolve() if user_config_dir else canonical_user_config_dir()

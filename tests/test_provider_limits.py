@@ -22,6 +22,7 @@ from alysis_code.llm.provider_limits import (
     resolve_provider_concurrency_cap,
     run_provider_limited_call,
 )
+from alysis_code.llm.types import LLMStreamNoProgressError
 from alysis_code.model_registry import resolve_model_provider_key
 from alysis_code.tools.web_search_dashscope import dashscope_chat_search
 
@@ -433,6 +434,39 @@ def test_provider_unavailable_retry_wall_clock_cap_blocks_backoff() -> None:
     assert sleeps == []
 
 
+def test_responses_sized_no_progress_timeout_cannot_start_a_retry_past_cap() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    # OpenAI Responses uses a 240s no-progress watchdog and a 60s retry wall
+    # clock cap. Once the first watchdog fires, another attempt must not start.
+    clock_values = iter((0.0, 240.0))
+
+    def call() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise LLMStreamNoProgressError("no meaningful payload")
+
+    with pytest.raises(LLMStreamNoProgressError, match="meaningful payload"):
+        run_provider_limited_call(
+            call=call,
+            provider_key=None,
+            provider_concurrency_caps={},
+            retry_settings=ProviderRetrySettings(
+                max_retries=5,
+                base_delay_seconds=1.0,
+                max_delay_seconds=30.0,
+            ),
+            operation="test_no_progress_retry_cap",
+            sleep_fn=sleeps.append,
+            random_fn=lambda: 0.5,
+            retry_wall_clock_cap_seconds=60.0,
+            clock_fn=lambda: next(clock_values),
+        )
+
+    assert attempts == 1
+    assert sleeps == []
+
+
 def test_marked_non_retryable_error_is_not_retried_despite_retryable_message() -> None:
     attempts = 0
     sleeps: list[float] = []
@@ -457,6 +491,41 @@ def test_marked_non_retryable_error_is_not_retried_despite_retryable_message() -
                 max_delay_seconds=30.0,
             ),
             operation="test_non_retryable",
+            sleep_fn=sleeps.append,
+            random_fn=lambda: 0.5,
+        )
+
+    assert attempts == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LLMError("LLM error 503: service unavailable"),
+        httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
+    ],
+)
+def test_disable_retries_bypasses_general_and_connection_drop_budgets(
+    error: Exception,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    def call() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise error
+
+    with pytest.raises(type(error)):
+        run_provider_limited_call(
+            call=call,
+            provider_key="openai",
+            retry_settings=ProviderRetrySettings(
+                max_retries=9,
+                disable_retries=True,
+            ),
+            operation="optional_control_plane",
             sleep_fn=sleeps.append,
             random_fn=lambda: 0.5,
         )

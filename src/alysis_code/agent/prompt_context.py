@@ -286,7 +286,8 @@ _SYSTEM_PROMPT_SKILL_DISCOVERY_SECTION = """
 
 Skills and skill_read
 - The <skill_context> block lists every skill discovered for this session with its name and description. These descriptions tell you when each skill applies.
-- BEFORE acting on a task that matches a skill's description, call skill_read(name) to load its full instructions. Do not skip this step when a skill description plausibly fits the task.
+- Select only a skill whose action the user requests; a concept mention is not a match. Honor explicit exclusions and choose the most specific fit.
+- BEFORE any other task action, call skill_read(name) for each selected skill.
 - Use skill_read(name, path) for bundled references, scripts, or assets cited inside the skill body.
 - Do not invent skill names. Only use names that appear in the <skill_context> block.
 - Project-local explicit-turn skill context (when present) outranks this discovery list.
@@ -2261,6 +2262,7 @@ def prepare_session_prompt_context(
         discover_skills(
             focus_path=workspace_context.focus_path,
             workspace_root=workspace_context.workspace_root,
+            cfg=session_cfg,
         )
         if resolved_skills_enabled
         else DiscoveredSkills(skills={}, ordered=(), issues=())
@@ -2420,7 +2422,10 @@ def prepare_session_prompt_context(
         workspace_root=workspace_context.workspace_root,
     )
     skill_context = (
-        build_skill_advertise_block(skills=discovered_skills.ordered)
+        build_skill_advertise_block(
+            skills=discovered_skills.ordered,
+            skills_auto_invoke=skills_auto_invoke,
+        )
         if resolved_skills_enabled
         else None
     )

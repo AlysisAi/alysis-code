@@ -408,6 +408,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.5] - 2026-09-07
+
+### Added
+
+- Ship eight bundled workflow skills: `address-pr-comments`, `code-review`,
+  `commit`, `debug`, `fix-ci`, `release-notes`, `security-review`, and `skill-creator`.
+- Select a relevant skill automatically with a bounded, reasoning-off model call;
+  read its instructions before other task tools, with ordinary routing as fallback.
+- Invoke skills with `$<name> [task]` at an idle chat prompt, with live completion
+  and one-turn attachment. `/skill` remains supported.
+- Add `bundled_skills_enabled` configuration, project and user override precedence,
+  and model-in-loop bundled workflow evaluations with launch-readiness checks.
+
+### Fixed
+
+- Harden skill instruction boundaries, selection ordering, and per-turn cleanup.
+- Preserve resolved skill settings in child agents and restore slash completion.
+- Recognize silent and inline verification results and preserve authoritative
+  verification evidence when supplemental checks run.
+- Bound stalled OpenAI-compatible and Responses streams, including traffic that
+  contains no meaningful progress.
+
 ## [0.13.4] - 2026-09-05
 
 Model-catalog and TUI-access refresh.

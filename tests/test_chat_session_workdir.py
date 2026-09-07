@@ -710,12 +710,12 @@ def test_natural_language_navigation_logs_active_workdir_changes(
         session.close()
 
 
-def test_session_provisions_no_router_client_and_coding_client_keeps_reasoning(
+def test_session_provisions_reasoning_off_skill_selector_and_keeps_coding_reasoning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Router-free path: no router/classification client exists at all, and the
-    # coding client keeps the configured deep-reasoning settings.
+    # Skill selection gets an independent reasoning-off client while the coding
+    # client keeps the configured deep-reasoning settings.
     repo = tmp_path / "repo"
     repo.mkdir(parents=True, exist_ok=True)
     _fake_git_repo(repo)
@@ -744,7 +744,13 @@ def test_session_provisions_no_router_client_and_coding_client_keeps_reasoning(
         # Coding client honors the configured reasoning settings...
         assert session.client.enable_thinking is True
         assert session.client.reasoning_effort == "high"
-        # ...and no router/classification client is provisioned at all.
-        assert session.router_client is None
+        # ...while automatic skill selection remains deterministic at the
+        # sampling layer without inheriting those reasoning settings.
+        assert session.router_client is not None
+        assert session.router_client.temperature == 0.0
+        assert session.router_client.enable_thinking is False
+        assert session.router_client.reasoning_effort == ""
+        assert session._semantic_router_bound_client is session.client
+        assert session._provisioned_router_client is session.router_client
     finally:
         session.close()

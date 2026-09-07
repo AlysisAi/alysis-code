@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-SkillSourceScope = Literal["project", "user"]
-SkillSourceKind = Literal["native", "interop"]
+SkillSourceScope = Literal["project", "user", "bundled"]
+SkillSourceKind = Literal["native", "interop", "bundled"]
 SkillTrustLevel = Literal["untrusted"]
 
 

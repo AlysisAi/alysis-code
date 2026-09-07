@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,8 @@ from rich.console import Console
 
 from alysis_code.agent_loop import build_tools, create_session
 from alysis_code.config import AppConfig
-from alysis_code.llm.openai_compat import LLMResponse
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.request_estimation import estimate_message_tokens
 from alysis_code.session_store import SessionStore
 from alysis_code.skills import (
     SkillBundle,
@@ -31,6 +33,17 @@ from alysis_code.skills.validation import (
     SKILL_ENTRYPOINT_WARNING_CHARS,
     SKILL_NAME_WARNING_CHARS,
 )
+
+_BUNDLED_SKILL_NAMES = {
+    "address-pr-comments",
+    "code-review",
+    "commit",
+    "debug",
+    "fix-ci",
+    "release-notes",
+    "security-review",
+    "skill-creator",
+}
 
 
 def _write_skill(
@@ -88,6 +101,37 @@ class _CaptureClient:
         _ = on_text_delta, temperature
         self.calls.append({"messages": list(messages), "tools": tools, "stream": stream})
         return LLMResponse(content="Done.", tool_calls=[], raw={})
+
+
+class _SkillReadThenDoneCaptureClient(_CaptureClient):
+    def chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        stream: bool = False,
+        on_text_delta=None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        _ = on_text_delta, temperature
+        self.calls.append({"messages": list(messages), "tools": tools, "stream": stream})
+        if len(self.calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="skill-read-1",
+                        name="skill_read",
+                        arguments={"name": "pytest"},
+                    )
+                ],
+                raw={},
+            )
+        return LLMResponse(content="Done.", tool_calls=[], raw={})
+
+
+class _NoToolCaptureClient(_CaptureClient):
+    supports_tool_calling = False
 
 
 def test_discover_skills_respects_ancestor_and_path_family_precedence(tmp_path: Path) -> None:
@@ -245,6 +289,128 @@ def test_discover_skills_project_beats_user_and_user_precedence_is_deterministic
     assert research.source_family == ".claude/skills"
 
 
+def test_discover_skills_includes_bundled_pack_by_default(tmp_path: Path) -> None:
+    discovered = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=tmp_path / "empty-user-config",
+        home_dir=tmp_path / "empty-home",
+    )
+
+    bundled = {skill.name: skill for skill in discovered.ordered if skill.source_scope == "bundled"}
+    assert set(bundled) == _BUNDLED_SKILL_NAMES
+    assert all(skill.source_kind == "bundled" for skill in bundled.values())
+
+
+def test_discover_skills_bundled_kill_switch_removes_exactly_the_pack(tmp_path: Path) -> None:
+    enabled = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=tmp_path / "empty-user-config",
+        home_dir=tmp_path / "empty-home",
+        cfg=AppConfig(model="test-model"),
+    )
+    disabled = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=tmp_path / "empty-user-config",
+        home_dir=tmp_path / "empty-home",
+        cfg=AppConfig(model="test-model", bundled_skills_enabled=False),
+    )
+
+    assert set(enabled.skills) - set(disabled.skills) == _BUNDLED_SKILL_NAMES
+    assert not any(skill.source_scope == "bundled" for skill in disabled.ordered)
+
+
+def test_project_skill_shadows_same_named_bundled_skill(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        ".alysis_skills",
+        "code-review",
+        name="code-review",
+        description="Project-specific review workflow",
+        body="Use the project review workflow.",
+    )
+
+    discovered = discover_skills(
+        focus_path=tmp_path,
+        workspace_root=tmp_path,
+        user_config_dir=tmp_path / "empty-user-config",
+        home_dir=tmp_path / "empty-home",
+    )
+    selected = resolve_skill_by_name(discovered.skills, "code-review")
+
+    assert selected is not None
+    assert selected.source_scope == "project"
+    assert selected.description == "Project-specific review workflow"
+    assert sum(skill.name == "code-review" for skill in discovered.ordered) == 1
+
+
+def test_bundled_skill_entrypoints_are_packaged_resources() -> None:
+    bundled_root = resources.files("alysis_code.skills").joinpath("bundled")
+
+    packaged_names = {
+        name for name in _BUNDLED_SKILL_NAMES if bundled_root.joinpath(name, "SKILL.md").is_file()
+    }
+
+    assert packaged_names == _BUNDLED_SKILL_NAMES
+
+
+def test_bundled_skill_bodies_follow_pack_contract() -> None:
+    bundled_root = resources.files("alysis_code.skills").joinpath("bundled")
+
+    for name in sorted(_BUNDLED_SKILL_NAMES):
+        entrypoint = bundled_root.joinpath(name, "SKILL.md")
+        text = entrypoint.read_text(encoding="utf-8")
+        validation = validate_skill_bundle(Path(str(entrypoint.parent)))
+
+        assert validation.valid, (name, validation.errors)
+        assert text.isascii(), name
+        assert len(text.splitlines()) < 80, name
+        assert "\nUse when:" in text, name
+        assert "\nDo not use when:" in text, name
+        assert len(validation.description) <= SKILL_DESCRIPTION_WARNING_CHARS, name
+
+    debug = validate_skill_bundle(Path(str(bundled_root.joinpath("debug"))))
+    assert debug.description == (
+        "Diagnose, reproduce, fix, and verify a concrete runtime/test failure as a fallback when "
+        "no narrower discovered workflow governs the request."
+    )
+
+    code_review = validate_skill_bundle(Path(str(bundled_root.joinpath("code-review"))))
+    assert "no narrower review workflow is requested" in code_review.description
+
+    address_pr_comments_text = bundled_root.joinpath("address-pr-comments", "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "created during the current task" in address_pr_comments_text
+    assert "Preserve pre-existing and user-provided files" in address_pr_comments_text
+    assert address_pr_comments_text.index(
+        "Remove temporary reproduction artifacts"
+    ) < address_pr_comments_text.index("final focused verification")
+
+    fix_ci_entrypoint = bundled_root.joinpath("fix-ci", "SKILL.md")
+    fix_ci_text = fix_ci_entrypoint.read_text(encoding="utf-8")
+    fix_ci = validate_skill_bundle(Path(str(fix_ci_entrypoint.parent)))
+    assert fix_ci.description.startswith("Use for a failing automated build or repository check")
+    assert "run output/logs" in fix_ci.description
+    assert "created during the current task" in fix_ci_text
+    assert "Preserve pre-existing and user-provided files" in fix_ci_text
+    assert fix_ci_text.index("Remove temporary reproduction artifacts") < fix_ci_text.index(
+        "final authoritative rerun"
+    )
+
+    release_notes = validate_skill_bundle(Path(str(bundled_root.joinpath("release-notes"))))
+    assert "not for conceptual explanations" in release_notes.description
+
+    skill_creator_text = bundled_root.joinpath("skill-creator", "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "created during the current task" in skill_creator_text
+    assert "preserve pre-existing and user-provided files" in skill_creator_text
+    assert "clean those throwaways before final verification" in skill_creator_text
+
+
 def test_discover_skills_skips_malformed_bundles_without_crashing(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -344,6 +510,37 @@ def test_conventions_loader_stays_separate_from_skills(tmp_path: Path) -> None:
     assert [doc.name for doc in conventions] == ["AGENTS.md", "CONVENTIONS.md"]
     assert resolve_skill_by_name(discovered.skills, "python") is not None
     assert all(doc.name.casefold() not in discovered.skills for doc in conventions)
+
+
+def test_conventions_loader_skips_symlinks_outside_workspace(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside-agents.md"
+    outside.write_text("Host-only instructions.\n", encoding="utf-8")
+    (repo / "AGENTS.md").symlink_to(outside)
+    (repo / "CONVENTIONS.md").write_text("Repository instructions.\n", encoding="utf-8")
+
+    conventions = load_repo_conventions(focus_path=repo, workspace_root=repo)
+
+    assert [doc.name for doc in conventions] == ["CONVENTIONS.md"]
+    assert all("Host-only instructions." not in doc.content for doc in conventions)
+
+
+def test_conventions_loader_allows_symlinks_within_workspace(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    rules_dir = repo / "docs"
+    rules_dir.mkdir(parents=True)
+    rules = rules_dir / "agent-rules.md"
+    rules.write_text("Shared repository instructions.\n", encoding="utf-8")
+    link = repo / "AGENTS.md"
+    link.symlink_to(rules)
+
+    conventions = load_repo_conventions(focus_path=repo, workspace_root=repo)
+
+    assert len(conventions) == 1
+    assert conventions[0].name == "AGENTS.md"
+    assert conventions[0].path == link
+    assert conventions[0].content == "Shared repository instructions."
 
 
 def test_match_skills_returns_obvious_positive_and_negative_cases(tmp_path: Path) -> None:
@@ -452,7 +649,12 @@ def test_skill_advertise_and_match_blocks_stay_bounded(tmp_path: Path) -> None:
         )
         for idx in range(8)
     ]
-    advertise = build_skill_advertise_block(skills=skills, max_chars=260, max_items=4)
+    advertise = build_skill_advertise_block(
+        skills=skills,
+        skills_auto_invoke=True,
+        max_chars=260,
+        max_items=4,
+    )
     matches = build_matched_skill_context(
         matches=match_skills("Need skill-1 and skill-2", skills=skills),
         max_chars=220,
@@ -464,6 +666,43 @@ def test_skill_advertise_and_match_blocks_stay_bounded(tmp_path: Path) -> None:
     assert len(advertise) <= 260
     assert len(matches) <= 220
     assert "...(truncated)" in advertise
+
+
+def test_skill_advertise_block_distinguishes_auto_activation_from_manual_access(
+    tmp_path: Path,
+) -> None:
+    skill = SkillBundle(
+        name="pytest",
+        description="Debug pytest failures and stack traces",
+        instructions="Use pytest-focused debugging instructions.",
+        bundle_name="pytest",
+        bundle_path=tmp_path / "pytest",
+        entry_path=tmp_path / "pytest" / "SKILL.md",
+        source_scope="project",
+        source_kind="native",
+        source_family=".alysis_skills",
+        source_path=tmp_path / "pytest",
+        trust_level="untrusted",
+    )
+
+    automatic = build_skill_advertise_block(skills=[skill], skills_auto_invoke=True)
+    manual = build_skill_advertise_block(skills=[skill], skills_auto_invoke=False)
+
+    assert automatic is not None
+    assert manual is not None
+    assert "Compare all descriptions" in automatic
+    assert "requested outcome and workflow" in automatic
+    assert "not shared steps or concept mentions" in automatic
+    assert "honor exclusions" in automatic
+    assert "narrowest fit" in automatic
+    assert "broad skills are fallbacks" in automatic
+    assert "call skill_read(name) before any other task action" in automatic
+    assert "otherwise continue without a skill" in automatic
+    assert "skill_read only loads instructions; it never executes them" in automatic
+    assert "Use skill_read(name, path)" in automatic
+    assert "optional attachable context" not in automatic
+    assert "Skills are optional attachable context" in manual
+    assert "Compare all descriptions" not in manual
 
 
 def test_build_explicit_skill_context_substitutes_argument_placeholders() -> None:
@@ -745,6 +984,11 @@ def test_create_session_adds_skill_advertise_and_separate_repo_conventions(tmp_p
     assert skill_blocks
     assert convention_blocks
     assert "Work on Python code" in skill_blocks[0]
+    assert "Compare all descriptions" in skill_blocks[0]
+    assert "requested outcome and workflow" in skill_blocks[0]
+    assert "broad skills are fallbacks" in skill_blocks[0]
+    assert "call skill_read(name) before any other task action" in skill_blocks[0]
+    assert "optional attachable context" not in skill_blocks[0]
     assert "Deep Python instructions" not in skill_blocks[0]
     assert "AGENTS.md" in convention_blocks[0]
 
@@ -873,6 +1117,10 @@ def test_run_turn_explicit_skill_context_is_request_only(tmp_path: Path) -> None
         and str(message.get("content") or "") == "Explain the Python workflow."
         for message in request_messages
     )
+    assert not any(
+        "Before the first task tool" in str(message.get("content") or "")
+        for message in request_messages
+    )
 
 
 def test_run_turn_does_not_auto_attach_matched_skill_context_when_auto_invoke_disabled(
@@ -913,6 +1161,10 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_auto_invoke_di
         "<matched_skill_context>" in str(message.get("content") or "")
         for message in client.calls[0]["messages"]
     )
+    assert not any(
+        "Before the first task tool" in str(message.get("content") or "")
+        for message in client.calls[0]["messages"]
+    )
 
 
 def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
@@ -936,11 +1188,11 @@ def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=1,
+        max_steps=2,
         no_log=True,
         api_key_override="override-key",
     )
-    client = _CaptureClient()
+    client = _SkillReadThenDoneCaptureClient()
     session.client = client  # type: ignore[assignment]
     try:
         exit_code = session.run_turn("Debug the pytest failure in parser.py.")
@@ -949,14 +1201,55 @@ def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
 
     assert exit_code == 0
     assert session.skills_auto_invoke is True
-    assert any(
-        "<skill_context>" in str(message.get("content") or "")
-        for message in client.calls[0]["messages"]
+    assert len(client.calls) == 2
+    first_request = client.calls[0]["messages"]
+    second_request = client.calls[1]["messages"]
+    skill_context_index = next(
+        index
+        for index, message in enumerate(first_request)
+        if "<skill_context>" in str(message.get("content") or "")
+    )
+    task_index = next(
+        index
+        for index, message in enumerate(first_request)
+        if str(message.get("content") or "") == "Debug the pytest failure in parser.py."
+    )
+    reminder_indexes = [
+        index
+        for index, message in enumerate(first_request)
+        if "Before the first task tool" in str(message.get("content") or "")
+    ]
+
+    assert skill_context_index < task_index < reminder_indexes[0]
+    assert len(reminder_indexes) == 1
+    assert first_request[reminder_indexes[0]]["role"] == "system"
+    assert "First call skill_read(name)" in str(
+        first_request[reminder_indexes[0]].get("content") or ""
+    )
+    reminder = str(first_request[reminder_indexes[0]].get("content") or "")
+    assert "compare all skills with the requested outcome and workflow" in reminder
+    assert "not shared steps" in reminder
+    assert "Honor exclusions" in reminder
+    assert "narrowest fit without its broad fallback" in reminder
+    assert estimate_message_tokens([first_request[reminder_indexes[0]]]) <= 60
+    assert not any(
+        "Before the first task tool" in str(message.get("content") or "")
+        for message in second_request
     )
     assert not any(
-        "<matched_skill_context>" in str(message.get("content") or "")
-        for message in client.calls[0]["messages"]
+        "<matched_skill_context>" in str(message.get("content") or "") for message in first_request
     )
+    skill_read_schema = next(
+        tool
+        for tool in client.calls[0]["tools"] or []
+        if str(tool.get("function", {}).get("name") or "") == "skill_read"
+    )
+    skill_read_description = str(skill_read_schema["function"].get("description") or "")
+    assert "With automatic skill selection" in skill_read_description
+    assert "requested actions" in skill_read_description
+    assert "concept mentions" in skill_read_description
+    assert "most specific" in skill_read_description
+    assert "before any other task tool" in skill_read_description
 
 
 def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disabled(
@@ -995,6 +1288,51 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disable
     assert exit_code == 0
     assert not any(
         "<matched_skill_context>" in str(message.get("content") or "")
+        for message in client.calls[0]["messages"]
+    )
+    assert not any(
+        "Before the first task tool" in str(message.get("content") or "")
+        for message in client.calls[0]["messages"]
+    )
+
+
+def test_run_turn_omits_auto_skill_reminder_when_provider_cannot_call_tools(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path,
+        ".alysis_skills",
+        "pytest",
+        name="pytest",
+        description="Debug pytest failures and stack traces",
+        body="Use pytest-focused debugging instructions.",
+    )
+    session = create_session(
+        cfg=AppConfig(
+            model="test-model",
+            web_search_mode="off",
+            routing_mode="code_only",
+            skills_enabled=True,
+            skills_auto_invoke=True,
+        ),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=1,
+        no_log=True,
+        api_key_override="override-key",
+    )
+    client = _NoToolCaptureClient()
+    session.client = client  # type: ignore[assignment]
+    try:
+        exit_code = session.run_turn("Debug the pytest failure in parser.py.")
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert client.calls[0]["tools"] is None
+    assert not any(
+        "Before the first task tool" in str(message.get("content") or "")
         for message in client.calls[0]["messages"]
     )
 

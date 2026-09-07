@@ -1,0 +1,9 @@
+diff --git a/src/calculator.py b/src/calculator.py
+--- a/src/calculator.py
++++ b/src/calculator.py
+@@ -1,2 +1,5 @@
+ def average(total: float, count: int) -> float:
+-    return total / count
++    if count < 0:
++        raise ValueError("count must be positive")
++    return total / count

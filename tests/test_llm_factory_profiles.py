@@ -611,6 +611,8 @@ def test_make_llm_client_routes_openai_responses_to_native_client() -> None:
         )
     )
     cfg.llm_reasoning_effort = "low"
+    cfg.llm_stream_no_progress_timeout_s = 12.5
+    cfg.subagent_orchestration.inflight_deadline_grace_s = 3.0
     cfg.web_search_mode = "native"
 
     client = make_llm_client(cfg=cfg, api_key="key", model="gpt-test")
@@ -620,6 +622,8 @@ def test_make_llm_client_routes_openai_responses_to_native_client() -> None:
     assert client.base_url == "https://api.openai.com/v1"
     assert client.extra_headers == {"x-test": "yes"}
     assert client.reasoning_effort == "low"
+    assert client.stream_no_progress_timeout_s == 12.5
+    assert client.inflight_deadline_grace_s == 3.0
     assert client.usage_contract.response_usage_authoritative is True
     assert client.usage_contract.supports_input_token_count is True
     assert client.web_search_mode == "native"

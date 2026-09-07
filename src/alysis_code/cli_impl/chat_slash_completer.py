@@ -173,6 +173,15 @@ class ChatSlashCompleter(Completer):
     def get_completions(self, document: Any, complete_event: Any) -> Iterable[Completion]:
         del complete_event
         text = str(getattr(document, "text_before_cursor", "") or "")
+        if text.startswith("$"):
+            completions = self._matching_dollar_skill_completions(text)
+            for spec in completions:
+                yield Completion(
+                    text=spec.completion,
+                    start_position=-len(text),
+                    display=_completion_display(spec.usage, spec.description),
+                )
+            return
         if not text.startswith("/"):
             return
         completions = self._matching_completions(text)
@@ -190,6 +199,16 @@ class ChatSlashCompleter(Completer):
         exact = [entry for entry in matches if entry.completion.lower() == text_lower]
         inexact = [entry for entry in matches if entry.completion.lower() != text_lower]
         return [*exact, *inexact]
+
+    def _matching_dollar_skill_completions(self, text: str) -> list[_ChatSlashCompletionSpec]:
+        if any(char.isspace() for char in text):
+            return []
+        text_lower = text.casefold()
+        return [
+            entry
+            for entry in self._skill_name_entries(prefix="$")
+            if entry.completion.casefold().startswith(text_lower)
+        ]
 
     def _completion_entries_for_text(self, text: str) -> list[_ChatSlashCompletionSpec]:
         if " " not in text[1:]:
@@ -216,17 +235,16 @@ class ChatSlashCompleter(Completer):
             entries.extend(_FORGE_NESTED_SPECS)
         else:
             entries.extend(_CHAT_NESTED_SPECS)
-        lower = text.lower()
-        if lower.startswith("/skill "):
-            entries.extend(self._skill_name_entries())
+        if text.lower().startswith("/skill "):
+            entries.extend(self._skill_name_entries(prefix="/skill "))
         return entries
 
-    def _skill_name_entries(self) -> list[_ChatSlashCompletionSpec]:
+    def _skill_name_entries(self, *, prefix: str) -> list[_ChatSlashCompletionSpec]:
         names = self._safe_names(self._skill_names_provider)
         return [
             _ChatSlashCompletionSpec(
-                completion=f"/skill {name}",
-                usage=f"/skill {name} [task]",
+                completion=f"{prefix}{name}",
+                usage=f"{prefix}{name} [task]",
                 description="Show skill info or attach it for one turn",
             )
             for name in names

@@ -1268,11 +1268,8 @@ def _verification_attempt_passed(
     tool_name: str,
     status: str,
     result: dict[str, Any],
-    evidence: VerificationEvidence | None = None,
 ) -> bool:
     if status == "failed":
-        return False
-    if evidence is not None and not evidence.allowed_to_satisfy_contract:
         return False
     normalized_tool = tool_name.strip().lower()
     touched_repo_paths = result.get("material_touched_repo_paths", result.get("touched_repo_paths"))
@@ -1409,21 +1406,18 @@ def _record_verify_run_command_outcomes(
     state: TurnExecutionState,
     result: dict[str, Any],
     known_verification_commands: list[str] | None,
+    evidence_records: list[VerificationEvidence],
 ) -> None:
+    allowed_coverage = {
+        command
+        for record in evidence_records
+        if record.allowed_to_satisfy_contract
+        for command in record.covered_verification_commands
+    }
     command_results = result.get("command_results")
     if not isinstance(command_results, list):
         if result.get("all_passed") is True:
-            commands = result.get("commands")
-            if isinstance(commands, list):
-                covered: set[str] = set()
-                for command in commands:
-                    covered.update(
-                        _matching_effective_verification_commands(
-                            observed_command=str(command),
-                            effective_verification_commands=known_verification_commands,
-                        )
-                    )
-                state.record_verification_coverage(covered)
+            state.record_verification_coverage(allowed_coverage)
         return
 
     covered: set[str] = set()
@@ -1448,7 +1442,7 @@ def _record_verify_run_command_outcomes(
         if not matches:
             continue
         if _verification_command_result_passed(item):
-            covered.update(matches)
+            covered.update(matches.intersection(allowed_coverage))
             continue
         snippet = _verification_command_result_snippet(item)
         for command in matches:
@@ -1467,20 +1461,19 @@ def _record_shell_verification_command_outcome(
     passed: bool,
     evidence: VerificationEvidence | None = None,
 ) -> None:
-    matches = (
+    allowed_matches = (
         set(evidence.covered_verification_commands)
         if evidence is not None and evidence.allowed_to_satisfy_contract
         else set()
     )
-    if not matches:
-        matches = _matching_effective_verification_commands(
-            observed_command=str(result.get("effective_cmd") or arguments.get("cmd") or ""),
-            effective_verification_commands=known_verification_commands,
-        )
-    if not matches:
-        return
     if passed:
-        state.record_verification_coverage(matches)
+        state.record_verification_coverage(allowed_matches)
+        return
+    matches = allowed_matches or _matching_effective_verification_commands(
+        observed_command=str(result.get("effective_cmd") or arguments.get("cmd") or ""),
+        effective_verification_commands=known_verification_commands,
+    )
+    if not matches:
         return
     output = "\n".join(
         [
@@ -1693,21 +1686,21 @@ def _verification_evidence_observation(
     evidence: VerificationEvidence,
     result: dict[str, Any],
 ) -> tuple[int | None, bool]:
-    def _has_output(payload: dict[str, Any]) -> bool:
+    def _observed_output_capture(payload: dict[str, Any]) -> bool:
         if any(
-            str(payload.get(key) or "").strip()
+            key in payload and isinstance(payload.get(key), str)
             for key in ("output", "output_preview", "stdout", "stderr")
         ):
             return True
         output_chars = payload.get("output_chars")
-        return isinstance(output_chars, int) and output_chars > 0
+        return isinstance(output_chars, int) and output_chars >= 0
 
     normalized_tool = tool_name.strip().casefold()
     if normalized_tool == "shell_run":
         exit_code = result.get("exit_code")
         return (
             exit_code if isinstance(exit_code, int) else None,
-            _has_output(result),
+            _observed_output_capture(result),
         )
 
     if normalized_tool == "verify_run":
@@ -1730,13 +1723,13 @@ def _verification_evidence_observation(
                 exit_code = raw_item.get("exit_code")
                 return (
                     exit_code if isinstance(exit_code, int) else None,
-                    _has_output(raw_item),
+                    _observed_output_capture(raw_item),
                 )
         all_passed = result.get("all_passed")
         exit_code = 0 if all_passed is True else 1 if all_passed is False else None
         return (
             exit_code,
-            _has_output(result),
+            _observed_output_capture(result),
         )
 
     return None, False
@@ -2266,12 +2259,23 @@ def _record_tool_effect(
 
     state.verification_attempt_count += 1
     state.verification_tools.add(normalized_tool)
-    state.last_verification_passed = _verification_attempt_passed(
+    attempt_physically_passed = _verification_attempt_passed(
         tool_name=normalized_tool,
         status=status,
         result=result,
-        evidence=evidence,
     )
+    any_allowed_evidence = any(record.allowed_to_satisfy_contract for record in evidence_records)
+    all_evidence_is_supplemental = bool(evidence_records) and all(
+        record.supplemental_only for record in evidence_records
+    )
+    preserve_prior_verification_outcome = bool(
+        attempt_physically_passed and not any_allowed_evidence and all_evidence_is_supplemental
+    )
+    # A successful supplemental check is additional telemetry, not a newer contract
+    # verdict. Preserve the last decisive outcome and its paired metadata; a failed
+    # supplemental check still contradicts an earlier pass below.
+    if not preserve_prior_verification_outcome:
+        state.last_verification_passed = bool(attempt_physically_passed and any_allowed_evidence)
     for record in evidence_records:
         observed_exit_code, observed_output = _verification_evidence_observation(
             tool_name=normalized_tool,
@@ -2280,9 +2284,7 @@ def _record_tool_effect(
         )
         state.record_verification_evidence(
             record,
-            accepted=(
-                state.last_verification_passed is True and record.allowed_to_satisfy_contract
-            ),
+            accepted=bool(attempt_physically_passed and record.allowed_to_satisfy_contract),
             observed_exit_code=observed_exit_code,
             observed_output=observed_output,
         )
@@ -2297,16 +2299,18 @@ def _record_tool_effect(
     # Baseline-first regression protocol (step 3): remember whether this
     # verification attempt ran a test-runner command, so the gate can clear a
     # non-contract all-pre-existing test failure without masking a non-test one.
-    state.last_verification_attempt_was_test_run = _verification_attempt_executed_test_runner(
-        tool_name=normalized_tool,
-        arguments=arguments,
-        result=result,
-    )
+    if not preserve_prior_verification_outcome:
+        state.last_verification_attempt_was_test_run = _verification_attempt_executed_test_runner(
+            tool_name=normalized_tool,
+            arguments=arguments,
+            result=result,
+        )
     if normalized_tool == "verify_run":
         _record_verify_run_command_outcomes(
             state=state,
             result=result,
             known_verification_commands=known_verification_commands,
+            evidence_records=evidence_records,
         )
     elif normalized_tool == "shell_run":
         _record_shell_verification_command_outcome(
@@ -2314,10 +2318,12 @@ def _record_tool_effect(
             arguments=arguments,
             result=result,
             known_verification_commands=known_verification_commands,
-            passed=state.last_verification_passed is True,
+            passed=attempt_physically_passed,
             evidence=evidence,
         )
 
+    if preserve_prior_verification_outcome:
+        return
     if state.last_verification_passed is True:
         state.last_verification_failure_category = ""
         if not state.failed_verification_commands():

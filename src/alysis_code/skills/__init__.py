@@ -1,5 +1,10 @@
 from .conventions import load_repo_conventions, render_repo_conventions_context
-from .discovery import discover_skills, resolve_skill_by_name, resolve_skills_enabled
+from .discovery import (
+    discover_skills,
+    resolve_bundled_skills_enabled,
+    resolve_skill_by_name,
+    resolve_skills_enabled,
+)
 from .install import (
     SkillInstallResult,
     SkillRemoveResult,
@@ -16,6 +21,7 @@ from .models import (
     SkillMatch,
 )
 from .paths import (
+    bundled_skill_root,
     global_managed_skill_root,
     global_skills_state_path,
     project_managed_skill_root,
@@ -30,6 +36,18 @@ from .prompting import (
     render_skill_info_text,
 )
 from .scaffold import SkillScaffoldResult, scaffold_skill_bundle
+from .selection import (
+    SKILL_SELECTION_MAX_CANDIDATES,
+    SKILL_SELECTION_MAX_SELECTED,
+    SKILL_SELECTION_TASK_MAX_CHARS,
+    SkillSelectionCandidate,
+    SkillSelectionRequest,
+    SkillSelectionResult,
+    SkillSelectionStatus,
+    build_skill_selection_request,
+    parse_skill_selection_response,
+    unavailable_skill_selection,
+)
 from .state import (
     ManagedSkillRecord,
     SkillCatalog,
@@ -55,6 +73,9 @@ __all__ = [
     "ConventionDocument",
     "DiscoveredSkills",
     "ManagedSkillRecord",
+    "SKILL_SELECTION_MAX_CANDIDATES",
+    "SKILL_SELECTION_MAX_SELECTED",
+    "SKILL_SELECTION_TASK_MAX_CHARS",
     "SkillBundle",
     "SkillCatalog",
     "SkillCatalogEntry",
@@ -67,11 +88,17 @@ __all__ = [
     "SkillReadError",
     "SkillRemoveResult",
     "SkillScaffoldResult",
+    "SkillSelectionCandidate",
+    "SkillSelectionRequest",
+    "SkillSelectionResult",
+    "SkillSelectionStatus",
     "SkillValidationIssue",
     "SkillValidationResult",
     "build_explicit_skill_context_message",
     "build_matched_skill_context",
     "build_skill_advertise_block",
+    "build_skill_selection_request",
+    "bundled_skill_root",
     "discover_skills",
     "global_managed_skill_root",
     "global_skills_state_path",
@@ -85,10 +112,12 @@ __all__ = [
     "project_managed_skill_root",
     "project_skill_root_for_family",
     "project_skills_state_path",
+    "parse_skill_selection_response",
     "read_skill_bundle_file",
     "render_repo_conventions_context",
     "render_skill_info_text",
     "remove_managed_skill",
+    "resolve_bundled_skills_enabled",
     "resolve_managed_bundle_path",
     "resolve_skill_by_name",
     "resolve_skill_catalog",
@@ -100,5 +129,6 @@ __all__ = [
     "set_global_skill_disabled",
     "set_project_skill_override",
     "skill_bundle_dir_name",
+    "unavailable_skill_selection",
     "validate_skill_bundle",
 ]

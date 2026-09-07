@@ -1125,10 +1125,10 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
             "models": {
                 "resolver-model": {
                     # Sized to stay one notch above the minimal truncation tier so
-                    # omission notes are still emitted; rebased (+256) after the
-                    # tool-necessity/artifact-reporting norms grew the fixed prompt
-                    # overhead. The scenario stays budget-tight by construction.
-                    "context_window_tokens": 8448,
+                    # omission notes are still emitted. Reserve room for the
+                    # bundled skill catalog in the fixed prompt overhead; the
+                    # oversized plan still forces execution-priority reduction.
+                    "context_window_tokens": 9472,
                     "max_output_tokens": 2048,
                     "supports_vision": False,
                 }

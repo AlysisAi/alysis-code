@@ -733,6 +733,11 @@ def _apply_chat_persona(
     if prepared_client is not None and prepared_client_key is not None:
         session.client = prepared_client
         session.persona_client_key = prepared_client_key
+        # This is a session-owned main-client transition, so keep the dedicated
+        # selector bound to the new legitimate client. External embedders that
+        # replace only ``session.client`` still trip the turn-time stale guard.
+        if hasattr(session, "_semantic_router_bound_client"):
+            session._semantic_router_bound_client = prepared_client
     if target_mode != current_mode or scope_changed:
         # The rebuild inside _apply_chat_effective_mode re-reads the session's
         # allow_write_globs, so a scope-only change still needs it.
@@ -1073,6 +1078,7 @@ _RELOAD_CLIENT_FIELDS = (
     "api_key",
     "model",
     "timeout_s",
+    "stream_no_progress_timeout_s",
     "temperature",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -1114,6 +1120,7 @@ def _reload_snapshot_value(value: Any) -> Any:
 def _reload_clients(session: Any) -> list[Any]:
     candidates = [
         getattr(session, "client", None),
+        getattr(session, "router_client", None),
         getattr(
             getattr(session, "conversation_compactor", None),
             "compactor_client",
@@ -1188,6 +1195,10 @@ def _apply_config_menu_changes_to_session(*, session: Any, cfg: AppConfig) -> No
 
 
 def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConfig) -> None:
+    from ...agent.session import (
+        _SKILL_SELECTOR_TIMEOUT_S,
+        _skill_selector_provider_retry_settings,
+    )
     from ...config import (
         ConfigError,
         clone_cfg,
@@ -1218,6 +1229,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     from ...model_router import (
         ROLE_CODING,
         ROLE_COMPACTOR,
+        ROLE_ROUTER,
         resolve_model_for_role,
     )
     from ...profile_presets import find_preset_for_profile
@@ -1269,6 +1281,9 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         role: str,
         temperature: float | None = None,
         disable_reasoning: bool = False,
+        timeout_override_s: float | None = None,
+        stream_no_progress_timeout_override_s: float | None = None,
+        disable_retries: bool = False,
     ) -> None:
         existing_route_identity = getattr(client, "route_identity", None)
         client.base_url = effective_base_url
@@ -1276,7 +1291,11 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             client.provider_auth = provider_auth
         client.api_key = session.api_key
         client.model = model
-        client.timeout_s = timeout_s
+        client.timeout_s = timeout_s if timeout_override_s is None else timeout_override_s
+        if stream_no_progress_timeout_override_s is not None and hasattr(
+            client, "stream_no_progress_timeout_s"
+        ):
+            client.stream_no_progress_timeout_s = stream_no_progress_timeout_override_s
         if temperature is not None:
             client.temperature = temperature
         provider_key = resolve_model_provider_key(
@@ -1404,15 +1423,12 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
                     clear_cached_content = getattr(cached_content_by_signature, "clear", None)
                     if callable(clear_cached_content):
                         clear_cached_content()
-        # The router/classification client is built reasoning-off in session.py so
-        # latency-sensitive routing/non-repo turns stay fast on slow reasoning
-        # models (e.g. Xiaomi MiMo via the trial proxy). Re-applying the
-        # session-wide reasoning settings here would silently re-enable that
-        # chain-of-thought and reintroduce the timeout->clarification-fallback bug,
-        # so honor disable_reasoning for that client.
+        # The automatic-skill selector is built reasoning-off in session.py.
+        # Re-applying session-wide reasoning settings here would silently make
+        # selection inherit the main client's latency, so preserve that contract.
         if disable_reasoning:
             client.enable_thinking = False
-            client.reasoning_effort = None
+            client.reasoning_effort = ""
         else:
             client.enable_thinking = enable_thinking
             client.reasoning_effort = reasoning_effort
@@ -1438,7 +1454,11 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         if hasattr(client, "provider_concurrency_caps"):
             client.provider_concurrency_caps = dict(session.cfg.provider_concurrency_caps)
         if hasattr(client, "provider_retry_settings"):
-            client.provider_retry_settings = provider_retry_settings
+            client.provider_retry_settings = (
+                _skill_selector_provider_retry_settings(session.cfg)
+                if disable_retries
+                else provider_retry_settings
+            )
 
     client = getattr(session, "client", None)
     if client is not None:
@@ -1447,6 +1467,29 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             model=str(session.cfg.model or ""),
             role=ROLE_CODING,
             temperature=coding_temperature,
+        )
+
+    router_client = getattr(session, "router_client", None)
+    if router_client is not None:
+        selector_timeout_s = min(timeout_s, _SKILL_SELECTOR_TIMEOUT_S)
+        selector_stream_timeout_s = min(
+            float(session.cfg.llm_stream_no_progress_timeout_s),
+            selector_timeout_s,
+        )
+        router_model = resolve_model_for_role(
+            cfg=session.cfg,
+            role=ROLE_ROUTER,
+            plan=None,
+        )
+        _apply_client_config(
+            router_client,
+            model=router_model,
+            role=ROLE_ROUTER,
+            temperature=0.0,
+            disable_reasoning=True,
+            disable_retries=True,
+            timeout_override_s=selector_timeout_s,
+            stream_no_progress_timeout_override_s=selector_stream_timeout_s,
         )
 
     compactor = getattr(session, "conversation_compactor", None)
@@ -1557,6 +1600,13 @@ def _handle_chat_command(*args: Any, **kwargs: Any) -> Any:
 
     _commands._sync_command_globals(globals())
     return _commands._handle_chat_command(*args, **kwargs)
+
+
+def _handle_idle_skill_invocation(*args: Any, **kwargs: Any) -> Any:
+    from . import commands as _commands
+
+    _commands._sync_command_globals(globals())
+    return _commands._handle_idle_skill_invocation(*args, **kwargs)
 
 
 def _handle_forge_chat_command(*args: Any, **kwargs: Any) -> Any:
@@ -2622,7 +2672,7 @@ def chat(
                         plan_mode_action_prompt = _tui_plan_mode_action_prompt
                     try:
                         _sys.stdin = _io.StringIO("")
-                        result = _handle_chat_command(
+                        idle_skill_result = _handle_idle_skill_invocation(
                             input_text=text,
                             root=focus_path,
                             session=sess,
@@ -2632,6 +2682,21 @@ def chat(
                             plan_mode_state=_tui_plan_state,
                             plan_mode_escape_supported=False,
                             plan_mode_action_prompt=plan_mode_action_prompt,
+                        )
+                        result = (
+                            idle_skill_result
+                            if idle_skill_result is not None
+                            else _handle_chat_command(
+                                input_text=text,
+                                root=focus_path,
+                                session=sess,
+                                pending_images=[],
+                                console=cap,
+                                forge_state=_tui_forge_state,
+                                plan_mode_state=_tui_plan_state,
+                                plan_mode_escape_supported=False,
+                                plan_mode_action_prompt=plan_mode_action_prompt,
+                            )
                         )
                     except Exception as _cmd_exc:  # noqa: BLE001
                         return ("handled", f"Command error: {_cmd_exc}", None, None)
@@ -3928,7 +3993,7 @@ def chat(
                 console.print("")
                 return
 
-            command_result = _handle_chat_command(
+            command_result = _handle_idle_skill_invocation(
                 input_text=user_msg,
                 root=focus_path,
                 session=session,
@@ -3938,6 +4003,17 @@ def chat(
                 plan_mode_state=plan_mode_state,
                 plan_mode_escape_supported=prompt_session is not None,
             )
+            if command_result is None:
+                command_result = _handle_chat_command(
+                    input_text=user_msg,
+                    root=focus_path,
+                    session=session,
+                    pending_images=pending_images,
+                    console=console,
+                    forge_state=forge_state,
+                    plan_mode_state=plan_mode_state,
+                    plan_mode_escape_supported=prompt_session is not None,
+                )
             if command_result == "exit":
                 return
             if command_result == "handled":

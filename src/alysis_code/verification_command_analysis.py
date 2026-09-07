@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 from .config import (
+    VERIFY_PYTHON_LAUNCHER_RE,
     normalize_verify_module_invocation,
     split_verify_command_parts,
     strip_verify_runner_prefix,
@@ -80,11 +81,41 @@ class VerificationCommandAnalysis:
             and self.evidentiary_capability == VerificationCommandEvidentiaryCapability.ASSERTIVE
         )
 
+    @property
+    def uses_opaque_inline_code(self) -> bool:
+        """Whether a non-shell interpreter receives opaque inline source."""
+        return _command_uses_opaque_inline_code(self.normalized_command)
+
 
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 _SHELL_CONTROL_TOKENS = {"||", "&&", ";", "|", "&"}
 _SHELL_WRAPPER_HEADS = {"bash", "sh", "zsh"}
+_SHELL_CLUSTERABLE_SHORT_OPTIONS = frozenset("abcefhiklmnprstuvxBCEHPT")
 _PYTHON_EXECUTABLES = {"python", "python3", "py"}
+_INTERPRETER_INLINE_CODE_OPTIONS = {
+    "bash": {"-c"},
+    "node": {"-e", "--eval", "-p", "--print"},
+    "python": {"-c"},
+    "python3": {"-c"},
+    "py": {"-c"},
+    "r": {"-e", "--expression"},
+    "rscript": {"-e", "--expression"},
+    "ruby": {"-e", "--eval"},
+    "sh": {"-c"},
+    "zsh": {"-c"},
+}
+_INTERPRETER_OPTIONS_WITH_SEPARATE_VALUES = {
+    "bash": {"-o", "-O"},
+    "node": {"-r", "--require", "--import", "--loader"},
+    "python": {"-W", "-X", "--check-hash-based-pycs"},
+    "python3": {"-W", "-X", "--check-hash-based-pycs"},
+    "py": {"-W", "-X", "--check-hash-based-pycs"},
+    "r": {"-f", "--file"},
+    "rscript": {"-f", "--file"},
+    "ruby": {"-C", "-I", "-r"},
+    "sh": {"-o"},
+    "zsh": {"-o"},
+}
 _VACUOUS_SUCCESS_HEADS = {"true", ":"}
 _OBSERVATION_HEADS = {
     "cat",
@@ -937,6 +968,8 @@ def _interpreter_script_path(parts: list[str]) -> str | None:
     tail = parts[1:]
     if not tail or tail[0].casefold() in _META_OPTIONS:
         return None
+    if _interpreter_uses_inline_code(head, tail):
+        return None
     if head in _PYTHON_EXECUTABLES and tail[0] == "-m":
         return None
     for item in tail:
@@ -945,6 +978,80 @@ def _interpreter_script_path(parts: list[str]) -> str | None:
         if _is_repo_local_path(item):
             return item
     return None
+
+
+def _interpreter_uses_inline_code(head: str, tail: list[str]) -> bool:
+    inline_options = _INTERPRETER_INLINE_CODE_OPTIONS.get(head, set())
+    options_with_values = _INTERPRETER_OPTIONS_WITH_SEPARATE_VALUES.get(head, set())
+    index = 0
+    while index < len(tail):
+        token = tail[index]
+        if token == "--" or token == "-" or not token.startswith("-"):
+            return False
+        if token in inline_options:
+            return True
+        if head in _SHELL_WRAPPER_HEADS and _shell_short_options_use_inline_code(token):
+            return True
+        if head == "ruby" and _ruby_short_options_use_inline_code(token):
+            return True
+        if any(
+            token.startswith(f"{option}=")
+            or (option.startswith("-") and not option.startswith("--") and token.startswith(option))
+            for option in inline_options
+        ):
+            return True
+        if token in options_with_values:
+            index += 2
+            continue
+        index += 1
+    return False
+
+
+def _command_uses_opaque_inline_code(command: str, *, depth: int = 0) -> bool:
+    if depth > 4:
+        return False
+    parts = split_verify_command_parts(command) or []
+    for index, token in enumerate(parts):
+        if _ENV_ASSIGNMENT_RE.fullmatch(token):
+            continue
+        head = _command_head(token)
+        if VERIFY_PYTHON_LAUNCHER_RE.fullmatch(head):
+            head = "python"
+        if head not in _INTERPRETER_INLINE_CODE_OPTIONS:
+            continue
+        tail = parts[index + 1 :]
+        if not _interpreter_uses_inline_code(head, tail):
+            return False
+        if head not in _SHELL_WRAPPER_HEADS:
+            return True
+        for option_index, option in enumerate(tail):
+            if option == "-c" or _shell_short_options_use_inline_code(option):
+                source = tail[option_index + 1] if option_index + 1 < len(tail) else ""
+                return _command_uses_opaque_inline_code(source, depth=depth + 1)
+        return False
+    return False
+
+
+def _shell_short_options_use_inline_code(token: str) -> bool:
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    cluster = token[1:]
+    return (
+        "c" in cluster
+        and bool(cluster)
+        and all(option in _SHELL_CLUSTERABLE_SHORT_OPTIONS for option in cluster)
+    )
+
+
+def _ruby_short_options_use_inline_code(token: str) -> bool:
+    if not token.startswith("-") or token.startswith("--"):
+        return False
+    for option in token[1:]:
+        if option == "e":
+            return True
+        if option in {"0", "C", "E", "F", "I", "K", "T", "W", "r"}:
+            return False
+    return False
 
 
 def _is_repo_local_path(path: str) -> bool:
