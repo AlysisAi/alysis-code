@@ -408,6 +408,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.6.2] - 2026-09-08
+
+### Fixed
+
+- **Alysis Code account setup and configuration use subscription controls.**
+  Setup identifies the Alysis Code endpoint without the retired MiMo label.
+  Hosted profiles show Alysis Code subscription access and account sign-in,
+  reconnect, and disconnect controls instead of an API-key editor.
+- **Hosted model changes no longer ask for a base URL.** The managed endpoint
+  stays in place through model selection and back navigation. Custom and BYOK
+  providers keep their endpoint settings.
+- **Switching to an Alysis Code account keeps the correct connection.** Signing
+  in refreshes the full active profile before configuration is saved, preventing
+  the previous provider's URL from overwriting the hosted endpoint. Login also
+  switches back to the native agent from a selected delegated runtime. Account
+  status reflects the Alysis login, including after logout when an unrelated
+  provider key is still saved.
+
 ## [0.13.6.1] - 2026-09-08
 
 ### Fixed

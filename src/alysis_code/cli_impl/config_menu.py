@@ -227,6 +227,7 @@ class ConfigMenuState:
     _provider_models_cache_identity: tuple[str, str, str] | None = field(default=None, repr=False)
     _provider_models_cache: tuple[ProviderModelOption, ...] = field(default=(), repr=False)
     _provider_model_catalog_warning: str = field(default="", repr=False)
+    _account_changed: bool = field(default=False, repr=False)
     _original: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -1115,7 +1116,9 @@ class ConfigMenuState:
         return ConfigMenuResult(
             saved=True,
             changes=changes,
-            api_key_changed=bool(self.new_api_key.strip() or self.clear_stored_key_confirmed),
+            api_key_changed=bool(
+                self.new_api_key.strip() or self.clear_stored_key_confirmed or self._account_changed
+            ),
         )
 
     def validate(self) -> str | None:
@@ -1309,7 +1312,9 @@ def run_config_menu(
             if result.saved or result.error is None:
                 return result
         elif action == "cancel" and _confirm_cancel_when_dirty(state, console):
-            return ConfigMenuResult(saved=False, changes={}, api_key_changed=False)
+            return ConfigMenuResult(
+                saved=state._account_changed, changes={}, api_key_changed=state._account_changed
+            )
 
 
 def _resolve_console() -> Console:
@@ -1317,6 +1322,8 @@ def _resolve_console() -> Console:
 
 
 def _execution_summary_text(state: ConfigMenuState) -> str:
+    if _active_alysis_profile(state) is not None:
+        return "Alysis Code subscription"
     if state.execution_backend == "native":
         return "API key · Alysis Code agent"
     runtime = str(state.execution_runtime or "").strip()
@@ -1324,6 +1331,25 @@ def _execution_summary_text(state: ConfigMenuState) -> str:
         return _MISSING_RUNTIME
     labels = {value: label for value, label, _description in _runtime_setup_rows()}
     return f"AI subscription · {labels.get(runtime, runtime)}"
+
+
+def _active_alysis_profile(state: ConfigMenuState) -> ProfileSpec | None:
+    """Recognize hosted account access by its effective endpoint, not its model or key."""
+    from .. import alysis_cloud
+
+    if state.execution_backend != "native" or state.active_profile not in state.profiles:
+        return None
+    profile = ProfileSpec.from_dict(state.active_profile, state.profiles[state.active_profile])
+    if profile.auth_provider or profile.protocol != OPENAI_COMPAT_PROTOCOL:
+        return None
+    effective_url = str(state.fields.get("base_url") or profile.base_url).strip().rstrip("/")
+    preset = next(p for p in PROFILE_PRESETS if p.key == alysis_cloud.PROFILE_KEY)
+    hosted_urls = {preset.base_url.strip().rstrip("/")}
+    try:
+        hosted_urls.add(alysis_cloud.gateway_base_url().strip().rstrip("/"))
+    except alysis_cloud.AlysisCloudConfigError:
+        pass
+    return profile if effective_url in hosted_urls else None
 
 
 def _inactive_native_summary(summary: str) -> str:
@@ -1615,9 +1641,12 @@ def _top_level_menu_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
         api_key_summary = "not used · managed by AI subscription"
     native_suffix = " (inactive)" if delegated else ""
     api_key_suffix = " (not used)" if direct_subscription else native_suffix
+    hosted_account = _active_alysis_profile(state) is not None
+    if hosted_account:
+        api_key_summary = "Manage your Alysis Code subscription connection"
     return [
         ("profile", f"Provider Profile{native_suffix}", profile_summary),
-        ("api_key", f"API Key{api_key_suffix}", api_key_summary),
+        ("api_key", "Account" if hosted_account else f"API Key{api_key_suffix}", api_key_summary),
         ("default", f"Default Model{native_suffix}", model_summary),
         ("web_search", "Web Search", _web_search_summary_text(state)),
         ("cache", "Context & Cache", _cache_summary_text(state)),
@@ -1634,7 +1663,10 @@ def _top_level_menu_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
 
 
 def _run_execution_section(state: ConfigMenuState, console: Console) -> None:
+    from ..alysis_cloud import PROFILE_KEY
+
     while True:
+        hosted_account = _active_alysis_profile(state) is not None
         selected_backend = _run_config_picker(
             console=console,
             title="Model Access",
@@ -1651,23 +1683,28 @@ def _run_execution_section(state: ConfigMenuState, console: Console) -> None:
                     "Sign in through a supported provider connection; API-key settings stay saved.",
                 ),
             ],
-            current_value=state.execution_backend,
+            current_value="delegated" if hosted_account else state.execution_backend,
         )
         if selected_backend is None:
             _print_section_cancelled(console, "Model Access")
             return
         if selected_backend == "native":
             state.set_execution_backend("native")
+            if hosted_account:
+                _run_provider_section(state, console)
+                return
             console.print("[green]Model access:[/green] API key. Save to apply.")
             return
 
-        rows = _runtime_setup_rows()
-        if not rows:
-            console.print(
-                "[yellow]No AI subscription connections are available in this build.[/yellow]"
-            )
-            return
-        current_runtime = state.execution_runtime
+        rows = [
+            (
+                PROFILE_KEY,
+                "Alysis Code account",
+                "Connect your Alysis Code subscription in the browser.",
+            ),
+            *_runtime_setup_rows(),
+        ]
+        current_runtime = PROFILE_KEY if hosted_account else state.execution_runtime
         if current_runtime not in {value for value, _label, _description in rows}:
             current_runtime = rows[0][0]
         selected_runtime = _run_config_picker(
@@ -1682,6 +1719,9 @@ def _run_execution_section(state: ConfigMenuState, console: Console) -> None:
         )
         if selected_runtime is None:
             continue
+        if selected_runtime == PROFILE_KEY:
+            _run_alysis_account_section(state, console)
+            return
         state.set_execution_backend("delegated", runtime=selected_runtime)
         runtime_label = next(
             (label for value, label, _description in rows if value == selected_runtime),
@@ -1693,6 +1733,59 @@ def _run_execution_section(state: ConfigMenuState, console: Console) -> None:
         )
         _run_subscription_account_section(selected_runtime, console)
         return
+
+
+def _run_alysis_account_section(state: ConfigMenuState, console: Console) -> None:
+    from .. import account_login
+    from ..alysis_cloud import PROFILE_KEY
+    from ..profiles import get_profile
+
+    while True:
+        cfg = load_config()
+        status = account_login.login_status(cfg)
+        rows = [
+            (
+                "connect",
+                "Reconnect / switch account" if status.logged_in else "Connect account",
+                "Open Alysis Code sign-in in your browser.",
+            )
+        ]
+        if status.logged_in:
+            rows.append(
+                ("disconnect", "Disconnect account", "Remove your saved account connection.")
+            )
+        rows.append(("back", "Back", "Return to configuration."))
+        action = _run_config_picker(
+            console=console,
+            title="Alysis Code Account",
+            subtitle="Account: connected" if status.logged_in else "Account: not connected",
+            rows=rows,
+            current_value="back",
+        )
+        if action in {None, "back"}:
+            return
+        try:
+            if action == "disconnect":
+                if not _prompt_yes_no("Disconnect your Alysis Code account? [y/N]"):
+                    continue
+                account_login.logout(cfg)
+                state._account_changed = True
+                state.refresh_api_key_status()
+                console.print("[yellow]Alysis Code account disconnected.[/yellow]")
+                continue
+            account_login.login(
+                cfg,
+                output_write=lambda message: console.print(message, highlight=False),
+            )
+            profile = get_profile(cfg, PROFILE_KEY)
+            if profile is not None:
+                state.profiles[PROFILE_KEY] = profile.to_dict()
+                state.set_active_profile_name(PROFILE_KEY)
+                state.set_execution_backend("native")
+            state._account_changed = True
+            console.print("[green]Alysis Code account connected.[/green]")
+        except (account_login.AlysisLoginError, ConfigError) as exc:
+            console.print(f"[red]Alysis Code account action failed:[/red] {escape(str(exc))}")
 
 
 def _run_subscription_account_section(provider_id: str, console: Console) -> None:
@@ -2647,7 +2740,7 @@ def _run_profile_edit_current(state: ConfigMenuState, console: Console) -> None:
         )
         return
     profile = ProfileSpec.from_dict(state.active_profile, state.profiles[state.active_profile])
-    if profile.auth_provider:
+    if profile.auth_provider or _active_alysis_profile(state) is not None:
         console.print(
             "[yellow]This subscription connection is provider-managed. Use Default Model "
             "to choose its model and reasoning effort.[/yellow]"
@@ -2770,6 +2863,9 @@ def _run_profile_remove(state: ConfigMenuState, console: Console) -> None:
 
 
 def _run_api_key_section(state: ConfigMenuState, console: Console) -> None:
+    if _active_alysis_profile(state) is not None:
+        _run_alysis_account_section(state, console)
+        return
     console.print()
     console.rule("[bold]API Key[/bold]")
     if state.execution_backend == "delegated":
@@ -2808,6 +2904,7 @@ def _run_default_section(state: ConfigMenuState, console: Console) -> None:
     console.print()
     console.rule("[bold]Default Model[/bold]")
     direct_subscription = _active_subscription_profile(state) is not None
+    hosted_account = _active_alysis_profile(state) is not None
     if state.execution_backend == "delegated" and not direct_subscription:
         console.print(
             "[yellow]This API-key model is preserved but inactive while an AI subscription is selected.[/yellow]"
@@ -2820,7 +2917,7 @@ def _run_default_section(state: ConfigMenuState, console: Console) -> None:
         model = _prompt_default_model(console, state)
         base_url = (
             state.fields["base_url"]
-            if direct_subscription
+            if direct_subscription or hosted_account
             else _prompt_text("Base URL", state.fields["base_url"])
         )
         state.set_field("base_url", base_url)

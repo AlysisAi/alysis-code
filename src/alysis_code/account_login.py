@@ -479,6 +479,10 @@ def _activate_alysis_profile(cfg: AppConfig, *, email: str | None) -> LoginResul
 
     add_profile(cfg, profile)
     set_active_profile(cfg, profile.name)
+    # Hosted account access uses the native agent loop. Keep configured
+    # delegated runtimes available, but stop routing this session through one.
+    cfg.execution.backend = "native"
+    cfg.execution.runtime = None
     save_config(cfg)
 
     return LoginResult(

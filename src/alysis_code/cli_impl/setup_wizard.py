@@ -333,7 +333,7 @@ def run_setup_wizard() -> bool:
 def _maybe_offer_alysis_login(
     console: Console, *, profile_result: _ProfileStepResult, cfg: AppConfig
 ) -> None:
-    """If the user chose the hosted MiMo (login-based) preset, offer to connect now.
+    """If the user chose the hosted Alysis Code preset, offer to connect now.
 
     That preset authenticates via `alysis login` instead of an API key.
     Running the handshake here saves a separate step; declining is harmless (the

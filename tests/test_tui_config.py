@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from alysis_code import account_login, alysis_cloud
 from alysis_code.cli_impl.tui import config_flow as flow_mod
 from alysis_code.cli_impl.tui.app import ConfigReloadOutcome
 from alysis_code.cli_impl.tui.config_flow import ConfigFlow
@@ -24,6 +25,9 @@ from alysis_code.config import (
     AppConfig,
     load_config,
     load_persisted_profile_keys,
+    save_config,
+    save_persisted_api_key,
+    save_persisted_profile_key,
 )
 from alysis_code.profile_presets import PROFILE_PRESETS, make_profile_from_preset
 from alysis_code.profiles import ProfileSpec
@@ -77,6 +81,21 @@ def _cfg_with_subscription_profile() -> AppConfig:
         reasoning_effort="high",
     )
     cfg = AppConfig(model=profile.default_model)
+    cfg.extra_fields = {
+        "profiles": {profile.name: profile.to_dict()},
+        "active_profile": profile.name,
+    }
+    return cfg
+
+
+def _cfg_with_alysis_profile() -> AppConfig:
+    profile = ProfileSpec(
+        name="alysis",
+        protocol="openai_compat",
+        base_url=alysis_cloud.gateway_base_url(),
+        default_model="deepseek-v4-flash",
+    )
+    cfg = AppConfig(model=profile.default_model, base_url=profile.base_url)
     cfg.extra_fields = {
         "profiles": {profile.name: profile.to_dict()},
         "active_profile": profile.name,
@@ -235,6 +254,118 @@ def test_model_access_manages_subscription_account(monkeypatch: pytest.MonkeyPat
     assert [row.value for row in flow.screen().rows] == ["connect", "back"]
 
 
+@pytest.mark.parametrize("connected", [False, True])
+def test_alysis_subscription_menu_opens_account_instead_of_key_editor(
+    tmp_path, monkeypatch, connected
+):
+    _config_env(tmp_path, monkeypatch)
+    if connected:
+        save_persisted_profile_key("alysis", "test-hosted-account-credential")
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+
+    rows = {row.value: row for row in flow.screen().rows}
+    assert rows["execution"].description == "Alysis Code subscription"
+    assert rows["api_key"].label == "Account"
+    assert rows["api_key"].description == ("connected" if connected else "not connected — sign in")
+    flow.choose("api_key")
+    assert flow.stage == "subscription_account"
+    actions = {row.value for row in flow.screen().rows}
+    assert "connect" in actions
+    assert ("disconnect" in actions) == connected
+
+
+def test_alysis_model_access_selects_subscription_and_keeps_account_available(
+    tmp_path, monkeypatch
+):
+    _config_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(flow_mod, "_runtime_setup_rows", lambda: [])
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    flow.choose("execution")
+    screen = flow.screen()
+    assert screen.rows[flow.index].value == "delegated"
+    assert [row.value for row in screen.rows if row.current] == ["delegated"]
+    flow.choose("delegated")
+    assert flow.stage == "execution_runtime"
+    assert [row.value for row in flow.screen().rows if row.current] == ["alysis"]
+    flow.choose("alysis")
+    assert flow.stage == "subscription_account"
+
+
+def test_alysis_api_key_choice_requests_a_different_provider(tmp_path, monkeypatch):
+    _config_env(tmp_path, monkeypatch)
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    flow.choose("execution")
+    flow.choose("native")
+    assert flow.stage == "provider"
+    assert "API-key provider" in flow.status
+    assert flow.state.active_profile == "alysis"
+    assert not flow.state.dirty
+
+
+@pytest.mark.parametrize("finish", ["save", "chat"])
+def test_alysis_login_replaces_previous_provider_state_and_preserves_gateway(
+    tmp_path, monkeypatch, finish
+):
+    _config_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("ALYSIS_GATEWAY_URL", "https://gateway.example.test/v1")
+    cfg = _cfg_with_profiles()
+    save_config(cfg)
+    flow = ConfigFlow(cfg=cfg)
+    previous_profile = flow.state.profiles["openai"].copy()
+    assert flow.state.fields["base_url"] != alysis_cloud.gateway_base_url()
+
+    def login(config, **_kwargs):
+        save_persisted_profile_key("alysis", "test-hosted-account-credential")
+        return account_login._activate_alysis_profile(config, email="person@example.test")
+
+    monkeypatch.setattr(account_login, "login", login)
+    flow.choose("execution")
+    flow.choose("delegated")
+    flow.choose("alysis")
+    flow.choose("connect")
+    flow.run_busy()
+
+    assert flow.stage == "subscription_account"
+    assert flow.state.active_profile == "alysis"
+    assert flow.state.fields["base_url"] == alysis_cloud.gateway_base_url()
+    assert flow.state.fields["model"] == "deepseek-v4-flash"
+    assert flow.state.execution_backend == "native"
+    assert flow.state.profiles["openai"] == previous_profile
+    if finish == "save":
+        flow.choose("back")
+        rows = {row.value: row for row in flow.screen().rows}
+        assert rows["api_key"].label == "Account"
+        assert rows["api_key"].description == "connected"
+        flow.choose("__save__")
+        flow.run_busy()
+    else:
+        flow.choose("chat")
+
+    assert flow.stage == "done" and flow.saved
+    reloaded = load_config()
+    assert reloaded.base_url == alysis_cloud.gateway_base_url()
+    assert reloaded.extra_fields["profiles"]["alysis"]["base_url"] == reloaded.base_url
+    assert reloaded.extra_fields["active_profile"] == "alysis"
+    assert reloaded.execution.backend == "native"
+    assert load_persisted_profile_keys()["alysis"] == "test-hosted-account-credential"
+
+
+def test_alysis_disconnect_refreshes_menu_account_status(tmp_path, monkeypatch):
+    _config_env(tmp_path, monkeypatch)
+    save_persisted_api_key("test-unrelated-legacy-provider-credential")
+    save_persisted_profile_key("alysis", "test-hosted-account-credential")
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    flow.choose("api_key")
+    flow.choose("disconnect")
+    flow.confirm(True)
+    flow.run_busy()
+    flow.choose("back")
+    rows = {row.value: row for row in flow.screen().rows}
+    assert rows["api_key"].description == "not connected — sign in"
+    assert rows["execution"].description == "Alysis Code subscription"
+    assert "alysis" not in load_persisted_profile_keys()
+
+
 def test_advanced_submenu_holds_subagent_and_forge():
     flow = ConfigFlow(cfg=_cfg())
     flow.choose("advanced")
@@ -342,6 +473,43 @@ def test_default_model_custom_path():
     flow.submit_input("my-custom-model")
     assert flow.stage == "model_base_url"
     assert flow.state.fields["model"] == "my-custom-model"
+
+
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("gateway_override", [None, "https://gateway.example.test/v1"])
+def test_alysis_model_flow_skips_managed_endpoint_in_both_directions(
+    tmp_path, monkeypatch, custom, gateway_override
+):
+    _config_env(tmp_path, monkeypatch)
+    if gateway_override:
+        monkeypatch.setenv("ALYSIS_GATEWAY_URL", gateway_override)
+    monkeypatch.setattr(account_login, "list_trial_models", lambda _cfg: [])
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    gateway = flow.state.fields["base_url"]
+    flow.choose("default")
+    if custom:
+        flow.choose(flow_mod._CUSTOM_MODEL_VALUE)
+        flow.submit_input("future-hosted-model")
+    else:
+        flow.choose("deepseek-v4-flash")
+    assert flow.stage == "model_thinking"
+    flow.back()
+    assert flow.stage == "model"
+    flow.choose("deepseek-v4-flash")
+    flow.choose("auto")
+    flow.submit_input("45")
+    assert flow.stage == "menu"
+    assert flow.state.fields["base_url"] == gateway
+
+
+def test_alysis_profile_editor_keeps_endpoint_managed(tmp_path, monkeypatch):
+    _config_env(tmp_path, monkeypatch)
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    flow.choose("profile")
+    flow.choose("edit")
+    assert flow.stage == "provider"
+    assert "provider-managed" in flow.status
+    assert not flow.state.dirty
 
 
 def test_model_timeout_rejects_non_positive():

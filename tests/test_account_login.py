@@ -294,6 +294,71 @@ def test_login_preserves_user_chosen_model_across_relogin(tmp_path: Path, monkey
         stub.close()
 
 
+@pytest.mark.parametrize("existing_hosted_profile", [False, True])
+def test_login_activates_native_execution_after_delegated_runtime(
+    tmp_path: Path, monkeypatch, existing_hosted_profile: bool
+) -> None:
+    from dataclasses import replace
+
+    from alysis_code.config import AgentRuntimeSettings, ExecutionConfig, save_config
+    from alysis_code.profiles import add_profile, get_profile, set_active_profile
+
+    _config_env(tmp_path, monkeypatch)
+    stub = _StubDeviceFlowServer()
+    monkeypatch.setenv("ALYSIS_SUPABASE_URL", stub.base_url)
+    gateway_url = f"{stub.base_url}/hosted/v1"
+    monkeypatch.setenv("ALYSIS_GATEWAY_URL", gateway_url)
+    try:
+        cfg = load_config()
+        byok = replace(
+            make_profile_from_preset(get_preset("openai"), name="my-api-provider"),
+            default_model="gpt-4.1",
+            reasoning_effort="low",
+        )
+        add_profile(cfg, byok)
+        set_active_profile(cfg, byok.name)
+        if existing_hosted_profile:
+            add_profile(
+                cfg,
+                replace(
+                    make_profile_from_preset(get_preset("alysis"), name="alysis"),
+                    default_model="deepseek-v4-pro",
+                    reasoning_effort="high",
+                ),
+            )
+        cfg.execution = ExecutionConfig(backend="delegated", runtime="openai-codex")
+        runtime = AgentRuntimeSettings(
+            adapter="codex-cli",
+            executable="codex",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+            timeout_seconds=90,
+        )
+        cfg.agent_runtimes["openai-codex"] = runtime
+        save_config(cfg)
+
+        result = account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
+
+        reloaded = load_config()
+        assert reloaded.execution.backend == "native"
+        assert reloaded.execution.runtime is None
+        assert reloaded.extra_fields["active_profile"] == "alysis"
+        assert reloaded.base_url == gateway_url
+        assert reloaded.model == (
+            "deepseek-v4-pro" if existing_hosted_profile else "deepseek-v4-flash"
+        )
+        assert result.model == reloaded.model
+        assert result.base_url == gateway_url
+        assert get_profile(reloaded, byok.name) == byok
+        assert reloaded.agent_runtimes["openai-codex"] == runtime
+        assert resolve_api_key(reloaded, profile_name="alysis").key == _GATEWAY_KEY
+        if existing_hosted_profile:
+            assert get_profile(reloaded, "alysis").reasoning_effort == "high"
+            assert reloaded.llm_reasoning_effort == "high"
+    finally:
+        stub.close()
+
+
 def test_login_migrates_legacy_mimo_selection(tmp_path: Path, monkeypatch) -> None:
     # A user coming from the retired Xiaomi MiMo trial has a profile pinned to a
     # MiMo id. The preset aliases canonicalize it to the Pro default at config

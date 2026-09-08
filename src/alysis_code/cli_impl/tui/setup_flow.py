@@ -256,7 +256,7 @@ class SetupFlow:
             else "thread"
         )
 
-    def _hosted_mimo(self) -> bool:
+    def _hosted_alysis(self) -> bool:
         preset = self.profile_result.preset if self.profile_result else None
         if preset is None:
             return False
@@ -636,7 +636,7 @@ class SetupFlow:
             stage="login_confirm",
             mode="confirm",
             title="Alysis Code account",
-            subtitle="Your provider is the Alysis Code-hosted MiMo endpoint.",
+            subtitle="Your provider is the Alysis Code endpoint.",
             lines=[("Connect your Alysis Code account now?", "plain")],
             hint="Y connect · N later · Esc skip",
             confirm_default=True,
@@ -1073,7 +1073,7 @@ class SetupFlow:
             self._model_catalog_warning = ""
         self.profile_result = new
         warning = (preset.setup_warning or "").strip()
-        if self._hosted_mimo():
+        if self._hosted_alysis():
             # The Alysis Code account needs no API key and login picks the
             # hosted default model — skip both steps and head straight to the
             # workspace; the post-commit login_confirm step connects the
@@ -1582,7 +1582,7 @@ class SetupFlow:
         self._after_sandbox()
 
     def _after_sandbox(self) -> None:
-        if self._hosted_mimo():
+        if self._hosted_alysis():
             self._goto("login_confirm")
         else:
             self._goto("complete")

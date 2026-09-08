@@ -73,6 +73,7 @@ from ..config_menu import (
     ROLE_ORDER,
     ConfigMenuResult,
     ConfigMenuState,
+    _active_alysis_profile,
     _active_preset,
     _active_subscription_profile,
     _advanced_profile_presets_for_setup,
@@ -178,7 +179,7 @@ def _pretty_key_source(source: str | None) -> str:
 
 def _short_preset_description(preset: Any) -> str:
     if preset.key == "alysis":
-        return "hosted MiMo — Alysis Code account"
+        return "Alysis Code endpoint — account sign-in"
     short = _NATIVE_PROTOCOL_SHORT.get(preset.protocol)
     if short:
         return short
@@ -608,6 +609,7 @@ class ConfigFlow:
         direct_sub = st.execution_backend == "delegated" and _is_direct_subscription_id(
             st.execution_runtime
         )
+        hosted_account = _active_alysis_profile(st) is not None
         native_suffix = " (inactive)" if delegated else ""
         profile_desc, profile_tone = self._short_profile(delegated)
         model_desc, model_tone = self._short_model(delegated)
@@ -637,7 +639,7 @@ class ConfigFlow:
             # The status ("not used" / "inactive") lives in the description —
             # repeating it as a label suffix read twice on one row.
             Row(
-                label="API Key",
+                label="Account" if hosted_account else "API Key",
                 description=key_desc,
                 value="api_key",
                 tone=key_tone,
@@ -691,6 +693,8 @@ class ConfigFlow:
 
     def _short_execution(self) -> tuple[str, str]:
         st = self.state
+        if _active_alysis_profile(st) is not None:
+            return "Alysis Code subscription", ""
         if st.execution_backend == "native":
             return "API key", ""
         runtime = str(st.execution_runtime or "").strip()
@@ -718,6 +722,12 @@ class ConfigFlow:
             return "not used", ""
         if delegated:
             return "inactive", ""
+        if _active_alysis_profile(self.state) is not None:
+            from ... import account_login
+
+            if account_login.login_status(self.cfg).logged_in:
+                return "connected", ""
+            return "not connected — sign in", "warn"
         raw = _api_key_summary_text(self.state)
         if raw == _MISSING_REQUIRED:
             return "missing — required", "warn"
@@ -742,6 +752,7 @@ class ConfigFlow:
         return f"subagents {sub} · forge {forge}"
 
     def _screen_execution_backend(self) -> Screen:
+        hosted_account = _active_alysis_profile(self.state) is not None
         return Screen(
             stage="execution_backend",
             mode="list",
@@ -752,7 +763,7 @@ class ConfigFlow:
                     label="Use an API key",
                     description="Connect directly to a supported model provider.",
                     value="native",
-                    current=self.state.execution_backend == "native",
+                    current=self.state.execution_backend == "native" and not hosted_account,
                 ),
                 Row(
                     label="Use an AI subscription",
@@ -760,7 +771,7 @@ class ConfigFlow:
                         "Sign in through a supported provider connection; API-key settings stay saved."
                     ),
                     value="delegated",
-                    current=self.state.execution_backend == "delegated",
+                    current=self.state.execution_backend == "delegated" or hosted_account,
                 ),
             ],
             hint="",
@@ -775,10 +786,7 @@ class ConfigFlow:
                 label="Alysis Code account",
                 description="Free daily DeepSeek included — browser sign-in, no API key.",
                 value=_ALYSIS_CONNECTION_ID,
-                current=(
-                    self.state.execution_backend == "native"
-                    and self.state.active_profile == _ALYSIS_CONNECTION_ID
-                ),
+                current=_active_alysis_profile(self.state) is not None,
             )
         ]
         rows.extend(
@@ -1845,6 +1853,12 @@ class ConfigFlow:
         if self.stage == "cancel_confirm":
             self._goto(self._resume_stage or "menu")
             return
+        if self.stage == "model_thinking" and (
+            _active_subscription_profile(self.state) is not None
+            or _active_alysis_profile(self.state) is not None
+        ):
+            self._goto("model", index=self._model_index())
+            return
         prev = _PREV.get(self.stage)
         if prev is not None:
             self._goto(prev)
@@ -1886,7 +1900,10 @@ class ConfigFlow:
         elif value == "profile":
             self._goto("provider")
         elif value == "api_key":
-            self._goto("api_key")
+            if _active_alysis_profile(self.state) is not None:
+                self._choose_execution_runtime(_ALYSIS_CONNECTION_ID)
+            else:
+                self._goto("api_key")
         elif value == "default":
             self.open_default_model()
         elif value == "web_search":
@@ -1903,10 +1920,17 @@ class ConfigFlow:
             self._goto("personas", index=self._persona_index())
 
     def _execution_backend_index(self) -> int:
-        return 1 if self.state.execution_backend == "delegated" else 0
+        return int(
+            self.state.execution_backend == "delegated"
+            or _active_alysis_profile(self.state) is not None
+        )
 
     def _choose_execution_backend(self, value: str) -> None:
         if value == "native":
+            if _active_alysis_profile(self.state) is not None:
+                self._goto("provider")
+                self._set_status("Choose or add an API-key provider profile.", "dim")
+                return
             self.state.set_execution_backend("native")
             self._goto("menu")
             self._set_status("API-key model access selected. Save to apply.", "ok")
@@ -1915,10 +1939,9 @@ class ConfigFlow:
             self._set_status(f"Unknown model access method: {value}", "err")
             return
         rows = _runtime_setup_rows()
-        if not rows:
-            self._set_status("No AI subscription connections are available in this build.", "warn")
-            return
-        runtime_ids = [runtime_id for runtime_id, _label, _description in rows]
+        runtime_ids = [_ALYSIS_CONNECTION_ID] + [
+            runtime_id for runtime_id, _label, _description in rows
+        ]
         index = (
             runtime_ids.index(self.state.execution_runtime)
             if self.state.execution_runtime in runtime_ids
@@ -2089,7 +2112,10 @@ class ConfigFlow:
         self.state.set_field("model", value)
         if self._finish_preset_chain_if_active(model=value):
             return
-        if _active_subscription_profile(self.state) is not None:
+        if (
+            _active_subscription_profile(self.state) is not None
+            or _active_alysis_profile(self.state) is not None
+        ):
             labels = _thinking_labels_for_state(self.state, model=value)
             if self.state.thinking_label not in labels:
                 self.state.set_thinking_label("auto")
@@ -2105,7 +2131,13 @@ class ConfigFlow:
         self.state.set_field("model", model)
         if self._finish_preset_chain_if_active(model=model):
             return
-        self._goto("model_base_url")
+        if (
+            _active_subscription_profile(self.state) is not None
+            or _active_alysis_profile(self.state) is not None
+        ):
+            self._goto("model_thinking", index=self._thinking_index())
+        else:
+            self._goto("model_base_url")
 
     def _submit_model_base_url(self, text: str) -> None:
         value = text.strip() or str(self.state.fields.get("base_url", ""))
@@ -2505,7 +2537,7 @@ class ConfigFlow:
         profile = ProfileSpec.from_dict(
             self.state.active_profile, self.state.profiles[self.state.active_profile]
         )
-        if profile.auth_provider:
+        if profile.auth_provider or _active_alysis_profile(self.state) is not None:
             self._set_status(
                 "This subscription connection is provider-managed. Use Default model for "
                 "model and reasoning choices.",
@@ -2731,24 +2763,21 @@ class ConfigFlow:
         if kind == "connected":
             # login() already activated + saved the alysis profile in cfg;
             # mirror it into the TUI state so a later Save is consistent.
-            result = getattr(self, "_alysis_login_result", None)
             self._alysis_login_result = None
             from ...profiles import get_profile
 
             profile = get_profile(self.cfg, _ALYSIS_CONNECTION_ID)
             if profile is not None:
                 self.state.profiles[_ALYSIS_CONNECTION_ID] = profile.to_dict()
-            self.state.active_profile = _ALYSIS_CONNECTION_ID
+                self.state.set_active_profile_name(_ALYSIS_CONNECTION_ID)
             self.state.set_execution_backend("native")
-            model = str(getattr(result, "model", "") or "").strip()
-            if model:
-                self.state.fields["model"] = model
             self._goto("subscription_account")
             self._set_status(
-                "Alysis Code connected — hosted DeepSeek active. Esc to exit config.",
+                "Alysis Code subscription connected. Esc to exit config.",
                 "ok",
             )
         else:
+            self.state.refresh_api_key_status()
             self._goto("subscription_account")
             self._set_status(
                 "Logged out. Hosted requests will be refused until you sign in again.",

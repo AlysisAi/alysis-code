@@ -751,7 +751,7 @@ def test_setup_profile_picker_separates_compatibility_and_native_presets() -> No
     advanced_keys = [preset.key for preset in advanced]
 
     # Native first-party providers lead the primary picker; every other hosted
-    # provider follows in registration order. The account-gated hosted MiMo
+    # provider follows in registration order. The account-gated hosted Alysis Code
     # preset stays behind the advanced picker while no campaign is active.
     assert keys[:3] == ["openai-responses", "anthropic", "gemini"]
     assert "alysis" not in keys
@@ -2191,11 +2191,10 @@ def test_run_default_run_action_passes_concrete_typer_defaults(monkeypatch) -> N
     assert captured["diagnostic_log"] is None
 
 
-def _mimo_login_preset() -> ProfilePreset:
+def _alysis_login_preset() -> ProfilePreset:
     from alysis_code.alysis_cloud import PROFILE_KEY
 
-    # While no hosted campaign is running the MiMo login preset stays behind
-    # the advanced picker — never on the primary provider picker.
+    # The account preset is exposed separately from the API-key providers.
     assert all(p.key != PROFILE_KEY for p in setup_wizard_mod.provider_selection_presets())
     return next(
         p for p in setup_wizard_mod.advanced_provider_selection_presets() if p.key == PROFILE_KEY
@@ -2207,7 +2206,7 @@ def _profile_step_for(preset: ProfilePreset) -> Any:
     return setup_wizard_mod._ProfileStepResult(profile=profile, label=preset.label, preset=preset)
 
 
-def test_setup_offers_login_for_mimo_preset(monkeypatch) -> None:
+def test_setup_offers_login_for_alysis_preset(monkeypatch) -> None:
     import alysis_code.account_login as account_login_mod
 
     console = Console(file=io.StringIO())
@@ -2221,7 +2220,7 @@ def test_setup_offers_login_for_mimo_preset(monkeypatch) -> None:
     monkeypatch.setattr(account_login_mod, "login", fake_login)
 
     setup_wizard_mod._maybe_offer_alysis_login(
-        console, profile_result=_profile_step_for(_mimo_login_preset()), cfg=Mock()
+        console, profile_result=_profile_step_for(_alysis_login_preset()), cfg=Mock()
     )
 
     assert calls == [True]
@@ -2234,7 +2233,7 @@ def test_setup_skips_login_offer_for_other_presets(monkeypatch) -> None:
     other = next(
         p
         for p in setup_wizard_mod.provider_selection_presets()
-        if p.key != _mimo_login_preset().key
+        if p.key != _alysis_login_preset().key
     )
     calls: list[bool] = []
     monkeypatch.setattr(setup_wizard_mod, "_prompt_yes_no", lambda *a, **k: True)
@@ -2244,7 +2243,7 @@ def test_setup_skips_login_offer_for_other_presets(monkeypatch) -> None:
         console, profile_result=_profile_step_for(other), cfg=Mock()
     )
 
-    assert calls == []  # never prompts or logs in for non-MiMo providers
+    assert calls == []  # never prompts or logs in for other providers
 
 
 def test_setup_login_offer_declined_does_not_log_in(monkeypatch) -> None:
@@ -2256,7 +2255,7 @@ def test_setup_login_offer_declined_does_not_log_in(monkeypatch) -> None:
     monkeypatch.setattr(account_login_mod, "login", lambda *a, **k: calls.append(True))
 
     setup_wizard_mod._maybe_offer_alysis_login(
-        console, profile_result=_profile_step_for(_mimo_login_preset()), cfg=Mock()
+        console, profile_result=_profile_step_for(_alysis_login_preset()), cfg=Mock()
     )
 
     assert calls == []

@@ -445,7 +445,7 @@ def test_provider_screen_surfaces_hosted_providers_with_advanced_branch():
     assert by_value["xiaomi-mimo"].description == "API key"
 
     # The advanced branch holds the local / compatibility / custom / legacy
-    # presets plus the account-gated hosted MiMo entry.
+    # presets plus the account-gated hosted Alysis Code entry.
     flow.choose(flow_mod._wiz._ADVANCED_PROVIDER_PRESETS_VALUE)
     assert flow.stage == "provider_advanced"
     advanced_values = [r.value for r in flow.screen().rows]
@@ -728,10 +728,10 @@ def test_flow_sandbox_no_backend_disable(monkeypatch, tmp_path):
     assert cfg is not None
 
 
-# --------------------------------------------------------------------------- flow: hosted MiMo login
+# --------------------------------------------------------------------------- flow: hosted Alysis Code login
 
 
-def test_flow_hosted_mimo_offers_login(monkeypatch, tmp_path):
+def test_flow_hosted_alysis_offers_login(monkeypatch, tmp_path):
     _config_env(tmp_path, monkeypatch)
     _patch_validate(monkeypatch, status="skipped")
     monkeypatch.setattr(
@@ -752,6 +752,7 @@ def test_flow_hosted_mimo_offers_login(monkeypatch, tmp_path):
     flow.submit_input(os.fspath(tmp_path))
     _drive_busy(flow)  # commit -> diagnose -> login_confirm
     assert flow.stage == "login_confirm"
+    assert flow.screen().subtitle == "Your provider is the Alysis Code endpoint."
     flow.confirm(True)
     _drive_busy(flow)  # logging_in -> complete
     assert flow.stage == "complete"
@@ -938,7 +939,7 @@ def test_flow_fatal_commit_error(monkeypatch, tmp_path):
     assert flow.success is False  # a save failure must not claim success
 
 
-def test_flow_hosted_mimo_login_failure_is_non_fatal(monkeypatch, tmp_path):
+def test_flow_hosted_alysis_login_failure_is_non_fatal(monkeypatch, tmp_path):
     _config_env(tmp_path, monkeypatch)
     _patch_validate(monkeypatch, status="skipped")
     monkeypatch.setattr(

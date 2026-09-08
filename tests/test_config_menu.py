@@ -289,6 +289,212 @@ def test_classic_subscription_back_returns_to_model_access(
     assert output[-1] == "[green]Model access:[/green] API key. Save to apply."
 
 
+@pytest.fixture
+def hosted_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppConfig:
+    from alysis_code.alysis_cloud import gateway_base_url
+
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
+    profile = ProfileSpec(name="alysis", base_url=gateway_base_url(), default_model="hosted-model")
+    cfg = AppConfig()
+    add_profile(cfg, profile)
+    set_active_profile(cfg, profile.name)
+    return cfg
+
+
+@pytest.mark.parametrize(
+    ("name", "endpoint", "protocol", "backend", "expected"),
+    [
+        ("alysis", None, "openai_compat", "native", True),
+        ("my-hosted-profile", None, "openai_compat", "native", True),
+        ("alysis", "https://custom.example/v1", "openai_compat", "native", False),
+        ("custom", "https://custom.example/v1", "openai_compat", "native", False),
+        ("alysis", None, "anthropic_messages", "native", False),
+        ("alysis", None, "openai_compat", "delegated", False),
+    ],
+)
+def test_hosted_account_identity_uses_effective_endpoint(
+    hosted_config: AppConfig,
+    name: str,
+    endpoint: str | None,
+    protocol: str,
+    backend: str,
+    expected: bool,
+) -> None:
+    state = ConfigMenuState.from_cfg(hosted_config)
+    profile = dict(state.profiles.pop("alysis"))
+    profile["protocol"] = protocol
+    state.profiles[name] = profile
+    state.active_profile = name
+    state.execution_backend = backend
+    if endpoint is not None:
+        # Effective edits must take precedence over the saved hosted URL.
+        state.fields["base_url"] = endpoint
+    else:
+        state.fields["base_url"] += "/"
+
+    actual = config_menu_mod._active_alysis_profile(state)
+
+    assert (actual is not None) is expected
+    if actual is not None:
+        assert actual.name == name
+        assert actual.auth_provider is None
+
+
+def test_hosted_account_identity_supports_configured_gateway_override(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALYSIS_GATEWAY_URL", "https://staging.example/hosted/v1/")
+    state = ConfigMenuState.from_cfg(hosted_config)
+    # Existing production profiles remain recognizable after a staging override.
+    assert config_menu_mod._active_alysis_profile(state) is not None
+    state.fields["base_url"] = "https://staging.example/hosted/v1"
+    assert config_menu_mod._active_alysis_profile(state) is not None
+    state.fields["base_url"] = "https://staging.example/other/v1"
+    assert config_menu_mod._active_alysis_profile(state) is None
+
+
+def test_classic_hosted_access_shows_subscription_and_opens_account(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = ConfigMenuState.from_cfg(hosted_config)
+    rows = {
+        value: (label, description)
+        for value, label, description in config_menu_mod._top_level_menu_rows(state)
+    }
+    assert rows["execution"][1] == "Alysis Code subscription"
+    assert rows["api_key"][0] == "Account"
+    managed_accounts = []
+    monkeypatch.setattr(
+        config_menu_mod,
+        "_run_alysis_account_section",
+        lambda st, _console: managed_accounts.append(st),
+    )
+    console = SimpleNamespace(print=lambda *_args: None)
+    config_menu_mod._run_api_key_section(state, console)
+
+    choices = iter(("delegated", "alysis"))
+    pickers = []
+
+    def pick(**kwargs):
+        pickers.append(kwargs)
+        return next(choices)
+
+    monkeypatch.setattr(config_menu_mod, "_run_config_picker", pick)
+    config_menu_mod._run_execution_section(state, console)
+
+    assert managed_accounts == [state, state]
+    assert pickers[0]["current_value"] == "delegated"
+    assert pickers[1]["current_value"] == "alysis"
+    assert state.execution_backend == "native"
+
+
+@pytest.mark.parametrize("hosted", [True, False])
+def test_classic_default_model_preserves_managed_endpoint_and_byok_editing(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch, hosted: bool
+) -> None:
+    state = ConfigMenuState.from_cfg(hosted_config)
+    if not hosted:
+        state.fields["base_url"] = "https://custom.example/v1"
+    original_url = state.fields["base_url"]
+    prompts = []
+
+    def prompt(label, current):
+        prompts.append(label)
+        return current
+
+    monkeypatch.setattr(config_menu_mod, "_prompt_default_model", lambda *_args: "selected-model")
+    monkeypatch.setattr(config_menu_mod, "_prompt_text", prompt)
+    monkeypatch.setattr(config_menu_mod, "_prompt_thinking_label", lambda *_args, **_kwargs: "auto")
+    console = SimpleNamespace(print=lambda *_args: None, rule=lambda *_args: None)
+    config_menu_mod._run_default_section(state, console)
+
+    assert ("Base URL" in prompts) is not hosted
+    assert state.fields["base_url"] == original_url
+    assert state.fields["model"] == "selected-model"
+
+
+def test_classic_hosted_profile_edit_directs_to_managed_model_settings(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = ConfigMenuState.from_cfg(hosted_config)
+    monkeypatch.setattr(
+        config_menu_mod,
+        "_prompt_non_secret_text",
+        lambda *_args: pytest.fail("Hosted profile is managed"),
+    )
+    output = []
+    config_menu_mod._run_profile_edit_current(state, SimpleNamespace(print=output.append))
+    assert "provider-managed" in output[0]
+
+
+def test_classic_hosted_login_keeps_gateway_after_save_and_signals_reload(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alysis_code import account_login
+
+    cfg = hosted_config
+    add_profile(
+        cfg,
+        ProfileSpec(name="byok", base_url="https://custom.example/v1", default_model="byok-model"),
+    )
+    set_active_profile(cfg, "byok")
+    save_config(cfg)
+    state = ConfigMenuState.from_cfg(cfg)
+    choices = iter(("connect", "back"))
+    monkeypatch.setattr(config_menu_mod, "_run_config_picker", lambda **_kwargs: next(choices))
+    monkeypatch.setattr(
+        account_login,
+        "login",
+        lambda target, **_kwargs: account_login._activate_alysis_profile(target, email=None),
+    )
+    console = SimpleNamespace(print=lambda *_args, **_kwargs: None)
+
+    config_menu_mod._run_alysis_account_section(state, console)
+    result = state.commit_to(cfg)
+    save_config(cfg)
+
+    persisted = load_config()
+    assert state.fields["base_url"] == hosted_config.extra_fields["profiles"]["alysis"]["base_url"]
+    assert persisted.base_url == state.fields["base_url"]
+    assert persisted.extra_fields["active_profile"] == "alysis"
+    assert persisted.execution.backend == "native"
+    assert result.api_key_changed is True
+    assert persisted.extra_fields["profiles"]["byok"]["base_url"] == "https://custom.example/v1"
+
+
+@pytest.mark.parametrize("account_action", ["connect", "disconnect"])
+def test_classic_account_changes_reload_chat_when_config_is_closed(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch, account_action: str
+) -> None:
+    from alysis_code import account_login
+
+    save_config(hosted_config)
+    choices = iter((account_action, "back"))
+    menu_actions = iter(("api_key", "cancel"))
+    monkeypatch.setattr(config_menu_mod, "_run_config_picker", lambda **_kwargs: next(choices))
+    monkeypatch.setattr(config_menu_mod, "_prompt_main_action", lambda *_args: next(menu_actions))
+    monkeypatch.setattr(config_menu_mod, "_prompt_yes_no", lambda *_args: True)
+    monkeypatch.setattr(config_menu_mod, "_confirm_cancel_when_dirty", lambda *_args: True)
+    monkeypatch.setattr(account_login, "login_status", lambda _cfg: SimpleNamespace(logged_in=True))
+    monkeypatch.setattr(account_login, "logout", lambda _cfg: True)
+    monkeypatch.setattr(
+        account_login,
+        "login",
+        lambda target, **_kwargs: account_login._activate_alysis_profile(target, email=None),
+    )
+    monkeypatch.setattr(
+        config_menu_mod,
+        "_resolve_console",
+        lambda: SimpleNamespace(print=lambda *_args, **_kwargs: None),
+    )
+
+    result = config_menu_mod.run_config_menu(cfg=hosted_config)
+
+    assert result.saved is True
+    assert result.api_key_changed is True
+    assert result.changes == {}
+
+
 def test_commit_persists_model_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     cfg = load_config()

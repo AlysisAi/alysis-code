@@ -17,7 +17,7 @@ wheels = [
 
 [[package]]
 name = "alysis-code"
-version = "0.13.6.1"
+version = "0.13.6.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
