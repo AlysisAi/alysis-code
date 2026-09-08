@@ -750,12 +750,17 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "deepseek-v4-pro",
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
+            "deepseek-v4.1-flash-expires-on-0910",
         ),
         suggested_model_descriptions={
             "deepseek-v4-pro": "default - flagship coding model, 1M context",
             "deepseek-v4-flash": "fast - cheap high-volume work, 1M context",
             "deepseek-v4-flash-vision-exp": (
                 "vision preview - image understanding and tools, 1M context"
+            ),
+            "deepseek-v4.1-flash-expires-on-0910": (
+                "V4.1 Flash beta - new architecture, native multimodal, priced as "
+                "v4-flash; temporary id expires 2026-09-10"
             ),
         },
         model_aliases={
@@ -770,7 +775,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "Retired aliases deepseek-chat and deepseek-reasoner no longer resolve; "
             "use the V4 model IDs. Pricing is peak/off-peak (off-peak is 50% of the "
             "listed rate). The vision model is experimental and may change without "
-            "a stable-release deprecation window."
+            "a stable-release deprecation window. deepseek-v4.1-flash-expires-on-0910 "
+            "is an internal-beta id that stops resolving on 2026-09-10 and is capped "
+            "at 20 concurrent requests per account."
         ),
     ),
     ProfilePreset(

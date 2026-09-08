@@ -408,6 +408,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.6] - 2026-09-08
+
+### Added
+
+- **DeepSeek V4.1 Flash internal beta.** `deepseek-v4.1-flash-expires-on-0910`
+  (announced 2026-09-08) is now on the DeepSeek preset menu. It is a
+  new-architecture model with native multimodal input, served on the unchanged
+  `https://api.deepseek.com` base URL under a temporary id that stops resolving
+  on 2026-09-10; DeepSeek bills it at the `deepseek-v4-flash` rate and caps
+  accounts at 20 concurrent requests. Registry metadata assumes the V4 Flash
+  shape (1M context, 384K output, vision, thinking `low|high|max`) until
+  DeepSeek publishes the GA id and limits. `deepseek-v4-pro` stays the default.
+
+### Changed
+
+- **DeepSeek footer labels follow vendor spelling.** Names now appear as
+  `DeepSeek-V4-Pro` and `DeepSeek-V4.1-Flash`; dated beta ids omit their
+  `-expires-on-<date>` suffix from the displayed label.
+
 ## [0.13.5] - 2026-09-07
 
 ### Added

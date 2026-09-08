@@ -666,6 +666,18 @@ def test_explicit_endpoint_pricing_overrides_unknown_compatible_route() -> None:
             0.00000044,
             0.00000132,
         ),
+        # V4.1 Flash internal beta (2026-09-08): temporary id on the same
+        # base_url, multimodal, billed at the v4-flash rate.
+        (
+            "https://api.deepseek.com",
+            "deepseek-v4.1-flash-expires-on-0910",
+            1_000_000,
+            384_000,
+            "deepseek-v4.1-flash-expires-on-0910",
+            True,
+            0.00000044,
+            0.00000132,
+        ),
         (
             "https://openrouter.ai/api/v1",
             "qwen/qwen3.8-max",

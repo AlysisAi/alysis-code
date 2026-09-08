@@ -92,6 +92,10 @@ _CANONICAL_MODEL_SOURCES: dict[str, tuple[str, ...]] = {
     "deepseek-v4-pro": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash-vision-exp": ("https://api-docs.deepseek.com/quick_start/pricing/",),
+    "deepseek-v4.1-flash-expires-on-0910": (
+        "https://news.ycombinator.com/item?id=49607094",
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+    ),
     "glm-5.3": (
         "https://docs.z.ai/guides/llm/glm-5.3",
         "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3",
@@ -151,6 +155,16 @@ _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "supports_vision": True,
         "supports_reasoning": True,
     },
+    # DeepSeek-V4.1-Flash internal beta (2026-09-08): new architecture with
+    # native multimodal input, served on the same base_url under a temporary
+    # id that expires 2026-09-10. DeepSeek publishes no separate limits, so the
+    # V4 Flash capacity is assumed until the GA id and docs land.
+    "deepseek-v4.1-flash-expires-on-0910": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 384_000,
+        "supports_vision": True,
+        "supports_reasoning": True,
+    },
     # GLM-5.3 (2026-08-19) and GLM-5.3-Flash (2026-08-26): 1M context, 128K
     # output, thinking cannot be disabled. Flash is natively multimodal.
     "glm-5.3": {
@@ -188,6 +202,7 @@ _PROVIDER_CANONICAL_MODEL_IDS: dict[str, dict[str, str]] = {
         "deepseek-v4-pro": "deepseek-v4-pro",
         "deepseek-v4-flash": "deepseek-v4-flash",
         "deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
+        "deepseek-v4.1-flash-expires-on-0910": "deepseek-v4.1-flash-expires-on-0910",
     },
     "zhipu": {
         "glm-5.3": "glm-5.3",
@@ -314,6 +329,7 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
             "deepseek-v4-pro",
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
+            "deepseek-v4.1-flash-expires-on-0910",
         )
     },
     "openrouter": {
@@ -757,6 +773,13 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "reasoning_output_cost_per_token": 0.00000132,
         },
         "deepseek-v4-flash-vision-exp": {
+            "input_cost_per_token": 0.00000044,
+            "output_cost_per_token": 0.00000132,
+            "cache_read_input_cost_per_token": 0.000000014,
+            "reasoning_output_cost_per_token": 0.00000132,
+        },
+        # Beta is billed at the deepseek-v4-flash rate (announcement, 2026-09-08).
+        "deepseek-v4.1-flash-expires-on-0910": {
             "input_cost_per_token": 0.00000044,
             "output_cost_per_token": 0.00000132,
             "cache_read_input_cost_per_token": 0.000000014,

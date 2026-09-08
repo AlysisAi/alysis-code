@@ -207,6 +207,7 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     qwen37 = reasoning_contract_for("qwen", "qwen3.7-plus")
     deepseek = reasoning_contract_for("deepseek", "deepseek-v4-pro")
     deepseek_vision = reasoning_contract_for("deepseek", "deepseek-v4-flash-vision-exp")
+    deepseek_v41_beta = reasoning_contract_for("deepseek", "deepseek-v4.1-flash-expires-on-0910")
 
     assert qwen.wire == "reasoning_effort"
     assert qwen.values == ("low", "medium", "xhigh")
@@ -223,6 +224,7 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     assert deepseek.allows_value("low")
     assert not deepseek.allows_value("medium")
     assert deepseek_vision is deepseek
+    assert deepseek_v41_beta is deepseek
 
 
 def test_dated_deepseek_gateway_routes_use_surface_specific_contracts() -> None:

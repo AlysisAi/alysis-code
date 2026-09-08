@@ -392,6 +392,7 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "deepseek-v4-pro",
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
+            "deepseek-v4.1-flash-expires-on-0910",
         ),
         "gemini": (
             "gemini-3.8-flash",

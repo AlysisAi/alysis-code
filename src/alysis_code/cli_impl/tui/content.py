@@ -40,18 +40,27 @@ _ACRONYMS = {
 # Flash", "Claude Opus 5", "Kimi K3"), which matches those vendors' naming.
 _HYPHENATED_VERSION_FAMILIES = frozenset({"GPT", "GLM"})
 
+# Families whose vendors hyphenate every word of the name ("DeepSeek-V4-Flash",
+# "DeepSeek-V4.1-Flash", "DeepSeek-V4-Flash-Vision-Exp").
+_FULLY_HYPHENATED_FAMILIES = frozenset({"DeepSeek"})
+
+# DeepSeek serves betas under dated ids ("deepseek-v4.1-flash-expires-on-0910",
+# "v3.2_speciale_expires_on_20251215"). The expiry is routing detail, not part
+# of the model's name.
+_EXPIRY_SUFFIX = re.compile(r"[-_]expires[-_]on[-_]\d+$", re.IGNORECASE)
+
 
 def pretty_model_label(model: str | None) -> str:
     """Turn a raw model id into a friendly footer label.
 
-    ``deepseek-chat`` -> ``DeepSeek Chat``; ``gpt-6-astra`` -> ``GPT-6 Astra``;
-    ``gpt-4o`` -> ``GPT-4o``. Falls back to the raw id when there is nothing
-    sensible to do.
+    ``deepseek-v4.1-flash`` -> ``DeepSeek-V4.1-Flash``; ``gpt-6-astra`` ->
+    ``GPT-6 Astra``; ``gpt-4o`` -> ``GPT-4o``. Falls back to the raw id when
+    there is nothing sensible to do.
     """
     raw = (model or "").strip()
     if not raw:
         return "model"
-    name = raw.rsplit("/", 1)[-1]
+    name = _EXPIRY_SUFFIX.sub("", raw.rsplit("/", 1)[-1])
     tokens = [t for t in re.split(r"[-_\s]+", name) if t]
     out: list[str] = []
     for token in tokens:
@@ -71,7 +80,11 @@ def pretty_model_label(model: str | None) -> str:
             out[-1] = f"{out[-1]}.{word}"
             continue
         out.append(word)
-    return " ".join(out) or raw
+    if not out:
+        return raw
+    if out[0] in _FULLY_HYPHENATED_FAMILIES:
+        return "-".join(out)
+    return " ".join(out)
 
 
 def heading_fragments() -> FormattedText:

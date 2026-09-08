@@ -80,7 +80,13 @@ def test_disconnected_landing_uses_one_neutral_model_access_instruction():
 @pytest.mark.parametrize(
     "model,expected",
     [
-        ("deepseek-chat", "DeepSeek Chat"),
+        # DeepSeek hyphenates the whole name ("DeepSeek-V4-Flash"); dated beta
+        # ids drop their expiry suffix.
+        ("deepseek-chat", "DeepSeek-Chat"),
+        ("deepseek-v4-pro", "DeepSeek-V4-Pro"),
+        ("deepseek-v4-flash-vision-exp", "DeepSeek-V4-Flash-Vision-Exp"),
+        ("deepseek-v4.1-flash-expires-on-0910", "DeepSeek-V4.1-Flash"),
+        ("deepseek/deepseek-v4-flash-0731", "DeepSeek-V4-Flash-0731"),
         # OpenAI and Zhipu hyphenate the version onto the family name.
         ("gpt-4o", "GPT-4o"),
         ("gpt-6-astra", "GPT-6 Astra"),
@@ -109,7 +115,7 @@ def test_footer_core_fields():
     state = TuiState(model_name="deepseek-chat", username="perdikis", context_pct=100.0)
     text = _plain(footer_fragments(state, width=90))
     assert "alysis" in text
-    assert "DeepSeek Chat" in text
+    assert "DeepSeek-Chat" in text
     assert "context: 100% left" in text
     assert "0 processed" in text and "$0.0000" in text
     assert "perdikis" in text
@@ -223,7 +229,7 @@ def test_footer_usage_hud_off_hides_usage_metrics():
         )
     )
     line1 = text.split("\n")[0]
-    assert "DeepSeek Chat" in line1
+    assert "DeepSeek-Chat" in line1
     assert "context" not in line1
     assert "tokens" not in line1
     assert "$" not in line1
