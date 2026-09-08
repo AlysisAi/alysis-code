@@ -723,16 +723,19 @@ def test_default_model_rows_include_discovered_alysis_trial_models(
     set_active_profile(cfg, "alysis")
     state = ConfigMenuState.from_cfg(cfg)
 
-    model_values = [
-        value for value, _label, _description in config_menu_mod._default_model_rows(state)
-    ]
+    rows = config_menu_mod._default_model_rows(state)
+    model_values = [value for value, _label, _description in rows]
     # Curated clean names present...
     assert "deepseek-v4-flash" in model_values
     assert "deepseek-v4-pro" in model_values
     # ...the provider-prefixed duplicate of a curated model is suppressed...
     assert "deepseek/deepseek-v4-flash" not in model_values
-    # ...but a genuinely new discovered model still shows.
+    # ...but a genuinely new discovered model still shows, attributed to the
+    # Pro plan rather than the retired MiMo trial.
     assert "deepseek-v5-preview" in model_values
+    descriptions = {value: description for value, _label, description in rows}
+    assert descriptions["deepseek-v5-preview"] == "available on your Alysis Code Pro plan"
+    assert "trial" not in descriptions["deepseek-v5-preview"]
 
 
 def test_default_model_rows_survive_alysis_discovery_failure(

@@ -112,7 +112,14 @@ def test_alysis_preset_offers_pro_models() -> None:
     assert preset is not None
     assert preset.api_key_env is None
     assert preset.suggested_models[0] == "deepseek-v4-flash"
-    assert set(preset.suggested_models) == {"deepseek-v4-flash", "deepseek-v4-pro"}
+    # Mirrors the models offered by the Alysis Code Pro gateway.
+    assert set(preset.suggested_models) == {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4.1-flash-expires-on-0910",
+    }
+    assert set(preset.suggested_model_descriptions) == set(preset.suggested_models)
     profile = make_profile_from_preset(preset, name="alysis")
     assert profile.default_model == "deepseek-v4-flash"
     # Retired MiMo-trial ids canonicalize to the Pro default via preset aliases,

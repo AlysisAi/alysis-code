@@ -1698,10 +1698,22 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         # The models the subscription offers. Live availability is discovered
         # from the gateway's /v1/models at runtime; this static list is the
         # offline fallback and the menu shown before a model is chosen.
-        suggested_models=("deepseek-v4-flash", "deepseek-v4-pro"),
+        suggested_models=(
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4.1-flash-expires-on-0910",
+        ),
         suggested_model_descriptions={
             "deepseek-v4-flash": "default - fast high-volume coding (1M context, free daily allowance)",
             "deepseek-v4-pro": "flagship - deeper reasoning (1M context, requires Alysis Code Pro)",
+            "deepseek-v4-flash-vision-exp": (
+                "vision preview - image understanding at the v4-flash rate (experimental)"
+            ),
+            "deepseek-v4.1-flash-expires-on-0910": (
+                "V4.1 Flash beta - new architecture, native multimodal, v4-flash rate; "
+                "DeepSeek retires this id on 2026-09-10"
+            ),
         },
         validation_model="deepseek-v4-flash",
         # Migrate ids from the retired Xiaomi MiMo trial to the Pro default so

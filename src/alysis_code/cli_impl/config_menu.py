@@ -3104,8 +3104,9 @@ def _preset_model_option_rows(
 
     NVIDIA's API catalog contains both NVIDIA and third-party models, so its live
     ``/v1/models`` inventory is merged with a small curated recommendation set.
-    The hosted MiMo trial similarly appends its live proxy allowlist. Discovery is
-    best-effort and offline-safe: on failure the static rows still render.
+    The hosted Alysis Code Pro gateway similarly appends its live ``/v1/models``
+    allowlist. Discovery is best-effort and offline-safe: on failure the static
+    rows still render.
     """
     rows = list(model_options_for_preset(preset))
 
@@ -3155,7 +3156,10 @@ def _preset_model_option_rows(
         if any(_same_model(model_id, existing) for existing in known):
             continue
         known.append(model_id)
-        rows.append((model_id, model_id, "available on your Alysis Code trial"))
+        # A model the gateway serves but the client predates: the preset may
+        # still describe it; otherwise say where it comes from.
+        description = str(preset.suggested_model_descriptions.get(model_id) or "").strip()
+        rows.append((model_id, model_id, description or "available on your Alysis Code Pro plan"))
     return rows
 
 

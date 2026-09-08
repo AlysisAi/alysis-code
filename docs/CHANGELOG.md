@@ -408,6 +408,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Workspace-target extraction also keeps extensionless dotfiles such as `.npmrc` available to
   verification selection.
 
+## [0.13.6.1] - 2026-09-08
+
+### Fixed
+
+- **V4.1 Flash beta on Alysis Code Pro.** The Pro model picker now includes
+  `deepseek-v4.1-flash-expires-on-0910` and `deepseek-v4-flash-vision-exp`
+  with descriptions. Newly discovered models are captioned "available on your
+  Alysis Code Pro plan" instead of the retired MiMo "trial" wording.
+
 ## [0.13.6] - 2026-09-08
 
 ### Added
