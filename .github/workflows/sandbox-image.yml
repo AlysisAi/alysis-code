@@ -160,7 +160,7 @@ jobs:
 
       - name: Upload Trivy SARIF artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-pr-dev-amd64-sarif
           path: trivy-pr-dev-amd64.sarif
@@ -411,7 +411,7 @@ jobs:
           category: trivy-sandbox-${{ matrix.variant }}-arm64
 
       - name: Upload Trivy SARIF artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-${{ matrix.variant }}-${{ needs.validate-source.outputs.sha12 }}-sarif
           path: trivy-${{ matrix.variant }}-*.sarif
@@ -482,7 +482,7 @@ jobs:
             > "candidate-record/${VARIANT}.json"
 
       - name: Upload verified candidate record
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sandbox-candidate-${{ matrix.variant }}-${{ github.sha }}
           path: candidate-record/${{ matrix.variant }}.json
