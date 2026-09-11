@@ -63,7 +63,7 @@ Source = "https://github.com/AlysisAi/alysis-code"
 dev = [
   "editables==0.5",
   "hatchling==1.31.0",
-  "pyyaml>=6.0.0",
+  "pyyaml>=6.0.3",
   "pytest>=8.0.0",
   "ruff>=0.6.0",
 ]
