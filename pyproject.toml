@@ -65,7 +65,7 @@ dev = [
   "hatchling==1.31.0",
   "pyyaml>=6.0.0",
   "pytest>=8.0.0",
-  "ruff>=0.6.0",
+  "ruff>=0.16.6",
 ]
 managed-build = [
   "pyinstaller==6.21.0",
