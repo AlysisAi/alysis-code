@@ -15,13 +15,10 @@ the release job invokes is inspectable, runnable in a bare interpreter, and
 fails loudly in the job log rather than silently inside a backend.
 
 The committed ``_build_info.py`` is a dev default reporting an unidentifiable
-build. After a release build, restore it::
-
-    git checkout -- src/alysis_code/_build_info.py
-
-so the repository never carries a stamp belonging to some earlier build. The
-dirty check deliberately ignores this one file, so stamping a clean tree still
-reports ``dirty: no``.
+build. This command overwrites the output file; save and restore its existing
+contents when stamping a working checkout. ``scripts/build_benchmark_wheel.sh``
+handles restoration automatically. The dirty check deliberately ignores this
+one file, so stamping a clean tree still reports ``dirty: no``.
 
 Exit codes: ``0`` stamped, ``1`` refused (with ``--require-clean``, when the
 tree is dirty or has no commit).

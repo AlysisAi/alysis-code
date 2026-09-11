@@ -437,7 +437,7 @@ class AppConfig(BaseModel):
     # Default persona for interactive chat: code|architect|ask|debug. Personas
     # are conventions (prompt overlay, model role, default execution mode)
     # layered on the execution-mode gate; "code" is the no-op persona and
-    # preserves pre-persona behavior exactly. See docs/persona_modes_design.md.
+    # preserves pre-persona behavior exactly. See docs/personas.md.
     default_persona: str = "code"
     # Kill-switch for persona modes; env override ALYSIS_PERSONA_MODES=off
     # wins over the config value. Off: /mode accepts only execution modes,

@@ -410,6 +410,8 @@ def _run_headless(state: TuiState, keys: str, **kwargs):
 def _run_and_capture_input_geometry(monkeypatch, keys: str):
     from prompt_toolkit.application import Application as PromptToolkitApplication
     from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.layout.containers import VSplit
+    from prompt_toolkit.layout.layout import walk
     from prompt_toolkit.output import DummyOutput
 
     from alysis_code.cli_impl.tui import app as app_module
@@ -418,7 +420,12 @@ def _run_and_capture_input_geometry(monkeypatch, keys: str):
 
     def geometry(application):
         main = application.layout.container.content
-        input_row = main.children[3]
+        input_window = application.layout.current_window
+        input_row = next(
+            container
+            for container in walk(main)
+            if isinstance(container, VSplit) and input_window in walk(container)
+        )
         side = input_row.children[0]
         frame = input_row.children[1]
         input_inner = frame.children[1].children[1].get_container()

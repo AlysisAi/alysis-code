@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -192,7 +193,7 @@ def test_timed_out_command_stays_tracked_then_is_reaped(tmp_path: Path) -> None:
     # The sklearn-14710 shape: the shell is killed by the timeout, its child
     # survives. The group must remain tracked so finalization can reap it.
     registry = ProcessGroupRegistry()
-    script = f"{sys.executable} -c 'import time; time.sleep(60)' & wait"
+    script = f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)' & wait"
     with pytest.raises(subprocess.TimeoutExpired):
         run_in_tracked_process_group(
             script,
@@ -218,7 +219,9 @@ def test_timed_out_command_stays_tracked_then_is_reaped(tmp_path: Path) -> None:
 @posix_only
 def test_backgrounded_command_stays_tracked_after_the_call_returns(tmp_path: Path) -> None:
     registry = ProcessGroupRegistry()
-    script = f"nohup {sys.executable} -c 'import time; time.sleep(60)' >/dev/null 2>&1 &"
+    script = (
+        f"nohup {shlex.quote(sys.executable)} -c 'import time; time.sleep(60)' >/dev/null 2>&1 &"
+    )
     completed = run_in_tracked_process_group(
         script,
         shell=True,
@@ -245,7 +248,9 @@ def test_backgrounded_command_stays_tracked_after_the_call_returns(tmp_path: Pat
 @posix_only
 def test_graceful_group_exits_on_sigterm(tmp_path: Path) -> None:
     registry = ProcessGroupRegistry()
-    script = f"nohup {sys.executable} -c 'import time; time.sleep(60)' >/dev/null 2>&1 &"
+    script = (
+        f"nohup {shlex.quote(sys.executable)} -c 'import time; time.sleep(60)' >/dev/null 2>&1 &"
+    )
     run_in_tracked_process_group(
         script, shell=True, cwd=str(tmp_path), timeout=30, registry=registry, origin="test"
     )
@@ -270,7 +275,7 @@ def test_sigterm_ignoring_group_escalates_to_sigkill(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     registry = ProcessGroupRegistry()
-    script = f"nohup {sys.executable} {stubborn} >/dev/null 2>&1 &"
+    script = f"nohup {shlex.quote(sys.executable)} {shlex.quote(str(stubborn))} >/dev/null 2>&1 &"
     run_in_tracked_process_group(
         script, shell=True, cwd=str(tmp_path), timeout=30, registry=registry, origin="test"
     )
@@ -305,7 +310,7 @@ def test_interrupting_a_tracked_command_kills_its_whole_group(tmp_path: Path) ->
         process.communicate = _interrupt  # type: ignore[method-assign]
         return process
 
-    script = f"nohup {sys.executable} -c 'import time; time.sleep(60)' >/dev/null 2>&1 & sleep 30"
+    script = f"nohup {shlex.quote(sys.executable)} -c 'import time; time.sleep(60)' >/dev/null 2>&1 & sleep 30"
     with pytest.raises(KeyboardInterrupt):
         run_in_tracked_process_group(
             script,

@@ -425,8 +425,8 @@ See [MCP](mcp.md), [Skills](skills.md), [Plugins](plugins.md),
 [Subagents](subagents.md) for the user-facing contracts.
 
 Release work that touches completion-gate, verification-evidence,
-deadline, diagnostic, or compatibility behavior should also follow the
-[release checklist](release_checklist.md).
+deadline, diagnostic, or compatibility behavior should include focused
+regression coverage and follow the project [release process](RELEASING.md).
 
 ### Forge
 
@@ -487,6 +487,5 @@ and the rules that apply to them.
 - [Plugins](plugins.md): extension packaging.
 - [Custom tools](custom_tools.md): trusted Python tools.
 - [Lifecycle hooks](hooks.md): command-based policy and automation.
-- [Release checklist](release_checklist.md): completion-gate regression and
-  compatibility checklist.
+- [Release process](RELEASING.md): maintainer release steps.
 - [Server mode](server.md): HTTP API operation.

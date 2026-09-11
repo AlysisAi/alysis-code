@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import io
 import json
+import textwrap
 from pathlib import Path
 from typing import Any
 
 from alysis_code.ide import management_protocol
 from alysis_code.ide.health import SUPPORTED_METHODS, capabilities_payload
+from alysis_code.ide.management_protocol import MANAGEMENT_METHODS
 from alysis_code.ide.protocol import ProtocolError
 from alysis_code.ide.stdio_bridge import StdioBridge
-from scripts.qa import check_ide_cli_parity as parity
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = REPO_ROOT / "docs" / "generated" / "ide_protocol_methods.json"
@@ -49,6 +52,60 @@ def _expanded_contract_methods() -> dict[str, dict[str, Any]]:
     for method, values in contract.get("methods", {}).items():
         methods[method] = {**methods.get(method, defaults), **values, "method": method}
     return methods
+
+
+def _literal_strings(node: ast.AST) -> set[str] | None:
+    if not isinstance(node, (ast.Set, ast.Tuple, ast.List)):
+        return None
+    values: set[str] = set()
+    for element in node.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return None
+        values.add(element.value)
+    return values
+
+
+class _DispatchMethodVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.methods: set[str] = set()
+        self.includes_management_methods = False
+
+    def visit_Compare(self, node: ast.Compare) -> None:  # noqa: N802
+        left = node.left
+        for operator, right in zip(node.ops, node.comparators, strict=False):
+            self._collect(left, operator, right)
+            left = right
+        self.generic_visit(node)
+
+    def _collect(self, left: ast.AST, operator: ast.cmpop, right: ast.AST) -> None:
+        if isinstance(operator, ast.Eq):
+            if isinstance(left, ast.Name) and left.id == "method":
+                if isinstance(right, ast.Constant) and isinstance(right.value, str):
+                    self.methods.add(right.value)
+            elif isinstance(right, ast.Name) and right.id == "method":
+                if isinstance(left, ast.Constant) and isinstance(left.value, str):
+                    self.methods.add(left.value)
+            return
+
+        if not isinstance(operator, ast.In):
+            return
+        if not isinstance(left, ast.Name) or left.id != "method":
+            return
+        if isinstance(right, ast.Name) and right.id == "MANAGEMENT_METHODS":
+            self.includes_management_methods = True
+            return
+        values = _literal_strings(right)
+        if values is not None:
+            self.methods.update(values)
+
+
+def _stdio_dispatch_methods() -> set[str]:
+    source = textwrap.dedent(inspect.getsource(StdioBridge._dispatch))
+    visitor = _DispatchMethodVisitor()
+    visitor.visit(ast.parse(source))
+    if visitor.includes_management_methods:
+        visitor.methods.update(MANAGEMENT_METHODS)
+    return visitor.methods
 
 
 def test_protocol_method_contract_covers_every_advertised_method() -> None:
@@ -219,14 +276,10 @@ def test_protocol_method_contract_captures_live_mcp_server_lifecycle() -> None:
 
 
 def test_advertised_methods_have_dispatch_or_documented_fail_closed_behavior() -> None:
-    health_methods = parity.extract_ide_method_features()
-    dispatch_methods = parity.extract_stdio_dispatch_method_features()
-    health_method_names = {method.name for method in health_methods}
+    dispatch_methods = _stdio_dispatch_methods()
 
-    assert health_methods <= dispatch_methods
-
-    management_handlers = parity.extract_management_handler_features()
-    assert parity.extract_management_method_features() == management_handlers
+    assert set(SUPPORTED_METHODS) <= dispatch_methods
+    assert set(MANAGEMENT_METHODS) == set(management_protocol._HANDLERS)
 
     oauth_login = capabilities_payload()["features"]["management"]["methods"][
         "mcp.auth.login.start"
@@ -239,15 +292,15 @@ def test_advertised_methods_have_dispatch_or_documented_fail_closed_behavior() -
     assert oauth_login["browser_opened_by_bridge"] is False
     assert oauth_login["tokens_in_protocol_params"] is False
     assert oauth_login["authorization_code_in_protocol"] is False
-    assert "mcp.auth.login.status" in health_method_names
-    assert "mcp.auth.login.complete" not in health_method_names
-    assert "mcp.auth.login.cancel" in health_method_names
+    assert "mcp.auth.login.status" in SUPPORTED_METHODS
+    assert "mcp.auth.login.complete" not in SUPPORTED_METHODS
+    assert "mcp.auth.login.cancel" in SUPPORTED_METHODS
 
     management = capabilities_payload()["features"]["management"]
     assert management["mcp"]["auth_login"]["advertised_lifecycle_methods"] is True
     assert management["hooks"]["watch"]["advertised_lifecycle_methods"] is False
-    assert "hooks.watch" not in health_method_names
-    assert not any(name.startswith("hooks.watch.") for name in health_method_names)
+    assert "hooks.watch" not in SUPPORTED_METHODS
+    assert not any(name.startswith("hooks.watch.") for name in SUPPORTED_METHODS)
 
 
 def test_workspace_required_management_methods_fail_closed_before_handler_params() -> None:

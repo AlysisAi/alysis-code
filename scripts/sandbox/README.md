@@ -38,5 +38,5 @@ a locally built image when Docker is available.
 
 ## See Also
 
-- [Shell sandbox](../docs/shell_sandbox.md)
-- [Server mode](../docs/server.md)
+- [Shell sandbox](../../docs/shell_sandbox.md)
+- [Server mode](../../docs/server.md)

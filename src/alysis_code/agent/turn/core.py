@@ -5800,8 +5800,6 @@ def run_turn(
                     and tool_executed_for_deadline_observation
                 ):
                     skill_selection_no_match_pending = False
-                if getattr(self, "agentbox_telemetry", None) is not None:
-                    self.agentbox_telemetry.tool(effective_tool_name)
                 tool_unavailable = is_tool_unavailable_result(result)
                 if status == "done" and not tool_unavailable:
                     if effective_tool_name == "shell_background":

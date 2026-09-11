@@ -279,7 +279,8 @@ def test_load_bundled_pack_eval_cases_covers_positive_explicit_and_negative_case
     specific_ci = next(case for case in cases if case.id == "bundled_fix_ci_normal")
     assert specific_ci.expected_skills == ("fix-ci",)
     assert "failing" in specific_ci.task.casefold()
-    assert "ci.log" in specific_ci.task
+    assert "ci-output.txt" in specific_ci.task
+    assert (specific_ci.workspace / "ci-output.txt").is_file()
 
     release_concept = next(
         case for case in cases if case.id == "bundled_negative_release_notes_concept"

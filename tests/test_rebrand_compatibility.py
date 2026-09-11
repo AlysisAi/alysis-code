@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import runpy
 import sys
 import warnings
 from pathlib import Path
@@ -28,16 +27,6 @@ from alysis_code.branding import (
     resolve_project_dir,
     with_legacy_env_aliases,
 )
-
-
-def test_child_repetition_replay_uses_canonical_package_and_brand() -> None:
-    root = Path(__file__).resolve().parents[1]
-    namespace = runpy.run_path(os.fspath(root / "scripts" / "qa" / "replay_child_repetition.py"))
-
-    fingerprint = namespace["_child_tool_outcome_fingerprint"]
-    parser = namespace["_parser"]()
-    assert fingerprint.__module__ == "alysis_code.agent.turn.core"
-    assert "Alysis Code's real repetition" in parser.description
 
 
 @pytest.fixture(autouse=True)
@@ -371,44 +360,6 @@ def test_legacy_runtime_dirs_stay_write_protected() -> None:
 
 
 # --- frozen wire constants --------------------------------------------------
-
-
-def test_release_signature_domain_is_frozen_at_its_prerebrand_value() -> None:
-    """This string is hashed into every signature already published.
-
-    Renaming it with the rest of the rebrand would make every existing signed
-    managed-CLI release fail verification. It is frozen for the life of schema
-    v3. When the optional VS Code extension source is present, both verifiers
-    must also match byte for byte.
-    """
-    import re
-
-    root = Path(__file__).resolve().parents[1]
-    python_domain = re.search(
-        r'^DOMAIN = "([^"]+)"',
-        (root / "scripts" / "release" / "build_managed_cli_manifest.py").read_text(
-            encoding="utf-8"
-        ),
-        re.M,
-    )
-    assert python_domain is not None
-    assert python_domain.group(1) == "sylliptor-managed-cli-release-v3"
-    ts_path = (
-        root / "extensions" / "vscode-alysis" / "src" / "runtime" / "ManagedCliReleaseSecurity.ts"
-    )
-    if ts_path.is_file():
-        ts_domain = re.search(
-            r'RELEASE_ATTESTATION_DOMAIN = "([^"]+)"',
-            ts_path.read_text(encoding="utf-8"),
-        )
-        assert ts_domain is not None
-        assert python_domain.group(1) == ts_domain.group(1)
-
-
-def test_retiring_release_trust_anchor_id_is_frozen() -> None:
-    from scripts.release.build_managed_cli_manifest import LEGACY_SIGNING_KEY_ID
-
-    assert LEGACY_SIGNING_KEY_ID == "sylliptor-release-2026-01"
 
 
 def test_token_store_aad_pair_is_intact() -> None:

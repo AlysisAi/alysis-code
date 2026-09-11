@@ -1885,6 +1885,15 @@ def compute_context_left(
     if request_measurement is not None and projection_kind is not None:
         anchor_token_count_source = request_measurement.source
         anchor_token_count_confidence = request_measurement.confidence
+        # Provider usage measures the whole request, not its startup portion.
+        # Estimate that portion with the same measured/local ratio used to
+        # project subsequent growth. Integer ceiling keeps an identical startup
+        # request exact instead of introducing floating-point rounding drift.
+        baseline = (
+            baseline * request_measurement.input_tokens
+            + request_measurement.anchor_estimate_tokens
+            - 1
+        ) // request_measurement.anchor_estimate_tokens
         if projection_kind == "exact_request":
             used = request_measurement.input_tokens
             token_count_source = request_measurement.source
@@ -1931,13 +1940,11 @@ def compute_context_left(
         if (effective_remaining is not None and effective_input_budget > 0)
         else None
     )
-    # Conversation-growth metrics intentionally remain on the local estimator.
-    # Provider counts include tokenizer framing and ephemeral request wrappers;
-    # attributing that overhead to conversation growth makes the dynamic gauge
-    # jump even when no persistent context changed.
-    dynamic_metric_used = local_used if projection_kind is not None else used
+    # Normalize remaining capacity against the space available after startup.
+    # Use the same request count as the capacity budget: provider framing and
+    # ephemeral wrappers occupy context too, even when history has not grown.
     dynamic_budget = max(0, effective_input_budget - baseline)
-    dynamic_used = max(0, dynamic_metric_used - baseline)
+    dynamic_used = max(0, used - baseline)
     dynamic_remaining = max(0, dynamic_budget - dynamic_used)
     dynamic_percent = (dynamic_remaining / dynamic_budget) * 100.0 if dynamic_budget > 0 else 0.0
     return ContextLeft(

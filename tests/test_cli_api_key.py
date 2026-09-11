@@ -645,6 +645,9 @@ def test_create_session_strict_model_metadata_policy_allows_override_backed_capa
 def test_agent_session_context_left_uses_model_window_and_effective_budget(
     tmp_path: Path,
 ) -> None:
+    from alysis_code.cli_impl.tui.footer import footer_fragments
+    from alysis_code.cli_impl.tui.state import TuiState
+
     cfg = AppConfig(model="custom-model", model_metadata_policy="strict")
     cfg.extra_fields = {
         "model_metadata_overrides": {
@@ -694,6 +697,12 @@ def test_agent_session_context_left_uses_model_window_and_effective_budget(
         assert ctx.dynamic_context_used_tokens == 0
         assert ctx.dynamic_context_percent_left == 100.0
 
+        session._hud_context_cache = ctx
+        fresh_footer = footer_fragments(
+            TuiState(context_pct=cli_mod._chat_context_percent_value(session)), width=120
+        )
+        assert "context: 100% left" in "".join(text for _, text in fresh_footer)
+
         session.messages.append({"role": "user", "content": "additional context " * 100})
         grown_ctx = session.context_left()
         assert grown_ctx.startup_baseline_tokens == expected_used
@@ -703,6 +712,14 @@ def test_agent_session_context_left_uses_model_window_and_effective_budget(
         )
         assert grown_ctx.dynamic_context_percent_left is not None
         assert grown_ctx.dynamic_context_percent_left < 100.0
+        session._hud_context_cache = grown_ctx
+        grown_footer = footer_fragments(
+            TuiState(context_pct=cli_mod._chat_context_percent_value(session)), width=120
+        )
+        grown_text = "".join(text for _, text in grown_footer)
+        assert "context:" in grown_text
+        assert "context: 100% left" not in grown_text
+        assert "context: n/a" not in grown_text
     finally:
         session.close()
 
@@ -3682,6 +3699,7 @@ def test_chat_turn_usage_line_formats_compact_totals_and_context_warning() -> No
         None,
     )
     assert cli_mod._chat_turn_usage_style(session) == "dim"
+    assert cli_mod._chat_context_hud_value(session) == "99.4%"
 
     session._hud_context_cache = SimpleNamespace(
         percent_left=72.2,
@@ -3690,10 +3708,11 @@ def test_chat_turn_usage_line_formats_compact_totals_and_context_warning() -> No
     )
     assert cli_mod._chat_turn_usage_line(session) == (
         "153.8k [dim]tokens[/dim]   [dim]↓[/dim] 150.3k   "
-        "[dim]↑[/dim] 3,422   [dim]context left:[/dim] 8.5%",
+        "[dim]↑[/dim] 3,422   [dim]context left:[/dim] 93.3%",
         "\u26a0\ufe0e  Critical input budget — run /compact to reduce context",
     )
     assert cli_mod._chat_turn_usage_style(session) == "bold red"
+    assert cli_mod._chat_context_hud_value(session) == "93.3% !!"
 
     session._hud_context_cache = SimpleNamespace(
         percent_left=55.0,
@@ -3704,10 +3723,11 @@ def test_chat_turn_usage_line_formats_compact_totals_and_context_warning() -> No
         "153.8k [dim]tokens[/dim]   "
         "[dim]↓[/dim] 150.3k   "
         "[dim]↑[/dim] 3,422   "
-        "[dim]context left:[/dim] 15.0%",
+        "[dim]context left:[/dim] 44.0%",
         "\u26a0\ufe0e  Low input budget — run /compact to reduce context",
     )
     assert cli_mod._chat_turn_usage_style(session) == "yellow"
+    assert cli_mod._chat_context_hud_value(session) == "44.0% !"
 
     session._hud_context_cache = SimpleNamespace(percent_left=None)
     assert cli_mod._chat_turn_usage_line(session) == (

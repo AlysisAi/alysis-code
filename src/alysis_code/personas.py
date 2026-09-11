@@ -5,7 +5,7 @@ execution mode — never an enforcement layer. Execution modes, approval guards,
 write scope, and the sandbox remain the sole authority over what a turn may do.
 A persona switch may freely lower the effective execution mode but may never
 raise it above the user's session mode (the clamp rule, mirroring subagent
-mode clamping). See ``docs/persona_modes_design.md``.
+mode clamping). See ``docs/personas.md``.
 
 This module is deliberately dependency-light: the registry, the name
 vocabulary, the kill switch, and the model-role lookup. Applying a persona to

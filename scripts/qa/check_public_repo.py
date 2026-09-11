@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Check public-tree contents and portable relative documentation links."""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from collections.abc import Iterable
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
+
+_CACHE_DIRS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+}
+_LOCAL_ROOTS = {".alysis", ".sylliptor", "artifacts", "build", "dist", "runs"}
+_BLOCKED_NAMES = {
+    ".coverage",
+    ".DS_Store",
+    "coverage.xml",
+}
+_BLOCKED_SUFFIXES = {
+    ".bak",
+    ".db",
+    ".har",
+    ".jks",
+    ".key",
+    ".keystore",
+    ".log",
+    ".p12",
+    ".pcap",
+    ".pem",
+    ".pfx",
+    ".pyc",
+    ".pyo",
+    ".sqlite",
+    ".swp",
+    ".tmp",
+    ".trace",
+}
+_ENV_EXAMPLES = {".env.example", ".env.sample", ".env.template"}
+_MAX_TRACKED_FILE_BYTES = 5 * 1024 * 1024
+_MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)")
+
+
+def path_violation(path_text: str) -> str | None:
+    """Return the public-tree policy violation for a tracked path, if any."""
+    path = PurePosixPath(path_text)
+    parts = set(path.parts)
+
+    if tuple(part.casefold() for part in path.parts[:2]) == ("docs", "internal"):
+        return "internal documentation directory"
+    if parts & _CACHE_DIRS:
+        return "generated cache directory"
+    if path.parts and path.parts[0] in _LOCAL_ROOTS:
+        return "local runtime or build-output directory"
+    if path.name in _BLOCKED_NAMES:
+        return "local generated file"
+    if path.name.startswith(".env") and path.name not in _ENV_EXAMPLES:
+        return "environment file"
+    if path.suffix.lower() in _BLOCKED_SUFFIXES:
+        return "credential-bearing or generated file type"
+    return None
+
+
+def collect_violations(paths: Iterable[str], root: Path) -> list[str]:
+    """Return sorted policy violations for tracked repository paths."""
+    violations: list[str] = []
+    for path_text in paths:
+        reason = path_violation(path_text)
+        if reason:
+            violations.append(f"{path_text}: {reason}")
+            continue
+
+        local_path = root / path_text
+        if local_path.is_file() and local_path.stat().st_size > _MAX_TRACKED_FILE_BYTES:
+            violations.append(f"{path_text}: tracked file exceeds 5 MiB")
+    return sorted(violations)
+
+
+def _is_host_navigation_target(relative_target: str) -> bool:
+    """Return whether an escaping link denotes a repository-host route, not a file."""
+    path = PurePosixPath(relative_target.rstrip("/"))
+    return bool(path.parts) and path.name not in {".", ".."} and not path.suffix
+
+
+def _path_exists_with_exact_case(path: Path, root: Path) -> bool:
+    """Check each link component even on a case-insensitive filesystem."""
+    current = root
+    for part in path.relative_to(root).parts:
+        if part == "..":
+            current = current.resolve().parent
+            continue
+        if not current.is_dir() or part not in {entry.name for entry in current.iterdir()}:
+            return False
+        current = current / part
+    return current.exists()
+
+
+def markdown_link_violations(paths: Iterable[str], root: Path) -> list[str]:
+    """Return missing, miscapitalized, or repository-escaping relative Markdown links."""
+    root = root.resolve()
+    violations: list[str] = []
+    for path_text in paths:
+        if PurePosixPath(path_text).suffix.lower() != ".md":
+            continue
+        markdown_path = root / path_text
+        if not markdown_path.is_file():
+            continue
+
+        in_fence = False
+        for line_number, line in enumerate(
+            markdown_path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+
+            for match in _MARKDOWN_LINK_RE.finditer(line):
+                raw_target = match.group(1).strip("<>")
+                parsed = urlsplit(raw_target)
+                if parsed.scheme or parsed.netloc or raw_target.startswith(("#", "/")):
+                    continue
+                relative_target = unquote(parsed.path)
+                if not relative_target:
+                    continue
+                target = markdown_path.parent / relative_target
+                resolved = target.resolve()
+                try:
+                    resolved.relative_to(root)
+                except ValueError:
+                    # Hosted Markdown may link to extensionless repository routes such as
+                    # ``../../issues``. Those are URL paths, so local filesystem checks cannot
+                    # validate them. Escaping links that look like files remain violations.
+                    if _is_host_navigation_target(relative_target):
+                        continue
+                    violations.append(
+                        f"{path_text}:{line_number}: relative link escapes repository: {raw_target}"
+                    )
+                    continue
+                if not _path_exists_with_exact_case(target, root):
+                    violations.append(
+                        f"{path_text}:{line_number}: broken relative link: {raw_target}"
+                    )
+    return sorted(violations)
+
+
+def _git_lines(root: Path, *args: str) -> list[str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parents[2]
+    repository_paths = _git_lines(
+        root,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    )
+    repository_paths = [
+        path for path in repository_paths if (root / path).exists() or (root / path).is_symlink()
+    ]
+    violations = collect_violations(repository_paths, root)
+    violations.extend(markdown_link_violations(repository_paths, root))
+
+    for path_text in _git_lines(root, "ls-files", "-ci", "--exclude-standard"):
+        if (root / path_text).exists() or (root / path_text).is_symlink():
+            violations.append(f"{path_text}: tracked file is excluded by .gitignore")
+
+    if violations:
+        print("Public repository hygiene check failed:", file=sys.stderr)
+        for violation in sorted(set(violations)):
+            print(f"- {violation}", file=sys.stderr)
+        return 1
+
+    print(f"Public repository hygiene check passed ({len(repository_paths)} repository files).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -687,7 +687,5 @@ def run_agent(
     finally:
         if watchdog is not None:
             watchdog.disarm()
-        # close() is left with its default reason on purpose: `status` feeds
-        # the agentbox error flag, and a budget stop is not an error. The
-        # machine-readable marker travels as session.stop_reason instead.
+        # Budget stops retain their machine-readable reason in session.stop_reason.
         session.close()

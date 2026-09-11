@@ -5,14 +5,15 @@ managed execution flows.
 
 ## Contents
 
-- `session.py` builds session state from configuration, workspace context, and
+- [session.py](session.py) builds session state from configuration, workspace context, and
   runtime kind.
-- `tools_assembly.py` builds the concrete tool surface for a session.
-- `turn.py` runs the turn loop and tool-call iteration.
-- `routing.py` handles routing and final response shaping.
-- `prompt_context.py` prepares workspace, convention, skill, plugin, and
+- [tools_assembly.py](tools_assembly.py) builds the concrete tool surface for a session.
+- [turn/core.py](turn/core.py) runs the turn loop and tool-call iteration.
+- [turn_path.py](turn_path.py) defines execution posture and reply-language directives.
+- [prompt_context.py](prompt_context.py) prepares workspace, convention, skill, plugin, and
   verification context.
-- `verification.py` and `verification_commands.py` support verification flows.
+- [verification.py](verification.py) and [verification_commands.py](verification_commands.py)
+  support verification flows.
 
 ## Scope
 
