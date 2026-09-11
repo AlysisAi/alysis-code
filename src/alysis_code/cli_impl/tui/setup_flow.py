@@ -322,7 +322,7 @@ class SetupFlow:
                 ),
                 ("Setup then asks for the workspace folder you want to work on.", "dim"),
             ],
-            hint="▶  Press Enter to begin",
+            hint="▶  Press Enter to continue",
         )
 
     def _screen_connect_provider(self) -> Screen:

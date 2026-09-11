@@ -1,39 +1,45 @@
-# Alysis Code Docs
+# Alysis Code documentation
 
-Public documentation for setup, operation, extension points, and security.
+The root [README](../README.md) covers installation and a first run. The guides below describe
+configuration, operation, extension points, and security in more detail.
 
-Start with the [root README](../README.md) for installation and first use. Use this index for deeper guides.
+## Getting started
 
-## Start Here
+- [Quickstart](quickstart.md): configure a provider and run your first task.
+- [Credentials](credentials.md): understand API-key precedence and storage.
+- [AI subscription connections](account-runtimes.md): sign in through a supported provider.
+- [Reference](reference.md): commands, modes, configuration, sessions, and troubleshooting.
+- [Migration from Sylliptor](migration-alysis-code.md): update commands and configuration after
+  the project rename.
 
-- [Quickstart](quickstart.md): configure a provider, bind a workspace, and run the first task.
-- [AI subscription connections](account-runtimes.md): use provider sign-in with Alysis Code's native agent and `/config` model/effort selection.
-- [Credentials](credentials.md): understand API-key precedence and persisted credential storage.
-- [Reference](reference.md): review commands, modes, configuration, updates, sessions, and troubleshooting.
-- [Web search](web-search.md): review model-led search behavior, provider coverage, and fallback configuration.
+## Core guides
 
-## Core Guides
+- [Architecture](architecture.md): session loop, providers, tools, and verification.
+- [Security model](security_model.md): trust boundaries and host-enforced controls.
+- [Shell sandbox](shell_sandbox.md): Docker and Bubblewrap configuration.
+- [Forge](forge.md): plan and execute larger tasks.
+- [Background terminals](terminals.md): manage background commands and durable services.
+- [Subagents](subagents.md): delegate focused work with constrained permissions.
+- [Personas](personas.md): switch between implementation, planning, question, and debugging
+  behavior.
+- [Web search](web-search.md): configure hosted and external search backends.
+- [Server mode](server.md): run the HTTP API and worker service.
 
-- [Architecture](architecture.md): understand the session loop, provider layer, tools, verification, and trust boundaries.
-- [Shell sandbox](shell_sandbox.md): configure Docker or Bubblewrap isolation for shell and verification commands.
-- [Security model](security_model.md): review trust boundaries, HTTP protections, MCP boundaries, hooks, plugins, and fullaccess mode.
-- [Server mode](server.md): start the HTTP API and configure authentication, uploads, job queues, and workers.
-- [Forge](forge.md): plan, execute, verify, and review larger coding tasks.
-- [Subagents](subagents.md): delegate focused read-only exploration, review, and testing strategy work.
-- [Release checklist](release_checklist.md): regression gates for one-shot completion safety, deadlines, diagnostics, and compatibility.
+## Extensions
 
-## Extension Guides
+- [MCP servers](mcp.md)
+- [Skills](skills.md)
+- [Skill lifecycle](skills_lifecycle.md)
+- [Plugins](plugins.md)
+- [Custom tools](custom_tools.md)
+- [Lifecycle hooks](hooks.md)
+- [Custom tool and hook examples](examples/README.md)
+- [IDE protocol](ide_protocol.md): build editor integrations using the structured bridge API.
 
-- [MCP](mcp.md): connect stdio or Streamable HTTP MCP servers with explicit policy.
-- [Skills](skills.md): discover and use reusable instruction bundles.
-- [Skills lifecycle](skills_lifecycle.md): scaffold, validate, install, enable, disable, and remove skills.
-- [Plugins](plugins.md): package skills, tools, MCP servers, and hooks into trusted bundles.
-- [Custom tools](custom_tools.md): add trusted Python tools with manifests, validation, and subprocess execution.
-- [Lifecycle hooks](hooks.md): run deterministic command hooks around sessions and tool calls.
-
-## Project
+## Project information
 
 - [Contributing](../.github/CONTRIBUTING.md): local development and pull request guidance.
 - [Release process](RELEASING.md): package and sandbox-image release steps.
 - [Security policy](../.github/SECURITY.md): private vulnerability reporting.
 - [Code of Conduct](../.github/CODE_OF_CONDUCT.md): community participation expectations.
+- [Changelog](CHANGELOG.md): user-facing release history.

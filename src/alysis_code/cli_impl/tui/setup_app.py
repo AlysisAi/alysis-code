@@ -71,7 +71,7 @@ _SETUP_STYLE = Style.from_dict(
         "setup.subtitle": "#8b949e",
         "setup.text": "#c9d1d9",
         "setup.dim": "#6e7681",
-        # Prominent call-to-action (e.g. "Press Enter to begin") on message screens.
+        # Prominent call-to-action pinned above the footer on every setup step.
         "setup.cta": f"bold {_ACCENT}",
         "setup.ok": f"bold {_ACCENT}",
         "setup.warn": "#d19a66",
@@ -193,11 +193,6 @@ def run_setup_tui(
         for text, tone in scr.lines:
             frags.append((_TONE_STYLE.get(tone, "class:setup.text"), text))
             frags.append(("", "\n"))
-        if scr.hint:
-            # The call-to-action stands out in bold green with a blank line above.
-            frags.append(("", "\n\n"))
-            frags.append(("class:setup.cta", scr.hint))
-            frags.append(("", "\n"))
         return FormattedText(frags)
 
     def _body_fragments() -> FormattedText:
@@ -219,7 +214,7 @@ def run_setup_tui(
 
         if scr.mode == "list" and scr.rows:
             picker = _render_picker_rows(
-                [_row_to_dict(r) for r in scr.rows], scr.index, width, hint=scr.hint
+                [_row_to_dict(r) for r in scr.rows], scr.index, width, hint=""
             )
             located = next(
                 (i for i, prow in enumerate(picker) if any("selcaret" in s for s, _ in prow)),
@@ -231,9 +226,6 @@ def run_setup_tui(
             for text, tone in scr.lines:
                 for line in _wrap_line(text, width):
                     rows.append([(_TONE_STYLE.get(tone, "class:setup.text"), line)])
-            rows.append([("", "")])
-            if scr.hint:
-                rows.append([("class:setup.dim", scr.hint)])
         elif scr.mode == "input":
             if scr.input_label:
                 rows.append([("class:setup.text", scr.input_label + ":")])
@@ -268,8 +260,7 @@ def run_setup_tui(
         except Exception:
             width = 80
         left: list[tuple[str, str]] = [("class:setup.footer.progress", scr.progress)]
-        # The per-screen hint already lives in the body (picker/confirm/input);
-        # keep the footer to the progress label + a global cancel hint.
+        # The per-screen action is pinned directly above this footer.
         right: list[tuple[str, str]] = [("class:setup.footer.dim", "Ctrl+C cancel")]
         left_len = sum(len(t) for _s, t in left)
         right_len = sum(len(t) for _s, t in right)
@@ -296,6 +287,17 @@ def run_setup_tui(
         right_margins=[ScrollbarMargin(display_arrows=False)],
     )
     status_window = Window(FormattedTextControl(_status_fragments, focusable=False), height=1)
+    # Reserve space outside the scrollable body so artwork and long provider
+    # lists cannot push the next action off-screen. Wrap on narrow terminals.
+    hint_window = Window(
+        FormattedTextControl(
+            lambda: FormattedText([("class:setup.cta", flow.screen().hint)]),
+            focusable=False,
+        ),
+        align=WindowAlign.CENTER,
+        wrap_lines=True,
+        dont_extend_height=True,
+    )
 
     _is_password = Condition(lambda: flow.screen().input_password)
     input_area = TextArea(
@@ -332,6 +334,7 @@ def run_setup_tui(
             ConditionalContainer(status_window, filter=has_status | is_busy),
             ConditionalContainer(input_frame, filter=is_input),
             Window(height=1),
+            ConditionalContainer(hint_window, filter=Condition(lambda: bool(flow.screen().hint))),
             Window(FormattedTextControl(_footer_fragments, focusable=False), height=1),
         ]
     )

@@ -45,7 +45,7 @@ body:
     attributes:
       label: Alysis Code version
       description: Output of `alysis --version` (or commit SHA if running from source).
-      placeholder: 0.9.1
+      placeholder: alysis 0.x.y
     validations:
       required: true
   - type: input
@@ -70,4 +70,4 @@ body:
     id: extra
     attributes:
       label: Additional context
-      description: Logs, config snippets, screenshots, anything else relevant.
+      description: Relevant logs, sanitized configuration, or screenshots. Remove credentials and personal data.

@@ -1,7 +1,7 @@
 """Persona modes PR A: registry, config keys, env-context line, surface event.
 
 Personas are conventions layered on the execution-mode gate (see
-``docs/persona_modes_design.md``). This suite pins the PR A surface: the
+``docs/personas.md``). This suite pins the registry surface: the
 registry vocabulary and defaults, strict config-time validation vs lenient
 runtime normalization, the kill-switch pair, the ``persona_models.<persona>``
 dotted keys, the environment-context ``persona:`` line (absent for the no-op

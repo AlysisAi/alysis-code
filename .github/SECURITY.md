@@ -1,30 +1,29 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-Alysis Code tracks security support by release line and repository branch. Security
-fixes for the current 0.9 release line are handled on the `main` branch and shipped
-in the next patch release.
+Security fixes are made on `main` and released in the next available patch version.
 
-| Release line / branch | Supported |
-| --------------------- | --------- |
-| 0.9.x / `main`        | Yes       |
-| Earlier lines         | No        |
+| Version | Supported |
+| --- | --- |
+| Latest release | Yes |
+| Older releases | No |
 
-## Reporting a Vulnerability
+Users should upgrade to the latest release before reporting a problem that may already be fixed.
 
-Please report security vulnerabilities by contacting [products@alysisai.com](mailto:products@alysisai.com).
+## Reporting a vulnerability
 
-Do NOT open public GitHub issues for security bugs.
+Do not open a public issue for a suspected vulnerability.
 
-We aim to acknowledge security reports within 72 hours and provide a fix or remediation roadmap within 14 days.
+Use [GitHub's private vulnerability reporting](https://github.com/AlysisAi/alysis-code/security/advisories/new)
+or email [products@alysisai.com](mailto:products@alysisai.com). Include the affected version,
+reproduction steps, expected impact, and any known workarounds. Please remove API keys, access
+tokens, personal data, and unrelated logs from the report.
 
-Please include:
-
-- Affected version
-- Reproduction steps
-- Impact assessment
+We aim to acknowledge reports within three business days. Investigation and remediation timelines
+depend on severity and complexity. We will keep reporters informed when a report is accepted.
 
 ## Disclosure
 
-Coordinated disclosure is preferred. Credit will be given unless the reporter prefers anonymity.
+Please allow time for a fix and release before publishing details. We coordinate disclosure with
+reporters and provide credit unless anonymity is requested.

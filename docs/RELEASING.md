@@ -1,106 +1,78 @@
-# Releasing
+# Releasing Alysis Code
 
-This is the maintainer checklist for publishing Alysis Code packages and sandbox images.
+This document is for maintainers publishing the Python package or sandbox images. Release
+credentials are managed through protected GitHub environments; they must not be stored in the
+repository or passed on the command line.
 
-## Version And Tag
+## Python package
 
-1. Bump the package version in `pyproject.toml` and `src/alysis_code/__init__.py`.
-2. Update `docs/CHANGELOG.md` with user-facing changes and known limitations.
-3. Commit the release changes.
-4. Create and push the release tag:
+1. Start from a clean commit on `main` with all required checks passing.
+2. Update the version in `pyproject.toml` and `src/alysis_code/__init__.py`.
+3. Move user-facing entries from `Unreleased` into a dated section in `docs/CHANGELOG.md`.
+4. Run the release checks locally:
 
-```bash
-git tag v0.x.y
-git push origin v0.x.y
-```
+   ```bash
+   uv sync --frozen --extra dev
+   uv run --frozen --no-sync ruff check .
+   uv run --frozen --no-sync ruff format --check .
+   uv run --frozen --no-sync pytest -q
+   uv build --clear --no-build-isolation --no-sources --out-dir dist/python
+   uv run --frozen --no-sync python scripts/release/validate_python_distributions.py dist/python
+   ```
 
-## PyPI
+5. Commit the release metadata and obtain review.
+6. Create and push the version tag:
 
-Release tags build the wheel and source distribution. The publish job expects PyPI trusted
-publishing to be configured for this repository and release workflow.
+   ```bash
+   VERSION=0.14.0
+   git tag "v${VERSION}"
+   git push origin "v${VERSION}"
+   ```
 
-After the workflow finishes:
+The tag-triggered `release` workflow validates that the tag, package version, source commit, and
+default branch agree. It then tests and builds the source distribution and wheel, creates an SBOM
+and provenance attestations, publishes through PyPI trusted publishing, and creates the GitHub
+release.
 
-- Confirm the package page shows the expected version.
-- Install the package in a clean environment.
-- Run `alysis --help`.
+After publication:
 
-## Sandbox Images
+- confirm the GitHub Actions run completed successfully;
+- verify the version and files on PyPI;
+- install the wheel in a clean environment; and
+- run `alysis-code --version` and `alysis-code --help`.
 
-Sandbox images are published under:
+Never move or reuse a published version tag. If a release is defective, fix the problem and publish
+a new patch version. Yank a PyPI release only when leaving it available would harm users.
 
-```text
-ghcr.io/alysisai/alysis-sandbox
-```
+## Sandbox images
 
-Sandbox releases use an isolated Git tag namespace. Create a tag such as
-`sandbox-v0.9.7`; ordinary Python or extension `v*` tags do not trigger the
-container workflow.
+Sandbox images are published from tags named `sandbox-vX.Y.Z`. The `sandbox-image` workflow builds,
+scans, signs, attests, and smoke-tests each supported image variant before promotion.
 
-The workflow first publishes source- and run-bound candidates under
-`:candidate-<variant>-<full-sha>-<run-id>-<run-attempt>`. It scans and
-smoke-tests both `linux/amd64` and `linux/arm64`, creates provenance, and signs
-every candidate digest. Only after **all three variants** pass does the
-promotion job create consumer tags:
+Before tagging, confirm that the protected `sandbox-release` environment has required reviewers,
+self-review prevention, and deployment restrictions for `main` and `sandbox-v*` tags.
 
-- `:<variant>` for the moving variant tag, for example `:dev`
-- `:<variant>-<sha12>` for the immutable per-commit tag
-- `:<variant>-<sandbox-git-tag>` for release tags
-- `:<sandbox-git-tag>` for the default variant
-
-The default variant is `dev`. A manual run must target the repository default
-branch and does not update moving tags unless `publish_moving_tags` is selected.
-Candidate tags are not consumer release channels.
-Promotion refuses to replace an existing per-commit or release tag with a
-different digest; only the explicitly selected moving aliases may move.
-
-Repository administrators must configure the `sandbox-release` GitHub
-environment with required maintainer reviewers, self-review prevention, and
-deployment-branch/tag restrictions for the default branch and `sandbox-v*`
-release tags. The write-enabled promotion job is the only job attached to this
-protected environment.
-
-## Verify A Release Image
-
-Pull the image:
+Create and push the tag:
 
 ```bash
-docker pull ghcr.io/alysisai/alysis-sandbox:dev
+VERSION=0.14.0
+git tag "sandbox-v${VERSION}"
+git push origin "sandbox-v${VERSION}"
 ```
 
-For production use, prefer a digest-pinned image:
+After the workflow succeeds, inspect the published manifest and prefer digest-pinned references in
+production:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/alysisai/alysis-sandbox:dev
-export ALYSIS_SHELL_SANDBOX_DOCKER_IMAGE=ghcr.io/alysisai/alysis-sandbox@sha256:<digest>
 ```
 
-Verify the signature and exact-source provenance for the immutable release digest. Replace the
-placeholders with the tag and full source commit used by the retained workflow run:
+The workflow file is the authoritative description of image variants, signing, provenance, SBOM,
+and promotion checks.
 
-```bash
-cosign verify ghcr.io/alysisai/alysis-sandbox@<digest> \
-  --certificate-identity 'https://github.com/AlysisAi/alysis-code/.github/workflows/sandbox-image.yml@refs/tags/<sandbox-tag>' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+## Failed releases
 
-gh attestation verify oci://ghcr.io/alysisai/alysis-sandbox@<digest> \
-  --repo AlysisAi/alysis-code \
-  --signer-workflow AlysisAi/alysis-code/.github/workflows/sandbox-image.yml \
-  --source-ref refs/tags/<sandbox-tag> \
-  --source-digest <full-source-sha> \
-  --deny-self-hosted-runners \
-  --predicate-type https://slsa.dev/provenance/v1
-```
-
-The protected workflow also resolves the exact `linux/amd64` and `linux/arm64` manifest digests,
-extracts each BuildKit SPDX 2.3 SBOM, checks its recorded SHA-256, and verifies that the exact SBOM
-semantically matches a source-bound `https://spdx.dev/Document/v2.3` attestation for that platform
-manifest. Signature, scan, smoke, provenance, platform inventory, or SBOM predicate failures prevent
-promotion; there is no best-effort release path.
-
-## Troubleshooting
-
-- GHCR rate limits: authenticate before repeated pulls.
-- Package visibility: confirm the GHCR package is public before public launch.
-- Vulnerability findings: review the advisory, decide whether it is exploitable, then patch or
-  document an explicit temporary exception.
+- Do not rerun publication from a different commit under the same tag.
+- Do not bypass a failing validation, scan, signature, or provenance check.
+- Keep failed workflow logs and artifacts private if they contain operational details.
+- Correct the source, increment the version when necessary, and create a new reviewed tag.

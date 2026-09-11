@@ -540,9 +540,12 @@ def _chat_context_hud_value(session: Any) -> str:
     if value is None:
         return "n/a"
     label = f"{value:.1f}%"
-    if value < 10.0:
+    warning_percent = _chat_effective_budget_percent_value(session)
+    if warning_percent is None:
+        warning_percent = value
+    if warning_percent < 10.0:
         return f"{label} !!"
-    if value < 25.0:
+    if warning_percent < 25.0:
         return f"{label} !"
     return label
 
@@ -596,11 +599,12 @@ def _chat_context_percent_value(session: Any) -> float | None:
     ctx = getattr(session, "_hud_context_cache", None)
     if ctx is None:
         return None
-    # The primary HUD must describe provider-usable capacity. The former
-    # baseline-subtracted conversation percentage always started at 100%, even
-    # when bootstrap prompts and tool schemas already occupied a substantial
-    # part of the model window.
-    percent = getattr(ctx, "effective_percent_left", None)
+    # Show the conversation space remaining after startup prompts and tools,
+    # so a fresh session starts at 100%. Capacity warnings still use the full
+    # request through _chat_effective_budget_percent_value.
+    percent = getattr(ctx, "dynamic_context_percent_left", None)
+    if percent is None:
+        percent = getattr(ctx, "effective_percent_left", None)
     if percent is None:
         percent = getattr(ctx, "context_window_percent_left", None)
     if percent is None:

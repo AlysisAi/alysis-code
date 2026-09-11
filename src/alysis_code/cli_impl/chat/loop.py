@@ -2247,8 +2247,8 @@ def chat(
 
                     try:
                         _refresh_chat_hud_context_cache(built)
-                        # The footer reports provider-usable input capacity so
-                        # its "context" label agrees with /context and /status.
+                        # Show conversation space relative to the startup
+                        # baseline; /context retains full-request diagnostics.
                         pct = _chat_context_percent_value(built)
                         if pct is not None:
                             _tui_state.context_pct = float(pct)

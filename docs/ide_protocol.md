@@ -101,15 +101,9 @@ The machine-readable method contract lives in
 [`docs/generated/ide_protocol_methods.json`](generated/ide_protocol_methods.json). It records each
 advertised IDE method, required and optional params, forbidden secret field names, mutation and
 Workspace Trust metadata, workspace requirements, and selected result redaction expectations.
-CLI-to-IDE parity is governed separately by
-[`docs/generated/ide_cli_parity_matrix.json`](generated/ide_cli_parity_matrix.json), with the
-generated burn-down in
-[`docs/generated/ide_cli_parity_burndown.md`](generated/ide_cli_parity_burndown.md).
 
-The fixture is validated against `health.py`, `management_protocol.py`, protocol docs, and the VS
-Code backend action registry. TypeScript action tests collect deterministic params for every
-registered action and validate them against this fixture, so route/schema drift such as renamed
-params or contradictory options fails in CI instead of reaching users.
+The fixture is validated against `health.py`, `management_protocol.py`, the stdio dispatcher, and
+the protocol documentation so route and schema drift fails in CI instead of reaching users.
 
 VS Code slash aliases stay on typed protocol methods: `/clear` maps to `session.clear`, `/context`
 (with `/ctx` as an alias) maps to

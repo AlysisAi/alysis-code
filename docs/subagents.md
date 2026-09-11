@@ -505,9 +505,8 @@ Notes:
   error-shaped result with deadline metadata such as
   `failure_category: "deadline"`, `deadline_prevented_launch`,
   `deadline_start_decision`, and `remaining_seconds`.
-- Release changes to subagent deadline propagation should follow the focused
-  [release checklist](release_checklist.md). Maintainers integrating this completed stack should
-  also follow the [subagent merge runbook](subagents/RELEASE_RUNBOOK.md).
+- Release changes to subagent deadline propagation should include focused
+  regression coverage and follow the project [release process](RELEASING.md).
 - For precise inspection, prefer `symbol_search` for Python/JS/TS symbol navigation, `search_rg` for broader text hits, `fs_read_lines` to read the exact surrounding range, and `fs_read` when broader file context is needed.
 - For history or regression questions, prefer `git_history` over raw shell commands.
 - Subagent execution mode is capped by the parent session mode (no privilege escalation): readonly < review < auto < fullaccess. Built-in definitions additionally restrict their visible tools; for example, `debugger` has diagnostic tools but no direct file-edit tools.

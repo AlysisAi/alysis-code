@@ -179,6 +179,20 @@ pinned. It scrolls three rows per wheel event by default. Set
 `ALYSIS_SCROLL_SPEED` to an integer from `1` through `20` to tune the distance
 for a high-resolution trackpad or a physical mouse wheel.
 
+Enter submits a message; **Ctrl+J** inserts a new line. Pasted multiline text
+keeps its line breaks.
+
+The context footer shows remaining conversation capacity after startup prompts
+and tools, starting at 100% when that space is unused. It uses provider token
+measurements when valid, or calibrated local estimates otherwise. Startup
+overhead is estimated with the same calibration; request wrappers still count
+against available capacity. `/context` shows the full budget breakdown.
+
+While the agent works, a muted tip above the input explains commands, keyboard
+shortcuts, and ways to give useful instructions. Tips rotate every 15 seconds,
+hide when the turn stops or a dialog opens, and stay out of conversation history.
+Linked tips are underlined; click the text or URL to open it in your browser.
+
 Dragging across transcript text selects it inside the TUI and leaves the
 clipboard unchanged. While text is selected, the status line displays
 `ctrl+c to copy`; pressing Ctrl+C copies the selection and clears the highlight.
@@ -338,58 +352,6 @@ telemetry and reverts the directives and gate policy.
 `role_models.router` overrides the model used for lightweight routing. Leave it
 unset to inherit `model`, or set it to a smaller/cheaper model while keeping the
 main coding model stronger.
-
-## AgentBox Telemetry
-
-AgentBox telemetry is opt-in, metadata-only, and built into Alysis Code. No
-AgentBox package or sibling source checkout is required:
-
-```bash
-python -m pip install alysis-code
-```
-
-From a contributor checkout, the normal `python -m pip install -e ".[dev]"`
-installation includes the integration.
-
-On an enrolled computer, Alysis Code reads the machine URL, token, identity, and
-privacy detail setting from `~/.agentbox/config.toml`. Set only the opt-in switch:
-
-```bash
-export AGENTBOX_ENABLED=1
-```
-
-Use `AGENTBOX_CONFIG` to select another enrollment config. Environment
-variables override config values when an explicit per-process override is
-needed:
-
-```bash
-export AGENTBOX_ENABLED=1
-export AGENTBOX_PLANE_URL=https://agentbox.example.com
-export AGENTBOX_TOKEN="<this machine's ingest token>"
-export AGENTBOX_MACHINE_ID="<this machine's ID>"
-# optional overrides:
-export AGENTBOX_AGENT_ID="<unique Alysis Code agent ID>"
-export AGENTBOX_TASK_DETAIL=category
-export AGENTBOX_QUEUE_DIR=~/.agentbox/alysis-sdk-queue
-```
-
-Each computer must be enrolled separately. Do not copy another machine's token
-or identity. By default, the enrolled Alysis Code agent ID is
-`<machine-id>_alysis`, so computers appear as distinct agents.
-
-Alysis Code uses its dedicated `~/.agentbox/sdk-queue` rather than the
-connector shipper's `~/.agentbox/queue`. Set `AGENTBOX_QUEUE_DIR` only when a
-separate Alysis Code-specific queue location is required.
-
-Network failures leave events in that queue for replay and do not fail the
-Alysis Code run. Scrubbed client errors are written to
-`~/.agentbox/alysis-agentbox.log`; URLs and filesystem paths are removed.
-
-When disabled or missing required configuration, Alysis Code does not create the
-AgentBox client and emits nothing. When enabled, it sends session lifecycle,
-short sanitized task objectives, turn token/cost totals, and tool activity
-categories only. Prompts, diffs, tool arguments, outputs, file contents, and
-full paths are never sent.
 
 ## Profiles
 
@@ -836,8 +798,8 @@ If an unchanged episode repeats beyond the bounded nudge policy, the run exits
 non-zero as completion-gate stagnation. Actual completion-gate repair
 step-budget exhaustion instead reports `TERMINATE_BUDGET_EXHAUSTED`, and
 forced-summary wording distinguishes that budget case from gate stagnation.
-Release maintainers should keep the focused regression matrix in
-[Release checklist](release_checklist.md) green when changing this behavior.
+Changes to this behavior should include focused regression coverage and follow
+the project [release process](RELEASING.md).
 
 ## Forge
 

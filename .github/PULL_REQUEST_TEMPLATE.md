@@ -12,9 +12,9 @@
 
 <!-- How you verified this works. Tick what applies. -->
 
-- [ ] `pytest` passes locally
-- [ ] `ruff check .` clean
-- [ ] `ruff format --check .` clean
+- [ ] `uv run pytest -q` passes locally
+- [ ] `uv run ruff check .` is clean
+- [ ] `uv run ruff format --check .` is clean
 - [ ] Manual smoke test (describe):
 
 ## Linked issues

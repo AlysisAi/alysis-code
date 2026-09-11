@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..agent import _patchable
-from ..agentbox_integration import AgentBoxTelemetry
 from ..background_runner import (
     DisabledBackgroundRunner,
     LazyBackgroundShellRunner,
@@ -549,7 +548,7 @@ class AgentSession:
     one_shot_execution: bool = False
     # Persona mode (code|architect|ask|debug). A convention layered on the
     # execution-mode gate, never an enforcement layer; "code" is the no-op
-    # persona. See docs/persona_modes_design.md.
+    # persona. See docs/personas.md.
     persona: str = "code"
     # The user's chosen execution mode remembered while a narrowing persona
     # (architect/ask) is active, so switching back to code/debug restores it.
@@ -629,7 +628,6 @@ class AgentSession:
     cache_keepalive: ParentCacheKeepalive | None = None
     crash_diagnostics: CrashDiagnosticLogger | None = None
     crash_diagnostic_log_path: str | None = None
-    agentbox_telemetry: AgentBoxTelemetry | None = None
     process_group_registry: ProcessGroupRegistry | None = None
     # Empty-response handling is budgeted per session, not per turn: two failed
     # recovery cycles mean the endpoint is not answering, and re-spending the
@@ -840,8 +838,6 @@ class AgentSession:
             if self.mcp_manager is not None:
                 self.mcp_manager.close()
         finally:
-            if self.agentbox_telemetry is not None:
-                self.agentbox_telemetry.close(error=reason not in {"session_close", "completed"})
             self.store.close()
 
     def _hook_warning(self, message: str, *, code: str = "hook_warning") -> None:
@@ -1154,8 +1150,6 @@ class AgentSession:
                     persistent_has_media=request_contains_media(self.messages),
                 )
             self.store.append("llm_usage", usage_record.to_payload())
-            if self.agentbox_telemetry is not None:
-                self.agentbox_telemetry.record_usage(usage_record)
             return usage_record
         except Exception as exc:  # noqa: BLE001 -- accounting cannot break the agent turn
             self.store.append(
@@ -1709,29 +1703,16 @@ class AgentSession:
         self._turn_owner_thread_id = turn_thread_id
         self._bind_provider_retry_observer(self.client)
         try:
-            if self.agentbox_telemetry is None:
-                return _run_turn(
-                    self,
-                    instruction,
-                    image_paths=image_paths,
-                    routing_mode_override=routing_mode_override,
-                    ephemeral_system_messages=ephemeral_system_messages,
-                    ephemeral_user_messages=ephemeral_user_messages,
-                    cancellation_token=cancellation_token,
-                    chat_only=chat_only,
-                )
-            self.agentbox_telemetry.task(instruction)
-            with self.agentbox_telemetry.turn():
-                return _run_turn(
-                    self,
-                    instruction,
-                    image_paths=image_paths,
-                    routing_mode_override=routing_mode_override,
-                    ephemeral_system_messages=ephemeral_system_messages,
-                    ephemeral_user_messages=ephemeral_user_messages,
-                    cancellation_token=cancellation_token,
-                    chat_only=chat_only,
-                )
+            return _run_turn(
+                self,
+                instruction,
+                image_paths=image_paths,
+                routing_mode_override=routing_mode_override,
+                ephemeral_system_messages=ephemeral_system_messages,
+                ephemeral_user_messages=ephemeral_user_messages,
+                cancellation_token=cancellation_token,
+                chat_only=chat_only,
+            )
         except CooperativeCancellationError as exc:
             # The budget watchdog cancels through the same cooperative channel a
             # user does, so the two are told apart by reason. A budget stop is a
@@ -3234,10 +3215,6 @@ def create_session(
             execution_deadline=execution_deadline,
             crash_diagnostics=crash_diagnostics,
             crash_diagnostic_log_path=resolved_crash_diagnostic_log_path,
-            agentbox_telemetry=AgentBoxTelemetry.from_env(
-                root=root,
-                runtime_version=f"alysis-{__version__}",
-            ),
             process_group_registry=process_group_registry,
         )
         if subagent_depth == 0 and store.enabled:

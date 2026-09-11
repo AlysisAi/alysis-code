@@ -12,6 +12,8 @@
 #   bash scripts/build_benchmark_wheel.sh --allow-dirty
 #
 # On success it prints the wheel path; export it as ALYSIS_WHEEL for Harbor.
+# Each build uses a unique directory beneath dist/, preserving older wheels.
+# The original local build metadata is restored on exit, including failures.
 
 set -euo pipefail
 
@@ -23,17 +25,31 @@ REQUIRE_CLEAN=1
 for arg in "$@"; do
   case "$arg" in
     --allow-dirty) REQUIRE_CLEAN=0 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
 
-# Always put the dev-default stamp back, even on failure or interrupt: the
-# repository must never carry a stamp belonging to an earlier build.
+if [[ ! -f "$BUILD_INFO" || -L "$BUILD_INFO" ]]; then
+  echo "ERROR: build metadata must be an existing regular file: $BUILD_INFO" >&2
+  exit 1
+fi
+
+# Preserve local edits as well as the committed dev-default stamp.
+BUILD_INFO_BACKUP="$(mktemp "${TMPDIR:-/tmp}/alysis-build-info.XXXXXX")"
+cp -p "$BUILD_INFO" "$BUILD_INFO_BACKUP"
 restore_build_info() {
-  git checkout -- "$BUILD_INFO" 2>/dev/null || true
+  local build_status=$?
+  if ! cp -p "$BUILD_INFO_BACKUP" "$BUILD_INFO"; then
+    echo "ERROR: could not restore build metadata; backup retained at $BUILD_INFO_BACKUP" >&2
+    exit 1
+  fi
+  rm -f "$BUILD_INFO_BACKUP"
+  return "$build_status"
 }
-trap restore_build_info EXIT INT TERM
+trap restore_build_info EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "==> stamping build identity"
 if [ "$REQUIRE_CLEAN" = "1" ]; then
@@ -43,18 +59,21 @@ else
 fi
 
 echo "==> building wheel"
-rm -rf dist/*.whl 2>/dev/null || true
+mkdir -p dist
+WHEEL_DIR="$(mktemp -d "$REPO_ROOT/dist/benchmark.XXXXXX")"
 if command -v uv >/dev/null 2>&1; then
-  uv build --wheel
+  uv build --wheel --out-dir "$WHEEL_DIR"
 else
-  python3 -m build --wheel
+  python3 -m build --wheel --outdir "$WHEEL_DIR"
 fi
 
-WHEEL="$(ls -t dist/*.whl 2>/dev/null | head -1)"
-if [ -z "${WHEEL:-}" ]; then
-  echo "ERROR: no wheel produced in dist/" >&2
+shopt -s nullglob
+wheels=("$WHEEL_DIR"/*.whl)
+if [ "${#wheels[@]}" -ne 1 ]; then
+  echo "ERROR: expected one wheel in $WHEEL_DIR, found ${#wheels[@]}" >&2
   exit 1
 fi
+WHEEL="${wheels[0]}"
 
 echo "==> verifying the stamp survived into the wheel"
 python3 - "$WHEEL" <<'PY'
@@ -78,5 +97,5 @@ print(f"    commit={commit_v[:12]} built={built.group(1) if built else '?'} dirt
 PY
 
 echo
-echo "wheel: $REPO_ROOT/$WHEEL"
-echo "export ALYSIS_WHEEL=\"$REPO_ROOT/$WHEEL\""
+echo "wheel: $WHEEL"
+printf 'export ALYSIS_WHEEL=%q\n' "$WHEEL"

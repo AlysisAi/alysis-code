@@ -25,7 +25,9 @@ def test_run_task_worker_mirrors_allocates_and_passes_asset_tools(
     cfg.extra_fields["model_metadata_overrides"] = {
         "models": {
             "fake-model": {
-                "context_window_tokens": 8192,
+                # Keep room for startup prompts and tools: this test verifies
+                # asset delivery, while execution-budget tests cover trimming.
+                "context_window_tokens": 32000,
                 "max_output_tokens": 1024,
                 "supports_vision": False,
             }
@@ -122,6 +124,8 @@ def test_run_task_worker_mirrors_allocates_and_passes_asset_tools(
 
     assert result.task_id == task["id"]
     assert "## Relevant Assets" in captured["instruction"]
+    assert asset.id in captured["instruction"]
+    assert "asset guidance" in captured["instruction"]
     assert captured["tool_aliases"] == ["echo", "asset_read", "asset_load"]
     assert (worktree / ".alysis" / "task_assets" / "manifest.json").exists()
     allocation_payload = json.loads(

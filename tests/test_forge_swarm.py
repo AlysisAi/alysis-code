@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -7060,7 +7061,7 @@ def test_swarm_accepts_green_pre_merge_candidate_via_real_integration_gate_git_b
             verify_summary="verification disabled (--verify off)",
         )
 
-    integration_command = f"{sys.executable} -m pytest -q -s test_calc.py"
+    integration_command = shlex.join([sys.executable, "-m", "pytest", "-q", "-s", "test_calc.py"])
     code = run_swarm(
         paths=paths,
         plan=plan,
@@ -7154,7 +7155,7 @@ def test_swarm_accepts_green_pre_merge_candidate_via_real_integration_gate_snaps
             verify_summary="verification disabled (--verify off)",
         )
 
-    integration_command = f"{sys.executable} -m pytest -q -s test_calc.py"
+    integration_command = shlex.join([sys.executable, "-m", "pytest", "-q", "-s", "test_calc.py"])
     code = run_swarm(
         paths=paths,
         plan=plan,

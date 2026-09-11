@@ -878,6 +878,8 @@ def test_main_usage_anchors_hud_to_provider_visible_request(tmp_path: Path) -> N
     assert ctx.token_count_source == "mixed"
     assert ctx.token_count_confidence == "estimated"
     assert ctx.anchor_token_count_source == "provider_response"
+    assert ctx.dynamic_context_remaining_tokens == ctx.effective_remaining_tokens
+    assert ctx.dynamic_context_used_tokens == ctx.used_input_tokens - ctx.startup_baseline_tokens
 
 
 # ---------------------------------------------------------------------------

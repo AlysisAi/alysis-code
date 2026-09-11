@@ -118,5 +118,4 @@ event (persona, effective mode, source `user`/`model`/`config`/`resume`, and the
 `/status` shows the active persona; the model sees it as a `persona:` line in its environment
 context and receives a short system-prompt section explaining the persona contract.
 
-See also: `docs/persona_modes_design.md` (design and invariants), `docs/subagents.md`,
-`docs/security_model.md`.
+See also: [Subagents](subagents.md) and the [security model](security_model.md).

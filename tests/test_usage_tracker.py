@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from alysis_code.config import AppConfig
 from alysis_code.litellm_static_provider import BUNDLED_MODEL_CATALOG_SOURCE
 from alysis_code.llm.types import BillingMode, CostSource, LLMUsage
@@ -1568,7 +1570,8 @@ def test_compute_context_left_projects_from_provider_visible_request_measurement
     assert ctx.anchor_token_count_source == "provider_response"
     assert ctx.anchor_token_count_confidence == "authoritative"
     assert ctx.provider_projection_applied is True
-    assert ctx.dynamic_context_used_tokens == current_estimate
+    assert ctx.dynamic_context_used_tokens == ctx.used_input_tokens
+    assert ctx.dynamic_context_remaining_tokens == ctx.effective_remaining_tokens
 
 
 def test_context_measurement_rejects_nonpersistent_media_overhead() -> None:
@@ -1964,6 +1967,18 @@ def test_compute_context_left_dynamic_context_tracks_compacted_active_request() 
             "content": "Compacted conversation summary: " + ("summary " * 80),
         },
     ]
+    before_estimate = estimate_request_token_breakdown(
+        messages=before_compaction, tool_list=None, pinned_prefix_len=len(baseline_messages)
+    ).total_tokens
+    measurement = RequestContextMeasurement(
+        input_tokens=before_estimate * 2,
+        anchor_estimate_tokens=before_estimate,
+        persistent_anchor_estimate_tokens=before_estimate,
+        source="provider_response",
+        confidence="authoritative",
+        request_message_signatures=request_message_signatures(before_compaction),
+        persistent_message_signatures=request_message_signatures(before_compaction),
+    )
 
     before = compute_context_left(
         messages=before_compaction,
@@ -1972,6 +1987,7 @@ def test_compute_context_left_dynamic_context_tracks_compacted_active_request() 
         pinned_prefix_len=len(baseline_messages),
         safety_margin_tokens=100,
         startup_baseline_tokens=baseline,
+        request_measurement=measurement,
     )
     after = compute_context_left(
         messages=after_compaction,
@@ -1980,14 +1996,126 @@ def test_compute_context_left_dynamic_context_tracks_compacted_active_request() 
         pinned_prefix_len=len(baseline_messages),
         safety_margin_tokens=100,
         startup_baseline_tokens=baseline,
+        request_measurement=measurement,
+        prompt_estimate_multiplier=2.0,
     )
 
+    # Compaction invalidates the provider anchor. Apply the calibrated local
+    # estimate to both the new request and its baseline rather than carrying
+    # the previous request's measured size into the compacted conversation.
+    assert before.token_count_source == "provider_response"
+    assert after.token_count_source == "local_estimate"
+    assert after.startup_baseline_tokens == before.startup_baseline_tokens == baseline * 2
+    assert before.dynamic_context_remaining_tokens == before.effective_remaining_tokens
+    assert after.dynamic_context_remaining_tokens == after.effective_remaining_tokens
     assert before.dynamic_context_used_tokens > after.dynamic_context_used_tokens
     assert after.dynamic_context_used_tokens > 0
     assert before.dynamic_context_percent_left is not None
     assert after.dynamic_context_percent_left is not None
     assert after.dynamic_context_percent_left > before.dynamic_context_percent_left
     assert after.dynamic_context_percent_left < 100.0
+
+
+@pytest.mark.parametrize("capacity_delta", [-400, 0, 700])
+@pytest.mark.parametrize("append_reply", [False, True])
+def test_conversation_gauge_preserves_provider_measured_headroom(
+    capacity_delta: int, append_reply: bool
+) -> None:
+    from alysis_code.cli_impl.commands.startup import _chat_context_percent_value
+    from alysis_code.cli_impl.tui.footer import footer_fragments
+    from alysis_code.cli_impl.tui.state import TuiState
+
+    meta = ModelMeta(
+        model_name="measured-chat",
+        context_window_tokens=8000,
+        max_output_tokens=500,
+        input_cost_per_token=None,
+        output_cost_per_token=None,
+        raw_metadata={},
+        source="test",
+    )
+    startup = [{"role": "system", "content": "Coding assistant."}]
+    request = [*startup, {"role": "user", "content": "input " * 5000}]
+    baseline = estimate_request_token_breakdown(messages=startup, tool_list=None).total_tokens
+    estimate = estimate_request_token_breakdown(messages=request, tool_list=None).total_tokens
+    budget = compute_input_budget(meta, safety_margin=100)
+    measured_tokens = budget + capacity_delta
+    measurement = RequestContextMeasurement(
+        input_tokens=measured_tokens,
+        anchor_estimate_tokens=estimate,
+        persistent_anchor_estimate_tokens=estimate,
+        source="provider_response",
+        confidence="authoritative",
+        request_message_signatures=request_message_signatures(request),
+        persistent_message_signatures=request_message_signatures(request),
+    )
+    messages = [*request]
+    if append_reply:
+        messages.append({"role": "assistant", "content": "response " * 80})
+    ctx = compute_context_left(
+        messages=messages,
+        model_name=meta.model_name,
+        registry=_FakeRegistry({meta.model_name: meta}),  # type: ignore[arg-type]
+        startup_baseline_tokens=baseline,
+        safety_margin_tokens=100,
+        request_measurement=measurement,
+    )
+
+    # Regression: the local estimate left about 32% while the provider count
+    # left only 400 tokens. Both gauges must agree on available tokens even
+    # though the conversation percentage excludes startup from its denominator.
+    assert ctx.local_request_estimate_tokens < budget
+    assert ctx.used_input_tokens >= measured_tokens
+    assert ctx.dynamic_context_remaining_tokens == max(0, budget - ctx.used_input_tokens)
+    assert ctx.dynamic_context_remaining_tokens == ctx.effective_remaining_tokens
+    assert ctx.startup_baseline_tokens == math.ceil(baseline * measured_tokens / estimate)
+    assert ctx.dynamic_context_used_tokens + ctx.startup_baseline_tokens == ctx.used_input_tokens
+    percent = _chat_context_percent_value(SimpleNamespace(_hud_context_cache=ctx))
+    assert percent is not None and 0 <= percent < 10
+    footer = "".join(text for _, text in footer_fragments(TuiState(context_pct=percent), width=100))
+    if capacity_delta >= 0:
+        assert percent == 0
+        assert "context: 0% left" in footer
+    elif not append_reply:
+        assert "context: 5% left" in footer
+
+
+@pytest.mark.parametrize("scale", [0.65, 1.0, 1.8])
+def test_measured_startup_and_calibrated_fallback_keep_the_same_baseline(scale: float) -> None:
+    meta = ModelMeta(
+        model_name="startup-chat",
+        context_window_tokens=5000,
+        max_output_tokens=500,
+        input_cost_per_token=None,
+        output_cost_per_token=None,
+        raw_metadata={},
+        source="test",
+    )
+    startup = [{"role": "system", "content": "Instructions and environment. " * 40}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+    baseline = estimate_request_token_breakdown(messages=startup, tool_list=tools).total_tokens
+    measurement = RequestContextMeasurement(
+        input_tokens=math.ceil(baseline * scale),
+        anchor_estimate_tokens=baseline,
+        source="provider_count",
+        confidence="authoritative",
+        request_message_signatures=request_message_signatures(startup),
+        tool_schema_signature=tool_schema_signature(tools),
+    )
+    for request_measurement in (measurement, None):
+        ctx = compute_context_left(
+            messages=startup,
+            model_name=meta.model_name,
+            registry=_FakeRegistry({meta.model_name: meta}),  # type: ignore[arg-type]
+            tool_list=tools,
+            startup_baseline_tokens=baseline,
+            prompt_estimate_multiplier=scale,
+            request_measurement=request_measurement,
+        )
+        assert ctx.startup_baseline_tokens == ctx.used_input_tokens
+        assert ctx.dynamic_context_used_tokens == 0
+        assert ctx.dynamic_context_remaining_tokens == ctx.effective_remaining_tokens
+        assert ctx.dynamic_context_percent_left == 100
 
 
 def test_compute_context_left_includes_tool_schema_tokens() -> None:

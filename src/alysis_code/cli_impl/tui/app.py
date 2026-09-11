@@ -4,7 +4,7 @@ A prompt_toolkit ``Application`` (alt-screen) that reproduces the launch
 screenshot: a centered white owl animation, the "What can I do for you?"
 heading, a dim hint line, a larger bordered multi-line input box, and a pinned
 2-line footer (brand · model · context/tokens/cost; persona · execution mode ·
-user · workspace · branch). Enter submits, Ctrl+J / Alt+Enter insert a newline,
+user · workspace · branch). Enter submits, Ctrl+J inserts a newline,
 Tab on an empty input cycles the persona, and Shift+Tab cycles the execution
 mode (read → safe → fast → full) via the ``mode_cycle`` callback — the mode is
 the sole approval authority, so the key mutates the session rather than a
@@ -59,6 +59,7 @@ from prompt_toolkit.widgets import Frame, TextArea
 from ...agent.steering import MAX_PENDING_STEER_MESSAGES, steer_inbox_for
 from ...branding import env_get
 from ...clipboard import ClipboardError, copy_text_to_clipboard
+from ...host_browser import open_url
 from ...llm.types import LLMError
 from ...llm_error_display import friendly_llm_error_message, is_network_or_model_error
 from ...subagent_labels import subagent_identity
@@ -95,6 +96,7 @@ from .subagent_panel import (
     subagent_panel_rows,
 )
 from .surface import TuiSurface, set_active_cancellation
+from .tips import working_tip
 from .transcript import TuiTranscript
 
 _EXIT_WORDS = EXIT_WORDS
@@ -308,6 +310,7 @@ _STYLE = Style.from_dict(
         # blue (per-agent accents live in the footer badge).
         "tui.transcript.subagent": "bold #58a6ff",
         "tui.status": "#8a8a8a",
+        "tui.tip.link": f"underline {_ACCENT}",
         # Working line turns amber once a turn has run long (>=30s).
         "tui.status.warn": "#d29922",
         # Full-screen /config surface. Keep this semantic so terminal-theme
@@ -2300,6 +2303,8 @@ def run_tui(
     pending_operations: list[_DeferredOperation] = []
     draining: dict[str, bool] = {"on": False}
     spinner: dict[str, int] = {"i": 0}
+    tip_state: dict[str, int] = {"turn_index": -1}
+    tip_link_press: tuple[str, Point, Point] | None = None
     cancel_box: dict[str, _Cancellation | None] = {"token": None}
     approval_box: dict[str, Any] = {"event": None, "decision": None, "request": None}
     worker_box: dict[str, threading.Thread | None] = {"thread": None}
@@ -2372,12 +2377,17 @@ def run_tui(
         except Exception:
             pass
 
-    def _begin_drag_capture(target: str, step: Callable[[int], None]) -> None:
+    def _begin_drag_capture(target: str, step: Callable[[int], None] | None = None) -> None:
+        nonlocal tip_link_press
+        if target != "tip_link":
+            tip_link_press = None
         drag_capture["generation"] += 1
         drag_capture.update({"target": target, "direction": 0, "step": step})
         _safe_invalidate()
 
     def _stop_drag_capture() -> None:
+        nonlocal tip_link_press
+        tip_link_press = None
         if drag_capture["target"] is None:
             return
         drag_capture["generation"] += 1
@@ -2977,7 +2987,81 @@ def run_tui(
 
     status_window = Window(FormattedTextControl(_status_text, focusable=False), height=1)
 
-    # ---- input box (multiline; Enter submits, Ctrl+J / Alt+Enter add a line) ----
+    def _working_tip_visible() -> bool:
+        return running["on"] and not _small_modal_open() and not _config_open()
+
+    def _tip_link_mouse_event(event: MouseEvent) -> None:
+        """Complete a link click using screen coordinates, including captured drags."""
+        press = tip_link_press
+        if press is None:
+            return
+        url, content_position, screen_position = press
+        if event.event_type == MouseEventType.MOUSE_MOVE and event.position == screen_position:
+            return
+        _stop_drag_capture()
+        info = working_tip_window.render_info
+        current_tip = working_tip(
+            time.monotonic() - run_box["started"], turn_index=tip_state["turn_index"]
+        )
+        if (
+            event.event_type == MouseEventType.MOUSE_UP
+            and event.button == MouseButton.LEFT
+            and event.position == screen_position
+            and _working_tip_visible()
+            and current_tip.url == url
+            and info is not None
+            and info._rowcol_to_yx.get((content_position.y, content_position.x))
+            == (screen_position.y, screen_position.x)
+        ):
+            # Browser startup can block on some hosts; keep the live TUI responsive.
+            threading.Thread(target=open_url, args=(url,), daemon=True).start()
+
+    def _working_tip_text() -> FormattedText:
+        tip = working_tip(time.monotonic() - run_box["started"], turn_index=tip_state["turn_index"])
+        if tip_link_press is not None and tip.url != tip_link_press[0]:
+            _stop_drag_capture()
+        if tip.url is None:
+            return FormattedText([("class:tui.status", f"  Tip: {tip.text}")])
+
+        def _open_tip_link(event: MouseEvent) -> None:
+            nonlocal tip_link_press
+            info = working_tip_window.render_info
+            # Use the renderer's mapping so wide characters and clipping have
+            # the same hit positions as prompt_toolkit's own mouse handling.
+            position = (
+                info._rowcol_to_yx.get((event.position.y, event.position.x))
+                if info is not None
+                else None
+            )
+            if position is None:
+                _stop_drag_capture()
+                return
+            screen_position = Point(x=position[1], y=position[0])
+            if event.event_type == MouseEventType.MOUSE_DOWN and event.button == MouseButton.LEFT:
+                tip_link_press = (tip.url, event.position, screen_position)
+                _begin_drag_capture("tip_link")
+            else:
+                # A press and release can arrive before the capture overlay has
+                # repainted. Route those events through the same click handler.
+                _tip_link_mouse_event(
+                    MouseEvent(screen_position, event.event_type, event.button, event.modifiers)
+                )
+
+        return FormattedText(
+            [
+                ("class:tui.status", "  Tip: "),
+                ("class:tui.tip.link", tip.text, _open_tip_link),
+                ("class:tui.status underline", f" {tip.url}", _open_tip_link),
+            ]
+        )
+
+    working_tip_window = Window(
+        FormattedTextControl(_working_tip_text, focusable=False),
+        height=1,
+        wrap_lines=False,
+    )
+
+    # ---- input box (multiline; Enter submits, Ctrl+J adds a line) ----
     # Grows from one row up to a few as the user adds lines (so a pasted/multi-line
     # prompt stays visible); empty it is one row, keeping the welcome centering.
     def _placeholder_text() -> str:
@@ -3206,6 +3290,7 @@ def run_tui(
         subagent_panel["tip_shown"] = False
         cancel_box["token"] = _Cancellation()
         run_box["started"] = time.monotonic()
+        tip_state["turn_index"] += 1
         # No "Thinking…" footer status — the transient thinking indicator now
         # renders under the question (see _transcript_fragments).
         transcript.set_status(None)
@@ -3643,6 +3728,10 @@ def run_tui(
             # the welcome screen keeps its Phase 1 spacing exactly.
             ConditionalContainer(status_window, filter=has_messages | has_live_paste_tokens),
             subagent_panel_container,
+            ConditionalContainer(
+                working_tip_window,
+                filter=Condition(_working_tip_visible),
+            ),
             input_row,
             Window(height=1),
             footer_window,
@@ -4376,6 +4465,8 @@ def run_tui(
 
     def _captured_drag_mouse_event(mouse_event: MouseEvent) -> Any:
         target = drag_capture.get("target")
+        if target == "tip_link":
+            return _tip_link_mouse_event(mouse_event)
         if target == "transcript":
             target_window = transcript_window
         elif target == "editor":
@@ -4588,7 +4679,7 @@ def run_tui(
     def _escape_interrupt(event: Any) -> None:
         # Esc interrupts a running turn immediately (never exits the app). Gated to a
         # live turn so it doesn't shadow Esc's other roles (cancel completion, close
-        # help/picker, Alt+Enter newline).
+        # help/picker).
         _soft_interrupt()
 
     @kb.add(
@@ -4608,7 +4699,6 @@ def run_tui(
         _submit()
 
     @kb.add("c-j", filter=_input_focused & ~_small_modal_open & ~_config_open)
-    @kb.add("escape", "enter", filter=_input_focused & ~_small_modal_open & ~_config_open)
     def _newline(event: Any) -> None:
         input_area.buffer.insert_text("\n")
 

@@ -87,7 +87,7 @@
   {
     "id": "bundled_fix_ci_normal",
     "workspace": "workspaces/bundled_fix_ci",
-    "task": "The build's slug check is failing. Inspect ci.log, reproduce the failing command locally, fix the evidenced cause, and rerun only the affected check.",
+    "task": "The build's slug check is failing. Inspect ci-output.txt, reproduce the failing command locally, fix the evidenced cause, and rerun only the affected check.",
     "invocation_mode": "normal",
     "expected_skills": ["fix-ci"],
     "verification_command": "python ci_check.py",
@@ -96,7 +96,7 @@
   {
     "id": "bundled_fix_ci_explicit",
     "workspace": "workspaces/bundled_fix_ci",
-    "task": "Use ci.log to reproduce the failed slug job, implement the smallest repair, and rerun python ci_check.py without weakening the check.",
+    "task": "Use ci-output.txt to reproduce the failed slug job, implement the smallest repair, and rerun python ci_check.py without weakening the check.",
     "invocation_mode": "explicit_skill",
     "explicit_skill_name": "fix-ci",
     "expected_skills": ["fix-ci"],

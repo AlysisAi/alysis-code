@@ -188,7 +188,7 @@ def test_footer_context_never_rounds_up_to_full_or_down_to_empty():
     assert "context: 1% left" in near_empty
 
 
-def test_footer_context_metric_uses_effective_provider_capacity():
+def test_footer_context_metric_uses_conversation_budget():
     from alysis_code.cli_impl.commands.startup import (
         _chat_context_percent_value,
     )
@@ -200,6 +200,14 @@ def test_footer_context_metric_uses_effective_provider_capacity():
             effective_percent_left=99.2,
         )
     )
+    assert _chat_context_percent_value(measured) == 100.0
+
+    # Exhausted conversation space must stay at zero, not fall back to the
+    # remaining capacity that includes the reserved startup baseline.
+    measured._hud_context_cache.dynamic_context_percent_left = 0.0
+    assert _chat_context_percent_value(measured) == 0.0
+
+    measured._hud_context_cache.dynamic_context_percent_left = None
     assert _chat_context_percent_value(measured) == 99.2
 
     window_fallback = SimpleNamespace(

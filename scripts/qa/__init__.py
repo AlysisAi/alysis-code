@@ -1,1 +1,1 @@
-"""QA smoke battery for Alysis Code user-facing UX."""
+"""Repository and runtime QA helpers for Alysis Code."""
