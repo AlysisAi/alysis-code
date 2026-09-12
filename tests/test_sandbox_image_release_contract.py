@@ -179,6 +179,8 @@ def test_docker_toolchains_and_external_images_are_immutable_inputs() -> None:
     assert re.search(r"ARG NODE_VERSION=\d+\.\d+\.\d+", dockerfile)
     assert re.search(r"ARG NODE_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG NODE_LINUX_ARM64_SHA256=[0-9a-f]{64}", dockerfile)
+    assert re.search(r"ARG NPM_VERSION=\d+\.\d+\.\d+", dockerfile)
+    assert re.search(r"ARG NPM_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG GO_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG GO_LINUX_ARM64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG RUSTUP_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)

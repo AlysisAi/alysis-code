@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG PYTHON_IMAGE=python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
+ARG PYTHON_IMAGE=python:3.12-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 ARG VARIANT=dev
 ARG SOURCE_URL=https://github.com/AlysisAi/alysis-code
 ARG GIT_SHA=dev
@@ -16,7 +16,7 @@ ARG GIT_SHA
 ARG VERSION
 ARG SOURCE_DATE_EPOCH
 # Freeze Debian package indexes instead of resolving against a moving mirror.
-ARG DEBIAN_SNAPSHOT=20260701T000000Z
+ARG DEBIAN_SNAPSHOT=20260912T120000Z
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -37,7 +37,8 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
           {} +; \
     printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot; \
     apt-get update; \
-    packages="bash ca-certificates curl git ripgrep build-essential python3 python3-venv tini xz-utils"; \
+    apt-get upgrade -y --no-install-recommends; \
+    packages="bash ca-certificates curl git ripgrep build-essential tini xz-utils"; \
     case "${TARGETPLATFORM:-linux/amd64}" in \
         linux/*) packages="${packages} bubblewrap" ;; \
         *) echo "Skipping bubblewrap for TARGETPLATFORM=${TARGETPLATFORM:-unknown}" ;; \
@@ -72,12 +73,14 @@ USER root
 
 ARG TARGETARCH
 # Each downloaded tool is version- and digest-pinned for both supported platforms.
-ARG NODE_VERSION=24.18.1
-ARG NODE_LINUX_AMD64_SHA256=d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
-ARG NODE_LINUX_ARM64_SHA256=7201e3a09dc825bac57867c81913e2b8f0ef87d04cb9082af4cda82f6ff3d88c
-ARG GO_VERSION=1.26.4
-ARG GO_LINUX_AMD64_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
-ARG GO_LINUX_ARM64_SHA256=ef758ae7c6cf9267c9c0ef080b8965f453d89ab2d25d9eb22de4405925238768
+ARG NODE_VERSION=24.21.0
+ARG NODE_LINUX_AMD64_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+ARG NODE_LINUX_ARM64_SHA256=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+ARG NPM_VERSION=11.19.1
+ARG NPM_SHA256=9f58bff01604cb1b14008fef14dceb14d836a49225e45c6c2e37de3be3e707f0
+ARG GO_VERSION=1.26.8
+ARG GO_LINUX_AMD64_SHA256=d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
+ARG GO_LINUX_ARM64_SHA256=211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0
 ARG RUSTUP_VERSION=1.28.2
 ARG RUSTUP_LINUX_AMD64_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
 ARG RUSTUP_LINUX_ARM64_SHA256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
@@ -115,6 +118,17 @@ RUN case "${TARGETARCH:-amd64}" in \
     tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1; \
     rm /tmp/node.tar.xz; \
     node --version; \
+    npm --version
+
+# Node's bundled npm can lag npm security releases. Replace the complete,
+# verified distribution so old vendored dependencies are not left in the image.
+RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/npm.tgz \
+        "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"; \
+    echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -; \
+    rm -rf /usr/local/lib/node_modules/npm; \
+    mkdir -p /usr/local/lib/node_modules/npm; \
+    tar -xzf /tmp/npm.tgz -C /usr/local/lib/node_modules/npm --strip-components=1; \
+    rm /tmp/npm.tgz; \
     npm --version
 
 RUN case "${TARGETARCH:-amd64}" in \
@@ -164,7 +178,7 @@ USER root
 WORKDIR /opt/alysis
 # The digest is an official multi-platform uv image; the lockfile supplies hashes
 # for all Python runtime and build dependencies.
-COPY --from=ghcr.io/astral-sh/uv@sha256:2381d6aa60c326b71fd40023f921a0a3b8f91b14d5db6b90402e65a635053709 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv@sha256:b485bd65cc2cf1c9a93b3554012c9c3778cf7b1b5fd3d3096ce9e1226c97e1e6 /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock README.md /opt/alysis/
 COPY src /opt/alysis/src
 ENV UV_LINK_MODE=copy \

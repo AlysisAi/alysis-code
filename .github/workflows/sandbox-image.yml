@@ -50,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       release_tag: ${{ steps.source.outputs.release_tag }}
@@ -98,6 +99,26 @@ jobs:
             echo "source_date_epoch=$(git show -s --format=%ct HEAD)"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Check the release approval environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/${GITHUB_REPOSITORY}/environments/sandbox-release" > sandbox-release-policy.json; then
+            echo "Configure the sandbox-release environment before publishing; see docs/RELEASING.md." >&2
+            exit 1
+          fi
+          if ! jq -e '
+            any(.protection_rules[]?;
+              .type == "required_reviewers"
+              and .prevent_self_review == true
+              and (.reviewers | length) > 0)
+          ' sandbox-release-policy.json > /dev/null; then
+            echo "sandbox-release must require a maintainer review and prevent self-review." >&2
+            exit 1
+          fi
+
   build-scan-pr:
     name: build, scan, and smoke dev (pr)
     if: github.event_name == 'pull_request'
@@ -139,6 +160,7 @@ jobs:
         id: trivy
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
+          version: "0.74.0"
           image-ref: alysis-sandbox-pr:${{ github.sha }}
           format: sarif
           output: trivy-pr-dev-amd64.sarif
@@ -317,6 +339,7 @@ jobs:
           TRIVY_PLATFORM: linux/amd64
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
+          version: "0.74.0"
           image-ref: ${{ steps.platforms.outputs.amd64_ref }}
           format: sarif
           output: trivy-${{ matrix.variant }}-amd64.sarif
@@ -330,10 +353,12 @@ jobs:
 
       - name: Scan linux/arm64 candidate manifest
         id: trivy-arm64
+        if: ${{ !cancelled() && steps.platforms.outcome == 'success' }}
         env:
           TRIVY_PLATFORM: linux/arm64
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
+          version: "0.74.0"
           image-ref: ${{ steps.platforms.outputs.arm64_ref }}
           format: sarif
           output: trivy-${{ matrix.variant }}-arm64.sarif
@@ -378,7 +403,7 @@ jobs:
         if: matrix.variant == 'dev'
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
-          version: "0.11.23"
+          version: "0.12.13"
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -411,11 +436,12 @@ jobs:
           category: trivy-sandbox-${{ matrix.variant }}-arm64
 
       - name: Upload Trivy SARIF artifacts
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-${{ matrix.variant }}-${{ needs.validate-source.outputs.sha12 }}-sarif
           path: trivy-${{ matrix.variant }}-*.sarif
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Attest candidate build provenance
@@ -518,6 +544,11 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -530,6 +561,15 @@ jobs:
           pattern: sandbox-candidate-*-${{ github.sha }}
           path: candidate-records
           merge-multiple: true
+
+      - name: Verify anonymous access before promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -er '.image + "@" + .digest' candidate-records/*.json > candidate-images.txt
+          mapfile -t images < candidate-images.txt
+          test "${#images[@]}" -eq 3
+          bash scripts/sandbox/check-public-images.sh "${images[@]}"
 
       - name: Verify complete records, immutable digests, signatures, and attestations
         env:
@@ -664,6 +704,11 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -811,6 +856,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          : > promoted-images.txt
           mapfile -t records < <(find candidate-records -maxdepth 1 -type f -name '*.json' -print | sort)
           for record in "${records[@]}"; do
             image="$(jq -r '.image' "${record}")"
@@ -845,7 +891,18 @@ jobs:
             fi
 
             docker buildx imagetools create "${tags[@]}" "${image}@${digest}"
+            for ((i=1; i<${#tags[@]}; i+=2)); do
+              printf '%s\n' "${tags[i]}" >> promoted-images.txt
+            done
           done
+
+      - name: Verify anonymous pulls of promoted images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t images < promoted-images.txt
+          test "${#images[@]}" -ge 3
+          bash scripts/sandbox/check-public-images.sh --pull "${images[@]}"
 
       - name: Write promotion summary
         env:
@@ -864,4 +921,5 @@ jobs:
             echo "- immutable suffix: ${SHA12}"
             echo "- release tag: ${RELEASE_TAG:-none}"
             echo "- moving tags promoted: ${PUBLISH_MOVING_TAGS}"
+            echo "- anonymous pulls: verified for every promoted alias on linux/amd64 and linux/arm64"
           } >> "${GITHUB_STEP_SUMMARY}"
