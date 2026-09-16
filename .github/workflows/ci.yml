@@ -45,6 +45,7 @@ jobs:
         include:
           - {"python-version":"3.11"}
           - {"python-version":"3.12"}
+          - {"python-version":"3.13"}
 
     steps:
       - name: Check out repository
