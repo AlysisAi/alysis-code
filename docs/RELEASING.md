@@ -16,7 +16,7 @@ repository or passed on the command line.
    uv run --frozen --no-sync ruff check .
    uv run --frozen --no-sync ruff format --check .
    uv run --frozen --no-sync pytest -q
-   uv build --clear --no-build-isolation --no-sources --out-dir dist/python
+   uv build --clear --no-create-gitignore --no-build-isolation --no-sources --out-dir dist/python
    uv run --frozen --no-sync python scripts/release/validate_python_distributions.py dist/python
    ```
 

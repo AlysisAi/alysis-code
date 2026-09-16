@@ -306,6 +306,14 @@ class ToolOutputOffloader:
                 for key in ("total_lines", "returned_range", "next_range")
                 if key in result
             }
+        if tool_name == "git_diff" and isinstance(result, dict):
+            # Preserve pagination even when a diff page is stored as an artifact,
+            # including next_offset=None on the final page.
+            continuation_metadata = {
+                key: result[key]
+                for key in ("diff_id", "offset", "next_offset", "total_chars")
+                if key in result
+            }
         preview_text, preview_chars = _truncated_preview(content_json, self._preview_chars)
         shape_threshold_chars = self._transcript_shape_threshold_chars()
         if original_chars < shape_threshold_chars:

@@ -17,6 +17,7 @@ from ...surface.theme import (
 )
 from ...branding import env_get
 from .cli_common import *
+from ..chat.forge_visibility import command_visible, visible_commands
 
 
 def stripAnsi(value: str) -> str:
@@ -607,13 +608,7 @@ def _forge_help_footer_lines() -> list[str]:
         "Same-workspace re-entry keeps the same run id and tracks the chat's current focus.",
         "Changing workspaces starts a fresh run instead of resuming prior session-local state.",
         "Type freely to add requirements or talk to the planner.",
-        "Chat Plan Mode is unavailable.",
-        "In Forge, use:",
-        "/back",
-        "Forge plan commands:",
-        "/show",
-        "/plan markdown",
-        "/plan edit",
+        "/plan tasks|markdown|edit views or edits the plan; /back returns to chat.",
     ]
 
 
@@ -681,7 +676,7 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
                     ("/terminals", "list/read/kill background processes"),
                     ("/pwd", "show active workdir, focus dir, and workspace root"),
                     ("/usage", "token count & cost; /usage hud on|off toggles HUD"),
-                    ("/mode", "change execution mode"),
+                    ("/permissions", "change execution mode"),
                     ("/persona", "switch persona (code, architect, ask, debug)"),
                     ("/stream", "toggle streaming"),
                     ("/trace", "reasoning detail (off/compact/full)"),
@@ -714,7 +709,7 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
             ),
         ]
 
-    return [
+    sections = [
         (
             "Getting Started",
             [
@@ -729,21 +724,9 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
         (
             "Execution",
             [
-                ("/mode", "change execution mode"),
+                ("/permissions", "change execution mode"),
                 ("/persona", "switch persona (code, architect, ask, debug)"),
                 ("/ask <question>", "one read-only turn; mode restored afterwards"),
-                (
-                    "/plan <task>",
-                    "default planning path: draft, review, approve, then execute; bare /plan shows usage",
-                ),
-                (
-                    "/plan mode",
-                    "secondary persistent readonly planning overlay; it does not execute by itself",
-                ),
-                (
-                    "/plan approve",
-                    "while Plan Mode is on, leave readonly planning and execute the stored draft",
-                ),
                 ("/trace", "reasoning detail (off/compact/full)"),
             ],
         ),
@@ -784,6 +767,13 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
             ],
         ),
     ]
+    return [
+        (
+            section_name,
+            [row for row in rows if command_visible(row[0], ui_mode=ui_mode)],
+        )
+        for section_name, rows in sections
+    ]
 
 
 def _chat_commands_panel(*, ui_mode: str = "chat") -> Panel:
@@ -802,14 +792,14 @@ def _chat_quick_commands_panel(*, ui_mode: str = "chat") -> Panel:
 
 def _chat_visible_commands(*, ui_mode: str = "chat") -> list[str]:
     if _is_forge_ui_mode(ui_mode):
-        return list(_FORGE_SUGGESTION_COMMANDS)
-    return list(_CHAT_GLOBAL_VISIBLE_COMMANDS)
+        return visible_commands(_FORGE_SUGGESTION_COMMANDS, ui_mode=ui_mode)
+    return visible_commands(_CHAT_GLOBAL_VISIBLE_COMMANDS, ui_mode=ui_mode)
 
 
 def _chat_completer_commands(*, ui_mode: str = "chat") -> list[str]:
     if _is_forge_ui_mode(ui_mode):
-        return list(_FORGE_COMPLETER_COMMANDS)
-    return _ordered_unique_strings(
+        return visible_commands(_FORGE_COMPLETER_COMMANDS, ui_mode=ui_mode)
+    commands = _ordered_unique_strings(
         _CHAT_GLOBAL_VISIBLE_COMMANDS
         + [
             "/forge resume",
@@ -821,10 +811,9 @@ def _chat_completer_commands(*, ui_mode: str = "chat") -> list[str]:
             "/terminals show",
             "/terminals kill",
             "/terminals help",
-            "/plan mode",
-            "/plan approve",
         ]
     )
+    return visible_commands(commands, ui_mode=ui_mode)
 
 
 def _suggest_chat_command(raw_command: str, *, ui_mode: str = "chat") -> str | None:
@@ -897,7 +886,7 @@ def _session_build_tools_kwargs(*, session: Any, mode: str) -> dict[str, Any]:
         "console": getattr(session, "console", None),
         "surface": getattr(session, "surface", None),
         "store": session.store,
-        # Carried across tool rebuilds (/mode and plan-mode transitions):
+        # Carried across tool rebuilds (/permissions and plan-mode transitions):
         # dropping it would silently stop tracking the verifier's process groups
         # for the rest of the session.
         "process_group_registry": getattr(session, "process_group_registry", None),
@@ -905,7 +894,7 @@ def _session_build_tools_kwargs(*, session: Any, mode: str) -> dict[str, Any]:
         "yes": bool(getattr(session, "yes", False)),
         "cfg": cfg,
         # Carried across tool rebuilds so an active switch_mode coordination
-        # cell (and the tool itself) survives /mode and persona transitions.
+        # cell (and the tool itself) survives /permissions and persona transitions.
         "persona_switch_state": getattr(session, "persona_switch_state", None),
         "api_key": str(getattr(session, "api_key", "") or "") or None,
         "max_steps": max_steps,

@@ -7,22 +7,25 @@ short-circuit (`/chat`). Both are user-selected, never inferred.
 
 from __future__ import annotations
 
+import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from rich.console import Console
+from typer.testing import CliRunner
 
 from alysis_code import cli as cli_mod
 from alysis_code.agent.turn_path import CHAT_ONLY_SYSTEM_PROMPT
 from alysis_code.agent_loop import create_session
+from alysis_code.cli import app as alysis_app
 from alysis_code.cli_impl.chat import loop as chat_loop_mod
 from alysis_code.cli_impl.chat.state import (
     _ChatExecutionRequest,
-    _ChatPlanModeState,
     _ForgeChatState,
 )
-from alysis_code.config import AppConfig
+from alysis_code.config import AppConfig, save_config
 from alysis_code.llm.openai_compat import LLMResponse
 from alysis_code.session_store import read_session_events
 
@@ -36,8 +39,21 @@ def _dispatch(input_text: str, *, session: Any, tmp_path: Path) -> Any:
         pending_images=[],
         console=Console(),
         forge_state=_ForgeChatState(),
-        plan_mode_state=_ChatPlanModeState(),
     )
+
+
+def _dispatch_output(input_text: str, *, session: Any, tmp_path: Path) -> tuple[Any, str]:
+    output = io.StringIO()
+    result = chat_loop_mod._handle_chat_command_impl(
+        cli_mod,
+        input_text=input_text,
+        root=tmp_path,
+        session=session,
+        pending_images=[],
+        console=Console(file=output, force_terminal=False),
+        forge_state=_ForgeChatState(),
+    )
+    return result, output.getvalue()
 
 
 def _event_payloads(path: Path, event_type: str) -> list[dict[str, Any]]:
@@ -53,6 +69,28 @@ def _event_payloads(path: Path, event_type: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def test_permissions_is_idle_command_and_mode_is_unknown(tmp_path: Path) -> None:
+    session = SimpleNamespace(mode="review", cfg=AppConfig())
+
+    permissions_result, permissions_output = _dispatch_output(
+        "/permissions review",
+        session=session,
+        tmp_path=tmp_path,
+    )
+    mode_result, mode_output = _dispatch_output(
+        "/mode review",
+        session=session,
+        tmp_path=tmp_path,
+    )
+
+    assert permissions_result == "handled"
+    assert "Permissions already active: safe (review)" in permissions_output
+    assert "Unknown command" not in permissions_output
+    assert mode_result == "handled"
+    assert "Unknown command: /mode" in mode_output
+    assert "Did you mean" not in mode_output
+
+
 def test_ask_returns_one_turn_readonly_request(tmp_path: Path) -> None:
     session = SimpleNamespace(mode="review")
     result = _dispatch("/ask what does the parser module do?", session=session, tmp_path=tmp_path)
@@ -64,19 +102,55 @@ def test_ask_returns_one_turn_readonly_request(tmp_path: Path) -> None:
     assert result.chat_only is False
 
 
-def test_ask_in_readonly_mode_needs_no_override(tmp_path: Path) -> None:
+def test_ask_in_readonly_mode_keeps_explicit_turn_scope(tmp_path: Path) -> None:
     session = SimpleNamespace(mode="readonly")
     result = _dispatch("/ask anything risky here?", session=session, tmp_path=tmp_path)
 
     assert isinstance(result, _ChatExecutionRequest)
     assert result.instruction == "anything risky here?"
-    assert result.mode_override is None
-    assert result.restore_mode_after is None
+    assert result.mode_override == "readonly"
+    assert result.restore_mode_after == "readonly"
 
 
 def test_ask_without_text_prints_usage(tmp_path: Path) -> None:
     session = SimpleNamespace(mode="review")
     assert _dispatch("/ask", session=session, tmp_path=tmp_path) == "handled"
+
+
+def test_deferred_model_cache_note_only_appears_on_actual_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def apply_cfg(*, session: Any, cfg: AppConfig) -> None:
+        session.cfg = cfg
+        session.client.model = cfg.model
+
+    monkeypatch.setattr(chat_loop_mod, "_apply_config_menu_changes_to_session", apply_cfg)
+
+    def run(command: str, current: str) -> str:
+        output = io.StringIO()
+        session = SimpleNamespace(
+            cfg=AppConfig(model=current),
+            client=SimpleNamespace(model=current, route_identity=None),
+            _alysis_applying_deferred_command=True,
+        )
+        result = chat_loop_mod._handle_chat_command_impl(
+            cli_mod,
+            input_text=command,
+            root=tmp_path,
+            session=session,
+            pending_images=[],
+            console=Console(file=output, force_terminal=False),
+            forge_state=_ForgeChatState(),
+        )
+        assert result == "handled"
+        return output.getvalue()
+
+    changed = run("/model next-model", "old-model")
+    unchanged = run("/model same-model", "same-model")
+
+    assert "provider cache resets - first call re-reads the prefix." in changed
+    assert "provider cache resets - first call re-reads the prefix." not in unchanged
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +159,7 @@ def test_ask_without_text_prints_usage(tmp_path: Path) -> None:
 
 
 def test_chat_command_is_retired(tmp_path: Path) -> None:
-    # /chat retired in favor of the Ask persona (/mode ask); the notice is a
+    # /chat retired in favor of the Ask persona (/persona ask); the notice is a
     # handled command, never an execution request. The chat_only run_turn
     # plumbing below stays accepted-and-ignored for one release.
     session = SimpleNamespace(mode="review")
@@ -201,3 +275,180 @@ def test_one_turn_mode_override_applies_and_restores(tmp_path: Path) -> None:
         assert "fs_write" in set(session.tools)
     finally:
         session.close()
+
+
+def test_tui_pending_fullaccess_keeps_ask_readonly_and_restores_new_base(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from alysis_code.cli_impl import tui as tui_pkg
+
+    config_dir = tmp_path / "cfg"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(config_dir))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(data_dir))
+    save_config(AppConfig(model="test-model", default_mode="readonly"))
+    monkeypatch.setattr(cli_mod, "_is_non_interactive_terminal", lambda: False)
+    monkeypatch.setattr(tui_pkg, "is_tui_enabled", lambda: True)
+
+    observed_modes: list[str] = []
+    rebuild_modes: list[str] = []
+    runtime: dict[str, Any] = {}
+
+    class _Surface:
+        def emit_mode_changed(self, _mode: str) -> None:
+            return None
+
+    class _Store:
+        session_id = "tui-ask"
+
+        @staticmethod
+        def append(_event_type: str, _payload: dict[str, Any]) -> None:
+            return None
+
+    class _Session:
+        def __init__(self, **kwargs: Any) -> None:
+            self.cfg = kwargs["cfg"].model_copy(deep=True)
+            self.root = kwargs["root"]
+            self.mode = kwargs["mode"]
+            self.pending_permissions_mode = None
+            self.surface = kwargs["surface"]
+            self.store = _Store()
+            self.client = SimpleNamespace(model="test-model", temperature=0.2)
+            self.stream = True
+            self.subagents_enabled = False
+            self.usage_summary = None
+            self.messages: list[dict[str, Any]] = []
+            self.allow_write_globs = None
+            self.persona_allow_write_globs = None
+            self.persona_restore_mode = None
+            self.persona_restore_write_globs = None
+            self.persona = "code"
+            self.persona_registry = None
+
+        def run_turn(self, _instruction: str, **run_kwargs: Any) -> int:
+            assert not any(key.startswith("_alysis_") for key in run_kwargs)
+            observed_modes.append(self.mode)
+            return 0
+
+        @staticmethod
+        def close() -> None:
+            return None
+
+    def _create_session(**kwargs: Any) -> _Session:
+        session = _Session(**kwargs)
+        runtime["session"] = session
+        return session
+
+    def _rebuild(*, session: Any, mode: str) -> None:
+        _ = session
+        rebuild_modes.append(mode)
+
+    monkeypatch.setattr(cli_mod, "create_session", _create_session)
+    monkeypatch.setattr(cli_mod, "_rebuild_session_tools_for_mode", _rebuild)
+    monkeypatch.setattr(chat_loop_mod, "_rebuild_session_tools_for_mode", _rebuild, raising=False)
+    monkeypatch.setattr(
+        cli_mod,
+        "refresh_session_environment_context_message",
+        lambda _session: None,
+    )
+    monkeypatch.setattr(
+        chat_loop_mod,
+        "refresh_session_environment_context_message",
+        lambda _session: None,
+        raising=False,
+    )
+
+    def _run_tui(_state: Any, **kwargs: Any) -> tuple[str, list[Any]]:
+        session = kwargs["session_builder"](_Surface())
+        command_runner = kwargs["command_runner"]
+        before_turn = kwargs["before_turn"]
+
+        action, _output, _instruction, _run_kwargs = command_runner(
+            session,
+            "/permissions fullaccess",
+            100,
+        )
+        assert action == "handled"
+        assert session.mode == "readonly"
+        assert session.pending_permissions_mode == "fullaccess"
+
+        action, _output, instruction, run_kwargs = command_runner(
+            session,
+            "/ask inspect this safely",
+            100,
+        )
+        assert action == "run"
+        assert instruction == "inspect this safely"
+        assert run_kwargs is not None
+        cleanup = before_turn(session, run_kwargs)
+        assert session.mode == "readonly"
+        assert session.cfg.default_mode == "fullaccess"
+        try:
+            session.run_turn(instruction, **run_kwargs)
+        finally:
+            assert cleanup is not None
+            cleanup()
+        assert session.mode == "fullaccess"
+
+        # A newly staged base selection becomes authoritative at the next real
+        # turn; `/ask` still overlays readonly on top of it and restores the
+        # newly activated base afterwards.
+        action, _output, _instruction, _run_kwargs = command_runner(
+            session,
+            "/permissions auto",
+            100,
+        )
+        assert action == "handled"
+        assert session.mode == "fullaccess"
+        assert session.pending_permissions_mode == "auto"
+
+        action, _output, instruction, run_kwargs = command_runner(
+            session,
+            "/ask inspect the plan safely",
+            100,
+        )
+        assert action == "run"
+        assert run_kwargs is not None
+        cleanup = before_turn(session, run_kwargs)
+        assert session.mode == "readonly"
+        assert session.pending_permissions_mode is None
+        try:
+            session.run_turn(instruction, **run_kwargs)
+        finally:
+            assert cleanup is not None
+            cleanup()
+        assert session.mode == "auto"
+        return "/exit", []
+
+    monkeypatch.setattr(tui_pkg, "run_tui", _run_tui)
+
+    result = CliRunner().invoke(
+        alysis_app,
+        [
+            "chat",
+            "--path",
+            os.fspath(tmp_path),
+            "--model",
+            "test-model",
+            "--api-key",
+            "k",
+            "--no-log",
+        ],
+        env={
+            "ALYSIS_CONFIG_DIR": os.fspath(config_dir),
+            "ALYSIS_DATA_DIR": os.fspath(data_dir),
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed_modes == ["readonly", "readonly"]
+    assert runtime["session"].mode == "auto"
+    assert rebuild_modes == [
+        "fullaccess",
+        "readonly",
+        "fullaccess",
+        "auto",
+        "readonly",
+        "auto",
+    ]

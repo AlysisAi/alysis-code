@@ -25,7 +25,8 @@ from ...surface.styles import (
 )
 from ...swarm_orchestrator import acquire_swarm_mutation_guard
 from ...usage_tracker import UsageRecord, aggregate_usage_from_session_logs
-from .state import _ChatExecutionRequest, _ChatPlanModeState, _ForgeChatState
+from .forge_visibility import command_visible
+from .state import _ChatExecutionRequest, _ForgeChatState
 
 _PROTECTED_COMMAND_GLOBAL_NAMES: set[str] = set()
 _SYNCED_COMMAND_GLOBAL_VALUES: dict[str, Any] = {}
@@ -44,6 +45,40 @@ _TERMINALS_USAGE_LINES = (
     "       /terminals kill <process_id>",
     "       /terminals help",
 )
+
+
+def _record_chat_local_command(*, session: Any, command_token: str, has_argument: bool) -> None:
+    """Persist a privacy-safe marker for a locally dispatched chat command."""
+
+    normalized = str(command_token or "").strip().lower()
+    if normalized in {"exit", "/exit"}:
+        normalized = "/exit"
+    elif normalized in {"quit", "/quit"}:
+        normalized = "/quit"
+    elif not normalized.startswith("/"):
+        return
+
+    store = getattr(session, "store", None)
+    append = getattr(store, "append", None)
+    if callable(append):
+        append(
+            "chat_local_command",
+            {
+                "command": normalized,
+                "has_argument": bool(has_argument),
+            },
+        )
+
+
+def _handle_unknown_chat_command(*, command: str, console: Console, ui_mode: str) -> str:
+    suggestion = _suggest_chat_command(command, ui_mode=ui_mode)
+    if suggestion:
+        console.print(
+            f"[yellow]Unknown command:[/yellow] {command}. Did you mean {suggestion}? Try /help."
+        )
+        return "handled"
+    console.print(f"[yellow]Unknown command:[/yellow] {command}. Try /help.")
+    return "handled"
 
 
 def _merge_usage_payloads_into_session(
@@ -210,9 +245,6 @@ def _handle_idle_skill_invocation(
     pending_images: list[str],
     console: Console,
     forge_state: _ForgeChatState,
-    plan_mode_state: _ChatPlanModeState,
-    plan_mode_escape_supported: bool = False,
-    plan_mode_action_prompt: Any | None = None,
     forge_planner_reply_sink: Any | None = None,
     forge_execution_report_sink: Any | None = None,
 ) -> str | _ChatExecutionRequest | None:
@@ -242,9 +274,6 @@ def _handle_idle_skill_invocation(
         pending_images=pending_images,
         console=console,
         forge_state=forge_state,
-        plan_mode_state=plan_mode_state,
-        plan_mode_escape_supported=plan_mode_escape_supported,
-        plan_mode_action_prompt=plan_mode_action_prompt,
         forge_planner_reply_sink=forge_planner_reply_sink,
         forge_execution_report_sink=forge_execution_report_sink,
     )
@@ -258,11 +287,9 @@ def _handle_chat_command(
     pending_images: list[str],
     console: Console,
     forge_state: _ForgeChatState,
-    plan_mode_state: _ChatPlanModeState,
-    plan_mode_escape_supported: bool = False,
-    plan_mode_action_prompt: Any | None = None,
     forge_planner_reply_sink: Any | None = None,
     forge_execution_report_sink: Any | None = None,
+    record_local_command: bool = True,
 ) -> str | _ChatExecutionRequest:
     trimmed = input_text.strip()
     if not trimmed:
@@ -271,6 +298,19 @@ def _handle_chat_command(
     parts = trimmed.split(maxsplit=1)
     cmd = parts[0].lower()
     arg = parts[1].strip() if len(parts) > 1 else ""
+    if record_local_command:
+        _record_chat_local_command(
+            session=session,
+            command_token=cmd,
+            has_argument=bool(arg),
+        )
+
+    if not command_visible(cmd, ui_mode=forge_state.ui_mode):
+        return _handle_unknown_chat_command(
+            command=parts[0],
+            console=console,
+            ui_mode=forge_state.ui_mode,
+        )
 
     if _is_forge_ui_mode(forge_state.ui_mode):
         forge_action = _handle_forge_chat_command(
@@ -288,9 +328,6 @@ def _handle_chat_command(
 
     if cmd in {"exit", "quit", "/exit", "/quit"}:
         return "exit"
-    if cmd == "/back":
-        console.print("Already in chat.")
-        return "handled"
     if parsed_forge_enter is not None:
         if parsed_forge_enter.usage_error is not None:
             console.print(f"[red]{parsed_forge_enter.usage_error}[/red]")
@@ -380,11 +417,9 @@ def _handle_chat_command(
             console.print("[yellow]Usage:[/yellow] /ask <question> — one read-only turn")
             return "handled"
         current_mode = str(getattr(session, "mode", "review") or "review").strip().lower()
-        if current_mode == "readonly":
-            return _ChatExecutionRequest(instruction=remainder)
-        # One-turn read-only override: the existing mode machinery applies
-        # readonly before the turn and restores the previous mode afterwards,
-        # exception-safe, so "just look, don't touch" is host-enforced.
+        # Always describe the one-turn read-only scope explicitly. Even when the
+        # current mode is already readonly, a staged Permissions selection may
+        # activate at this message boundary before the overlay is applied.
         return _ChatExecutionRequest(
             instruction=remainder,
             mode_override="readonly",
@@ -394,7 +429,7 @@ def _handle_chat_command(
         # Retired in favor of the Ask persona; the chat_only plumbing stays
         # accepted-and-ignored for one release (no producer).
         console.print(
-            "[yellow]/chat is retired.[/yellow] Use /mode ask for a persistent "
+            "[yellow]/chat is retired.[/yellow] Use /persona ask for a persistent "
             "read-only Q&A persona, or /ask <question> for one read-only turn."
         )
         return "handled"
@@ -510,6 +545,7 @@ def _handle_chat_command(
                 )
                 return "handled"
 
+        pending_permissions = _pending_chat_permissions(session)
         resumed, message, history_messages = _resume_chat_session(
             session=session,
             target_session_id=target_session_id,
@@ -520,6 +556,15 @@ def _handle_chat_command(
             # session_start restored the base mode; the persona (and with it
             # the narrowed mode, write scope, and model role) rides on top.
             _reapply_resumed_persona(session=session, console=console)
+            # A next-message choice belongs to the live UI interaction, not the
+            # history being resumed. Restore the historical persona first so
+            # staging can distinguish its temporary narrowing from the user's
+            # selected base Permissions.
+            if pending_permissions is not None:
+                _stage_chat_permissions(
+                    session=session,
+                    next_mode=pending_permissions,
+                )
             _render_chat_resume_history(
                 session=session,
                 messages=history_messages,
@@ -1095,16 +1140,24 @@ def _handle_chat_command(
             return "handled"
         _open_assets_modal(session=session, console=console, run_paths=run_paths)
         return "handled"
-    if cmd in {"/mode"}:
-        current_mode = str(getattr(session, "mode", "review")).strip().lower()
+    if cmd in {"/permissions"}:
+        active_mode = str(getattr(session, "mode", "review")).strip().lower()
+        pending_mode = _pending_chat_permissions(session)
+        selected_mode = pending_mode or active_mode
         next_mode: str | None
         if not arg:
             next_mode, picker_available = _select_chat_mode_interactive(
-                current_mode=current_mode,
+                current_mode=selected_mode,
                 console=console,
             )
             if not picker_available:
-                console.print(_chat_mode_panel(current_mode=current_mode))
+                console.print(_chat_mode_panel(current_mode=selected_mode))
+                if pending_mode is not None:
+                    console.print(
+                        "Active Permissions: "
+                        f"{_chat_mode_display(active_mode)}; next message: "
+                        f"{_chat_mode_display(pending_mode)}"
+                    )
                 return "handled"
             if next_mode is None:
                 return "handled"
@@ -1119,37 +1172,41 @@ def _handle_chat_command(
             next_mode = _resolve_chat_mode_alias(arg)
         if next_mode is None or next_mode not in _CHAT_MODES:
             console.print(
-                "[red]Invalid mode.[/red] Try: /mode 1, /mode 2, /mode 3, /mode 4 "
+                "[red]Invalid mode.[/red] Try: /permissions 1, /permissions 2, "
+                "/permissions 3, /permissions 4 "
                 "(or safe, fast, read, full)."
             )
             return "handled"
-        if _chat_plan_mode_enabled(plan_mode_state):
-            if next_mode == "readonly":
-                console.print("Mode already set: Read-Only (Plan Mode is on)")
-                return "handled"
-            console.print(
-                "Cannot change execution mode while Plan Mode is on. Use /plan off first."
-            )
-            return "handled"
-        if next_mode == current_mode:
-            console.print(f"Mode already set: {_chat_mode_display(next_mode)}")
+        persona_is_narrowing = getattr(session, "persona_restore_mode", None) is not None
+        if next_mode == selected_mode and not (pending_mode is None and persona_is_narrowing):
+            if pending_mode is not None:
+                console.print(
+                    "Permissions already selected for the next message: "
+                    f"{_chat_mode_display(next_mode)}"
+                )
+            else:
+                console.print(f"Permissions already active: {_chat_mode_display(next_mode)}")
             if next_mode == "fullaccess":
                 _print_fullaccess_mode_warning(console=console)
             return "handled"
         try:
-            # An explicit execution-mode choice is the user redefining their
-            # base: restore any persona-narrowed write scope BEFORE the
-            # rebuild so the new tool surface reflects the user's own scope.
-            _clear_persona_restore(session)
-            _apply_chat_effective_mode(
+            staged = _stage_chat_permissions(
                 session=session,
                 next_mode=next_mode,
-                persist_default_mode=True,
             )
         except Exception as e:  # noqa: BLE001
-            console.print(f"[red]Failed to change mode:[/red] {e}")
+            console.print(f"[red]Failed to select Permissions:[/red] {e}")
             return "handled"
-        console.print(f"Mode set for this session: {_chat_mode_display(next_mode)}")
+        if staged is None:
+            console.print(
+                "Pending Permissions cleared; active Permissions remain "
+                f"{_chat_mode_display(active_mode)}"
+            )
+        else:
+            console.print(
+                f"Permissions for the next message: {_chat_mode_display(next_mode)} "
+                f"(currently {_chat_mode_display(active_mode)})"
+            )
         if next_mode == "fullaccess":
             _print_fullaccess_mode_warning(console=console)
         return "handled"
@@ -1188,9 +1245,6 @@ def _handle_chat_command(
         # _apply_chat_persona can only keep or lower the execution mode, so
         # this path needs no fullaccess warning and never persists
         # default_mode.
-        if _chat_plan_mode_enabled(plan_mode_state):
-            console.print("Cannot change persona while Plan Mode is on. Use /plan off first.")
-            return "handled"
         persona_name = normalize_persona(persona_selection, persona_registry)
         if persona_name == current_persona:
             console.print(f"Persona already set: {persona_name}")
@@ -1205,164 +1259,6 @@ def _handle_chat_command(
             console.print(f"[red]Failed to change persona:[/red] {e}")
             return "handled"
         console.print(f"Persona set for this session: {persona_name}")
-        return "handled"
-    if cmd in {"/plan"}:
-        if _is_forge_ui_mode(forge_state.ui_mode):
-            _print_forge_plan_command_guidance(console=console)
-            return "handled"
-        raw_plan_arg = arg.strip()
-        plan_action, plan_task = _parse_chat_plan_command(raw_plan_arg)
-        if plan_action == "draft":
-            if _chat_plan_mode_enabled(plan_mode_state):
-                for line in _chat_plan_draft_blocked_by_mode_lines(
-                    plan_mode_escape_supported=plan_mode_escape_supported
-                ):
-                    console.print(line)
-                return "handled"
-            current_mode = str(getattr(session, "mode", "review")).strip().lower()
-            if current_mode == "readonly":
-                for line in _chat_plan_readonly_mode_guidance_lines():
-                    console.print(line)
-                return "handled"
-            if not plan_task:
-                try:
-                    plan_task = typer.prompt("Plan task", default="").strip()
-                except KeyboardInterrupt:
-                    console.print("")
-                    return "handled"
-                except (EOFError, typer.Abort):
-                    # No interactive stdin available (the TUI feeds an empty/EOF
-                    # stdin so interactive prompts cancel cleanly). typer.prompt
-                    # raises click.Abort here, whose str() is empty -- if it
-                    # escaped it surfaced as a bare "Command error:" with no
-                    # detail. Fall through to the usage hint below instead.
-                    plan_task = ""
-            if not plan_task:
-                for line in _chat_plan_usage_lines():
-                    console.print(line)
-                return "handled"
-            approved_instruction = _run_plan_mode_approval_loop(
-                session=session,
-                console=console,
-                user_message=plan_task,
-                action_prompt=plan_mode_action_prompt,
-            )
-            if approved_instruction is None:
-                return "handled"
-            console.print("")
-            return _ChatExecutionRequest(instruction=approved_instruction)
-        if plan_action == "status":
-            if plan_task:
-                for line in _chat_plan_usage_lines():
-                    console.print(line)
-                return "handled"
-            _render_chat_plan_mode_status(console=console, plan_mode_state=plan_mode_state)
-            return "handled"
-        if plan_action == "approve":
-            if plan_task:
-                for line in _chat_plan_usage_lines():
-                    console.print(line)
-                return "handled"
-            if not _chat_plan_mode_enabled(plan_mode_state):
-                console.print(
-                    "Plan Mode is off. Use /plan <task> for the default draft/review/approve flow that can execute after approval."
-                )
-                console.print(
-                    "Use /plan mode only if you explicitly want secondary readonly planning chat."
-                )
-                return "handled"
-            latest_task = _chat_plan_mode_latest_task(plan_mode_state)
-            latest_draft = _chat_plan_mode_latest_draft(plan_mode_state)
-            if latest_task is None or latest_draft is None:
-                for line in _plan_mode_no_stored_draft_lines():
-                    console.print(line)
-                if plan_mode_escape_supported:
-                    console.print("Press Esc at an empty prompt to leave interactively.")
-                return "handled"
-            restore_mode = _chat_plan_mode_restore_mode(plan_mode_state) or "readonly"
-            if restore_mode == "readonly":
-                for line in _plan_mode_readonly_origin_lines():
-                    console.print(line)
-                if plan_mode_escape_supported:
-                    console.print("Press Esc at an empty prompt to leave interactively.")
-                return "handled"
-            approved_instruction = instruction_with_approved_plan(
-                user_message=latest_task,
-                approved_plan=latest_draft,
-            )
-            restored = _disable_chat_plan_mode(
-                session=session,
-                console=console,
-                plan_mode_state=plan_mode_state,
-                clear_draft=True,
-            )
-            if restored is None:
-                return "handled"
-            console.print(
-                f"Executing latest stored Plan Mode draft for: {_chat_plan_task_preview(latest_task)}"
-            )
-            return _ChatExecutionRequest(instruction=approved_instruction)
-        if plan_action in {"mode", "readonly", "on"}:
-            if plan_task:
-                for line in _chat_plan_usage_lines():
-                    console.print(line)
-                return "handled"
-            parsed = True
-        elif plan_action == "off":
-            if plan_task:
-                for line in _chat_plan_usage_lines():
-                    console.print(line)
-                return "handled"
-            parsed = False
-        else:
-            for line in _chat_plan_usage_lines():
-                console.print(line)
-            return "handled"
-        current_mode = str(getattr(session, "mode", "review")).strip().lower() or "review"
-        if parsed:
-            if _chat_plan_mode_enabled(plan_mode_state):
-                console.print(
-                    _chat_plan_already_on_message(
-                        plan_mode_escape_supported=plan_mode_escape_supported
-                    )
-                )
-                return "handled"
-            _clear_chat_plan_mode_draft_state(plan_mode_state)
-            plan_mode_state.enabled = True
-            plan_mode_state.restore_mode = current_mode
-            if current_mode != "readonly":
-                try:
-                    _apply_chat_effective_mode(
-                        session=session,
-                        next_mode="readonly",
-                        persist_default_mode=False,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    plan_mode_state.enabled = False
-                    plan_mode_state.restore_mode = None
-                    console.print(f"[red]Failed to enable Plan Mode:[/red] {e}")
-                    return "handled"
-            if plan_mode_escape_supported:
-                console.print(
-                    "Plan Mode set for this session: on "
-                    "(persistent readonly planning overlay; no execution by itself; press Esc at an empty prompt or use /plan off to leave)"
-                )
-            else:
-                console.print(
-                    "Plan Mode set for this session: on (persistent readonly planning overlay; no execution by itself)"
-                )
-            for line in _plan_mode_entry_guidance_lines(restore_mode=current_mode):
-                console.print(line)
-            return "handled"
-        if not _chat_plan_mode_enabled(plan_mode_state):
-            console.print("Plan Mode already off.")
-            return "handled"
-        _disable_chat_plan_mode(
-            session=session,
-            console=console,
-            plan_mode_state=plan_mode_state,
-            clear_draft=True,
-        )
         return "handled"
     if cmd in {"/stream"}:
         stream_arg = arg.strip().lower()
@@ -1511,6 +1407,11 @@ def _handle_chat_command(
             return "handled"
         _refresh_chat_hud_context_cache(session)
         console.print(f"Model set for this session: {arg}")
+        current_client_model = getattr(getattr(session, "client", None), "model", None)
+        if bool(getattr(session, "_alysis_applying_deferred_command", False)) and str(
+            current_client_model or ""
+        ) != str(previous_client_model or ""):
+            console.print("provider cache resets - first call re-reads the prefix.")
         return "handled"
     if cmd in {"/login"}:
         from ..commands.auth import login_connection_interactively, login_connection_rows
@@ -1578,15 +1479,11 @@ def _handle_chat_command(
         return "handled"
 
     if cmd[:1] in "/:":
-        suggestion = _suggest_chat_command(parts[0], ui_mode=forge_state.ui_mode)
-        if suggestion:
-            console.print(
-                f"[yellow]Unknown command:[/yellow] {parts[0]}. "
-                f"Did you mean {suggestion}? Try /help."
-            )
-            return "handled"
-        console.print(f"[yellow]Unknown command:[/yellow] {parts[0]}. Try /help.")
-        return "handled"
+        return _handle_unknown_chat_command(
+            command=parts[0],
+            console=console,
+            ui_mode=forge_state.ui_mode,
+        )
 
     if not _is_forge_ui_mode(forge_state.ui_mode):
         navigation_request = _parse_chat_workdir_navigation_request(
@@ -1614,14 +1511,6 @@ def _handle_chat_command(
             )
             if not trailing_instruction:
                 return "handled"
-            if _chat_plan_mode_enabled(plan_mode_state):
-                return _resolve_interactive_plan_mode_request(
-                    session=session,
-                    console=console,
-                    plan_mode_state=plan_mode_state,
-                    user_message=trailing_instruction,
-                    plan_mode_escape_supported=plan_mode_escape_supported,
-                )
             return _ChatExecutionRequest(instruction=trailing_instruction)
 
     return "send"
@@ -2565,7 +2454,7 @@ def _handle_forge_chat_command(
         # on completion, so suppress the token-delta trace that would otherwise
         # spill the streaming text as separate trace lines.
         on_text_delta = (
-            _make_plan_mode_delta_trace_callback(session=session)
+            _make_forge_planner_delta_trace_callback(session=session)
             if (session_stream and forge_planner_reply_sink is None)
             else None
         )

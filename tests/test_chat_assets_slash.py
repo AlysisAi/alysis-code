@@ -25,14 +25,13 @@ def _console() -> tuple[Console, io.StringIO]:
     return Console(file=stream, force_terminal=False), stream
 
 
-def test_assets_registered_in_slash_completer() -> None:
+def test_assets_absent_from_chat_slash_completer() -> None:
     specs = {spec.name: spec for spec in get_chat_specs()}
 
-    assert "assets" in specs
-    assert specs["assets"].usage == "/assets"
+    assert "assets" not in specs
 
 
-def test_assets_without_active_run_prints_clear_message(
+def test_assets_outside_forge_uses_unknown_command_path(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -51,17 +50,13 @@ def test_assets_without_active_run_prints_clear_message(
         pending_images=[],
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
-    assert (
-        "No forge run is active for this workspace. Use /forge plan to start one."
-        in stream.getvalue()
-    )
+    assert "Unknown command: /assets" in stream.getvalue()
 
 
-def test_assets_with_active_run_launches_modal(
+def test_assets_with_active_run_still_stays_hidden_outside_forge(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -87,12 +82,12 @@ def test_assets_with_active_run_launches_modal(
         pending_images=[],
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
-    assert calls
-    assert calls[0]["run_paths"].run_id == paths.run_id
+    assert "Unknown command: /assets" in _stream.getvalue()
+    assert calls == []
+    assert paths.run_id
 
 
 def test_assets_in_forge_planning_chat_launches_modal(
@@ -109,8 +104,10 @@ def test_assets_in_forge_planning_chat_launches_modal(
 
     monkeypatch.setattr("alysis_code.cli_impl.assets_modal.run_assets_modal", fake_modal)
 
-    result = cli_mod._handle_forge_chat_command(
+    result = cli_mod._handle_chat_command(
         input_text="/assets",
+        root=tmp_path,
+        pending_images=[],
         forge_state=cli_mod._ForgeChatState(
             ui_mode="forge",
             paths=paths,

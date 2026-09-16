@@ -567,6 +567,21 @@ def _resume_chat_session(
     no_log = not bool(getattr(store, "enabled", False))
     usage_role = str(getattr(session, "usage_role", "main") or "main")
     usage_hud_enabled = _chat_usage_hud_enabled(session)
+    # These bindings belong to the live UI, not to the persisted chat being
+    # resumed.  The session object is mutated in place below so callers keep a
+    # stable reference; preserve the same runtime hooks across that state swap.
+    runtime_bindings = {
+        name: getattr(session, name)
+        for name in (
+            "_alysis_tui_interactive",
+            "apply_staged_operation",
+            "pending_operation_labels",
+            "on_child_scheduler_replaced",
+        )
+        if hasattr(session, name)
+    }
+    previous_scheduler = getattr(session, "child_scheduler", None)
+    lifecycle_listener = getattr(previous_scheduler, "lifecycle_listener", None)
 
     start_model = str(start_payload.get("model") or "").strip()
     model_restore_reason = "no historical model recorded"
@@ -801,6 +816,12 @@ def _resume_chat_session(
 
     session.__dict__.clear()
     session.__dict__.update(new_session.__dict__)
+    for name, value in runtime_bindings.items():
+        setattr(session, name, value)
+    replacement_scheduler = getattr(session, "child_scheduler", None)
+    set_lifecycle_listener = getattr(replacement_scheduler, "set_lifecycle_listener", None)
+    if callable(set_lifecycle_listener) and callable(lifecycle_listener):
+        set_lifecycle_listener(lifecycle_listener)
     _set_chat_usage_hud_enabled(session, usage_hud_enabled)
     _refresh_chat_hud_context_cache(session)
     _ensure_session_summary_metadata(session=session, allow_model_summary=False)

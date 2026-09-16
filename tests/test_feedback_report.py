@@ -1672,7 +1672,6 @@ def test_chat_report_command_creates_bundle_host_side(monkeypatch, tmp_path: Pat
         pending_images=["queued.png"],
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1734,7 +1733,6 @@ def test_chat_report_still_reports_bundle_when_github_draft_fails(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     rendered = stream.getvalue()
@@ -1795,7 +1793,6 @@ def test_chat_report_command_in_forge_includes_active_run_paths(
         pending_images=[],
         console=console,
         forge_state=forge_state,
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1848,7 +1845,6 @@ def test_chat_feedback_alias_uses_report_flow(monkeypatch, tmp_path: Path) -> No
         pending_images=[],
         console=Console(file=io.StringIO(), force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"

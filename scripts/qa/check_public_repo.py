@@ -53,9 +53,16 @@ def path_violation(path_text: str) -> str | None:
     """Return the public-tree policy violation for a tracked path, if any."""
     path = PurePosixPath(path_text)
     parts = set(path.parts)
+    lower_parts = tuple(part.casefold() for part in path.parts)
 
-    if tuple(part.casefold() for part in path.parts[:2]) == ("docs", "internal"):
+    if lower_parts[:2] == ("docs", "internal"):
         return "internal documentation directory"
+    if lower_parts and lower_parts[0] in {"prompts", "claude outputs", ".claude", ".codex"}:
+        return "local assistant working files"
+    if lower_parts and lower_parts[0] in {"extensions", "supabase"}:
+        return "unreleased editor or hosted-service package"
+    if "power_mode" in lower_parts:
+        return "unreleased Power mode package"
     if parts & _CACHE_DIRS:
         return "generated cache directory"
     if path.parts and path.parts[0] in _LOCAL_ROOTS:

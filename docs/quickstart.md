@@ -128,7 +128,8 @@ Useful chat commands:
 - `/help`: show commands
 - `/status`: show mode, workspace, and active model
 - `/pwd`: show workspace root, focus directory, and active workdir
-- `/mode`: inspect or change execution mode
+- `/permissions`: inspect or select execution permissions for the next message
+- `/persona architect`: plan and design, with Markdown-only writes
 - `/config`: open the inline configuration menu, including router model and limits
 - `/forge`: start the plan-driven workflow for larger tasks
 

@@ -1622,7 +1622,10 @@ def test_mid_turn_config_saves_coalesce_reload_before_queued_turn() -> None:
     assert result == "/exit"
     assert reload_calls["n"] == 1
     assert events.index("reload") < events.index("turn:queued")
-    assert sum("running session will reload" in text for _role, text in transcript) == 2
+    assert (
+        sum("Session reload applies at your next message" in text for _role, text in transcript)
+        == 2
+    )
     assert any("could not be reloaded" in text for role, text in transcript if role == "error")
 
 

@@ -483,7 +483,7 @@ def test_clear_persona_restore_restores_user_scope(loop_mod) -> None:  # type: i
     loop_mod._apply_chat_persona(session=session, persona="architect")
     assert session.allow_write_globs is None
     assert session.persona_allow_write_globs == ["*.md", "**/*.md"]
-    # Explicit /mode <exec>: base redefined, persona scope must not leak.
+    # Explicit /permissions <exec>: base redefined, persona scope must not leak.
     loop_mod._clear_persona_restore(session)
     assert session.allow_write_globs is None
     assert session.persona_allow_write_globs is None
@@ -542,7 +542,7 @@ def test_startup_persona_applies_only_non_default(
 
 
 # ---------------------------------------------------------------------------
-# /mode command handling
+# /permissions command handling
 # ---------------------------------------------------------------------------
 
 
@@ -550,15 +550,13 @@ def _run_chat_command(
     input_text: str,
     session: _FakeChatSession,
     monkeypatch: pytest.MonkeyPatch,
-    *,
-    plan_mode_on: bool = False,
 ) -> tuple[str, str]:
     import io
 
     from rich.console import Console
 
     from alysis_code.cli_impl import chat as chat_facade
-    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code.cli_impl.chat.state import _ForgeChatState
 
     persona_calls: list[str] = []
 
@@ -580,9 +578,6 @@ def _run_chat_command(
 
     chat_facade._sync_cli_globals(cli_mod)
 
-    plan_state = _ChatPlanModeState()
-    if plan_mode_on:
-        plan_state.enabled = True
     buffer = io.StringIO()
     console = Console(file=buffer, force_terminal=False, width=200)
     result = chat_facade._handle_chat_command(
@@ -592,7 +587,6 @@ def _run_chat_command(
         pending_images=[],
         console=console,
         forge_state=_ForgeChatState(),
-        plan_mode_state=plan_state,
     )
     assert result == "handled"
     session._persona_calls = persona_calls  # type: ignore[attr-defined]
@@ -608,12 +602,19 @@ def test_persona_command_switches_persona(monkeypatch: pytest.MonkeyPatch) -> No
     assert session._persona_calls == ["architect"]  # type: ignore[attr-defined]
 
 
-def test_persona_command_refused_in_plan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_removed_plan_mode_command_never_touches_persona_or_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Chat plan mode is gone entirely (the architect persona is the planning
+    # posture). Its old entry command is unknown in chat and must not switch
+    # the persona or the execution mode.
     monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
-    output, persona = _run_chat_command("/persona ask", session, monkeypatch, plan_mode_on=True)
+    output, persona = _run_chat_command("/plan mode", session, monkeypatch)
     assert persona == "code"
-    assert "Cannot change persona while Plan Mode is on" in output
+    assert session.mode == "review"
+    assert "Unknown command: /plan" in output
+    assert "Plan Mode" not in output
     assert session._persona_calls == []  # type: ignore[attr-defined]
 
 
@@ -640,23 +641,25 @@ def test_mode_command_points_persona_args_at_persona_command(
 ) -> None:
     monkeypatch.delenv("ALYSIS_PERSONA_MODES", raising=False)
     session = _FakeChatSession()
-    output, persona = _run_chat_command("/mode architect", session, monkeypatch)
+    output, persona = _run_chat_command("/permissions architect", session, monkeypatch)
     assert persona == "code"
     assert "Personas have their own command: /persona architect" in output
     assert session._persona_calls == []  # type: ignore[attr-defined]
 
 
-def test_mode_command_exec_mode_clears_persona_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_permissions_command_defers_base_scope_change_until_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = _FakeChatSession()
     session.persona_restore_mode = "review"
     session.persona_restore_write_globs = None
     session.allow_write_globs = ["*.md", "**/*.md"]
-    output, _persona = _run_chat_command("/mode auto", session, monkeypatch)
-    assert session.mode == "auto"
-    assert session.persona_restore_mode is None
-    # The persona-narrowed scope must not leak past an explicit mode choice.
-    assert session.allow_write_globs is None
-    assert "Mode set for this session" in output
+    output, _persona = _run_chat_command("/permissions auto", session, monkeypatch)
+    assert session.mode == "review"
+    assert session.pending_permissions_mode == "auto"
+    assert session.persona_restore_mode == "review"
+    assert session.allow_write_globs == ["*.md", "**/*.md"]
+    assert "Permissions for the next message" in output
 
 
 def test_next_persona_cycle() -> None:
@@ -672,7 +675,7 @@ def test_next_persona_cycle() -> None:
 
 
 def test_mode_picker_rows_contain_no_personas() -> None:
-    # Personas moved out of the /mode picker (Tab cycles them in the TUI);
+    # Personas moved out of the /permissions picker (Tab cycles them in the TUI);
     # the picker surface is execution modes only.
     from alysis_code.cli_impl.commands.chat_terminal import _chat_mode_rows
 
@@ -816,7 +819,7 @@ def test_chat_command_retired_with_pointer(monkeypatch: pytest.MonkeyPatch) -> N
 
     from alysis_code import cli as cli_mod
     from alysis_code.cli_impl import chat as chat_facade
-    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code.cli_impl.chat.state import _ForgeChatState
 
     chat_facade._sync_cli_globals(cli_mod)
     buffer = io.StringIO()
@@ -828,12 +831,11 @@ def test_chat_command_retired_with_pointer(monkeypatch: pytest.MonkeyPatch) -> N
         pending_images=[],
         console=console,
         forge_state=_ForgeChatState(),
-        plan_mode_state=_ChatPlanModeState(),
     )
     assert result == "handled"
     output = buffer.getvalue()
     assert "/chat is retired" in output
-    assert "/mode ask" in output
+    assert "/persona ask" in output
 
 
 def test_chat_removed_from_visible_surfaces() -> None:
@@ -1457,7 +1459,7 @@ def test_persona_command_ignored_in_forge_mode(monkeypatch: pytest.MonkeyPatch) 
 
     from alysis_code import cli as cli_mod
     from alysis_code.cli_impl import chat as chat_facade
-    from alysis_code.cli_impl.chat.state import _ChatPlanModeState, _ForgeChatState
+    from alysis_code.cli_impl.chat.state import _ForgeChatState
 
     chat_facade._sync_cli_globals(cli_mod)
     session = _FakeChatSession()
@@ -1471,7 +1473,6 @@ def test_persona_command_ignored_in_forge_mode(monkeypatch: pytest.MonkeyPatch) 
         pending_images=[],
         console=console,
         forge_state=forge_state,
-        plan_mode_state=_ChatPlanModeState(),
     )
     assert result == "handled"
     assert session.persona == "code"

@@ -477,6 +477,50 @@ def test_run_turn_preserves_text_only_native_provider_metadata_for_followup(
     assert PROVIDER_METADATA_KEY not in str(first_event.get("content") or "")
 
 
+def test_plain_final_reply_separates_followup_user_messages(tmp_path: Path) -> None:
+    """A successful text reply must remain in the next request without provider metadata."""
+    session = create_session(
+        cfg=_cfg(),
+        root=tmp_path,
+        mode="readonly",
+        yes=True,
+        max_steps=4,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        enable_compaction=False,
+        enable_conversation_summarization=False,
+    )
+    client = _ScriptedClient(
+        responses=[
+            LLMResponse(content="FIRST_REPLY", tool_calls=[], raw={}),
+            LLMResponse(content="SECOND_REPLY", tool_calls=[], raw={}),
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+    try:
+        assert session.run_turn("Reply only FIRST_REPLY. Do not use tools.") == 0
+        assert session.run_turn("Now reply only SECOND_REPLY. Do not use tools.") == 0
+        history = [
+            (message.get("role"), message.get("content"))
+            for message in client.calls[-1]["messages"]
+            if message.get("role") in {"user", "assistant"}
+        ]
+        assert ("assistant", "FIRST_REPLY") in history
+        first = history.index(("assistant", "FIRST_REPLY"))
+        assert any(
+            "FIRST_REPLY" in str(content) for role, content in history[:first] if role == "user"
+        )
+        assert any(
+            "SECOND_REPLY" in str(content)
+            for role, content in history[first + 1 :]
+            if role == "user"
+        )
+        assert session.messages[-1] == {"role": "assistant", "content": "SECOND_REPLY"}
+    finally:
+        session.close()
+
+
 def test_run_turn_persists_duplicate_final_text_native_provider_metadata(
     tmp_path: Path,
 ) -> None:

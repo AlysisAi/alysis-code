@@ -162,7 +162,7 @@ def _run_headless(state, keys, **kwargs):
 def test_body_panel_opens_and_is_not_routed_to_runner():
     # A provider returning a {title, body} spec opens the document panel natively
     # (like /plan markdown) instead of routing through the command runner.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
 
     def md_provider(arg=""):
@@ -182,7 +182,7 @@ def test_body_panel_opens_and_is_not_routed_to_runner():
 def test_body_panel_enter_closes_without_routing():
     # Enter on an ordinary (no-confirm) panel only closes it — it must not route the
     # opening command to the runner (regression for the split Enter/confirm handler).
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
 
     def md_provider(arg=""):
@@ -355,7 +355,7 @@ def test_picker_submit_opens_panel_no_extra_enter():
     # A forge /plan picker whose on_select returns {"submit": "/plan tasks"} runs
     # that text straight through the submit pipeline → the panel opens, and the
     # raw "/plan tasks" is never routed to the command runner.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
 
     def plan_panel(arg=""):
@@ -387,7 +387,7 @@ def test_picker_submit_opens_panel_no_extra_enter():
 def test_picker_submit_routes_two_part_command_to_runner():
     # A forge /assistant picker whose on_select returns {"submit": "/assistant on"}
     # routes the explicit two-token form to the command runner (no /assistant panel).
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
 
     def assistant_picker():
@@ -699,7 +699,7 @@ def test_serialized_sink_prefers_on_swarm_event(tmp_path):
 def test_forge_execute_callable_dispatched_on_worker():
     # A command_runner returning ("run", …, {"_deferred_execute": cb}) makes the turn
     # machinery call cb instead of session.run_turn.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     ran: list = []
 
     def runner(session, text, width):
@@ -915,7 +915,7 @@ def test_asset_detail_panel_spec_unknown_id(monkeypatch):
 def test_editor_opens_types_and_saves():
     # A panel provider returning {"editor": {...}} opens the in-TUI editor; typing
     # then Ctrl+S calls on_save with the buffer, which on success closes + echoes.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     saved: dict = {}
 
     def on_save(text):
@@ -941,7 +941,7 @@ def test_editor_opens_types_and_saves():
 
 def test_editor_invalid_save_keeps_open():
     # on_save returning (False, msg) keeps the editor open (no echo); Esc cancels.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
 
     def on_save(text):
@@ -1094,7 +1094,7 @@ def test_execute_gate_picker_launch_defers_clean_command():
     # Launch row flags a one-shot bypass and re-submits a CLEAN "/execute plan" (no
     # internal sentinel); the gate consumes the flag so that re-submission falls
     # through to the runner exactly once instead of re-opening the gate.
-    state = TuiState(model_name="m", username="t")
+    state = TuiState(model_name="m", username="t", forge_mode=True)
     calls: list = []
     gate_flag = {"confirmed": False}
 

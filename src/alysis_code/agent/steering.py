@@ -15,11 +15,62 @@ steps, and must persist across resume.
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 from threading import Event, RLock
+from typing import Any
 
 MAX_STEER_MESSAGE_CHARS = 4000
 MAX_PENDING_STEER_MESSAGES = 16
+MAX_PENDING_OPS = 16
 _TRUNCATION_MARKER = " [truncated]"
+
+
+@dataclass(frozen=True)
+class ResolvedOperation:
+    """A validated operation that is safe for worker-thread application."""
+
+    kind: str
+    payload: Any
+    display_label: str
+
+
+class OpsInbox:
+    """Bounded, thread-safe FIFO for resolved mid-turn operations."""
+
+    __slots__ = ("_lock", "_operations")
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._operations: deque[ResolvedOperation] = deque()
+
+    def send(self, operation: ResolvedOperation) -> bool:
+        """Queue ``operation`` or return False when the inbox is full."""
+        if not isinstance(operation, ResolvedOperation):
+            raise TypeError("operation must be a ResolvedOperation")
+        with self._lock:
+            if len(self._operations) >= MAX_PENDING_OPS:
+                return False
+            self._operations.append(operation)
+            return True
+
+    def drain(self) -> list[ResolvedOperation]:
+        """Remove and return all pending operations, oldest first."""
+        with self._lock:
+            if not self._operations:
+                return []
+            operations = list(self._operations)
+            self._operations.clear()
+            return operations
+
+    def snapshot(self) -> list[ResolvedOperation]:
+        """Return pending operations in FIFO order without removing them."""
+        with self._lock:
+            return list(self._operations)
+
+    def pending_count(self) -> int:
+        """Return the number of operations waiting for application."""
+        with self._lock:
+            return len(self._operations)
 
 
 def _normalize_steer_message(message: str) -> str:
@@ -158,6 +209,21 @@ def wait_signal_digest(signals: list[dict[str, str]]) -> dict[str, object]:
         "wake_reasons": normalized,
         **({"wake_run_id": first["run_id"]} if first.get("run_id") else {}),
     }
+
+
+def ops_inbox_for(session: object, *, create: bool = False) -> OpsInbox | None:
+    """Return a session's ops inbox, optionally attaching one as an attribute."""
+    existing = getattr(session, "ops_inbox", None)
+    if isinstance(existing, OpsInbox):
+        return existing
+    if not create:
+        return None
+    inbox = OpsInbox()
+    try:
+        session.ops_inbox = inbox  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - frozen or slotted sessions opt out
+        return None
+    return inbox
 
 
 def steer_inbox_for(session: object, *, create: bool = False) -> SteerInbox | None:

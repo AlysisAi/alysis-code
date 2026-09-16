@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import shutil
-import webbrowser
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,8 @@ from .forge import (
     make_run_paths,
 )
 from .git_ops import GitOpsError, ensure_git_repo, ensure_runtime_artifact_excludes
+from .host_browser import open_url
+from .logging_redaction import redact_log_text
 from .serialized_paths import (
     looks_like_serialized_path_field,
     safe_serialized_path,
@@ -58,6 +62,43 @@ class FeedbackReportError(RuntimeError):
     pass
 
 
+class FeedbackReportCancelled(FeedbackReportError):
+    """An export was cancelled before publishing its archive."""
+
+
+@dataclass
+class _ExportJob:
+    progress: Callable[[str], None] | None = None
+    cancelled: Callable[[], bool] | None = None
+    bundle_dir: Path | None = None
+    zip_path: Path | None = None
+
+
+_EXPORT_JOB: ContextVar[_ExportJob | None] = ContextVar("feedback_export_job", default=None)
+
+
+def _io_path(path: Path) -> Path:
+    """Use extended Windows paths for I/O, never for display or serialization."""
+    if os.name != "nt":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
+def _checkpoint(label: str | None = None) -> None:
+    job = _EXPORT_JOB.get()
+    if job is None:
+        return
+    if job.cancelled is not None and job.cancelled():
+        raise FeedbackReportCancelled("Report cancelled. No archive was published.")
+    if label and job.progress is not None:
+        job.progress(label)
+
+
 _SAFE_EXPORT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _HIERARCHICAL_URL_RE = re.compile(
     r"\b[A-Za-z][A-Za-z0-9+.-]*://\S+",
@@ -66,7 +107,10 @@ _ISSUE_TITLE_MAX_CHARS = 96
 _ISSUE_FEEDBACK_MAX_CHARS = 1400
 _ISSUE_BODY_MAX_CHARS = 3600
 _ISSUE_URL_MAX_CHARS = 8000
+_MAX_REDACTION_DEPTH = 32
+_NESTED_EXPORT_OMITTED = "[Omitted: diagnostic data exceeds the safe redaction depth.]"
 _SECRET_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bslk_[A-Za-z0-9_-]{8,}"), "[REDACTED]"),
     (re.compile(r"sk-[A-Za-z0-9_\-]{16,}"), "[REDACTED]"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]{8,}", re.IGNORECASE), r"\1[REDACTED]"),
     (re.compile(r"(Authorization\s*:\s*)(.+)", re.IGNORECASE), r"\1[REDACTED]"),
@@ -82,6 +126,20 @@ _SECRET_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"((?:api_key|api-key)\s*[:=]\s*)([^\s,]+)", re.IGNORECASE),
         r"\1[REDACTED]",
     ),
+    (
+        re.compile(
+            r"""(\b(?:[\w-]*[_-])?(?:api[_-]?key|access[_-]?key|secret[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization|cookie|set-cookie)\b["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)""",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(
+            r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----"
+        ),
+        "[REDACTED PRIVATE KEY]",
+    ),
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"), "[REDACTED]"),
 )
 
 # Provider continuation state is required inside a live session but must never
@@ -235,13 +293,63 @@ def create_feedback_bundle(
     session_id: str | None = None,
     run_id: str | None = None,
     latest: bool = False,
+    progress: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> FeedbackBundleResult:
+    job = _ExportJob(progress=progress, cancelled=cancelled)
+    token = _EXPORT_JOB.set(job)
+    try:
+        _checkpoint("Collecting session diagnostics")
+        return _create_feedback_bundle(
+            workspace_root=workspace_root,
+            feedback_text=feedback_text,
+            cfg=cfg,
+            active_session=active_session,
+            active_run_paths=active_run_paths,
+            pending_images=pending_images,
+            session_id=session_id,
+            run_id=run_id,
+            latest=latest,
+        )
+    except BaseException as exc:
+        # These paths are registered only after this invocation creates them.
+        # Never remove a pre-existing bundle or the output directory itself.
+        if job.bundle_dir is not None:
+            shutil.rmtree(_io_path(job.bundle_dir), ignore_errors=True)
+        if job.zip_path is not None:
+            with suppress(OSError):
+                _io_path(job.zip_path.with_suffix(".zip.partial")).unlink(missing_ok=True)
+        if isinstance(exc, OSError):
+            raise FeedbackReportError(
+                "Could not write the report. Check free space and folder permissions. "
+                + _sanitize_exported_freeform_text(str(exc), workspace_root=workspace_root)
+            ) from exc
+        raise
+    finally:
+        _EXPORT_JOB.reset(token)
+
+
+def _create_feedback_bundle(
+    *,
+    workspace_root: Path,
+    feedback_text: str | None,
+    cfg: AppConfig | None,
+    active_session: Any | None,
+    active_run_paths: RunPaths | None,
+    pending_images: list[str] | None,
+    session_id: str | None,
+    run_id: str | None,
+    latest: bool,
 ) -> FeedbackBundleResult:
     if session_id and latest:
         raise FeedbackReportError("Use either session_id or latest, not both.")
 
     root = resolve_feedback_workspace_root(workspace_root)
     output_root = root / "alysis-feedback"
-    output_root.mkdir(parents=True, exist_ok=True)
+    _path_within_dir(
+        base_dir=root, candidate=output_root, label="report output", require_exists=False
+    )
+    _io_path(output_root).mkdir(parents=True, exist_ok=True)
     _ensure_feedback_dir_is_git_ignored(root)
 
     session_source = _resolve_session_source(
@@ -268,9 +376,18 @@ def create_feedback_bundle(
         session_id=session_source.session_id,
         run_id=run_source.paths.run_id if run_source.paths is not None else None,
     )
-    bundle_dir = _allocate_bundle_dir(output_root=output_root, base_name=bundle_name)
+    while True:
+        bundle_dir = _allocate_bundle_dir(output_root=output_root, base_name=bundle_name)
+        try:
+            _io_path(bundle_dir).mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            # Another process may export the same session in the same second.
+            _checkpoint()
     zip_path = bundle_dir.with_suffix(".zip")
-    bundle_dir.mkdir(parents=True, exist_ok=False)
+    job = _EXPORT_JOB.get()
+    if job is not None:
+        job.bundle_dir, job.zip_path = bundle_dir, zip_path
 
     copied_session_log_path: Path | None = None
     copied_session_artifacts_path: Path | None = None
@@ -325,7 +442,7 @@ def create_feedback_bundle(
     _write_json(session_score_path, session_source.score_payload, workspace_root=root)
 
     feedback_path = bundle_dir / "feedback.md"
-    feedback_path.write_text(
+    _io_path(feedback_path).write_text(
         _render_feedback_markdown(
             created_at=created_at,
             feedback_text=feedback_text,
@@ -337,7 +454,7 @@ def create_feedback_bundle(
     )
 
     summary_path = bundle_dir / "summary.md"
-    summary_path.write_text(
+    _io_path(summary_path).write_text(
         _render_summary_markdown(
             workspace_root=root,
             bundle_dir=bundle_dir,
@@ -469,7 +586,7 @@ def create_feedback_github_issue_draft(
     cfg: AppConfig | None = None,
     github_enabled: bool | None = None,
     open_browser: bool | None = None,
-    browser_open: Callable[..., bool] = webbrowser.open,
+    browser_open: Callable[..., bool] | None = None,
 ) -> FeedbackGithubIssueResult:
     enabled = (
         resolve_feedback_github_enabled(cfg) if github_enabled is None else bool(github_enabled)
@@ -504,22 +621,42 @@ def create_feedback_github_issue_draft(
             disabled_reason="browser_open_disabled",
         )
 
+    return open_feedback_github_issue_draft(
+        FeedbackGithubIssueResult(
+            repo=repo, issue_url=issue_url, opened=False, open_attempted=False
+        ),
+        browser_open=browser_open,
+    )
+
+
+def open_feedback_github_issue_draft(
+    draft: FeedbackGithubIssueResult,
+    *,
+    browser_open: Callable[..., bool] | None = None,
+) -> FeedbackGithubIssueResult:
+    """Open the exact URL that was previewed; never rebuild from mutable files."""
+    if draft.issue_url is None:
+        return draft
     try:
-        opened = bool(browser_open(issue_url, new=2))
+        opened = bool(
+            browser_open(draft.issue_url, new=2)
+            if browser_open is not None
+            else open_url(draft.issue_url, quiet=True)
+        )
     except Exception as exc:  # noqa: BLE001 - platform/browser integration is best-effort.
-        return FeedbackGithubIssueResult(
-            repo=repo,
-            issue_url=issue_url,
+        return replace(
+            draft,
             opened=False,
             open_attempted=True,
-            open_error=str(exc),
+            open_error=_redact_bundle_text(str(exc)),
+            disabled_reason=None,
         )
-    return FeedbackGithubIssueResult(
-        repo=repo,
-        issue_url=issue_url,
+    return replace(
+        draft,
         opened=opened,
         open_attempted=True,
         open_error=None if opened else "browser did not accept the URL",
+        disabled_reason=None,
     )
 
 
@@ -696,7 +833,7 @@ def _compact_feedback_issue_body(*, bundle_result: FeedbackBundleResult) -> str:
 
 def _read_optional_json(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_io_path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -809,11 +946,11 @@ def _resolve_active_session_source(
     logging_enabled = bool(getattr(store, "enabled", False))
     log_path_obj = getattr(store, "path", None)
     log_path = Path(log_path_obj) if log_path_obj is not None else None
-    if log_path is not None and not log_path.exists():
+    if log_path is not None and not _io_path(log_path).exists():
         log_path = None
     artifact_root_obj = getattr(store, "session_artifact_root", None)
     artifact_root = artifact_root_obj if isinstance(artifact_root_obj, Path) else None
-    if artifact_root is not None and not artifact_root.exists():
+    if artifact_root is not None and not _io_path(artifact_root).exists():
         artifact_root = None
     meta_path = log_path.with_suffix(".meta.json") if log_path is not None else None
     event_snapshot = (
@@ -1073,7 +1210,7 @@ def _copy_selected_run_artifacts(
         (paths.knowledge_dir, target_root / "knowledge"),
     ]
     for src, dest in selected:
-        if src.exists():
+        if _io_path(src).exists():
             _copy_tree(src, dest, workspace_root=workspace_root)
 
 
@@ -1098,11 +1235,14 @@ def _collect_failure_categories_from_json_dir(path: Path, counts: dict[str, int]
 
 
 def _copy_tree(src: Path, dest: Path, *, workspace_root: Path) -> None:
+    src, dest = _io_path(src), _io_path(dest)
+    _checkpoint("Sanitizing diagnostic artifacts")
     if not src.exists():
         return
     if src.is_dir():
         dest.mkdir(parents=True, exist_ok=True)
     for path in sorted(src.rglob("*")):
+        _checkpoint()
         if path.is_symlink():
             continue
         rel = path.relative_to(src)
@@ -1117,6 +1257,8 @@ def _copy_tree(src: Path, dest: Path, *, workspace_root: Path) -> None:
 
 
 def _copy_file(src: Path, dest: Path, *, workspace_root: Path) -> None:
+    src, dest = _io_path(src), _io_path(dest)
+    _checkpoint()
     dest.parent.mkdir(parents=True, exist_ok=True)
     text = _read_text_if_utf8(src)
     suffix = src.suffix.lower()
@@ -1125,7 +1267,11 @@ def _copy_file(src: Path, dest: Path, *, workspace_root: Path) -> None:
             _write_invalid_structured_export(dest, jsonl=suffix == ".jsonl")
             shutil.copystat(src, dest)
             return
-        shutil.copy2(src, dest)
+        # Binary/non-UTF-8 data cannot be inspected by the export scrubber.
+        # In particular UTF-16 tool output must not bypass credential redaction.
+        dest.write_text(
+            "[Omitted: artifact could not be safely sanitized as UTF-8 text.]\n", encoding="utf-8"
+        )
         return
     if suffix == ".json":
         sanitized_json = _sanitize_json_text(text, workspace_root=workspace_root)
@@ -1179,6 +1325,8 @@ def _write_json(
     *,
     workspace_root: Path | None = None,
 ) -> None:
+    path = _io_path(path)
+    _checkpoint()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -1193,15 +1341,26 @@ def _write_json(
 
 
 def _write_deterministic_zip(*, bundle_dir: Path, zip_path: Path) -> None:
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    _checkpoint("Compressing support bundle")
+    bundle_dir, zip_path = _io_path(bundle_dir), _io_path(zip_path)
+    partial = zip_path.with_suffix(".zip.partial")
+    with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(bundle_dir.rglob("*")):
+            _checkpoint()
             if not path.is_file() or path.is_symlink():
                 continue
             rel = path.relative_to(bundle_dir).as_posix()
             info = zipfile.ZipInfo(rel)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.date_time = (1980, 1, 1, 0, 0, 0)
-            zf.writestr(info, path.read_bytes())
+            # Chunked writes keep cancellation responsive and avoid reading
+            # each large tool output into memory again during compression.
+            with path.open("rb") as source, zf.open(info, "w", force_zip64=True) as target:
+                while chunk := source.read(1024 * 1024):
+                    _checkpoint()
+                    target.write(chunk)
+    _checkpoint()
+    partial.replace(zip_path)
 
 
 def _render_feedback_markdown(
@@ -1325,12 +1484,15 @@ def _render_summary_markdown(
 
 def _allocate_bundle_dir(*, output_root: Path, base_name: str) -> Path:
     candidate = output_root / base_name
-    if not candidate.exists() and not candidate.with_suffix(".zip").exists():
+    if not _io_path(candidate).exists() and not _io_path(candidate.with_suffix(".zip")).exists():
         return candidate
     index = 2
     while True:
         candidate = output_root / f"{base_name}_{index:02d}"
-        if not candidate.exists() and not candidate.with_suffix(".zip").exists():
+        if (
+            not _io_path(candidate).exists()
+            and not _io_path(candidate.with_suffix(".zip")).exists()
+        ):
             return candidate
         index += 1
 
@@ -1415,7 +1577,38 @@ def _redact_bundle_text(text: str) -> str:
     clean = str(text or "")
     for pattern, replacement in _SECRET_REPLACEMENTS:
         clean = pattern.sub(replacement, clean)
-    return clean
+    return redact_log_text(clean)
+
+
+def sanitize_feedback_text(text: str, *, workspace_root: Path) -> str:
+    """The same sanitized feedback for the local preview, archive and issue."""
+    return _sanitize_exported_freeform_text(text, workspace_root=workspace_root)
+
+
+def _is_secret_export_key(key: str | None) -> bool:
+    normalized = _normalize_export_key(key)
+    return normalized in {
+        "token",
+        "secret",
+        "cookie",
+        "setcookie",
+        "credentials",
+    } or normalized.endswith(
+        (
+            "apikey",
+            "accesskey",
+            "secretkey",
+            "privatekey",
+            "clientsecret",
+            "password",
+            "passwd",
+            "authorization",
+            "accesstoken",
+            "refreshtoken",
+            "authtoken",
+            "sessiontoken",
+        )
+    )
 
 
 def _sanitize_url_match(match: re.Match[str], *, strip_path: bool) -> str:
@@ -1467,12 +1660,31 @@ def _sanitize_exported_freeform_text(
     text: str | Path | None,
     *,
     workspace_root: Path | None,
+    _depth: int = 0,
 ) -> str:
+    if _depth >= _MAX_REDACTION_DEPTH:
+        return _NESTED_EXPORT_OMITTED
+    raw = str(text or "")
+    # Tool arguments and file contents can each be JSON encoded inside another
+    # JSON string. Inspect decoded fields before applying text patterns: escaped
+    # quotes (and escaped key names) otherwise hide credential assignments.
+    if raw.lstrip().startswith(("{", "[", '"')):
+        try:
+            decoded = json.loads(raw)
+        except RecursionError:
+            return _NESTED_EXPORT_OMITTED
+        except ValueError:
+            pass  # Ordinary prose still uses the free-form scrubber below.
+        else:
+            return json.dumps(
+                _redact_jsonable(decoded, workspace_root=workspace_root, _depth=_depth + 1),
+                ensure_ascii=True,
+            )
     # Free-form exported strings can still contain absolute host paths even when
     # the surrounding JSON field is not path-shaped (for example payload.content
     # or user-authored feedback text), so bundle serialization must sanitize
     # text values separately from explicit path fields.
-    without_host_paths = sanitize_paths_in_text(str(text or ""), workspace_root=workspace_root)
+    without_host_paths = sanitize_paths_in_text(raw, workspace_root=workspace_root)
     # Support bundles are shared outside the live session boundary. Keep only
     # scheme + sanitized host (+ optional port) for hierarchical URLs: signed
     # path segments can be just as sensitive as userinfo and query values.
@@ -1537,7 +1749,14 @@ def _redact_jsonable(
     *,
     current_key: str | None = None,
     workspace_root: Path | None = None,
+    _depth: int = 0,
 ) -> Any:
+    # Match the field before descending: after JSON parsing, a naked value
+    # no longer contains the key/assignment syntax used by the text scanner.
+    if _is_secret_export_key(current_key) and value is not None:
+        return "[REDACTED]"
+    if _depth >= _MAX_REDACTION_DEPTH:
+        return _NESTED_EXPORT_OMITTED
     if value is None or isinstance(value, (int, float, bool)):
         return value
     if isinstance(value, str):
@@ -1555,7 +1774,7 @@ def _redact_jsonable(
         # Keep path-shaped fields on the precise structured serializer, then use
         # best-effort text sanitization for generic strings so exported JSON and
         # JSONL artifacts do not leak absolute host paths via free-form text.
-        return _sanitize_exported_freeform_text(value, workspace_root=workspace_root)
+        return _sanitize_exported_freeform_text(value, workspace_root=workspace_root, _depth=_depth)
     if isinstance(value, Path):
         if looks_like_serialized_path_field(current_key):
             return _redact_bundle_text(
@@ -1566,7 +1785,9 @@ def _redact_jsonable(
                 )
                 or ""
             )
-        return _sanitize_exported_freeform_text(str(value), workspace_root=workspace_root)
+        return _sanitize_exported_freeform_text(
+            str(value), workspace_root=workspace_root, _depth=_depth
+        )
     if isinstance(value, dict):
         if _is_provider_reasoning_block(value):
             return {}
@@ -1579,6 +1800,7 @@ def _redact_jsonable(
                 item,
                 current_key=key_text,
                 workspace_root=workspace_root,
+                _depth=_depth + 1,
             )
         return sanitized
     if isinstance(value, (list, tuple)):
@@ -1587,11 +1809,14 @@ def _redact_jsonable(
                 item,
                 current_key=current_key,
                 workspace_root=workspace_root,
+                _depth=_depth + 1,
             )
             for item in value
             if not _is_provider_reasoning_block(item)
         ]
-    return _sanitize_exported_freeform_text(str(value), workspace_root=workspace_root)
+    return _sanitize_exported_freeform_text(
+        str(value), workspace_root=workspace_root, _depth=_depth
+    )
 
 
 def _sanitize_json_text(text: str, *, workspace_root: Path) -> str | None:
@@ -1613,6 +1838,7 @@ def _sanitize_json_text(text: str, *, workspace_root: Path) -> str | None:
 def _sanitize_jsonl_text(text: str, *, workspace_root: Path) -> str | None:
     lines: list[str] = []
     for raw_line in text.splitlines():
+        _checkpoint()
         if not raw_line.strip():
             continue
         try:
@@ -1634,7 +1860,12 @@ def _sanitize_jsonl_text(text: str, *, workspace_root: Path) -> str | None:
 
 def _read_text_if_utf8(path: Path) -> str | None:
     try:
-        return path.read_text(encoding="utf-8")
+        chunks: list[str] = []
+        with _io_path(path).open(encoding="utf-8") as stream:
+            while chunk := stream.read(1024 * 1024):
+                _checkpoint()
+                chunks.append(chunk)
+        return "".join(chunks)
     except (UnicodeDecodeError, OSError):
         return None
 

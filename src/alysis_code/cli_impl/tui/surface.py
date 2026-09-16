@@ -120,6 +120,8 @@ class TuiSurface:
         on_subagent_activity: Callable[[str | None], None] | None = None,
         on_subagent_activities: Callable[[tuple[str, ...]], None] | None = None,
         on_subagent_run_started: Callable[[SubagentStartEvent], None] | None = None,
+        before_visible_output: Callable[[], None] | None = None,
+        on_steer_messages_restored: Callable[[list[str]], None] | None = None,
     ) -> None:
         self._t = transcript
         self._approval_ui = request_approval_ui
@@ -159,6 +161,8 @@ class TuiSurface:
         self._on_subagent_activity = on_subagent_activity
         self._on_subagent_activities = on_subagent_activities
         self._on_subagent_run_started = on_subagent_run_started
+        self._before_visible_output = before_visible_output
+        self._on_steer_messages_restored = on_steer_messages_restored
         self._subagent_stack: list[tuple[int, str, str, str]] = []
         self._subagent_activity: dict[str, str] = {}
 
@@ -202,6 +206,28 @@ class TuiSurface:
         except Exception:
             pass
 
+    def _prepare_visible_output(self) -> None:
+        callback = self._before_visible_output
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            pass
+
+    def on_steer_messages_restored(self, messages: list[str]) -> None:
+        """Reconcile TUI metadata when the core rolls drained steers back."""
+
+        if _worker_cancelled():
+            return
+        callback = self._on_steer_messages_restored
+        if callback is None:
+            return
+        try:
+            callback(list(messages))
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------ content
     def on_user_message(self, text: str) -> None:
         # The app echoes the user's line instantly on submit; here we just open a
@@ -217,6 +243,7 @@ class TuiSurface:
     def on_assistant_token(self, delta: str) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         self._t.stream_assistant(delta)
 
     def on_reasoning_start(self, block_id: str) -> None:
@@ -224,6 +251,7 @@ class TuiSurface:
 
         if _worker_cancelled() or self._trace_level == "off":
             return
+        self._prepare_visible_output()
         self._t.begin_reasoning(block_id)
 
     def on_reasoning_token(self, delta: str) -> None:
@@ -231,6 +259,7 @@ class TuiSurface:
         # raw, encrypted, and redacted reasoning never reaches the surface.
         if _worker_cancelled() or self._trace_level == "off":
             return
+        self._prepare_visible_output()
         self._t.stream_reasoning(delta)
 
     def on_reasoning_end(self, block_id: str) -> None:
@@ -246,6 +275,7 @@ class TuiSurface:
     def on_assistant_message_done(self, text: str) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         self._t.finish_assistant(text or "")
         # A model response just landed (usage recorded) — refresh the live HUD so a
         # multi-step turn's bottom-right numbers advance, not just at the very end.
@@ -254,6 +284,7 @@ class TuiSurface:
     def on_progress_update(self, message: str) -> None:
         if _worker_cancelled() or self._trace_level == "off":
             return
+        self._prepare_visible_output()
         self._t.set_status(_truncate(message, limit=80) or None)
 
     def on_status_update(self, status: StatusEvent) -> None:
@@ -457,6 +488,7 @@ class TuiSurface:
         # on completion. Collapse any open thinking first.
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         label = _tool_label(event.name)
         arg_detail = _tool_detail(event.name, event.args)
         self._t.end_reasoning()
@@ -500,6 +532,7 @@ class TuiSurface:
         arg_detail = self._tool_details.pop(event.tool_call_id, "")
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         label = _tool_label(event.name)
         if arg_detail:
             label = f"{label} · {arg_detail}"
@@ -625,6 +658,7 @@ class TuiSurface:
     def on_subagent_start(self, event: SubagentStartEvent) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         run_started = self._on_subagent_run_started
         if run_started is not None and event.subagent_run_id:
             try:
@@ -685,6 +719,7 @@ class TuiSurface:
             self._t.set_status(None)
         if _worker_cancelled() or self._trace_level == "off":
             return
+        self._prepare_visible_output()
         status = "finished" if event.status == "success" else event.status
         self._t.append(
             "trace",
@@ -706,6 +741,7 @@ class TuiSurface:
     def on_patch_generated(self, event: PatchEvent) -> None:
         if _worker_cancelled() or self._trace_level == "off":
             return
+        self._prepare_visible_output()
         files = ", ".join(event.files[:5]) or "patch"
         self._t.append("trace", f"✎ patch · {files}")
 
@@ -713,12 +749,14 @@ class TuiSurface:
     def on_error(self, err: str) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         self._t.append("error", _truncate(friendly_llm_error_message(err), limit=480) or "error")
         self._t.set_status(None)
 
     def on_warning(self, warning: str) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         self._t.append("warn", _truncate(str(warning), limit=480) or "warning")
 
     # ------------------------------------------------------------------ approval
@@ -790,6 +828,7 @@ class TuiSurface:
     ) -> None:
         if _worker_cancelled():
             return
+        self._prepare_visible_output()
         self._t.append("info", _truncate(str(message), limit=480) or "info")
 
 

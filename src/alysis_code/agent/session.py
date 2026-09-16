@@ -552,7 +552,7 @@ class AgentSession:
     persona: str = "code"
     # The user's chosen execution mode remembered while a narrowing persona
     # (architect/ask) is active, so switching back to code/debug restores it.
-    # None when the active persona narrows nothing. An explicit /mode <exec>
+    # None when the active persona narrows nothing. An explicit /permissions <exec>
     # always wins and clears the restore point (and restores the write scope).
     persona_restore_mode: str | None = None
     # The user's base allow_write_globs snapshotted alongside
@@ -1292,15 +1292,21 @@ class AgentSession:
         )
         if rewrite_payload is not None:
             self.store.append("final_summary_rewrite", rewrite_payload)
-        assistant_message = None
+        # Keep ordinary text replies in history so follow-up requests retain the
+        # assistant turn even when the provider supplies no opaque metadata.
+        assistant_message = (
+            None if internal_fallback else {"role": "assistant", "content": emitted_text}
+        )
         if assistant_response is not None:
-            candidate_message = assistant_message_from_response(
+            assistant_message = assistant_message_from_response(
                 assistant_response,
                 content=emitted_text,
             )
-            if PROVIDER_METADATA_KEY in candidate_message:
-                assistant_message = candidate_message
-        extra_payload = {"message": assistant_message} if assistant_message is not None else None
+        extra_payload = (
+            {"message": assistant_message}
+            if assistant_message is not None and PROVIDER_METADATA_KEY in assistant_message
+            else None
+        )
         if internal_fallback and self.subagent_depth > 0:
             # A nested run's locally generated stop report is internal state. The
             # nested surface forwards assistant messages up to the parent's panel,

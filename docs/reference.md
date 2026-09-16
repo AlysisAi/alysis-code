@@ -135,7 +135,8 @@ Common interactive commands:
 - `/help`: show chat commands
 - `/status`: show mode, model, workspace, and runtime state
 - `/pwd`: show workspace and active workdir
-- `/mode`: inspect or change execution mode
+- `/permissions`: inspect or select execution permissions for the next message
+- `/persona`: select Code, Architect, Ask, Debug, or a custom persona
 - `/config`: open the configuration menu
 - `/usage`: show token and cost usage
 - `/stream`: open the live-output picker (On by default)
@@ -145,24 +146,30 @@ Common interactive commands:
 - `/subagents`: open the active-subagent picker and select a run for the live pane
 - `/skill`: list discovered skills
 - `$<skill> [task]`: at an idle prompt, show skill info or attach it for one turn
-- `/plan <task>`: draft a plan for review and approval
 - `/forge [resume]`: enter or resume Forge for the workspace
 - `/report [text]`: create a local feedback bundle
 - `/exit`: quit chat
 
 While an agent turn is running, press Enter to send the current text as a
-mid-turn message. Alysis Code delivers it at the next safe step boundary and
-keeps it in conversation history. Press Ctrl+Q instead to queue the text as a
-separate follow-up turn. Esc interrupts the active turn and discards pending
-mid-turn messages, queued follow-ups, and staged commands.
+mid-turn message. Already-issued tool calls finish, then Alysis Code delivers it
+at the next safe step boundary and keeps it in conversation history. Press Ctrl+Q
+instead to queue a separate follow-up turn. With an empty input, Shift+Left recalls
+the newest queued follow-up for editing; Enter returns it to the queue. Esc interrupts
+the active turn and preserves undelivered messages and staged commands. Follow-ups
+wait for the interrupted worker to finish before starting.
 
 Read-only commands remain available during a running turn: `/help` (and `/`),
 `/status`, `/subagents`, `/pwd`, `/context` or `/ctx`, `/usage`, `/model-info`, `/trace`,
 `/toolbar`, `/images`, `/image`, `/paste-image`, `/clear-images`, `/terminals`,
-and bare `/skill`. `/mode`, `/persona`, `/model`, and typed `/config` commands
-are accepted and staged; they run when the active turn finishes and before a
-queued follow-up starts. They never alter the running turn. In particular, a
-staged model change does not retroactively switch the model handling that turn.
+and bare `/skill`.
+
+`/stream` changes apply on the worker at the next step. `/permissions` selects the
+base permissions for the next user message; repeated selections replace the pending
+choice without rebuilding the running turn's tools. Shift+Tab uses the same selection.
+`/persona`, `/model`, typed `/config`, and `/cd` changes wait until the active turn
+finishes. A model change therefore never switches the model handling the current turn.
+The status display distinguishes changes waiting for the next step from those waiting
+for the next message.
 
 Bare `/config` opens its overlay immediately so settings
 can be browsed and saved while output continues. A save reaches disk at once,
@@ -172,6 +179,10 @@ flight; the mid-turn allowlist fails closed.
 
 Forge mode has its own command surface for goal, task, plan, review, and
 execution actions. See [Forge](forge.md).
+
+Legacy chat Plan Mode and the `/plan <task>` draft/approve flow have been removed.
+Use `/persona architect` for planning in chat. Inside Forge, `/plan tasks|markdown|edit`
+continues to show or edit the current plan. `/mode` is retired in favor of `/permissions`.
 
 Interactive chat opens in the full-screen TUI. The transcript owns mouse-wheel
 scrolling and shows a persistent scrollbar while the input and footer remain
@@ -845,6 +856,11 @@ alysis report create "expected X, got Y" --path . --latest
 Alysis Code prepares local artifacts for review. It does not submit GitHub issues
 or upload archives automatically.
 
+Bundles sanitize structured credential fields, including JSON encoded inside tool
+arguments and file contents. Data that exceeds the safe redaction depth and
+non-UTF-8 diagnostic artifacts are omitted. Failed or cancelled exports remove
+their partial output while preserving existing bundles.
+
 For crash-resilient minimal diagnostics, pass `--diagnostic-log PATH` or set
 `crash_diagnostic_log_path` / `ALYSIS_CRASH_DIAGNOSTIC_LOG_PATH`. This
 append-only JSONL stream is opt-in and separate from normal session logs. It
@@ -897,6 +913,11 @@ running it.
   schema internals.
 - If shell commands cannot run, check the selected execution mode and sandbox
   setup.
+- If native Git inspection reports `git_content_filter_required` or
+  `git_submodule_review_required`, the requested worktree comparison requires
+  repository programs. Run `git status` or `git diff` through an approved shell
+  command. Staged diffs and paths unaffected by these settings remain available
+  through the native Git tool.
 - If a one-shot run stops with `deadline_exhausted`, increase
   `--deadline-seconds` or remove `ALYSIS_RUN_DEADLINE_SECONDS`; this is
   separate from step-budget exhaustion and from `ALYSIS_LLM_TIMEOUT_S`.

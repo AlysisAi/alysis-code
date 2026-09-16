@@ -152,6 +152,18 @@ def test_footer_mode_badge_is_the_approval_indicator():
     assert "sensitive:" not in text
 
 
+def test_footer_distinguishes_active_and_next_message_permissions():
+    state = TuiState(
+        model_name="deepseek-chat",
+        exec_mode="review",
+        pending_exec_mode="auto",
+    )
+
+    text = _plain(footer_fragments(state, width=100))
+
+    assert "safe→fast next" in text
+
+
 def test_footer_shows_workspace_and_branch():
     state = TuiState(
         model_name="m",
@@ -391,6 +403,80 @@ def test_app_records_submission_then_exits():
     assert result == "/exit"
 
 
+def test_app_runs_next_message_boundary_before_session_turn():
+    state = TuiState(model_name="deepseek-chat", username="t", exec_mode="review")
+    observed: list[tuple[str, str, str | None]] = []
+
+    class Session:
+        mode = "review"
+        pending_permissions_mode = "auto"
+
+        def run_turn(self, text: str, *, cancellation_token=None) -> int:
+            _ = cancellation_token
+            observed.append((text, self.mode, self.pending_permissions_mode))
+            return 0
+
+    session = Session()
+
+    def before_turn(live_session, _run_kwargs):
+        live_session.mode = str(live_session.pending_permissions_mode)
+        live_session.pending_permissions_mode = None
+
+    result, _transcript = _run_headless(
+        state,
+        "hello\r/exit\r",
+        session_builder=lambda _surface: session,
+        before_turn=before_turn,
+        background_turns=False,
+    )
+
+    assert result == "/exit"
+    assert observed == [("hello", "auto", None)]
+
+
+def test_app_restores_temporary_turn_permissions_after_failure():
+    state = TuiState(model_name="deepseek-chat", username="t", exec_mode="review")
+    observed: list[tuple[str, str]] = []
+    cleanup_calls: list[str] = []
+
+    class Session:
+        mode = "review"
+
+        def run_turn(self, text: str, *, cancellation_token=None) -> int:
+            _ = cancellation_token
+            observed.append((text, self.mode))
+            raise RuntimeError("turn failed")
+
+    session = Session()
+
+    def before_turn(live_session, _run_kwargs):
+        # Pending Permissions have already selected the new base by this point;
+        # the one-turn scope narrows only the turn itself.
+        live_session.mode = "fullaccess"
+        restore_mode = live_session.mode
+        live_session.mode = "readonly"
+
+        def cleanup() -> None:
+            cleanup_calls.append(restore_mode)
+            live_session.mode = restore_mode
+
+        return cleanup
+
+    result, transcript = _run_headless(
+        state,
+        "inspect safely\r/exit\r",
+        session_builder=lambda _surface: session,
+        before_turn=before_turn,
+        background_turns=False,
+    )
+
+    assert result == "/exit"
+    assert observed == [("inspect safely", "readonly")]
+    assert cleanup_calls == ["fullaccess"]
+    assert session.mode == "fullaccess"
+    assert any("turn failed" in text for role, text in transcript if role == "error")
+
+
 def test_app_without_session_surfaces_model_blocker():
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -470,12 +556,13 @@ def test_app_shift_tab_invokes_mode_cycle_then_exits():
 
     def _cycle() -> list[tuple[str, str]] | None:
         calls.append(1)
-        state.exec_mode = "auto"
-        return [("system", "Mode → fast (auto)")]
+        state.pending_exec_mode = "auto"
+        return [("system", "Permissions for the next message: fast (auto)")]
 
     _run_headless(state, "\x1b[Z/exit\r", mode_cycle=_cycle)
     assert calls == [1]
-    assert state.exec_mode == "auto"
+    assert state.exec_mode == "review"
+    assert state.pending_exec_mode == "auto"
 
 
 def test_app_shift_tab_is_inert_without_a_mode_cycle_callback():

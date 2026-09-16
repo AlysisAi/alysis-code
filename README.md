@@ -93,8 +93,10 @@ sandbox only when explicitly configured with `verify_sandbox.mode="off"` or
 
 Two layers control what the agent may do — one enforces, one focuses.
 
-**Execution modes** are the enforcement layer. Choose one per command with `--mode`, switch in chat
-with `/mode`, or set a default with `alysis-code config set default_mode <mode>`:
+**Execution modes** are the enforcement layer. Choose one per command with `--mode`, select the
+next message's permissions with `/permissions` or **Shift+Tab**, or set a default with
+`alysis-code config set default_mode <mode>`. A selection leaves the active turn's permissions
+unchanged until the next message starts:
 
 | Mode | Behavior |
 | --- | --- |
@@ -116,6 +118,10 @@ the TUI:
 A persona is a convention, never a permission: it can keep or lower your execution mode, but can
 never raise it. Define your own in `.alysis_personas/*.md`.
 [Learn more](https://alysiscode.com/docs/concepts/personas)
+
+Use `/persona architect` for planning in chat, or `/forge` for a plan-driven execution workflow.
+The legacy chat Plan Mode and its `/plan` commands have been removed; Forge retains its plan views
+and editor. Persona changes made during a running turn apply after that turn finishes.
 
 ## Project Links
 

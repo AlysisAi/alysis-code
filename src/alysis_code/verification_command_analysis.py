@@ -550,6 +550,55 @@ def is_benign_non_execution_reason(reason: str | None) -> bool:
     return str(reason or "").strip() in _BENIGN_NON_EXECUTION_REASONS
 
 
+# Actionable guidance appended to a verify_run rejection so the model is told
+# how to fix the command instead of only being handed the machine-readable
+# reason. verify_run rejects a command because its exit code cannot be trusted
+# as proof (a pipe reports the last stage's status, `&&`/`;` hide an earlier
+# failure), not because the code under test is wrong -- but a bare
+# "verification command is invalid: unsafe_pipeline" reads to the model like a
+# test failure and, in the TB 2.1 focus-64 campaign, sent it into git-stash /
+# re-explore thrash loops (e.g. fix-code-vulnerability went from a 4-minute
+# solve to two 60-minute timeouts). Each message names the concrete fix:
+# re-run the single underlying command so its own exit code is the verdict.
+_VERIFICATION_REJECTION_GUIDANCE: dict[str, str] = {
+    "unsafe_pipeline": (
+        "A pipeline reports only the last stage's exit code, so a failing test "
+        "piped into `tail`/`head`/`grep` looks like a pass. Pass just the test "
+        "command itself (e.g. `pytest -q`, not `pytest 2>&1 | tail`); it is not "
+        "a failure of your code."
+    ),
+    "disallowed_shell_control_flow": (
+        "verify_run needs a single command whose own exit code is the result, so "
+        "`&&`, `||`, `;` and `&` are not allowed. Drop the chaining and pass just "
+        "the test command (a leading `cd <dir> &&` is fine; put any setup in a "
+        "separate shell_run first). This is not a failure of your code."
+    ),
+    "non_assertive_observation": (
+        "This command only observes state (e.g. `ls`, `cat`, `grep`) and cannot "
+        "prove the task is done. Pass a command that fails on a wrong result -- a "
+        "test runner, or a `python -c '... assert ...'` check."
+    ),
+    "parse_error": (
+        "The command could not be parsed as a single shell command (often "
+        "unbalanced quotes). Simplify it to one runnable command, or run it with "
+        "shell_run first to confirm it parses."
+    ),
+    "multi_line_shell_expression": (
+        "Pass a single-line command. Move a multi-line script into a file and run "
+        "that file as the verification command."
+    ),
+}
+
+
+def verification_rejection_guidance(reason: str | None) -> str:
+    """Actionable one-line fix for a verify_run rejection ``reason``, or ``""``.
+
+    Kept beside the rejection reasons it explains so the two never drift. The
+    empty string for an unknown reason lets callers append unconditionally.
+    """
+    return _VERIFICATION_REJECTION_GUIDANCE.get(str(reason or "").strip(), "")
+
+
 def command_status_from_execution(
     *,
     exit_code: int,

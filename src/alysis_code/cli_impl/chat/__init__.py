@@ -12,8 +12,6 @@ _PUBLIC_FACADE_NAMES = {
     "_handle_chat_command_impl",
     "_handle_forge_chat_command",
     "_handle_forge_chat_command_impl",
-    "_run_plan_mode_approval_loop",
-    "_run_plan_mode_approval_loop_impl",
     "_sync_cli_globals",
     "_sync_loop_globals_from_public",
     "chat_impl",
@@ -87,11 +85,6 @@ def _handle_forge_chat_command(*args: Any, **kwargs: Any) -> Any:
     return _commands_module()._handle_forge_chat_command(*args, **kwargs)
 
 
-def _run_plan_mode_approval_loop(*args: Any, **kwargs: Any) -> Any:
-    _sync_loop_globals_from_public()
-    return _loop_module()._run_plan_mode_approval_loop(*args, **kwargs)
-
-
 def _apply_chat_effective_mode(*args: Any, **kwargs: Any) -> Any:
     _sync_loop_globals_from_public()
     return _loop_module()._apply_chat_effective_mode(*args, **kwargs)
@@ -110,11 +103,6 @@ def _handle_chat_command_impl(cli_mod: Any, *args: Any, **kwargs: Any) -> Any:
 def _handle_forge_chat_command_impl(cli_mod: Any, *args: Any, **kwargs: Any) -> Any:
     _sync_cli_globals(cli_mod)
     return _handle_forge_chat_command(*args, **kwargs)
-
-
-def _run_plan_mode_approval_loop_impl(cli_mod: Any, *args: Any, **kwargs: Any) -> Any:
-    _sync_cli_globals(cli_mod)
-    return _run_plan_mode_approval_loop(*args, **kwargs)
 
 
 def _print_chat_context_impl(cli_mod: Any, *args: Any, **kwargs: Any) -> Any:

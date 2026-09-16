@@ -376,7 +376,7 @@ def persona_modes_enabled(cfg: Any | None) -> bool:
     """``ALYSIS_PERSONA_MODES`` (on/off) wins over the config value.
 
     Mirrors the kill-switch idiom used by ``unified_turn_path_enabled``; the
-    default is on. Off means: ``/mode`` accepts only execution modes, the
+    default is on. Off means: ``/permissions`` accepts only execution modes, the
     ``switch_mode`` tool is not registered, and personas stay at Code.
     """
     env_value = env_get("ALYSIS_PERSONA_MODES")

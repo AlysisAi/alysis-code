@@ -165,7 +165,12 @@ from ..sensitive_output import (
     redact_sensitive_tool_result,
     sensitive_tool_boundary,
 )
-from ..steering import build_steer_messages, steer_inbox_for, wait_signal_digest
+from ..steering import (
+    build_steer_messages,
+    ops_inbox_for,
+    steer_inbox_for,
+    wait_signal_digest,
+)
 from ..subagent_execution import _SUBAGENT_PREASSIGNED_RUN_ID_ARG
 from ..tools_assembly import (
     _SHELL_CANCELLABLE_WAIT_TOOL_NAMES,
@@ -1698,9 +1703,16 @@ def run_turn(
         self.messages = copy.deepcopy(pre_turn_messages)
         _set_session_pinned_prefix_len(self, pre_turn_pinned_prefix_len)
         if steered_pending_restore:
+            restored_steers = list(steered_pending_restore)
             rollback_inbox = steer_inbox_for(self)
             if rollback_inbox is not None:
-                rollback_inbox.restore_front(steered_pending_restore)
+                rollback_inbox.restore_front(restored_steers)
+                notify_restored = getattr(self.surface, "on_steer_messages_restored", None)
+                if callable(notify_restored):
+                    try:
+                        notify_restored(restored_steers)
+                    except Exception:
+                        pass
             steered_pending_restore.clear()
         self.store.append(
             "warning",
@@ -3901,7 +3913,6 @@ def run_turn(
             return _deadline_exhausted_result("step_loop", step=step)
         _throw_if_cancelled()
         steps_attempted = step
-        stream_used = self.stream
         step_ephemeral_suffix_system_messages: list[str] = []
         remaining_tool_steps_after_this = None if turn_max_steps is None else turn_max_steps - step
         if remaining_tool_steps_after_this == 0:
@@ -4084,6 +4095,55 @@ def run_turn(
         # plain callable attribute keeps every chat() signature unchanged.
         _on_text_delta.stream_restart = _on_stream_restart  # type: ignore[attr-defined]
 
+        # Apply resolved operations before user steering at the worker-thread
+        # step boundary. The UI validates and queues these operations, but only
+        # this worker owns mutations to state read by an active turn.
+        ops_inbox = ops_inbox_for(self)
+        if ops_inbox is not None:
+            try:
+                staged_operations = ops_inbox.drain()
+            except Exception as exc:  # noqa: BLE001 - staged ops cannot fail a turn
+                self.store.append(
+                    "warning",
+                    {
+                        "warning": "staged_operation_delivery_failed",
+                        "step": step,
+                        "error": str(exc),
+                    },
+                )
+            else:
+                apply_staged_operation = getattr(self, "apply_staged_operation", None)
+                for staged_operation in staged_operations:
+                    label = str(staged_operation.display_label or staged_operation.kind).strip()
+                    try:
+                        if not callable(apply_staged_operation):
+                            raise RuntimeError("no staged-operation apply handler is attached")
+                        apply_staged_operation(staged_operation)
+                    except Exception as exc:  # noqa: BLE001 - drop this op, keep turn alive
+                        self.store.append(
+                            "warning",
+                            {
+                                "warning": "staged_operation_apply_failed",
+                                "kind": staged_operation.kind,
+                                "step": step,
+                                "error": str(exc),
+                            },
+                        )
+                        _emit_surface_error(
+                            self.surface,
+                            "staged_operation_apply_failed",
+                            f"{label} - failed to apply: {exc}",
+                            True,
+                        )
+                        continue
+                    self.store.append(
+                        "staged_operation_applied",
+                        {"kind": staged_operation.kind, "step": step},
+                    )
+                    emit_info = getattr(self.surface, "emit_info", None)
+                    if callable(emit_info):
+                        emit_info(f"{label} - applied")
+
         # Drain user steering at the worker-thread step boundary. The previous
         # step's tool results are already committed, so this cannot split tool
         # call/result adjacency. It is also before compaction, so any replacement
@@ -4118,6 +4178,9 @@ def run_turn(
                         },
                     )
 
+        # Streaming is a per-step setting. Read it only after staged operations
+        # have applied so a mid-turn toggle affects this boundary's LLM call.
+        stream_used = self.stream
         request_messages = _request_messages_for_step(self.messages)
         try:
             if self.conversation_compactor is not None:

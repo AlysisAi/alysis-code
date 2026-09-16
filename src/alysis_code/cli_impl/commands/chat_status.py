@@ -76,6 +76,19 @@ def _active_step_limit_label(session: Any) -> str:
     return _session_step_limit_label(session, scope="chat")
 
 
+def _pending_operation_labels(session: Any) -> list[str]:
+    provider = getattr(session, "pending_operation_labels", None)
+    if not callable(provider):
+        return []
+    try:
+        labels = provider()
+    except Exception:  # noqa: BLE001 - status inspection must stay available
+        return []
+    if not isinstance(labels, list | tuple):
+        return []
+    return [label for item in labels if (label := str(item or "").strip())]
+
+
 def _print_chat_status(
     *,
     console: Console,
@@ -150,6 +163,8 @@ def _print_chat_status(
     table.add_row("update", _cached_update_status_summary(resolved_cfg))
     table.add_row("task", "-")
     table.add_row("queued_images", str(len(pending_images)))
+    for index, label in enumerate(_pending_operation_labels(session), start=1):
+        table.add_row(f"pending_{index}", label)
     web_search_policy = resolve_web_search_policy(resolved_cfg)
     web_search_ready = web_search_status.registration_ready and web_search_policy != "off"
     web_search_label = (
@@ -286,6 +301,12 @@ def _chat_status_panel_spec(*, session: Any, pending_images: list[str]) -> dict[
     temperature = getattr(getattr(session, "client", None), "temperature", "?")
     stream = bool(getattr(session, "stream", False))
     mode = str(getattr(session, "mode", "?"))
+    pending_mode = str(getattr(session, "pending_permissions_mode", "") or "").strip()
+    mode_display = _chat_mode_status_label(mode)
+    if pending_mode and pending_mode != mode:
+        mode_display = f"{mode_display} → {_chat_mode_status_label(pending_mode)} next"
+    elif pending_mode:
+        mode_display = f"{mode_display} (selected as next base)"
     root = Path(getattr(session, "root", Path(".")))
     branch = _current_branch_label(root)
     dirty = _is_git_dirty(root)
@@ -301,7 +322,7 @@ def _chat_status_panel_spec(*, session: Any, pending_images: list[str]) -> dict[
         return getattr(session, name, getattr(getattr(session, "cfg", None), name, default))
 
     session_rows: list[tuple[str, str, str]] = [
-        ("mode", _chat_mode_status_label(mode), "accent"),
+        ("mode", mode_display, "accent"),
         *(
             [
                 (
@@ -405,10 +426,25 @@ def _chat_status_panel_spec(*, session: Any, pending_images: list[str]) -> dict[
 
     sections: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("Session", session_rows),
-        ("Model", model_rows),
-        ("Workspace", workspace_rows),
-        ("Web search", web_rows),
     ]
+    pending_labels = _pending_operation_labels(session)
+    if pending_labels:
+        sections.append(
+            (
+                "Pending operations",
+                [
+                    (str(index), label, "warn")
+                    for index, label in enumerate(pending_labels, start=1)
+                ],
+            )
+        )
+    sections.extend(
+        [
+            ("Model", model_rows),
+            ("Workspace", workspace_rows),
+            ("Web search", web_rows),
+        ]
+    )
 
     registry = getattr(session, "model_registry", None)
     resolved_model_name = str(model).strip()
@@ -888,10 +924,16 @@ def _chat_bottom_toolbar(
     session: Any,
     pending_images: list[str],
     forge_state: _ForgeChatState | None = None,
-    plan_mode_enabled: bool = False,
 ) -> str:
     model = str(getattr(getattr(session, "client", None), "model", "?"))
     mode = str(getattr(session, "mode", "?"))
+    pending_mode = str(getattr(session, "pending_permissions_mode", "") or "").strip()
+    if pending_mode and pending_mode != mode:
+        mode_display = f"{mode}→{pending_mode} next"
+    elif pending_mode:
+        mode_display = f"{mode} (next base)"
+    else:
+        mode_display = mode
     stream_enabled = bool(getattr(session, "stream", False))
     stream = "on" if stream_enabled else "off"
     temperature_raw = getattr(getattr(session, "client", None), "temperature", "?")
@@ -946,7 +988,7 @@ def _chat_bottom_toolbar(
 
     toolbar_parts: list[str] = []
     if "mode" in visible_items:
-        toolbar_parts.append(mode)
+        toolbar_parts.append(mode_display)
     if "model" in visible_items:
         toolbar_parts.append(model)
     if "stream" in visible_items and stream == "off":
@@ -978,15 +1020,6 @@ def _chat_bottom_toolbar(
         task_count = len((forge_state.plan or {}).get("tasks") or [])
         toolbar_parts.append(run_id)
         toolbar_parts.append(f"{task_count} task" + ("" if task_count == 1 else "s"))
-    elif forge_state is not None and "plan" in visible_items:
-        if plan_mode_enabled:
-            toolbar_parts.append("plan readonly")
-        else:
-            toolbar_parts.append("plan /plan <task>")
-    if plan_mode_enabled and not (
-        forge_state is not None and _is_forge_ui_mode(forge_state.ui_mode)
-    ):
-        toolbar_parts.append("Esc /plan off")
     if not toolbar_parts:
         return " /help "
     return " " + " · ".join([*toolbar_parts, "/help"]) + " "
@@ -1157,92 +1190,6 @@ def _render_chat_llm_error(*, session: Any, console: Console, error: Exception) 
             return
     console.print("")
     console.print(_chat_llm_error_panel(message=message))
-
-
-def _plan_mode_action_rows() -> list[tuple[str, str, str]]:
-    return [
-        (
-            "approve",
-            "Approve and execute",
-            "Run the task immediately using this approved draft.",
-        ),
-        ("propose", "Propose changes", "Provide feedback and regenerate a revised draft."),
-        ("discard", "Discard this plan", "Cancel this draft and return to chat."),
-    ]
-
-
-def _plan_mode_actions_panel(
-    *,
-    selected_action: str | None = None,
-    interactive: bool = False,
-) -> Any:
-    from rich.console import Group
-
-    selected = (selected_action or "").strip().casefold()
-    renderables: list[Any] = []
-    for idx, (value, label, desc) in enumerate(_plan_mode_action_rows(), start=1):
-        row_selected = str(value).strip().casefold() == selected
-        renderables.extend(
-            _plan_mode_picker_row_renderables(
-                label=f"{idx}) {label}",
-                desc=desc,
-                selected=row_selected,
-            )
-        )
-    if interactive:
-        renderables.append(_plan_mode_picker_hint_renderable())
-    return Group(*renderables)
-
-
-def _select_plan_mode_action_interactive(*, console: Console) -> tuple[str | None, bool]:
-    rows = _plan_mode_action_rows()
-    return _patchable("_run_inline_option_selector", _run_inline_option_selector)(
-        console=console,
-        rows=rows,
-        current_value="approve",
-        panel_builder=lambda selected, interactive: _plan_mode_actions_panel(
-            selected_action=selected,
-            interactive=interactive,
-        ),
-        unavailable_label="Plan action picker",
-        use_alt_screen=False,
-    )
-
-
-def _prompt_plan_mode_action(*, console: Console) -> str | None:
-    selected_action, picker_available = _patchable(
-        "_select_plan_mode_action_interactive",
-        _select_plan_mode_action_interactive,
-    )(console=console)
-    if picker_available:
-        return selected_action
-
-    console.print(_plan_mode_actions_panel())
-    try:
-        choice = _patchable("_prompt_ask", _prompt_ask)(
-            "Select option", choices=["1", "2", "3"], console=console
-        )
-    except (EOFError, KeyboardInterrupt):
-        console.print("")
-        return None
-    if choice == "1":
-        return "approve"
-    if choice == "2":
-        return "propose"
-    if choice == "3":
-        return "discard"
-    return None
-
-
-def _prompt_plan_mode_feedback(*, console: Console) -> str | None:
-    try:
-        return _patchable("_prompt_text_with_escape", _prompt_text_with_escape)(
-            "Plan feedback",
-            escape_hint="Esc to cancel draft",
-        )
-    except (EOFError, KeyboardInterrupt):
-        console.print("")
-        return None
 
 
 __all__ = [name for name in globals() if (not name.startswith("__") or name == "__version__")]

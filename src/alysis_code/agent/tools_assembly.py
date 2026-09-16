@@ -154,6 +154,7 @@ from ..usage_tracker import UsageSummary
 from ..verification_command_analysis import (
     VerificationCommandEvidentiaryCapability,
     analyze_verification_command,
+    verification_rejection_guidance,
 )
 from ..verify_gate import (
     ResolvedVerifyCommands,
@@ -695,6 +696,11 @@ _READONLY_MAIN_SESSION_BUILTIN_TOOL_NAMES = frozenset(
 
 _READONLY_TOP_LEVEL_WEB_TOOL_NAMES = frozenset({"web_fetch", "web_search"})
 
+
+# Long builds can wait once instead of forcing repeated model calls. The wait
+# still returns on completion, responds to cancellation, and is clamped to the
+# remaining run budget by _clamp_shell_wait_seconds.
+_MAX_SHELL_WAIT_SECONDS = 900.0
 
 # Out-of-band channel for handing the turn's cancellation token to the shell
 # wait path, mirroring _SUBAGENT_CANCELLATION_TOKEN_ARG. The key is an object()
@@ -3076,6 +3082,15 @@ def build_tools(
         )
         trusted_shell_commands = trusted_shell_expression_command_set(current_selection)
 
+        def _invalid_command_message(reason: str) -> str:
+            # Keep the machine-readable reason token (anything parsing the error
+            # still works) and append the concrete fix, so a rejection reads as
+            # "here is how to make this a usable check" rather than as a test
+            # failure the model tries to "repair" by rewriting working code.
+            guidance = verification_rejection_guidance(reason)
+            base = "verification command is invalid: " + reason
+            return f"{base} -- {guidance}" if guidance else base
+
         def _validate_explicit_verify_candidate(command: str) -> None:
             normalized_exact = " ".join(str(command or "").strip().split())
             trusted = normalized_exact in trusted_shell_commands
@@ -3085,9 +3100,9 @@ def build_tools(
                 workspace_root=root,
             )
             if analysis.rejection_reason:
-                raise VerifyError("verification command is invalid: " + analysis.rejection_reason)
+                raise VerifyError(_invalid_command_message(analysis.rejection_reason))
             if _has_disallowed_shell_control_flow(command) and not trusted:
-                raise VerifyError("verification command is invalid: disallowed_shell_control_flow")
+                raise VerifyError(_invalid_command_message("disallowed_shell_control_flow"))
 
         selection_metadata = verification_selection_payload(
             current_selection
@@ -3144,7 +3159,11 @@ def build_tools(
             )
             if incompatible_commands:
                 raise VerifyError(
-                    "verify_run commands must stay within the session's effective verification contract."
+                    "verify_run commands must stay within the session's effective verification "
+                    "contract. Omit the `commands` argument to run the resolved contract "
+                    f"({', '.join(current_effective_verification_commands)}), or run your own "
+                    "command with shell_run -- a passing shell_run of the project's test command "
+                    "also counts as verification evidence."
                 )
             commands = requested_commands
         elif verify_cmd is not None and unavailable_verification_contract:
@@ -3188,13 +3207,15 @@ def build_tools(
                 workspace_root=root,
             )
             if analysis.rejection_reason:
-                raise VerifyError("verification command is invalid: " + analysis.rejection_reason)
+                raise VerifyError(_invalid_command_message(analysis.rejection_reason))
             if (
                 _has_disallowed_shell_control_flow(command)
                 and normalized_exact not in trusted_shell_commands
             ):
                 raise VerifyError(
-                    "verification commands must be single commands without shell control flow or chaining."
+                    "verification commands must be single commands without shell control flow or "
+                    "chaining. Pass just the test command (e.g. `pytest -q`); a leading "
+                    "`cd <dir> &&` is fine, but move other setup into a separate shell_run."
                 )
         guard_verify(commands)
         workspace_services = _workspace_services_before_verification()
@@ -3644,7 +3665,7 @@ def build_tools(
             raise AgentRuntimeError(f"Invalid wait_seconds value: {raw_wait!r}") from exc
         if wait_seconds < 0:
             raise AgentRuntimeError("wait_seconds must be non-negative")
-        return min(wait_seconds, 60.0)
+        return min(wait_seconds, _MAX_SHELL_WAIT_SECONDS)
 
     def _coerce_shell_max_bytes(raw_max_bytes: Any) -> int | None:
         if raw_max_bytes is None:
@@ -4315,7 +4336,13 @@ def build_tools(
 
     _append_builtin_tool(
         "git_diff",
-        run=lambda _args: git_diff(root=root),
+        run=lambda args: git_diff(
+            root=root,
+            path=args.get("path"),
+            staged=bool(args.get("staged", False)),
+            offset=args.get("offset", 0),
+            diff_id=args.get("diff_id"),
+        ),
     )
 
     if git_backed_workspace:

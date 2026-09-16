@@ -30,7 +30,6 @@ from alysis_code.agent.verification import TurnExecutionState
 from alysis_code.agent_loop import create_session
 from alysis_code.config import AppConfig, ConfigError, set_config_value
 from alysis_code.llm.openai_compat import LLMResponse, ToolCall
-from alysis_code.plan_mode import instruction_with_approved_plan
 from alysis_code.session_store import read_session_events
 
 
@@ -465,19 +464,6 @@ def test_observed_task_brief_updates_only_on_material_edits() -> None:
         session, instruction="/status", material_edit_count=3
     )
     assert "/status" not in _brief_content(session)
-
-
-def test_observed_task_brief_accepts_approved_plan_at_turn_start() -> None:
-    session = _brief_session()
-    instruction = instruction_with_approved_plan(
-        user_message="Add retry logic to the fetcher",
-        approved_plan="1. Wrap fetch in retry\n2. Add tests",
-    )
-
-    refresh_session_task_brief_from_observed_turn(
-        session, instruction=instruction, material_edit_count=0
-    )
-    assert "Add retry logic to the fetcher" in _brief_content(session)
 
 
 # ---------------------------------------------------------------------------

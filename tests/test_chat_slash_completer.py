@@ -35,7 +35,7 @@ def _source_between(source: str, start_marker: str, end_marker: str) -> str:
 def test_get_chat_specs_match_curated_visible_surface() -> None:
     assert [spec.name for spec in get_chat_specs()] == [
         "help",
-        "mode",
+        "permissions",
         "persona",
         "ask",
         "status",
@@ -53,12 +53,10 @@ def test_get_chat_specs_match_curated_visible_surface() -> None:
         "login",
         "logout",
         "toolbar",
-        "assets",
         "image",
         "forge",
         "report",
         "feedback",
-        "plan",
         "skill",
         "exit",
     ]
@@ -78,6 +76,16 @@ def test_get_chat_completions_filters_by_prefix() -> None:
     assert _completion_names(completer, "/co") == ["context", "compact", "config"]
 
 
+def test_permissions_completion_is_unique_and_mode_is_removed() -> None:
+    completer = ChatSlashCompleter(mode_provider=lambda: "chat")
+    names = [spec.name for spec in get_chat_specs()]
+
+    assert _completion_names(completer, "/permissions") == ["permissions"]
+    assert names.count("permissions") == 1
+    assert "mode" not in names
+    assert _completion_names(completer, "/mode") == []
+
+
 def test_chat_completions_exclude_hidden_and_removed_commands() -> None:
     completer = ChatSlashCompleter(mode_provider=lambda: "chat")
     names = set(_completion_names(completer, "/"))
@@ -91,7 +99,19 @@ def test_chat_completions_exclude_hidden_and_removed_commands() -> None:
     assert "clear-images" not in spec_names
     assert "skills" not in spec_names
     assert "subagents" in spec_names
-    assert not {"back", "done", "show", "goal", "task", "assistant", "execute"} & names
+    assert (
+        not {
+            "assets",
+            "back",
+            "done",
+            "show",
+            "goal",
+            "task",
+            "assistant",
+            "execute",
+        }
+        & names
+    )
 
 
 def test_forge_completions_include_general_chat_and_forge_commands() -> None:
@@ -100,6 +120,7 @@ def test_forge_completions_include_general_chat_and_forge_commands() -> None:
     assert _completion_names(completer, "/go") == ["goal"]
     assert _completion_names(completer, "/st") == ["status", "stream"]
     assert _completion_names(completer, "/ta") == ["task"]
+    assert _completion_names(completer, "/ass") == ["assistant", "assets"]
 
 
 def test_nested_chat_completions_cover_usage_and_skill_names() -> None:
@@ -242,7 +263,7 @@ def test_completion_yields_all_matching_top_level_commands() -> None:
     assert len(completions) == len(get_chat_specs())
     completion_names = [completion.text for completion in completions]
     assert completion_names
-    assert "/plan" in completion_names
+    assert "/plan" not in completion_names
     assert "/resume" in completion_names
     assert "/config" in completion_names
     assert "/subagent" not in completion_names

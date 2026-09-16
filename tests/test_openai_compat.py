@@ -141,6 +141,8 @@ def test_alysis_trial_error_message_handles_each_proxy_code() -> None:
         "email_not_verified": "confirm your email",
         "plan_inactive": "not active",
         "rate_limit_exceeded": "wait a moment",
+        "hosted_capacity_exceeded": "capacity is full",
+        "hosted_routing_unavailable": "routing is temporarily unavailable",
         "global_budget_exceeded": "at capacity",
         "proxy_unconfigured": "temporarily unavailable",
     }
@@ -165,6 +167,28 @@ def test_alysis_trial_error_message_ignores_non_proxy_errors() -> None:
     # Non-JSON body (e.g. a plain-text 500 from an edge/CDN layer).
     plain = LLMError("LLM error 500: Internal Server Error")
     assert alysis_trial_error_message(plain) is None
+
+
+def test_alysis_hosted_limits_preserve_the_actual_reason() -> None:
+    messages = [
+        "5-hour fair-use limit reached (25 credits). Retry as usage ages out.",
+        "Weekly fair-use limit reached (50 credits in 7 days).",
+        "Four hosted requests are already running for your account. Retry shortly.",
+        "Available credits cannot cover this request while other usage or reservations apply. Reduce context or retry later.",
+    ]
+    for message in messages:
+        error = LLMError(
+            "LLM error 429: "
+            + json.dumps(
+                {
+                    "error": {
+                        "code": "rate_limit_exceeded",
+                        "message": message,
+                    }
+                }
+            )
+        )
+        assert alysis_trial_error_message(error) == message
 
 
 def _surrogate_escaped_text(text: str) -> str:

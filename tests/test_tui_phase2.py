@@ -1096,57 +1096,6 @@ def test_headless_runs_agent_turn():
     assert sessions and sessions[0].surface is not None
 
 
-def test_headless_plan_approval_picker_digit_executes_without_chat_echo(tmp_path):
-    state = TuiState(model_name="test-model", username="t")
-    run_turns: list[str] = []
-
-    class _PlanSession:
-        def __init__(self, surface: TuiSurface) -> None:
-            self.surface = surface
-
-        def run_turn(self, text: str, *, cancellation_token=None) -> int:
-            run_turns.append(text)
-            (tmp_path / "note.txt").write_text("# planned note\n", encoding="utf-8")
-            self.surface.on_user_message(text)
-            self.surface.on_assistant_message_done("executed")
-            return 0
-
-    def _builder(surface: TuiSurface) -> _PlanSession:
-        return _PlanSession(surface)
-
-    def _command_runner(sess, text, width):
-        _ = width
-        if text.strip() == "/plan add note":
-            sess.surface.defer_plan_mode_approval(
-                user_message="add note",
-                draft="1. Create note.txt",
-                approved_instruction="APPROVED PLAN INSTRUCTION",
-            )
-            return (
-                "handled",
-                "Plan (draft)\n1. Create note.txt\nSelect option [1/2/3]:",
-                None,
-                None,
-            )
-        if text.strip() == "/exit":
-            return ("exit", "", None, None)
-        return ("run", "", text, {})
-
-    _result, transcript = _run_headless(
-        state,
-        "/plan add note\r1\r/exit\r",
-        session_builder=_builder,
-        command_runner=_command_runner,
-        background_turns=False,
-    )
-
-    assert run_turns == ["APPROVED PLAN INSTRUCTION"]
-    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "# planned note\n"
-    assert ("user", "/plan add note") in transcript
-    assert ("user", "1") not in transcript
-    assert any(role == "system" and "Select option [1/2/3]" in text for role, text in transcript)
-
-
 def test_user_band_rows_full_width_with_prompt():
     from alysis_code.cli_impl.tui.app import _user_band_rows
 
@@ -1860,6 +1809,112 @@ def test_headless_slash_help_opens_popup_not_routed_to_runner():
     assert all(text.strip().lower() != "/help" for text, _w in calls)
 
 
+def test_headless_tui_audits_native_and_routed_commands_without_prompt_content():
+    class _Store:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def append(self, event_type: str, payload: dict[str, object]) -> None:
+            self.events.append((event_type, dict(payload)))
+
+    sessions: list[_FakeSession] = []
+
+    class _AuditedSession(_FakeSession):
+        def __init__(self, surface: TuiSurface) -> None:
+            super().__init__(surface)
+            self.store = _Store()
+            sessions.append(self)
+
+    panel_args: list[str] = []
+
+    def _status_provider(arg=""):
+        panel_args.append(arg)
+        return {
+            "title": "Session Status",
+            "sections": [("Session", [("mode", "auto", "accent")])],
+        }
+
+    calls: list = []
+    _run_headless(
+        TuiState(model_name="m", username="t"),
+        "/help\rq/status private panel argument\rqordinary private prompt\r/exit\r",
+        session_builder=_AuditedSession,
+        command_runner=_fake_command_runner(calls),
+        panel_providers={"/status": _status_provider},
+        background_turns=False,
+    )
+
+    assert panel_args == ["private panel argument"]
+    assert sessions[0].store.events == [
+        ("chat_local_command", {"command": "/help", "has_argument": False}),
+        ("chat_local_command", {"command": "/status", "has_argument": True}),
+        ("chat_local_command", {"command": "/exit", "has_argument": False}),
+    ]
+    assert not any("private" in repr(payload) for _kind, payload in sessions[0].store.events)
+
+
+def test_headless_tab_persona_cycle_audits_only_the_shortcut_action():
+    class _Store:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def append(self, event_type: str, payload: dict[str, object]) -> None:
+            self.events.append((event_type, dict(payload)))
+
+    sessions: list[_FakeSession] = []
+
+    class _AuditedSession(_FakeSession):
+        def __init__(self, surface: TuiSurface) -> None:
+            super().__init__(surface)
+            self.store = _Store()
+            sessions.append(self)
+
+    _run_headless(
+        TuiState(model_name="m", username="t"),
+        "\t/exit\r",
+        session_builder=_AuditedSession,
+        command_runner=_fake_command_runner([]),
+        persona_cycle=lambda: [("system", "Persona -> private-persona-name")],
+        background_turns=False,
+    )
+
+    assert sessions[0].store.events == [
+        ("chat_local_interaction", {"action": "persona_cycle"}),
+        ("chat_local_command", {"command": "/exit", "has_argument": False}),
+    ]
+
+
+def test_headless_shift_tab_permissions_cycle_audits_only_the_shortcut_action():
+    class _Store:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def append(self, event_type: str, payload: dict[str, object]) -> None:
+            self.events.append((event_type, dict(payload)))
+
+    sessions: list[_FakeSession] = []
+
+    class _AuditedSession(_FakeSession):
+        def __init__(self, surface: TuiSurface) -> None:
+            super().__init__(surface)
+            self.store = _Store()
+            sessions.append(self)
+
+    _run_headless(
+        TuiState(model_name="m", username="t"),
+        "\x1b[Z/exit\r",
+        session_builder=_AuditedSession,
+        command_runner=_fake_command_runner([]),
+        mode_cycle=lambda: [("system", "Permissions -> private-mode-value")],
+        background_turns=False,
+    )
+
+    assert sessions[0].store.events == [
+        ("chat_local_interaction", {"action": "permissions_cycle"}),
+        ("chat_local_command", {"command": "/exit", "has_argument": False}),
+    ]
+
+
 def test_help_popup_rows_render_green_commands_and_descriptions():
     from alysis_code.cli_impl.tui.app import (
         _help_content_width_for,
@@ -1868,7 +1923,7 @@ def test_help_popup_rows_render_green_commands_and_descriptions():
 
     sections = [
         ("Getting Started", [("/help", "commands & config"), ("/status", "session details")]),
-        ("Execution", [("/mode", "change execution mode")]),
+        ("Execution", [("/permissions", "change execution mode")]),
     ]
     width = _help_content_width_for(100)
     rows = _help_rows_for_sections(sections, width)
@@ -1876,7 +1931,7 @@ def test_help_popup_rows_render_green_commands_and_descriptions():
     assert all(sum(len(t) for _s, t in row) == width for row in rows)
     # Commands render in the green command style, left-aligned in a shared column.
     cmd_rows = [row for row in rows if any(s == "class:tui.help.cmd" for s, _t in row)]
-    assert len(cmd_rows) == 3  # /help, /status, /mode
+    assert len(cmd_rows) == 3  # /help, /status, /permissions
     cmd_texts = ["".join(t for s, t in row if s == "class:tui.help.cmd") for row in cmd_rows]
     assert any(c.startswith("/help") for c in cmd_texts)
     # Shared left column width → every command cell is padded to the same length.
@@ -1884,6 +1939,15 @@ def test_help_popup_rows_render_green_commands_and_descriptions():
     # Section headers and a closing hint are present.
     assert any(any(s == "class:tui.help.section" for s, _t in row) for row in rows)
     assert any(any(s == "class:tui.help.hint" for s, _t in row) for row in rows)
+
+
+def test_runtime_help_exposes_permissions_and_never_mode():
+    from alysis_code.cli_impl.commands.welcome import _chat_command_sections
+
+    commands = [command for _section, rows in _chat_command_sections() for command, _ in rows]
+
+    assert "/permissions" in commands
+    assert "/mode" not in commands
 
 
 def test_kv_panel_rows_render_toned_values_and_full_width():
@@ -1933,6 +1997,29 @@ def test_headless_status_panel_opens_via_provider_not_routed_to_runner():
     assert not any(text.strip().lower() == "/status" for text, _w in calls)
 
 
+def test_headless_forge_only_panel_falls_through_outside_forge():
+    state = TuiState(model_name="m", username="t")
+    calls: list = []
+    opened = {"n": 0}
+
+    def _assets_provider(arg=""):
+        opened["n"] += 1
+        return {"title": "Assets", "sections": []}
+
+    _result, transcript = _run_headless(
+        state,
+        "/assets\r/exit\r",
+        session_builder=_FakeSession,
+        command_runner=_fake_command_runner(calls),
+        panel_providers={"/assets": _assets_provider},
+        background_turns=False,
+    )
+
+    assert opened["n"] == 0
+    assert any(text.strip().lower() == "/assets" for text, _w in calls)
+    assert ("user", "/assets") in transcript
+
+
 def test_slash_completer_lists_commands_including_stream():
     # The dropdown content includes the restored /stream control, while prefix
     # filtering still narrows the list.
@@ -1969,6 +2056,107 @@ def test_cancellation_token_contract_raises_keyboardinterrupt():
     assert tok.is_cancelled is True
     with pytest.raises(KeyboardInterrupt):
         tok.throw_if_cancelled("cancelled_by_user")
+
+
+def test_cancellation_before_provider_abort_registration_closes_immediately():
+    from alysis_code.cancellation import InteractiveCancellationToken
+
+    aborted: list[bool] = []
+    token = InteractiveCancellationToken()
+    token.cancel()
+
+    token.set_abort_callback(lambda: aborted.append(True))
+
+    assert aborted == [True]
+
+
+def test_repeated_interactive_cancel_delivers_each_registered_callback_once():
+    from alysis_code.cancellation import InteractiveCancellationToken
+
+    deliveries: list[str] = []
+    token = InteractiveCancellationToken()
+    token.set_abort_callback(lambda: deliveries.append("provider"))
+    token.subscribe(lambda: deliveries.append("child"))
+
+    token.cancel()
+    token.cancel()
+
+    assert deliveries == ["provider", "child"]
+
+
+def test_interactive_cancel_records_request_before_provider_abort():
+    from alysis_code.cancellation import InteractiveCancellationToken
+
+    deliveries: list[str] = []
+    token = InteractiveCancellationToken()
+    token.set_request_callback(lambda: deliveries.append("request"))
+    token.set_abort_callback(lambda: deliveries.append("provider"))
+    token.subscribe(lambda: deliveries.append("child"))
+
+    token.cancel()
+    token.cancel()
+
+    assert deliveries == ["request", "provider", "child"]
+
+
+def test_nonblocking_cancel_fans_out_child_without_waiting_for_provider_abort():
+    import threading
+
+    from alysis_code.cancellation import InteractiveCancellationToken
+
+    deliveries: list[str] = []
+    provider_started = threading.Event()
+    release_provider = threading.Event()
+    provider_finished = threading.Event()
+    child_cancelled = threading.Event()
+
+    def _blocking_provider_abort() -> None:
+        provider_started.set()
+        release_provider.wait()
+        deliveries.append("provider")
+        provider_finished.set()
+
+    def _cancel_child() -> None:
+        deliveries.append("child")
+        child_cancelled.set()
+
+    token = InteractiveCancellationToken()
+    token.set_request_callback(lambda: deliveries.append("request"))
+    token.set_abort_callback(_blocking_provider_abort)
+    token.subscribe(_cancel_child)
+
+    returned = threading.Event()
+
+    def _cancel() -> None:
+        token.cancel_nonblocking()
+        returned.set()
+
+    caller = threading.Thread(target=_cancel)
+    caller.start()
+    try:
+        assert provider_started.wait(1.0)
+        assert returned.wait(1.0)
+        assert child_cancelled.wait(1.0)
+        assert deliveries[0] == "request"
+        assert "provider" not in deliveries
+    finally:
+        release_provider.set()
+        caller.join(timeout=1.0)
+        assert provider_finished.wait(1.0)
+
+
+def test_subscriber_registered_after_interactive_cancel_runs_once():
+    from alysis_code.cancellation import InteractiveCancellationToken
+
+    deliveries: list[str] = []
+    token = InteractiveCancellationToken()
+    token.cancel()
+
+    unsubscribe = token.subscribe(lambda: deliveries.append("late"))
+    token.cancel()
+    unsubscribe()
+
+    assert deliveries == ["late"]
 
 
 def test_surface_drops_output_for_cancelled_worker():
@@ -2031,7 +2219,7 @@ def _mode_picker_spec(on_select):
 
 
 def test_headless_mode_picker_digit_selects_and_applies():
-    # Bare /mode opens the picker (not routed to the runner, not echoed); pressing
+    # Bare /permissions opens the picker (not routed to the runner, not echoed); pressing
     # the number applies that option via on_select and echoes its messages.
     state = TuiState(model_name="m", username="t")
     calls: list = []
@@ -2043,16 +2231,16 @@ def test_headless_mode_picker_digit_selects_and_applies():
 
     _result, transcript = _run_headless(
         state,
-        "/mode\r2/exit\r",  # open picker, press "2", then exit
+        "/permissions\r2/exit\r",  # open picker, press "2", then exit
         session_builder=_FakeSession,
         command_runner=_fake_command_runner(calls),
-        picker_providers={"/mode": lambda: _mode_picker_spec(on_select)},
+        picker_providers={"/permissions": lambda: _mode_picker_spec(on_select)},
         background_turns=False,
     )
     assert picked["value"] == "auto"  # digit 2 chose the second option
     assert ("system", "Mode -> auto") in transcript
-    assert ("user", "/mode") not in transcript
-    assert not any(text.strip().lower() == "/mode" for text, _w in calls)
+    assert ("user", "/permissions") not in transcript
+    assert not any(text.strip().lower() == "/permissions" for text, _w in calls)
 
 
 def test_headless_mode_picker_arrow_then_enter_selects():
@@ -2066,17 +2254,17 @@ def test_headless_mode_picker_arrow_then_enter_selects():
 
     _result, _transcript = _run_headless(
         state,
-        "/mode\r\x1b[B\r/exit\r",  # open, Down (review->auto), Enter, exit
+        "/permissions\r\x1b[B\r/exit\r",  # open, Down (review->auto), Enter, exit
         session_builder=_FakeSession,
         command_runner=_fake_command_runner([]),
-        picker_providers={"/mode": lambda: _mode_picker_spec(on_select)},
+        picker_providers={"/permissions": lambda: _mode_picker_spec(on_select)},
         background_turns=False,
     )
     assert picked["value"] == "auto"
 
 
 def test_headless_mode_with_arg_falls_through_to_runner():
-    # "/mode fast" (with an arg) must NOT open the picker — it routes to the runner.
+    # "/permissions fast" (with an arg) must NOT open the picker — it routes to the runner.
     state = TuiState(model_name="m", username="t")
     calls: list = []
     opened = {"n": 0}
@@ -2087,14 +2275,14 @@ def test_headless_mode_with_arg_falls_through_to_runner():
 
     _run_headless(
         state,
-        "/mode fast\r/exit\r",
+        "/permissions fast\r/exit\r",
         session_builder=_FakeSession,
         command_runner=_fake_command_runner(calls),
-        picker_providers={"/mode": provider},
+        picker_providers={"/permissions": provider},
         background_turns=False,
     )
     assert opened["n"] == 0  # picker never opened
-    assert any(text.strip().lower() == "/mode fast" for text, _w in calls)
+    assert any(text.strip().lower() == "/permissions fast" for text, _w in calls)
 
 
 def test_headless_with_completer_does_not_crash():
@@ -2129,17 +2317,138 @@ def test_headless_plain_message_runs_turn_via_runner():
     assert ("assistant", "Echo: hello") in transcript
 
 
-def test_headless_slash_clear_empties_transcript():
+def test_headless_slash_clear_resets_session_and_clears_prior_transcript(monkeypatch):
+    import io
+    from pathlib import Path
+
+    from rich.console import Console
+
+    from alysis_code import cli as cli_mod
+    from alysis_code.compaction.conversation_compactor import CompactionState
+
     state = TuiState(model_name="m", username="t")
+    clear_calls: list[str] = []
+    cleared_sessions: list[_FakeSession] = []
+    pending_images = ["queued.png"]
+
+    class _Store:
+        def __init__(self) -> None:
+            self.session_id = "tui_clear_session"
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def append(self, event_type: str, payload: dict[str, object]) -> None:
+            self.events.append((event_type, dict(payload)))
+
+    startup_messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "Repo summary"},
+        {
+            "role": "user",
+            "content": (
+                "<workspace_binding_context>\n"
+                "active_workdir_relpath: .\n"
+                "</workspace_binding_context>\n"
+            ),
+        },
+        {
+            "role": "user",
+            "content": "<environment_context>\nmode: review\n</environment_context>\n",
+        },
+    ]
+
+    class _ClearSession(_FakeSession):
+        def __init__(self, surface: TuiSurface) -> None:
+            super().__init__(surface)
+            self.messages = [
+                *startup_messages,
+                {"role": "user", "content": "old private question"},
+                {"role": "assistant", "content": "old private answer"},
+            ]
+            self.startup_messages = startup_messages
+            self.pinned_prefix_len = len(startup_messages)
+            self.mode = "review"
+            self.yes = False
+            self.non_interactive = False
+            self.one_shot_execution = False
+            self.verification_enabled = True
+            self.deny_write_prefixes = []
+            self.allow_write_globs = None
+            self.effective_verification_commands = []
+            self.authoritative_verification_commands = None
+            self.verification_selection_source = ""
+            self.verification_selection_reason = ""
+            self.verification_contract_type = ""
+            self.verification_authoritative = False
+            self.root = Path("/tmp/demo")
+            self.focus_dir = self.root
+            self.focus_relpath = "."
+            self.workspace_kind = "plain_dir"
+            self.binding_requested_path = None
+            self.binding_source = None
+            self.binding_risk_level = None
+            self.binding_created_path = None
+            self.active_workdir_relpath = "."
+            self.store = _Store()
+            self.request_context_measurement = object()
+            self.conversation_compactor = type(
+                "Compactor",
+                (),
+                {
+                    "state": CompactionState(
+                        summary={"topic": "old"},
+                        history_chunk_index=4,
+                        memory_message_index=3,
+                        pinned_prefix_len=len(startup_messages),
+                        pins=[{"title": "old"}],
+                        pins_message_index=2,
+                    )
+                },
+            )()
+            cleared_sessions.append(self)
+
+    monkeypatch.setattr(cli_mod, "_refresh_chat_hud_context_cache", lambda _session: None)
+
+    def command_runner(session, text, _width):
+        if text.strip().lower() == "/clear":
+            clear_calls.append("/clear")
+        stream = io.StringIO()
+        result = cli_mod._handle_chat_command(
+            input_text=text,
+            root=Path("/tmp/demo"),
+            session=session,
+            pending_images=pending_images,
+            console=Console(file=stream, force_terminal=False),
+            forge_state=cli_mod._ForgeChatState(),
+            record_local_command=False,
+        )
+        return (result, stream.getvalue().rstrip("\n"), None, None)
+
     _result, transcript = _run_headless(
         state,
         "hello\r/clear\r/exit\r",
-        session_builder=_FakeSession,
-        command_runner=_fake_command_runner([]),
+        session_builder=_ClearSession,
+        command_runner=command_runner,
         background_turns=False,
     )
+    assert clear_calls == ["/clear"]
+    assert len(cleared_sessions[0].messages) == len(startup_messages)
+    assert cleared_sessions[0].messages[:2] == startup_messages[:2]
+    assert cleared_sessions[0].messages[2]["content"].startswith("<workspace_binding_context>")
+    assert cleared_sessions[0].messages[3]["content"].startswith("<environment_context>")
+    assert all(
+        "old private" not in str(message.get("content", ""))
+        for message in cleared_sessions[0].messages
+    )
+    assert cleared_sessions[0].conversation_compactor.state.summary == {}
+    assert pending_images == []
+    assert cleared_sessions[0].store.events == [
+        ("chat_local_command", {"command": "/clear", "has_argument": False}),
+        ("conversation_cleared", {"trigger": "user_command"}),
+        ("chat_local_command", {"command": "/exit", "has_argument": False}),
+    ]
     assert ("user", "hello") not in transcript
     assert ("assistant", "Echo: hello") not in transcript
+    assert ("system", "Conversation cleared.") in transcript
 
 
 def test_headless_without_session_uses_stub():

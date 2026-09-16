@@ -7,21 +7,23 @@ throttled) from the session's usage summary + context cache. Other fields are
 toggled by the user via Tab (persona) / Shift+Tab (execution mode).
 
 ``exec_mode`` mirrors ``session.mode`` and is the single authority for what the
-agent is allowed to do without asking. There is deliberately no second
-approval-policy flag here: an independent "auto-approve" toggle could silently
-answer every gate that ``review`` mode raised, leaving the footer advertising a
-guarded mode while the session behaved like ``fullaccess``.
+agent is allowed to do without asking. ``pending_exec_mode`` is only the user's
+selection for the next turn: it never grants capabilities until the chat host
+activates it immediately before a real user message starts. There is deliberately
+no second approval-policy flag here: an independent "auto-approve" toggle could
+silently answer every gate that ``review`` mode raised, leaving the footer
+advertising a guarded mode while the session behaved like ``fullaccess``.
+Planning posture is likewise not a separate flag: it is the ``architect``
+persona (``persona``), which narrows the execution mode and write scope through
+the persona clamp.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-PLAN_MODE = "plan"
-ACT_MODE = "act"
-
 # Shift+Tab cycles the execution mode in this order (wrapping). This is the same
-# set the /mode picker offers, kept in escalating-capability order so the cycle
+# set the /permissions picker offers, kept in escalating-capability order so the cycle
 # reads as "loosen the guards one notch" rather than an arbitrary rotation.
 # ``fullaccess`` is included deliberately — the caller echoes its warning every
 # time the cycle lands there, so reaching the unguarded mode is never silent.
@@ -59,8 +61,11 @@ class TuiState:
     # Empty retains the legacy numeric fallback for callers that do not have a
     # UsageSummary available yet.
     cost_display: str = ""
-    mode: str = ACT_MODE  # "plan" | "act"
     exec_mode: str = ""  # execution mode: review | auto | readonly | fullaccess
+    # A user-selected execution mode that will become active at the next real
+    # message boundary. Empty means there is no pending change. It is display
+    # state only; ``exec_mode`` remains the active permission authority.
+    pending_exec_mode: str = ""
     # Active persona (code|architect|ask|debug); "" or "code" renders no
     # persona badge — the execution-mode badge alone stays authoritative.
     persona: str = ""
@@ -83,19 +88,9 @@ class TuiState:
     # footer instead of a fabricated 100%.
     context_pct: float | None = None
 
-    @property
-    def plan_mode(self) -> bool:
-        return self.mode == PLAN_MODE
-
-    def toggle_mode(self) -> str:
-        self.mode = PLAN_MODE if self.mode == ACT_MODE else ACT_MODE
-        return self.mode
-
 
 __all__ = [
     "TuiState",
-    "PLAN_MODE",
-    "ACT_MODE",
     "EXEC_MODE_CYCLE",
     "next_exec_mode",
 ]

@@ -11,6 +11,11 @@ import pytest
 from rich.console import Console
 
 from alysis_code.agent.cache_keepalive import ParentCacheKeepalive
+from alysis_code.agent.steering import (
+    ResolvedOperation,
+    ops_inbox_for,
+    steer_inbox_for,
+)
 from alysis_code.agent_loop import AgentSession, ToolDef
 from alysis_code.cli_impl.tui.surface import TuiSurface
 from alysis_code.cli_impl.tui.transcript import TuiTranscript
@@ -75,10 +80,21 @@ class _ScriptedClient:
         response_format: dict[str, Any] | None = None,
         stream: bool = False,
         on_text_delta: Any = None,
+        on_reasoning_delta: Any = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
-        _ = messages, tools, tool_choice, response_format, temperature, max_tokens
+        _ = (
+            messages,
+            tools,
+            tool_choice,
+            response_format,
+            on_reasoning_delta,
+            temperature,
+            max_tokens,
+            cancellation_token,
+        )
         call_index = self.calls
         self.calls += 1
         self.call_messages.append(list(messages))
@@ -442,6 +458,233 @@ def test_run_turn_streaming_tool_call_executes_after_stream_finishes(tmp_path: P
     assert [event.text for event in surface.events[:2]] == ["I will ", "call the tool."]
 
 
+def test_step_boundary_applies_ops_before_steering_and_before_turn_finishes(
+    tmp_path: Path,
+) -> None:
+    holder: dict[str, Any] = {}
+    applied: list[str] = []
+
+    def stage_inputs(_args: dict[str, Any]) -> dict[str, Any]:
+        session = holder["session"]
+        operation_inbox = ops_inbox_for(session, create=True)
+        steering_inbox = steer_inbox_for(session, create=True)
+        assert operation_inbox is not None
+        assert steering_inbox is not None
+        assert operation_inbox.send(ResolvedOperation("test", "fast", "mode: fast"))
+        steering_inbox.send("use the staged mode")
+        return {"ok": True}
+
+    tool = ToolDef(
+        name="stage_inputs",
+        description="stage test inputs",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=stage_inputs,
+    )
+    surface = _RecordingEventSurface()
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="staging",
+                tool_calls=[ToolCall(id="stage-1", name="stage_inputs", arguments={})],
+                raw={},
+            ),
+            LLMResponse(content="done", tool_calls=[], raw={}),
+        ]
+    )
+    session = _make_session(root=tmp_path, client=client, surface=surface, tool=tool)
+    holder["session"] = session
+
+    def apply(operation: ResolvedOperation) -> None:
+        steering_inbox = steer_inbox_for(session)
+        assert steering_inbox is not None
+        assert steering_inbox.pending_count() == 1
+        applied.append(str(operation.payload))
+        session.mode = str(operation.payload)
+
+    session.apply_staged_operation = apply
+    try:
+        exit_code = session.run_turn("stage while running")
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert applied == ["fast"]
+    assert session.mode == "fast"
+    assert client.calls == 2
+    second_request = client.call_messages[1]
+    assert any(
+        message.get("content") == "[Mid-turn message from the user] use the staged mode"
+        for message in second_request
+    )
+    assert (
+        sum(
+            isinstance(event, InfoEmitted) and event.message == "mode: fast - applied"
+            for event in surface.events
+        )
+        == 1
+    )
+
+
+def test_failing_step_operation_does_not_fail_the_turn(tmp_path: Path) -> None:
+    holder: dict[str, Any] = {}
+
+    def stage_operation(_args: dict[str, Any]) -> dict[str, Any]:
+        inbox = ops_inbox_for(holder["session"], create=True)
+        assert inbox is not None
+        assert inbox.send(ResolvedOperation("test", None, "broken op"))
+        return {"ok": True}
+
+    tool = ToolDef(
+        name="stage_operation",
+        description="stage a failing operation",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=stage_operation,
+    )
+    surface = _RecordingEventSurface()
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="staging",
+                tool_calls=[ToolCall(id="stage-1", name="stage_operation", arguments={})],
+                raw={},
+            ),
+            LLMResponse(content="still alive", tool_calls=[], raw={}),
+        ]
+    )
+    session = _make_session(root=tmp_path, client=client, surface=surface, tool=tool)
+    holder["session"] = session
+    session.apply_staged_operation = lambda _operation: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    try:
+        exit_code = session.run_turn("keep going")
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert client.calls == 2
+    inbox = ops_inbox_for(session)
+    assert inbox is not None
+    assert inbox.pending_count() == 0
+
+
+def test_stream_step_operation_changes_the_next_llm_call_before_turn_end(
+    tmp_path: Path,
+) -> None:
+    from alysis_code.cli_impl.chat.loop import _apply_tui_step_operation
+
+    holder: dict[str, Any] = {}
+
+    def stage_stream_off(_args: dict[str, Any]) -> dict[str, Any]:
+        inbox = ops_inbox_for(holder["session"], create=True)
+        assert inbox is not None
+        assert inbox.send(ResolvedOperation("stream", False, "stream: off"))
+        return {"ok": True}
+
+    tool = ToolDef(
+        name="stage_stream_off",
+        description="stage stream off",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=stage_stream_off,
+    )
+    surface = _RecordingEventSurface()
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="staging",
+                tool_calls=[ToolCall(id="stage-1", name="stage_stream_off", arguments={})],
+                raw={},
+            ),
+            LLMResponse(content="done", tool_calls=[], raw={}),
+        ],
+        stream_chunks=[["staging"], ["must not stream"]],
+    )
+    session = _make_session(root=tmp_path, client=client, surface=surface, stream=True, tool=tool)
+    holder["session"] = session
+    tui_state = type("State", (), {"exec_mode": "auto"})()
+    session.apply_staged_operation = lambda operation: _apply_tui_step_operation(
+        session=session,
+        operation=operation,
+        tui_state=tui_state,
+    )
+
+    try:
+        exit_code = session.run_turn("turn streaming off")
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert [request["stream"] for request in client.requests] == [True, False]
+    assert session.stream is False
+
+
+def test_mode_step_operation_stays_pending_until_the_next_message(
+    tmp_path: Path,
+) -> None:
+    from alysis_code import cli as cli_mod
+    from alysis_code.cli_impl.chat import loop as chat_loop
+
+    chat_loop._sync_cli_globals(cli_mod)
+
+    holder: dict[str, Any] = {}
+    observed_modes: list[str] = []
+
+    class ModeObservingClient(_KeepaliveAwareScriptedClient):
+        def chat(self, **kwargs: Any) -> LLMResponse:
+            before = self.calls
+            mode_before = str(holder["session"].mode)
+            response = super().chat(**kwargs)
+            if self.calls > before:
+                observed_modes.append(mode_before)
+            return response
+
+    def stage_readonly(_args: dict[str, Any]) -> dict[str, Any]:
+        inbox = ops_inbox_for(holder["session"], create=True)
+        assert inbox is not None
+        assert inbox.send(ResolvedOperation("mode", "readonly", "mode: read"))
+        return {"ok": True}
+
+    tool = ToolDef(
+        name="stage_readonly",
+        description="stage readonly mode",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=stage_readonly,
+    )
+    surface = _RecordingEventSurface()
+    client = ModeObservingClient(
+        [
+            LLMResponse(
+                content="staging",
+                tool_calls=[ToolCall(id="stage-1", name="stage_readonly", arguments={})],
+                raw={},
+            ),
+            LLMResponse(content="done", tool_calls=[], raw={}),
+        ]
+    )
+    session = _make_session(root=tmp_path, client=client, surface=surface, tool=tool)
+    holder["session"] = session
+    tui_state = type("State", (), {"exec_mode": "auto"})()
+    session.apply_staged_operation = lambda operation: chat_loop._apply_tui_step_operation(
+        session=session,
+        operation=operation,
+        tui_state=tui_state,
+    )
+
+    try:
+        exit_code = session.run_turn("switch mode")
+
+        assert exit_code == 0
+        assert observed_modes == ["auto", "auto"]
+        assert session.mode == "auto"
+        assert session.pending_permissions_mode == "readonly"
+        assert tui_state.exec_mode == "auto"
+
+        assert chat_loop._activate_pending_chat_permissions(session=session) == "readonly"
+        assert session.mode == "readonly"
+        assert session.pending_permissions_mode is None
+    finally:
+        session.close()
+
+
 def test_run_turn_streaming_provider_metadata_survives_tool_followup_request(
     tmp_path: Path,
 ) -> None:
@@ -570,6 +813,124 @@ def test_run_turn_tool_success_emits_lifecycle_events_and_legacy(tmp_path: Path)
     assert len(surface.legacy_tool_starts) == 1
     assert len(surface.legacy_tool_outputs) == 1
     assert len(surface.legacy_tool_ends) == 1
+
+
+def test_steering_after_first_tool_finishes_issued_calls_then_replans(
+    tmp_path: Path,
+) -> None:
+    holder: dict[str, Any] = {}
+    executed: list[int] = []
+
+    def _run(args: dict[str, Any]) -> dict[str, Any]:
+        index = int(args["index"])
+        executed.append(index)
+        if index == 1:
+            inbox = steer_inbox_for(holder["session"], create=True)
+            assert inbox is not None
+            inbox.send("stop and use a different approach")
+        return {"ok": index}
+
+    tool = ToolDef(
+        name="batch_tool",
+        description="batch",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=_run,
+    )
+    surface = _RecordingEventSurface()
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id=f"call-{index}", name="batch_tool", arguments={"index": index})
+                    for index in range(1, 4)
+                ],
+                raw={},
+            ),
+            LLMResponse(content="replanned", tool_calls=[], raw={}),
+        ]
+    )
+    session = _make_session(root=tmp_path, client=client, surface=surface, tool=tool)
+    holder["session"] = session
+
+    try:
+        assert session.run_turn("run the batch") == 0
+    finally:
+        session.close()
+
+    assert executed == [1, 2, 3]
+    followup = client.call_messages[1]
+    tool_results = [message for message in followup if message.get("role") == "tool"]
+    assert [message["tool_call_id"] for message in tool_results] == [
+        "call-1",
+        "call-2",
+        "call-3",
+    ]
+    assert [json.loads(message["content"]) for message in tool_results] == [
+        {"ok": 1},
+        {"ok": 2},
+        {"ok": 3},
+    ]
+    assert any(
+        message.get("content")
+        == "[Mid-turn message from the user] stop and use a different approach"
+        for message in followup
+    )
+    assert not any(
+        event["type"] == "steering_preempted_tools" for event in session.store.events_snapshot()
+    )
+
+
+def test_pending_ops_alone_do_not_preempt_tool_calls(tmp_path: Path) -> None:
+    holder: dict[str, Any] = {}
+    executed: list[int] = []
+
+    def _run(args: dict[str, Any]) -> dict[str, Any]:
+        index = int(args["index"])
+        executed.append(index)
+        if index == 1:
+            inbox = ops_inbox_for(holder["session"], create=True)
+            assert inbox is not None
+            assert inbox.send(ResolvedOperation("test", "value", "test op"))
+        return {"ok": index}
+
+    tool = ToolDef(
+        name="batch_tool",
+        description="batch",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=_run,
+    )
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id=f"call-{index}", name="batch_tool", arguments={"index": index})
+                    for index in range(1, 4)
+                ],
+                raw={},
+            ),
+            LLMResponse(content="done", tool_calls=[], raw={}),
+        ]
+    )
+    session = _make_session(
+        root=tmp_path,
+        client=client,
+        surface=_RecordingEventSurface(),
+        tool=tool,
+    )
+    holder["session"] = session
+    session.apply_staged_operation = lambda _operation: None
+
+    try:
+        assert session.run_turn("run every tool") == 0
+    finally:
+        session.close()
+
+    assert executed == [1, 2, 3]
+    assert not any(
+        event["type"] == "steering_preempted_tools" for event in session.store.events_snapshot()
+    )
 
 
 def test_child_step_message_is_framed_after_prior_tool_result(tmp_path: Path) -> None:

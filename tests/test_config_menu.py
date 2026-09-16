@@ -1836,7 +1836,6 @@ def test_classic_config_reload_applies_routing_mode_change_without_closing(
         pending_images=[],
         console=console,
         forge_state=chat_loop._ForgeChatState(),
-        plan_mode_state=chat_loop._ChatPlanModeState(),
     )
 
     rendered = "\n".join(output)

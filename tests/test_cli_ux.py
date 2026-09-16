@@ -125,7 +125,7 @@ def test_no_args_interactive_defaults_to_chat(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "_maybe_run_startup_config_menu", lambda: None)
     monkeypatch.setattr(cli_mod, "_provider_auth_ready_for_chat", lambda: False)
 
-    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
+    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})(), require_clean_build=False)
 
     assert captured == {
         "path": Path("."),
@@ -347,6 +347,10 @@ def test_chat_status_surfaces_web_search_runtime_details(monkeypatch) -> None:
         root = Path("/tmp/demo-repo")
         model_registry = None
 
+        @staticmethod
+        def pending_operation_labels() -> list[str]:
+            return ["mode: fast", "persona: ask"]
+
     monkeypatch.setattr(cli_mod, "_current_branch_label", lambda _root: "main")
     monkeypatch.setattr(cli_mod, "_is_git_dirty", lambda _root: False)
     monkeypatch.setattr(cli_mod, "_chat_trace_level", lambda _session: "compact")
@@ -375,6 +379,17 @@ def test_chat_status_surfaces_web_search_runtime_details(monkeypatch) -> None:
     assert "available" in rendered
     assert "web_search_setup" in rendered
     assert "Native OpenAI Responses web search is ready" in rendered
+    assert "pending_1" in rendered
+    assert "mode: fast" in rendered
+    assert "pending_2" in rendered
+    assert "persona: ask" in rendered
+
+    spec = cli_mod._chat_status_panel_spec(session=_DummySession(), pending_images=[])
+    pending_rows = next(rows for title, rows in spec["sections"] if title == "Pending operations")
+    assert pending_rows == [
+        ("1", "mode: fast", "warn"),
+        ("2", "persona: ask", "warn"),
+    ]
 
 
 def test_chat_bottom_toolbar_hides_default_optional_fields(monkeypatch) -> None:
@@ -397,7 +412,6 @@ def test_chat_bottom_toolbar_hides_default_optional_fields(monkeypatch) -> None:
         session=_DummySession(),
         pending_images=[],
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_enabled=False,
     )
     assert "auto" in toolbar
     assert "gpt-test" in toolbar
@@ -419,7 +433,7 @@ def test_chat_bottom_toolbar_shows_non_default_optional_fields(monkeypatch) -> N
         client = _DummyClient()
         cfg = AppConfig(
             model="gpt-test",
-            toolbar_items=["mode", "model", "stream", "trace", "temp", "ctx", "subagents", "plan"],
+            toolbar_items=["mode", "model", "stream", "trace", "temp", "ctx", "subagents"],
         )
         stream = False
         mode = "auto"
@@ -435,23 +449,23 @@ def test_chat_bottom_toolbar_shows_non_default_optional_fields(monkeypatch) -> N
         session=_DummySession(),
         pending_images=[],
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_enabled=True,
     )
     assert "no-stream" in toolbar
     assert "trace full" in toolbar
     assert "temp 0.7" in toolbar
     assert "0 image" not in toolbar
-    assert "plan readonly" in toolbar
-    assert "Esc /plan off" in toolbar
+    assert "/plan" not in toolbar
 
 
-def test_chat_bottom_toolbar_plan_item_hints_default_plan_path_when_overlay_is_off() -> None:
+def test_chat_bottom_toolbar_ignores_stale_plan_item_from_saved_config() -> None:
     class _DummyClient:
         model = "gpt-test"
         temperature = 0.2
 
     class _DummySession:
         client = _DummyClient()
+        # "plan" was a valid toolbar item before chat plan mode was removed;
+        # a saved config may still list it and must simply be ignored.
         cfg = AppConfig(model="gpt-test", toolbar_items=["mode", "plan"])
         stream = True
         mode = "review"
@@ -465,58 +479,24 @@ def test_chat_bottom_toolbar_plan_item_hints_default_plan_path_when_overlay_is_o
         session=_DummySession(),
         pending_images=[],
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_enabled=False,
     )
 
-    assert "plan /plan <task>" in toolbar
-    assert "plan readonly" not in toolbar
-    assert "Esc /plan off" not in toolbar
+    assert "review" in toolbar
+    assert "plan" not in toolbar
+    assert "/plan" not in toolbar
 
 
-def test_chat_prompt_escape_action_is_contextual_for_plan_mode() -> None:
-    assert (
-        cli_mod._resolve_chat_prompt_escape_action(
-            ui_mode="chat",
-            plan_mode_enabled=True,
-            buffer_text="",
-        )
-        == cli_mod._CHAT_ESCAPE_ACTION_PLAN_OFF
-    )
-    assert (
-        cli_mod._resolve_chat_prompt_escape_action(
-            ui_mode="chat",
-            plan_mode_enabled=True,
-            buffer_text="draft this change",
-        )
-        == cli_mod._CHAT_ESCAPE_ACTION_NOOP
-    )
-    assert (
-        cli_mod._resolve_chat_prompt_escape_action(
-            ui_mode="chat",
-            plan_mode_enabled=False,
-            buffer_text="",
-        )
-        == cli_mod._CHAT_ESCAPE_ACTION_PASTE_IMAGE
-    )
-
-
-def test_chat_help_panel_describes_plan_workflow_and_explicit_readonly_mode() -> None:
+def test_chat_help_panel_has_no_chat_plan_command() -> None:
     console = Console(record=True, width=140)
 
     console.print(cli_mod._chat_help_panel(ui_mode="chat"))
     rendered = console.export_text()
 
-    assert "/plan <task>" in rendered
-    assert "default planning path" in rendered
-    assert "draft, review, approve, then execute" in rendered
-    assert "bare /plan shows usage" in rendered
-    assert "/plan mode" in rendered
-    assert "/plan approve" in rendered
+    assert "/persona" in rendered
+    assert "architect" in rendered
     assert "/pwd" in rendered
-    assert "secondary persistent readonly planning overlay" in rendered
-    assert "does not execute by itself" in rendered
-    assert "/plan draft" not in rendered
-    assert "/plan on|off|status|draft" not in rendered
+    assert "/plan" not in rendered
+    assert "Plan Mode" not in rendered
     assert "plan-first" not in rendered
 
 
@@ -625,6 +605,7 @@ def test_chat_help_panel_uses_compact_text_on_narrow_terminal(monkeypatch) -> No
     assert "/usage-hud" not in panel.renderable
     assert "/usage  token count & cost; /usage hud on|off toggles HUD" in panel.renderable
     assert "/subagents  open an active subagent run" in panel.renderable
+    assert "/assets" not in panel.renderable
     assert "/skills" not in panel.renderable
     assert "/context  context window left" in panel.renderable
     assert "/ctx" not in panel.renderable
@@ -644,7 +625,7 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
     assert cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS == [
         "/help",
         "/login",
-        "/mode",
+        "/permissions",
         "/persona",
         "/ask",
         "/status",
@@ -665,13 +646,14 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
         "/forge",
         "/report",
         "/feedback",
-        "/plan",
         "/skill",
         "/exit",
     ]
-    assert cli_mod._chat_visible_commands() == cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
+    assert cli_mod._chat_visible_commands() == [
+        command for command in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS if command != "/assets"
+    ]
     assert cli_mod._chat_completer_commands() == cli_mod._ordered_unique_strings(
-        cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
+        [command for command in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS if command != "/assets"]
         + [
             "/forge resume",
             "/usage hud",
@@ -682,9 +664,6 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
             "/terminals show",
             "/terminals kill",
             "/terminals help",
-            "/assets",
-            "/plan mode",
-            "/plan approve",
         ]
     )
     assert cli_mod._FORGE_COMPLETER_COMMANDS == cli_mod._ordered_unique_strings(
@@ -705,6 +684,7 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
             "/show",
             "/done",
             "/back",
+            "/plan tasks",
             "/plan markdown",
             "/plan md",
             "/plan edit",
@@ -772,7 +752,6 @@ def test_chat_config_menu_reload_uses_injected_helpers_without_login_shadowing(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -800,7 +779,6 @@ def test_chat_stream_command_toggles_session_and_reports_status(tmp_path: Path) 
         pending_images=[],
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
     status_result = cli_mod._handle_chat_command(
         input_text="/stream status",
@@ -809,7 +787,6 @@ def test_chat_stream_command_toggles_session_and_reports_status(tmp_path: Path) 
         pending_images=[],
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -818,9 +795,17 @@ def test_chat_stream_command_toggles_session_and_reports_status(tmp_path: Path) 
     assert cfg.stream is False
     assert events == [
         (
+            "chat_local_command",
+            {"command": "/stream", "has_argument": True},
+        ),
+        (
             "session_setting_changed",
             {"setting": "stream", "value": False},
-        )
+        ),
+        (
+            "chat_local_command",
+            {"command": "/stream", "has_argument": True},
+        ),
     ]
     assert "Streaming set for this session: off" in stream.getvalue()
     assert "Streaming is off" in stream.getvalue()
@@ -881,7 +866,6 @@ def test_chat_config_menu_closes_session_when_connection_protocol_changes(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "exit"
@@ -919,7 +903,6 @@ def test_chat_login_closes_session_when_connection_protocol_changes(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "exit"
@@ -966,7 +949,6 @@ def test_chat_config_menu_closes_subscription_session_when_model_pair_changes(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "exit"
@@ -1003,7 +985,6 @@ def test_chat_config_set_model_reports_success_after_reload(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1031,7 +1012,6 @@ def test_chat_config_set_cannot_bypass_subscription_model_picker(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1051,7 +1031,6 @@ def test_model_command_cannot_bypass_subscription_config_selection(tmp_path: Pat
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1090,7 +1069,6 @@ def test_model_command_refresh_failure_keeps_verified_model_and_route(
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1114,7 +1092,6 @@ def test_model_command_without_config_refuses_unsafe_bare_client_mutation(tmp_pa
         pending_images=[],
         console=Console(file=stream, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1315,6 +1292,7 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
 
     relaunched: list[dict[str, object]] = []
     exits: list[tuple[str, str]] = []
+    surface_events: list[tuple[str, dict[str, object]]] = []
     base_url = "https://router-restart.example/v1"
 
     monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "cfg"))
@@ -1338,6 +1316,9 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
             mode=kwargs["mode"],
             routing_mode=cfg.routing_mode,
             router_client=object(),
+            store=SimpleNamespace(
+                append=lambda event_type, payload: surface_events.append((event_type, payload))
+            ),
             close=lambda: None,
         )
 
@@ -1407,6 +1388,10 @@ def test_tui_routing_mode_change_applies_in_place_without_restart(
     assert getattr(applied[0], "routing_mode", "") == "code_only"
     assert getattr(applied[0], "model", "") == "cli-model"
     assert getattr(applied[0], "base_url", "") == base_url
+    assert surface_events == [
+        ("chat_surface_started", {"surface": "tui"}),
+        ("chat_surface_finished", {"surface": "tui", "status": "completed"}),
+    ]
 
 
 def test_one_shot_run_checks_subscription_readiness_before_launch(
@@ -1475,18 +1460,28 @@ def test_chat_command_registry_keeps_hidden_commands_known() -> None:
         "/ctx",
         "/model-info",
         "/model",
+        "/paste-image",
+        "/images",
+        "/clear-images",
+    }
+    assert hidden_commands.issubset(set(cli_mod._CHAT_COMMANDS))
+    # Chat plan mode is gone: none of its spellings may be advertised as a
+    # chat command anywhere. /plan itself is Forge-only.
+    retired_plan_commands = {
+        "/plan <task>",
+        "/plan draft",
         "/plan mode",
         "/plan readonly",
         "/plan on",
         "/plan approve",
         "/plan off",
         "/plan status",
-        "/plan draft",
-        "/paste-image",
-        "/images",
-        "/clear-images",
     }
-    assert hidden_commands.issubset(set(cli_mod._CHAT_COMMANDS))
+    assert retired_plan_commands.isdisjoint(set(cli_mod._CHAT_COMMANDS))
+    assert retired_plan_commands.isdisjoint(set(cli_mod._chat_completer_commands()))
+    assert "/plan" not in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS
+    assert "/plan" not in cli_mod._chat_completer_commands()
+    assert "/plan markdown" in cli_mod._chat_completer_commands(ui_mode="forge")
 
 
 def test_clear_command_wipes_conversation_but_preserves_session_identity(monkeypatch) -> None:
@@ -1577,7 +1572,6 @@ def test_clear_command_wipes_conversation_but_preserves_session_identity(monkeyp
         pending_images=pending_images,
         console=console,
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"
@@ -1595,8 +1589,66 @@ def test_clear_command_wipes_conversation_but_preserves_session_identity(monkeyp
     assert session.request_context_measurement is None
     assert pending_images == []
     assert refresh_calls == [session]
-    assert session.store.events[-1] == ("conversation_cleared", {"trigger": "user_command"})
+    assert session.store.events == [
+        (
+            "chat_local_command",
+            {"command": "/clear", "has_argument": False},
+        ),
+        ("conversation_cleared", {"trigger": "user_command"}),
+    ]
     assert stream.getvalue().strip().endswith("Conversation cleared.")
+
+
+def test_local_command_audit_is_normalized_and_does_not_capture_argument_text() -> None:
+    class _Store:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        def append(self, event_type: str, payload: dict[str, Any]) -> None:
+            self.events.append((event_type, dict(payload)))
+
+    session = type("Session", (), {"store": _Store()})()
+    console = Console(file=io.StringIO(), force_terminal=False)
+    dispatch_kwargs = {
+        "root": Path("/tmp/demo"),
+        "session": session,
+        "pending_images": [],
+        "console": console,
+        "forge_state": cli_mod._ForgeChatState(),
+    }
+
+    assert (
+        cli_mod._handle_chat_command(
+            input_text="/No-Such-Cmd sensitive argument text",
+            **dispatch_kwargs,
+        )
+        == "handled"
+    )
+    assert (
+        cli_mod._handle_chat_command(
+            input_text="ordinary prompt with private text",
+            **dispatch_kwargs,
+        )
+        == "send"
+    )
+    assert (
+        cli_mod._handle_chat_command(
+            input_text="EXIT ignored-argument",
+            **dispatch_kwargs,
+        )
+        == "exit"
+    )
+
+    assert session.store.events == [
+        (
+            "chat_local_command",
+            {"command": "/no-such-cmd", "has_argument": True},
+        ),
+        (
+            "chat_local_command",
+            {"command": "/exit", "has_argument": True},
+        ),
+    ]
 
 
 def test_print_welcome_banner_is_boxless_with_context(monkeypatch) -> None:
@@ -2152,7 +2204,7 @@ def test_home_chat_action_forwards_plain_defaults(monkeypatch) -> None:
     monkeypatch.setattr(cli_mod, "chat", _fake_chat)
     monkeypatch.setattr(cli_mod, "_maybe_run_startup_config_menu", lambda: None)
     monkeypatch.setattr(cli_mod, "_provider_auth_ready_for_chat", lambda: True)
-    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
+    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})(), require_clean_build=False)
 
     assert captured == {
         "path": Path("."),
@@ -2192,7 +2244,7 @@ def test_home_run_action_forwards_plain_defaults(monkeypatch) -> None:
     monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "run", _fake_run)
-    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
+    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})(), require_clean_build=False)
 
     assert captured == {
         "instruction": "summarize this repo",
@@ -2236,7 +2288,7 @@ def test_home_plan_action_forwards_plain_defaults(monkeypatch) -> None:
     monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "forge_plan", _fake_plan)
-    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
+    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})(), require_clean_build=False)
 
     assert captured == {"path": Path(".")}
 
@@ -2303,7 +2355,7 @@ def test_home_run_action_accepts_numeric_shortcut(monkeypatch) -> None:
     monkeypatch.setenv("ALYSIS_HOME_PROMPT", "1")
     monkeypatch.setattr(cli_mod.typer, "prompt", _fake_prompt)
     monkeypatch.setattr(cli_mod, "run", _fake_run)
-    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})())
+    cli_mod.main(type("Ctx", (), {"invoked_subcommand": None})(), require_clean_build=False)
 
     assert captured == {
         "instruction": "summarize this repo",

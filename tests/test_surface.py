@@ -1027,11 +1027,21 @@ def test_rich_surface_progress_update_deduplicates_repeated_lines() -> None:
     assert out.count("Planning next step.") == 1
 
 
+def test_rich_surface_uses_permissions_label_for_execution_mode_changes() -> None:
+    buffer = io.StringIO()
+    surface = RichSurface(console=Console(file=buffer, force_terminal=False))
+
+    surface.emit_mode_changed("auto")
+
+    out = buffer.getvalue()
+    assert "Permissions: auto" in out
+    assert "Mode: auto" not in out
+
+
 @pytest.mark.parametrize(
     "message",
     [
         "Applied planner update to the Forge plan.",
-        "Plan draft ready for review.",
         "Planner response ready.",
         "Planner update was a no-op.",
         "Planner returned an error; using fallback handling.",
@@ -1510,23 +1520,6 @@ def test_rich_surface_does_not_show_working_banner_without_active_turn() -> None
 
     out = buffer.getvalue()
     assert "Working... Press Esc to interrupt." not in out
-
-
-def test_rich_surface_preserves_original_request_for_approved_plan_execution_instruction() -> None:
-    buffer = io.StringIO()
-    surface = RichSurface(console=Console(file=buffer, force_terminal=False))
-
-    surface.on_user_message(
-        "Build a project.\n\nApproved plan:\n1. Inspect the repo\n2. Run tests\n\n"
-        "Now execute this task in the repository and follow the approved plan."
-    )
-
-    out = buffer.getvalue()
-    assert "Plan approved. Executing..." in out
-    assert "Build a project." in out
-    assert "Approved plan:" not in out
-    assert "Now execute this task" not in out
-    assert out.find("Plan approved. Executing...") < out.find("Build a project.")
 
 
 def test_rich_surface_compact_trace_summarizes_subagent_run_output() -> None:

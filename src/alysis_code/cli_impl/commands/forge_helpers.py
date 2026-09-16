@@ -6,24 +6,6 @@ from .cli_common import *
 from .forge_asset_view import forge_asset_view_count
 
 
-def _run_plan_mode_approval_loop(
-    *,
-    session: Any,
-    console: Console,
-    user_message: str,
-    max_iterations: int | None = None,
-) -> str | None:
-    from ..chat import _run_plan_mode_approval_loop_impl
-
-    return _run_plan_mode_approval_loop_impl(
-        _cli_module_for_legacy_impl(),
-        session=session,
-        console=console,
-        user_message=user_message,
-        max_iterations=max_iterations,
-    )
-
-
 def _planning_help_panel() -> Panel:
     rows = [
         ("/help", "show planning commands"),

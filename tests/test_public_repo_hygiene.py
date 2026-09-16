@@ -48,6 +48,27 @@ def test_allows_source_documentation_and_environment_examples() -> None:
     assert path_violation("src/alysis_code/cli.py") is None
     assert path_violation("docs/security_model.md") is None
     assert path_violation(".env.example") is None
+    assert path_violation("src/alysis_code/extensions/runtime.py") is None
+    assert path_violation("src/alysis_code/assets/prompts.py") is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["prompts/release.md", "Claude outputs/review.md", ".codex/notes.md", ".claude/settings.json"],
+)
+def test_rejects_local_assistant_working_files(path: str) -> None:
+    assert path_violation(path) == "local assistant working files"
+
+
+@pytest.mark.parametrize(
+    "path", ["extensions/vscode-alysis/package.json", "supabase/migrations/setup.sql"]
+)
+def test_rejects_unreleased_packages(path: str) -> None:
+    assert path_violation(path) == "unreleased editor or hosted-service package"
+
+
+def test_rejects_power_mode_package() -> None:
+    assert path_violation("src/alysis_code/power_mode/worker.py") == "unreleased Power mode package"
 
 
 @pytest.mark.parametrize(

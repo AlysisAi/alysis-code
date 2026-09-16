@@ -57,7 +57,6 @@ _VALID_TOOLBAR_ITEMS: set[str] = {
     "tokens",
     "cost",
     "forge",
-    "plan",
 }
 _DEFAULT_TOOLBAR_ITEMS: tuple[str, ...] = ("mode", "model", "ctx", "subagents")
 DEFAULT_SUBAGENT_TIMEOUT_S = 900.0
@@ -440,7 +439,7 @@ class AppConfig(BaseModel):
     # preserves pre-persona behavior exactly. See docs/personas.md.
     default_persona: str = "code"
     # Kill-switch for persona modes; env override ALYSIS_PERSONA_MODES=off
-    # wins over the config value. Off: /mode accepts only execution modes,
+    # wins over the config value. Off: /permissions accepts only execution modes,
     # the switch_mode tool is not registered, and personas stay at Code.
     persona_modes_enabled: bool = True
     max_steps: int = DEFAULT_CHAT_MAX_STEPS

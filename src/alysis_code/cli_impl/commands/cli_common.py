@@ -888,24 +888,6 @@ def run_agent(*args: Any, **kwargs: Any) -> Any:
     return _agent_loop_module().run_agent(*args, **kwargs)
 
 
-def _plan_mode_module() -> Any:
-    from ... import plan_mode
-
-    return plan_mode
-
-
-def generate_plan_draft(*args: Any, **kwargs: Any) -> Any:
-    return _plan_mode_module().generate_plan_draft(*args, **kwargs)
-
-
-def instruction_with_approved_plan(*args: Any, **kwargs: Any) -> Any:
-    return _plan_mode_module().instruction_with_approved_plan(*args, **kwargs)
-
-
-def record_plan_usage(*args: Any, **kwargs: Any) -> Any:
-    return _plan_mode_module().record_plan_usage(*args, **kwargs)
-
-
 def _plan_assistant_module() -> Any:
     from ... import plan_assistant
 
@@ -1046,11 +1028,11 @@ def _ordered_unique_strings(values: list[str]) -> list[str]:
     return ordered
 
 
-_CHAT_RETIRED_COMMANDS = {"/keys", "/tour", "/examples", "/chat"}
+_CHAT_RETIRED_COMMANDS = {"/keys", "/tour", "/examples", "/chat", "/mode"}
 _CHAT_GLOBAL_VISIBLE_COMMANDS = [
     "/help",
     "/login",
-    "/mode",
+    "/permissions",
     "/persona",
     "/ask",
     "/status",
@@ -1071,7 +1053,6 @@ _CHAT_GLOBAL_VISIBLE_COMMANDS = [
     "/forge",
     "/report",
     "/feedback",
-    "/plan",
     "/skill",
     "/exit",
 ]
@@ -1081,6 +1062,7 @@ _FORGE_COMMAND_TOKENS = [
     "/goal",
     "/task",
     "/show",
+    "/plan",
     "/done",
     "/back",
 ]
@@ -1089,13 +1071,14 @@ _FORGE_VISIBLE_COMMAND_TOKENS = [
     "/goal",
     "/task",
     "/show",
+    "/plan",
     "/done",
     "/back",
 ]
 _FORGE_SHARED_CHAT_COMMANDS = [
     "/help",
     "/login",
-    "/mode",
+    "/permissions",
     "/status",
     "/subagents",
     "/terminals",
@@ -1112,7 +1095,6 @@ _FORGE_SHARED_CHAT_COMMANDS = [
     "/image",
     "/report",
     "/feedback",
-    "/plan",
     "/skill",
     "/exit",
 ]
@@ -1136,6 +1118,7 @@ _FORGE_COMPLETER_COMMANDS = _ordered_unique_strings(
         "/show",
         "/done",
         "/back",
+        "/plan tasks",
         "/plan markdown",
         "/plan md",
         "/plan edit",
@@ -1156,13 +1139,6 @@ _CHAT_COMMANDS = _ordered_unique_strings(
         "/forge resume",
         "/model-info",
         "/model",
-        "/plan mode",
-        "/plan readonly",
-        "/plan on",
-        "/plan approve",
-        "/plan off",
-        "/plan status",
-        "/plan draft",
         "/stream on",
         "/stream off",
         "/stream status",
@@ -1195,7 +1171,6 @@ _CHAT_TOOLBAR_ITEM_ORDER = [
     "tokens",
     "cost",
     "forge",
-    "plan",
 ]
 _CHAT_LLM_ERROR_MAX_CHARS = 520
 _CHAT_LLM_ERROR_REDACT_PATTERNS = [
@@ -1217,7 +1192,6 @@ _CHAT_RESUME_SECRET_VALUE_RE = re.compile(
     r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _CHAT_RESUME_SECRET_ENV_RE = re.compile(rf"(?i)\b({_CHAT_RESUME_SECRET_KEY_PATTERN})=([^\s,;]+)")
-MAX_PLAN_ITERATIONS = 10
 
 
 __all__ = [name for name in globals() if (not name.startswith("__") or name == "__version__")]

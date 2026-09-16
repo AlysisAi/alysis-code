@@ -37,9 +37,13 @@ opaque IDE task/debug launches) are unavailable while a persona write scope is a
   is not an error, and a repeated identical proposal is auto-declined. The tool exists only
   in top-level interactive chat — one-shot runs, Forge, swarm workers, and subagents never
   see it, so automation cannot switch personas silently.
-- `/mode` stays the execution-mode command. An explicit `/mode <exec-mode>` always wins:
-  it redefines your base mode and clears any persona-held restore point and write scope.
-- Persona switches are refused while Plan Mode is on, and are inert inside a Forge session.
+- `/permissions <exec-mode>` selects your base mode for the next user message. On activation,
+  it redefines that base and clears any persona-held restore point and write scope. Repeated
+  selections replace the pending choice without changing the running turn's tools.
+- Persona changes during a running turn wait until it finishes. Tab stages the next persona;
+  approved model proposals also apply at turn end. Persona switches are inert inside Forge.
+- Use Architect for planning in chat. Legacy chat Plan Mode, including `/plan mode` and the
+  `/plan <task>` draft/approve flow, has been removed. Forge retains `/plan tasks|markdown|edit`.
 - The active persona survives `/resume`: the base mode is restored from the session start and
   the last applied persona is re-applied on top, reproducing the narrowed mode, scope, and
   model exactly.
@@ -107,7 +111,7 @@ invocation; `config set default_persona architect` makes it permanent.
 | `persona_models.<persona>` | Model role override per persona |
 | `persona_modes_enabled` | Kill switch; `ALYSIS_PERSONA_MODES=off` wins over config |
 
-With the feature off, `/persona` explains itself, `/mode` accepts only execution modes, the
+With the feature off, `/persona` explains itself, `/permissions` accepts execution modes, the
 `switch_mode` tool is not registered, and every prompt is byte-identical to pre-persona
 Alysis Code.
 

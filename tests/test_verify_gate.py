@@ -3518,3 +3518,21 @@ def test_verify_run_payload_hides_external_artifact_path_from_model(tmp_path: Pa
     assert command_payload["output_truncated"] is False
     assert command_payload["fallback_used"] is False
     assert command_payload["failure_summary"]["primary_error"] == "assertion failed"
+
+
+def test_verification_rejection_guidance_maps_reasons_to_fixes() -> None:
+    from alysis_code.verification_command_analysis import verification_rejection_guidance
+
+    pipe = verification_rejection_guidance("unsafe_pipeline")
+    assert "pipeline" in pipe.lower()
+    assert "not a failure of your code" in pipe
+
+    control = verification_rejection_guidance("disallowed_shell_control_flow")
+    assert "single command" in control.lower()
+
+    observe = verification_rejection_guidance("non_assertive_observation")
+    assert "prove" in observe.lower() or "fails on a wrong result" in observe
+
+    # Unknown reasons yield an empty string so callers can append unconditionally.
+    assert verification_rejection_guidance("some_future_reason") == ""
+    assert verification_rejection_guidance(None) == ""

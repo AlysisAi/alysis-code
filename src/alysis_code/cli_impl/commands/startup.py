@@ -850,12 +850,12 @@ def _set_chat_trace_level(*, session: Any, level: str) -> str:
     return applied
 
 
-def _emit_plan_mode_trace(
+def _emit_forge_planner_trace(
     *,
     session: Any,
     message: str,
     full_only: bool = False,
-    source: str = "plan_mode",
+    source: str = "forge_planner",
 ) -> None:
     clean = message.strip()
     if not clean:
@@ -883,20 +883,6 @@ def _emit_plan_mode_trace(
             return
 
 
-def _emit_forge_planner_trace(
-    *,
-    session: Any,
-    message: str,
-    full_only: bool = False,
-) -> None:
-    _emit_plan_mode_trace(
-        session=session,
-        message=message,
-        full_only=full_only,
-        source="forge_planner",
-    )
-
-
 def _make_forge_swarm_trace_sink(
     *,
     session: Any,
@@ -915,7 +901,7 @@ def _make_forge_swarm_trace_sink(
     )
 
 
-def _make_plan_mode_delta_trace_callback(*, session: Any) -> Callable[[str], None] | None:
+def _make_forge_planner_delta_trace_callback(*, session: Any) -> Callable[[str], None] | None:
     trace_level = _chat_trace_level(session)
     if trace_level == "off":
         return None
@@ -930,7 +916,7 @@ def _make_plan_mode_delta_trace_callback(*, session: Any) -> Callable[[str], Non
             return
         seen_chars += len(delta)
         if not started:
-            _emit_plan_mode_trace(session=session, message="Receiving planner output...")
+            _emit_forge_planner_trace(session=session, message="Receiving planner output...")
             started = True
         if trace_level != "full":
             return
@@ -938,7 +924,7 @@ def _make_plan_mode_delta_trace_callback(*, session: Any) -> Callable[[str], Non
         if bucket <= last_full_bucket:
             return
         last_full_bucket = bucket
-        _emit_plan_mode_trace(
+        _emit_forge_planner_trace(
             session=session,
             message=f"Planner draft progress: ~{seen_chars} chars captured.",
             full_only=True,

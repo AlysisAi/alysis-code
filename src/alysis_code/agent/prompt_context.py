@@ -22,7 +22,6 @@ from ..extensions.activation import (
 from ..extensions.models import normalize_extension_id, plugin_slug_from_id
 from ..extensions.state import load_global_state, load_project_state
 from ..personas import DEFAULT_PERSONA, normalize_persona, persona_modes_enabled
-from ..plan_mode import extract_approved_plan_user_message
 from ..repo_scan import (
     _MANIFEST_SPECS,
     _README_NAMES,
@@ -1460,10 +1459,7 @@ def _build_repo_task_brief_message(
     }:
         return None
 
-    clean = (
-        extract_approved_plan_user_message(pending_instruction)
-        or str(pending_instruction or "").strip()
-    )
+    clean = str(pending_instruction or "").strip()
     if not clean or _is_host_managed_user_context_message(clean):
         return None
     if clean[:1] in {"/", ":"} and "\n" not in clean:
@@ -1828,11 +1824,10 @@ def refresh_session_task_brief_from_observed_turn(
         return False
     messages_obj, existing_index, current_content, inserted_placeholder = ensured
 
-    approved_plan_message = extract_approved_plan_user_message(instruction)
-    if not approved_plan_message and material_edit_count <= 0:
+    if material_edit_count <= 0:
         return inserted_placeholder
 
-    clean = approved_plan_message or str(instruction or "").strip()
+    clean = str(instruction or "").strip()
     if not clean or _is_host_managed_user_context_message(clean):
         return inserted_placeholder
     if clean[:1] in {"/", ":"} and "\n" not in clean:
@@ -2090,9 +2085,6 @@ def _build_user_message(
     image_paths: list[str] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     log_payload: dict[str, Any] = {"content": instruction}
-    display_content = extract_approved_plan_user_message(instruction)
-    if display_content and display_content != instruction:
-        log_payload["display_content"] = display_content
     if not image_paths:
         return {"role": "user", "content": instruction}, log_payload
 

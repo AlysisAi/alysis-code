@@ -94,13 +94,8 @@ def test_run_turn_with_image_adds_visual_input_hint(tmp_path: Path) -> None:
     assert "can you see the image?" in content[1]["text"]
 
 
-def test_build_user_message_records_display_content_for_approved_plan_instruction(
-    tmp_path: Path,
-) -> None:
-    instruction = (
-        "Build a project.\n\nApproved plan:\n1. Inspect the repo\n\n"
-        "Now execute this task in the repository and follow the approved plan."
-    )
+def test_build_user_message_logs_plain_instruction_verbatim(tmp_path: Path) -> None:
+    instruction = "Build a project.\n\n1. Inspect the repo\n2. Run the tests"
 
     message, log_payload = _build_user_message(
         root=tmp_path,
@@ -109,8 +104,7 @@ def test_build_user_message_records_display_content_for_approved_plan_instructio
     )
 
     assert message == {"role": "user", "content": instruction}
-    assert log_payload["content"] == instruction
-    assert log_payload["display_content"] == "Build a project."
+    assert log_payload == {"content": instruction}
 
 
 def test_build_user_message_errors_for_missing_image(tmp_path: Path) -> None:

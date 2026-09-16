@@ -1482,6 +1482,28 @@ def test_verify_run_rejects_non_verifier_inside_simple_chain(
         tools["verify_run"].run({"commands": ["pytest -q && echo ok"]})
 
 
+def test_verify_run_pipeline_rejection_carries_actionable_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A pipeline is legitimately rejected (its exit code masks upstream
+    # failure), but the message must tell the model how to fix it -- name the
+    # pipe as the problem and steer to the bare command -- rather than reading
+    # like a test failure it then tries to "repair" by rewriting working code.
+    monkeypatch.setattr(
+        agent_loop_mod,
+        "run_task_verification",
+        lambda **_kwargs: pytest.fail("verify engine should not run for a rejected command"),
+    )
+    tools = _build_tools(tmp_path)
+    with pytest.raises(verify_gate_mod.VerifyError) as excinfo:
+        tools["verify_run"].run({"commands": ["pytest -q 2>&1 | tail -40"]})
+    message = str(excinfo.value)
+    assert "unsafe_pipeline" in message  # machine-readable reason preserved
+    assert "not a failure of your code" in message
+    assert "pytest" in message
+
+
 def test_verify_run_rejects_incompatible_override_against_effective_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

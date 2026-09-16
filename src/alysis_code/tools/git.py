@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -55,6 +56,8 @@ def _run_git(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
     except OSError as e:
@@ -202,21 +205,126 @@ def _parse_log_records(stdout: str) -> list[dict[str, str]]:
     return commits
 
 
+def _git_review_args(
+    root: Path, args: list[str], *, staged: bool = False, path: str | None = None
+) -> list[str]:
+    # Native review cannot execute arbitrary repository programs. Turning off a
+    # clean filter also changes Git's comparison semantics, so refuse affected
+    # worktree reads instead of inventing modifications. Index-only diffs are safe.
+    filters = _run_git(
+        root,
+        [
+            "config",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\..*\.(clean|process|required)$",
+        ],
+    )
+    if filters.returncode not in {0, 1}:
+        raise GitError("Could not inspect Git filters before reading repository changes.")
+    prefix = ["--no-optional-locks", "-c", "core.fsmonitor=false"]
+    names = sorted(set(filters.stdout.split("\0")) - {""})
+    tracked_paths = ""
+    if not staged:
+        tracked = _run_git_checked(
+            root=root,
+            args=[
+                *prefix,
+                "--literal-pathspecs",
+                "ls-files",
+                "--stage",
+                "-z",
+                *(["--", path] if path is not None else []),
+            ],
+            fallback="Could not inspect tracked paths before Git review.",
+        )
+        entries = [entry for entry in tracked.stdout.split("\0") if entry]
+        if any(entry.startswith("160000 ") for entry in entries):
+            raise GitError(
+                "git_submodule_review_required: This review includes submodules, which can "
+                "run their own Git helpers. Use shell_run with git status or git diff through "
+                "the configured command runner. Staged git_diff and other scoped paths remain available."
+            )
+        tracked_paths = "".join(entry.split("\t", 1)[1] + "\0" for entry in entries)
+    if names and not staged:
+        attributes = _run_git_checked(
+            root=root,
+            args=[*prefix, "check-attr", "-z", "--stdin", "filter"],
+            input_s=tracked_paths,
+            fallback="Could not inspect Git attributes before reading repository changes.",
+        ).stdout.split("\0")
+        configured = {name[7:].rsplit(".", 1)[0] for name in names}
+        if any(value in configured for value in attributes[2::3]):
+            raise GitError(
+                "git_content_filter_required: This repository uses content filters. "
+                "Native review cannot compare these files accurately without running those "
+                "programs. Use shell_run with git status or git diff through the configured "
+                "command runner. Staged git_diff remains available."
+            )
+    for name in names:
+        value = "false" if name.endswith(".required") else ""
+        prefix.extend(["-c", f"{name}={value}"])
+    return [*prefix, *args]
+
+
 def git_status(*, root: Path) -> dict[str, Any]:
     cp = _run_git_checked(
         root=root,
-        args=["status", "--porcelain=v1", "-b"],
+        args=_git_review_args(root, ["status", "--porcelain=v1", "-b"]),
         fallback="git status failed",
     )
     return {"status": cp.stdout}
 
 
-def git_diff(*, root: Path) -> dict[str, Any]:
-    cp = _run_git_checked(root=root, args=["diff"], fallback="git diff failed")
+def git_diff(
+    *,
+    root: Path,
+    path: str | None = None,
+    staged: bool = False,
+    offset: int = 0,
+    diff_id: str | None = None,
+) -> dict[str, Any]:
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise GitError("offset must be a non-negative integer")
+    if offset and not diff_id:
+        raise GitError("Pass the previous page's diff_id when continuing a diff.")
+    # Reviews must never invoke repository-configured diff programs or text filters.
+    args = [
+        "--literal-pathspecs",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+    ]
+    if staged:
+        args.append("--cached")
+    if path is not None:
+        args.extend(["--", _resolve_git_path(root, path)])
+    cp = _run_git_checked(
+        root=root,
+        args=_git_review_args(
+            root,
+            args,
+            staged=staged,
+            path=_resolve_git_path(root, path) if path is not None else None,
+        ),
+        fallback="git diff failed",
+    )
     diff = cp.stdout
-    if len(diff) > 20000:
-        diff = diff[:20000] + "...(truncated)"
-    return {"diff": diff}
+    current_id = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+    if diff_id is not None and diff_id != current_id:
+        raise GitError("The diff changed between pages. Restart with offset=0 and no diff_id.")
+    end = min(offset + 20000, len(diff))
+    truncated = end < len(diff)
+    return {
+        "diff_id": current_id,
+        "offset": offset,
+        "next_offset": end if truncated else None,
+        "total_chars": len(diff),
+        "truncated": truncated,
+        "diff": diff[offset:end],
+    }
 
 
 def git_history(

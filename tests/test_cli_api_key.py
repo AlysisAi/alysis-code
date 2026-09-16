@@ -3153,7 +3153,7 @@ def test_chat_mode_command_updates_mode_for_following_turn(tmp_path: Path, monke
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode auto\nhello\nexit\n",
+        input="/permissions auto\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
@@ -3252,7 +3252,7 @@ def test_chat_mode_command_refreshes_environment_context_message(
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode auto\nhello\nexit\n",
+        input="/permissions auto\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
@@ -3263,10 +3263,12 @@ def test_chat_mode_command_refreshes_environment_context_message(
     )
 
 
-def test_plan_mode_commands_refresh_environment_context_message(
+def test_persona_clamp_and_restore_refresh_environment_context_message(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    # The ask persona clamps the session to readonly and code restores the
+    # base mode; both transitions must refresh the pinned environment context.
     runner = CliRunner()
     refreshed_messages: list[str] = []
 
@@ -3350,10 +3352,12 @@ def test_plan_mode_commands_refresh_environment_context_message(
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/plan on\n/plan off\nexit\n",
+        input="/persona ask\n/persona code\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
+    assert "Persona set for this session: ask" in result.output
+    assert "Persona set for this session: code" in result.output
     assert len(refreshed_messages) == 2
     assert "mode: readonly" in refreshed_messages[0]
     assert "mode: review" in refreshed_messages[1]
@@ -3405,7 +3409,7 @@ def test_chat_mode_command_accepts_friendly_alias(tmp_path: Path, monkeypatch) -
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode fast\nhello\nexit\n",
+        input="/permissions fast\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
@@ -3464,7 +3468,7 @@ def test_chat_mode_command_without_arg_uses_picker_selection(tmp_path: Path, mon
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode\nhello\nexit\n",
+        input="/permissions\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
@@ -3523,11 +3527,11 @@ def test_chat_mode_command_without_arg_falls_back_to_panel(tmp_path: Path, monke
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode\nhello\nexit\n",
+        input="/permissions\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
-    assert "Mode Options" in result.output
+    assert "Permissions" in result.output
     assert "mode" not in rebuilt
     assert captured["mode"] == "review"
 
@@ -4769,11 +4773,11 @@ def test_chat_unknown_command_suggests_closest_match(tmp_path: Path, monkeypatch
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mod\nexit\n",
+        input="/permissons\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
-    assert "Did you mean /mode?" in result.output
+    assert "Did you mean /permissions?" in result.output
 
 
 def test_chat_removed_help_aliases_and_colon_picker_fall_through(
@@ -4863,7 +4867,7 @@ def test_chat_mode_command_accepts_numeric_shortcut(tmp_path: Path, monkeypatch)
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode 2\nhello\nexit\n",
+        input="/permissions 2\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0
@@ -4918,7 +4922,7 @@ def test_chat_mode_command_accepts_fullaccess_numeric_alias(tmp_path: Path, monk
     result = runner.invoke(
         alysis_app,
         ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
-        input="/mode 4\nhello\nexit\n",
+        input="/permissions 4\nhello\nexit\n",
         env=env,
     )
     assert result.exit_code == 0

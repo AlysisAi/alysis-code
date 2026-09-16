@@ -5,10 +5,10 @@ screenshot: a centered white owl animation, the "What can I do for you?"
 heading, a dim hint line, a larger bordered multi-line input box, and a pinned
 2-line footer (brand · model · context/tokens/cost; persona · execution mode ·
 user · workspace · branch). Enter submits, Ctrl+J inserts a newline,
-Tab on an empty input cycles the persona, and Shift+Tab cycles the execution
-mode (read → safe → fast → full) via the ``mode_cycle`` callback — the mode is
-the sole approval authority, so the key mutates the session rather than a
-display-only flag.
+Tab on an empty input cycles the persona, and Shift+Tab selects the execution
+mode (read → safe → fast → full) for the next message via the
+``mode_cycle`` callback. The active mode remains the sole approval authority
+until that next-message boundary.
 
 Phase 2 wires the agent: when a ``session_builder`` is supplied, the welcome body
 swaps for a scrollable transcript and each submission runs ``session.run_turn``
@@ -56,8 +56,14 @@ from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style, merge_styles
 from prompt_toolkit.widgets import Frame, TextArea
 
-from ...agent.steering import MAX_PENDING_STEER_MESSAGES, steer_inbox_for
+from ...agent.steering import (
+    MAX_PENDING_STEER_MESSAGES,
+    ResolvedOperation,
+    ops_inbox_for,
+    steer_inbox_for,
+)
 from ...branding import env_get
+from ...cancellation import InteractiveCancellationToken
 from ...clipboard import ClipboardError, copy_text_to_clipboard
 from ...host_browser import open_url
 from ...llm.types import LLMError
@@ -66,12 +72,16 @@ from ...subagent_labels import subagent_identity
 from ...surface.styles import TerminalTheme
 from ...surface.theme import detect_terminal_theme
 from ...surface.types import ApprovalDecision, SubagentStartEvent
+from ..chat.commands import _record_chat_local_command
+from ..chat.forge_visibility import command_visible
 from ..chat.mid_turn_policy import (
     EXIT_WORDS,
     MidTurnAction,
     block_message,
     classify_mid_turn,
     defer_message,
+    deferred_display_label,
+    is_command,
 )
 from . import content as _content
 from .footer import footer_fragments
@@ -105,6 +115,23 @@ _MAX_PENDING_COMMANDS = MAX_PENDING_STEER_MESSAGES
 _INLINE_PASTE_MAX_LINES = 8
 _INLINE_PASTE_MAX_CHARS = 800
 _PASTE_TOKEN_RE = re.compile(r"\[pasted #(?P<id>[1-9]\d*) \+(?P<lines>\d+) lines\]")
+_PENDING_STEER_HEADER = (
+    "message to be submitted after the next tool call - esc interrupts and sends it immediately"
+)
+_PENDING_STEERS_HEADER = (
+    "messages to be submitted after the next tool call - esc interrupts and sends them immediately"
+)
+_PENDING_QUEUED_HEADER = "queued follow-up inputs"
+_PENDING_EDIT_HINT = "shift + ← edit last queued message"
+
+
+def _record_tui_local_interaction(*, session: Any, action: str) -> None:
+    """Persist a value-free marker for an accepted TUI keyboard shortcut."""
+
+    store = getattr(session, "store", None)
+    append = getattr(store, "append", None)
+    if callable(append):
+        append("chat_local_interaction", {"action": action})
 
 
 def _normalize_paste_text(text: str) -> str:
@@ -202,6 +229,16 @@ class _DeferredOperationKind(Enum):
 class _DeferredOperation:
     kind: _DeferredOperationKind
     text: str = ""
+
+
+@dataclass(frozen=True)
+class _PendingMessage:
+    text: str
+    display_text: str
+    # A steer restored after an LLM rollback may already be visible in the
+    # transcript.  When it is rescued as the next queued turn, keep that
+    # original echo instead of rendering the same user message a second time.
+    echoed: bool = False
 
 
 class _DispatchOutcome(Enum):
@@ -352,7 +389,7 @@ _STYLE = Style.from_dict(
         "completion-menu.completion.current": f"bg:{_BAND_BG} bold {_ACCENT}",
         "completion-menu.meta.completion": "bg:#0d1117 #6e7681",
         "completion-menu.meta.completion.current": f"bg:{_BAND_BG} #c9d1d9",
-        # Selectable picker (e.g. /mode): same dark panel; the focused row gets the
+        # Selectable picker (e.g. /permissions): same dark panel; the focused row gets the
         # band bg + accent caret/label so it stands out. Green is the only accent.
         "tui.picker": "bg:#0d1117",
         "tui.picker.num": "#8a8a8a bg:#0d1117",
@@ -416,6 +453,14 @@ _STYLE = Style.from_dict(
         "tui.subpanel.assistant": "#c9d1d9",
         "tui.subpanel.user": "#8b949e",
         "tui.subpanel.hint": "italic #6e7681",
+        # Pending user messages sit in a quiet full-width band directly above
+        # the input. The darker surface separates queued work from transcript
+        # prose; the blue heading and dim hint establish hierarchy without
+        # making the panel look like an error or approval prompt.
+        "tui.pending-messages": "bg:#161b22",
+        "tui.pending-messages.head": "bold #79c0ff bg:#161b22",
+        "tui.pending-messages.row": "#e6edf3 bg:#161b22",
+        "tui.pending-messages.hint": "italic #8b949e bg:#161b22",
         # Violet frame border for Forge popups (/show, /plan, the launch gate),
         # applied by wrapping the shared help frame in a container that adds the
         # ``tui.forgeframe`` ancestor class. MUST be declared AFTER
@@ -1051,11 +1096,18 @@ def _sync_subagent_started_at(
 def _activity_elapsed_seconds(
     *,
     turn_started: float,
+    cancellation_started: float = 0.0,
     active_subagent: str,
     subagent_started_at: dict[str, float],
     now: float,
 ) -> int:
-    started = subagent_started_at.get(active_subagent) if active_subagent else None
+    # Cancellation is its own lifecycle phase.  Reusing the turn/subagent
+    # clock makes ``Cancelling current turn...`` appear to have been running
+    # for the entire turn, which is both alarming and useless for diagnosing
+    # provider/worker unwind latency.
+    started = cancellation_started or None
+    if started is None:
+        started = subagent_started_at.get(active_subagent) if active_subagent else None
     if started is None:
         started = turn_started
     return max(0, int(float(now) - float(started))) if started else 0
@@ -2069,44 +2121,9 @@ def _render_approval_rows(
     return out
 
 
-class _Cancellation:
-    """Minimal cancellation token understood by ``run_turn``.
-
-    ``run_turn`` calls ``throw_if_cancelled`` between steps and per streamed token;
-    raising ``KeyboardInterrupt`` mirrors the classic loop's interrupt semantics.
-
-    For the *initial* think-wait (the model has sent no tokens yet, so no callback
-    fires) an optional abort callback lets the LLM client register its live HTTP
-    response's ``close`` — :meth:`cancel` then closes the stream so the blocked
-    read unwinds promptly instead of waiting for the first byte.
-    """
-
-    def __init__(self) -> None:
-        self._cancelled = False
-        self._abort: Callable[[], None] | None = None
-
-    def cancel(self) -> None:
-        self._cancelled = True
-        abort = self._abort
-        if abort is not None:
-            try:
-                abort()
-            except Exception:
-                pass
-
-    def set_abort_callback(self, fn: Callable[[], None] | None) -> None:
-        self._abort = fn
-
-    def clear_abort_callback(self) -> None:
-        self._abort = None
-
-    @property
-    def is_cancelled(self) -> bool:
-        return self._cancelled
-
-    def throw_if_cancelled(self, reason: str = "cancelled_by_user") -> None:
-        if self._cancelled:
-            raise KeyboardInterrupt(reason)
+# Compatibility alias for tests and extensions that imported the original TUI
+# private name before the token became shared with classic interactive chat.
+_Cancellation = InteractiveCancellationToken
 
 
 class _PlaceholderProcessor(Processor):
@@ -2187,7 +2204,8 @@ def _status_line_fragments(
     selection_available: bool = False,
     input_pending: bool = False,
     queued_count: int = 0,
-    staged_count: int = 0,
+    step_staged_count: int = 0,
+    turn_end_staged_count: int = 0,
 ) -> FormattedText:
     if paste_hint.strip():
         return FormattedText([("class:tui.status", f"  {paste_hint.strip()}")])
@@ -2196,12 +2214,13 @@ def _status_line_fragments(
             return FormattedText(
                 [("class:tui.status", "  Enter to steer - Ctrl+Q to queue - Esc to interrupt")]
             )
-        if queued_count > 0 or staged_count > 0:
+        if queued_count > 0 or step_staged_count > 0 or turn_end_staged_count > 0:
             label = "message" if queued_count == 1 else "messages"
-            staged_label = "command" if staged_count == 1 else "commands"
             parts = []
-            if staged_count:
-                parts.append(f"{staged_count} staged {staged_label}")
+            if step_staged_count:
+                parts.append(f"{step_staged_count} applying next step")
+            if turn_end_staged_count:
+                parts.append(f"{turn_end_staged_count} at next message")
             if queued_count:
                 parts.append(f"{queued_count} queued {label}")
             return FormattedText(
@@ -2220,6 +2239,51 @@ def _status_line_fragments(
     return FormattedText([])
 
 
+def _pending_message_fragments(
+    steer_messages: list[_PendingMessage],
+    queued_messages: list[_PendingMessage],
+    *,
+    width: int,
+) -> FormattedText:
+    """Render pending messages as single clipped rows without changing payloads."""
+    width = max(1, int(width))
+    lines: list[tuple[str, str]] = []
+
+    def clip_message(text: str) -> str:
+        if len(text) <= width:
+            return text
+        if width <= 3:
+            return "." * width
+        return text[: width - 3] + "..."
+
+    def append_line(style: str, text: str, *, clip: bool = True) -> None:
+        if lines:
+            lines.append(("", "\n"))
+        lines.append((style, clip_message(text) if clip else text))
+
+    if steer_messages:
+        header = _PENDING_STEER_HEADER if len(steer_messages) == 1 else _PENDING_STEERS_HEADER
+        append_line("class:tui.pending-messages.head", header, clip=False)
+        for message in steer_messages:
+            preview = " ".join(message.display_text.split())
+            append_line("class:tui.pending-messages.row", f"  > {preview}")
+
+    if queued_messages:
+        append_line(
+            "class:tui.pending-messages.head",
+            _PENDING_QUEUED_HEADER,
+            clip=False,
+        )
+        for message in queued_messages:
+            preview = " ".join(message.display_text.split())
+            append_line("class:tui.pending-messages.row", f"  > {preview}")
+
+    if queued_messages:
+        append_line("class:tui.pending-messages.hint", _PENDING_EDIT_HINT)
+
+    return FormattedText(lines)
+
+
 def run_tui(
     state: TuiState,
     *,
@@ -2236,7 +2300,11 @@ def run_tui(
     panel_providers: dict[str, Callable[[], dict[str, Any] | None]] | None = None,
     picker_providers: dict[str, Callable[[], dict[str, Any] | None]] | None = None,
     persona_cycle: Callable[[], list[tuple[str, str]] | None] | None = None,
+    persona_stage_target: Callable[[str | None], str | None] | None = None,
     mode_cycle: Callable[[], list[tuple[str, str]] | None] | None = None,
+    before_turn: Callable[[Any, dict[str, Any]], Callable[[], None] | None] | None = None,
+    step_operation_resolver: Callable[[Any, str], ResolvedOperation | None] | None = None,
+    step_operation_apply: Callable[[Any, ResolvedOperation], None] | None = None,
     completer: Any | None = None,
     config_flow_factory: Callable[[], Any] | None = None,
     on_config_saved: Callable[[], ConfigReloadOutcome | bool | None] | None = None,
@@ -2269,6 +2337,13 @@ def run_tui(
     (defaulting to ``text``) and ``run_kwargs``. When omitted, slash commands are
     sent to the agent as plain messages.
 
+    ``before_turn(session, run_kwargs)`` runs synchronously after a submission has
+    resolved to a real turn but before ``session.run_turn`` starts. Raising rejects
+    that turn. It may return a cleanup callback, which runs exactly once after the
+    turn or before an interrupted turn releases the UI. This is the safe boundary
+    used to activate pending Permissions and enforce temporary turn scopes without
+    mutating a turn that is already in flight.
+
     ``input``/``output`` are injectable so tests can drive the application with a
     pipe input and a dummy output. ``background_turns=False`` runs turns inline
     (used by tests for deterministic ordering).
@@ -2297,15 +2372,22 @@ def run_tui(
     paste_registry = _PasteRegistry()
     wheel_step_rows = _resolve_wheel_step_rows()
 
-    # ---- turn/run state (mutated across threads; guarded by simple flags) ----
+    # ---- turn/run state (mutated across the UI and one worker thread) ----
     running: dict[str, bool] = {"on": False}
-    pending_turns: list[str] = []
+    retiring: dict[str, bool] = {"on": False}
+    turn_state_lock = threading.RLock()
+    pending_turns: list[_PendingMessage] = []
+    pending_steers: list[_PendingMessage] = []
+    delivered_steers: list[_PendingMessage] = []
+    pending_messages_lock = threading.RLock()
+    recalled_pending: dict[str, bool | None] = {"queue": None}
     pending_operations: list[_DeferredOperation] = []
     draining: dict[str, bool] = {"on": False}
     spinner: dict[str, int] = {"i": 0}
     tip_state: dict[str, int] = {"turn_index": -1}
     tip_link_press: tuple[str, Point, Point] | None = None
     cancel_box: dict[str, _Cancellation | None] = {"token": None}
+    turn_cleanup_box: dict[str, Callable[[], None] | None] = {"callback": None}
     approval_box: dict[str, Any] = {"event": None, "decision": None, "request": None}
     worker_box: dict[str, threading.Thread | None] = {"thread": None}
     # Scroll state: ``follow`` pins to the latest line; once the user scrolls up
@@ -2314,7 +2396,7 @@ def run_tui(
     scroll: dict[str, Any] = {"follow": True, "offset": 0}
     # ``started`` stamps the running turn so the status line can show elapsed
     # time; ``reasoning_expanded`` is a local expansion override (Ctrl+R).
-    run_box: dict[str, float] = {"started": 0.0}
+    run_box: dict[str, float] = {"started": 0.0, "cancellation_started": 0.0}
     subagent_started_at: dict[str, float] = {}
     view: dict[str, bool] = {"reasoning_expanded": False, "planmeta_expanded": False}
     subagent_panel: dict[str, Any] = {
@@ -2328,6 +2410,7 @@ def run_tui(
         "last_poll": None,
         "tip_shown": False,
     }
+
     # Centered popup panel (the reusable /help recipe): ``on`` toggles the Float;
     # ``offset`` is the top visible row (driven through the same cursor-pin trick as
     # the transcript so a set scroll position sticks); ``title`` retitles the Frame;
@@ -2348,7 +2431,7 @@ def run_tui(
         "accent": None,
     }
     help_rows: dict[str, int] = {"n": 0}
-    # Selectable picker popup (e.g. /mode): ``on`` toggles the Float, ``index`` is
+    # Selectable picker popup (e.g. /permissions): ``on`` toggles the Float, ``index`` is
     # the focused row, ``rows`` the option list, ``on_select`` the apply callback
     # (value -> list[(role, text)] messages to echo). Shares the dark popup chrome.
     picker_box: dict[str, Any] = {
@@ -2485,6 +2568,76 @@ def run_tui(
     surface: TuiSurface | None = None
     session: Any | None = None
 
+    def _sync_delivered_steers() -> int:
+        """Move FIFO messages whose inbox slots were drained into the transcript."""
+        with pending_messages_lock:
+            if session is None or not pending_steers:
+                return 0
+            inbox = steer_inbox_for(session)
+            pending_count = inbox.pending_count() if inbox is not None else 0
+            delivered_count = max(0, len(pending_steers) - pending_count)
+            if not delivered_count:
+                return 0
+            delivered = pending_steers[:delivered_count]
+            del pending_steers[:delivered_count]
+            # Keep the display values until the turn settles.  The core can
+            # restore drained steers after a failed model request, and the raw
+            # inbox text alone is not enough to reconstruct paste-token labels.
+            delivered_steers.extend(delivered)
+        for message in delivered:
+            transcript.append_user(message.display_text)
+        return delivered_count
+
+    def _restore_rolled_back_steers(messages: list[str]) -> None:
+        """Re-track delivered steers that the core returned to its inbox."""
+
+        restored: list[_PendingMessage] = []
+        with pending_messages_lock:
+            for text in messages:
+                match_index = next(
+                    (
+                        index
+                        for index, message in enumerate(delivered_steers)
+                        if message.text == text
+                    ),
+                    None,
+                )
+                if match_index is None:
+                    # No visible-output callback ran before rollback, so this
+                    # message is still represented in ``pending_steers`` and
+                    # has not been echoed yet.
+                    continue
+                message = delivered_steers.pop(match_index)
+                restored.append(
+                    _PendingMessage(
+                        text=message.text,
+                        display_text=message.display_text,
+                        echoed=True,
+                    )
+                )
+            # SteerInbox.restore_front() places rolled-back messages ahead of
+            # newer arrivals; mirror that chronology in the display metadata.
+            pending_steers[:0] = restored
+        _safe_invalidate()
+
+    def _drain_undelivered_steers() -> list[_PendingMessage]:
+        """Drain the steer inbox while preserving each TUI display value."""
+        if session is None:
+            return []
+        inbox = steer_inbox_for(session)
+        if inbox is None:
+            return []
+        with pending_messages_lock:
+            undelivered = inbox.drain()
+            tracked = pending_steers[: len(undelivered)]
+            del pending_steers[: len(undelivered)]
+        return [
+            tracked[index]
+            if index < len(tracked) and tracked[index].text == text
+            else _PendingMessage(text=text, display_text=text)
+            for index, text in enumerate(undelivered)
+        ]
+
     def _set_active_subagent(name: str | None) -> None:
         # Called from worker/subagent threads on subagent start/end: pin (or
         # clear) the footer's "↪ <name>" badge so the user always knows a nested
@@ -2492,7 +2645,7 @@ def run_tui(
         # — an abandoned turn's parallel subagent threads outlive a soft
         # interrupt (their cancellation is thread-local to the turn worker) and
         # must not re-light the badge of an idle session. Clearing always wins.
-        if name and not running["on"]:
+        if name and (not running["on"] or retiring["on"]):
             return
         if name:
             subagent_started_at.setdefault(str(name), time.monotonic())
@@ -2502,7 +2655,7 @@ def run_tui(
         _safe_invalidate()
 
     def _set_active_subagents(names: tuple[str, ...]) -> None:
-        if names and not running["on"]:
+        if names and (not running["on"] or retiring["on"]):
             return
         _sync_subagent_started_at(subagent_started_at, names, now=time.monotonic())
         state.active_subagents = tuple(str(name) for name in names if str(name))
@@ -2599,8 +2752,39 @@ def run_tui(
             on_subagent_activity=_set_active_subagent,
             on_subagent_activities=_set_active_subagents,
             on_subagent_run_started=_register_subagent_run,
+            before_visible_output=_sync_delivered_steers,
+            on_steer_messages_restored=_restore_rolled_back_steers,
         )
         session = session_builder(surface)
+
+        def _pending_operation_labels() -> list[str]:
+            labels: list[str] = []
+            pending_permissions = str(
+                getattr(session, "pending_permissions_mode", "") or ""
+            ).strip()
+            if pending_permissions:
+                labels.append(f"permissions: {pending_permissions}")
+            operation_inbox = ops_inbox_for(session)
+            if operation_inbox is not None:
+                labels.extend(
+                    str(operation.display_label or operation.kind).strip()
+                    for operation in operation_inbox.snapshot()
+                )
+            for pending_operation in pending_operations:
+                if pending_operation.kind is _DeferredOperationKind.COMMAND:
+                    labels.append(deferred_display_label(pending_operation.text))
+                else:
+                    labels.append("config reload")
+            return [label for label in labels if label]
+
+        try:
+            session.pending_operation_labels = _pending_operation_labels
+        except Exception:  # noqa: BLE001 - slotted test sessions can opt out
+            pass
+        if step_operation_apply is not None:
+            session.apply_staged_operation = lambda operation: step_operation_apply(
+                session, operation
+            )
         session.on_child_scheduler_replaced = _child_scheduler_replaced
         scheduler = getattr(session, "child_scheduler", None)
         set_lifecycle_listener = getattr(scheduler, "set_lifecycle_listener", None)
@@ -2645,6 +2829,7 @@ def run_tui(
     def _run_elapsed() -> int:
         return _activity_elapsed_seconds(
             turn_started=run_box["started"],
+            cancellation_started=run_box["cancellation_started"],
             active_subagent=state.active_subagent,
             subagent_started_at=subagent_started_at,
             now=time.monotonic(),
@@ -2673,6 +2858,10 @@ def run_tui(
     }
 
     def _transcript_fragments() -> FormattedText:
+        # The transcript renders before the pending area. Detect a worker-side
+        # full-FIFO drain here so delivered user bands precede any model output
+        # painted in the same frame.
+        _sync_delivered_steers()
         entries, status, streaming_index = transcript.snapshot()
         reasoning_index, reasoning_secs = transcript.reasoning_snapshot()
         # Use the transcript's content width — the terminal less its scrollbar
@@ -2792,7 +2981,7 @@ def run_tui(
                 frame,
                 label,
                 _run_elapsed(),
-                elapsed_is_run_time=bool(state.active_subagent),
+                elapsed_is_run_time=bool(state.active_subagent) and not retiring["on"],
             )
             rendered_rows.extend(activity_rows)
             rendered_row_roles.extend(["activity"] * len(activity_rows))
@@ -2975,14 +3164,18 @@ def run_tui(
         # timer) now lives in the transcript under the question via the live
         # activity indicator. This line only carries the interrupt reminder while
         # busy, so there is never a second timer here.
+        operation_inbox = ops_inbox_for(session) if session is not None else None
         return _status_line_fragments(
-            running=bool(running["on"]),
+            running=bool(running["on"] and not retiring["on"]),
             notice=str(selection_notice["text"] or ""),
             paste_hint=_paste_hint_text(),
             selection_available=bool(_current_transcript_selection()),
             input_pending=bool(input_area.buffer.text.strip()),
             queued_count=len(pending_turns),
-            staged_count=_pending_command_count(pending_operations),
+            step_staged_count=(
+                operation_inbox.pending_count() if operation_inbox is not None else 0
+            ),
+            turn_end_staged_count=_pending_command_count(pending_operations),
         )
 
     status_window = Window(FormattedTextControl(_status_text, focusable=False), height=1)
@@ -3128,6 +3321,7 @@ def run_tui(
 
     def _run_turn_blocking(instruction: str, run_kwargs: dict[str, Any]) -> None:
         my_token = cancel_box["token"]
+        turn_cleanup = run_kwargs.pop("_alysis_turn_cleanup", None)
         # Tag this worker thread so the surface can drop its output if it gets
         # soft-interrupted (and keeps blocking on a slow model in the background).
         set_active_cancellation(my_token)
@@ -3180,10 +3374,22 @@ def run_tui(
                 else:
                     transcript.append("error", f"{type(exc).__name__}: {exc}")
         finally:
+            if callable(turn_cleanup):
+                turn_cleanup()
+                if turn_cleanup_box.get("callback") is turn_cleanup:
+                    turn_cleanup_box["callback"] = None
             # Only reset shared run state if we are still the active turn — a
             # soft-interrupt (or a newer turn) may have moved on while we were
             # blocked, and we must not stomp on its state when we finally unwind.
-            if cancel_box.get("token") is my_token:
+            with turn_state_lock:
+                owns_active_turn = cancel_box.get("token") is my_token
+            if owns_active_turn:
+                # Settle any final drain before discarding the per-turn display
+                # metadata.  A rollback callback has already moved restored
+                # messages back to ``pending_steers`` at this point.
+                _sync_delivered_steers()
+                with pending_messages_lock:
+                    delivered_steers.clear()
                 transcript.set_status(None)
                 # The turn is over — no subagent can still be active. Idempotent
                 # (the end event normally cleared it); catches error unwinds.
@@ -3198,8 +3404,13 @@ def run_tui(
                 # running["on"] is True _submit blocks session-replacing commands,
                 # so a UI-thread /resume (which swaps session.__dict__ in place)
                 # cannot race this refresh's reads of the same session object.
-                running["on"] = False
-                cancel_box["token"] = None
+                with turn_state_lock:
+                    # Re-check ownership after callbacks: a cancellation may
+                    # have marked this worker as retiring while it finalized.
+                    if cancel_box.get("token") is my_token:
+                        retiring["on"] = False
+                        running["on"] = False
+                        cancel_box["token"] = None
                 if background_turns:
                     # Starting here would run on the worker thread and race an
                     # interrupt that just cleared these flags. Marshal chaining
@@ -3207,20 +3418,57 @@ def run_tui(
                     _schedule_on_ui_thread(_start_next_pending_turn)
             _safe_invalidate()
 
-    def _clear_pending_work() -> tuple[int, int, bool]:
-        """Discard deferred work and return item, operation, and reload counts."""
-        operation_count = len(pending_operations)
-        reload_pending = any(
+    def _apply_idle_step_operations() -> int:
+        """Apply resolved operations that reached the idle boundary undrained."""
+        if session is None:
+            return 0
+        inbox = ops_inbox_for(session)
+        if inbox is None:
+            return 0
+        apply_staged_operation = getattr(session, "apply_staged_operation", None)
+        applied_count = 0
+        for operation in inbox.drain():
+            label = str(operation.display_label or operation.kind).strip()
+            try:
+                if not callable(apply_staged_operation):
+                    raise RuntimeError("no staged-operation apply handler is attached")
+                apply_staged_operation(operation)
+            except Exception as exc:  # noqa: BLE001 - drop this op, keep the UI alive
+                transcript.append("error", f"{label} - failed to apply: {exc}")
+                continue
+            transcript.append("system", f"{label} - applied")
+            store = getattr(session, "store", None)
+            append = getattr(store, "append", None)
+            if callable(append):
+                try:
+                    append(
+                        "staged_operation_applied",
+                        {"kind": operation.kind, "step": 0},
+                    )
+                except Exception:
+                    pass
+            applied_count += 1
+        return applied_count
+
+    def _clear_pending_work(*, preserve_operations: bool = False) -> tuple[int, int, bool]:
+        """Discard queued work, optionally preserving both staged-operation tiers."""
+        _sync_delivered_steers()
+        operation_count = 0 if preserve_operations else len(pending_operations)
+        reload_pending = (not preserve_operations) and any(
             operation.kind is _DeferredOperationKind.CONFIG_RELOAD
             for operation in pending_operations
         )
         discarded = len(pending_turns) + operation_count
-        pending_operations.clear()
+        if not preserve_operations:
+            pending_operations.clear()
         pending_turns.clear()
         if session is not None:
             inbox = steer_inbox_for(session)
             if inbox is not None:
                 discarded += len(inbox.drain())
+        with pending_messages_lock:
+            pending_steers.clear()
+            delivered_steers.clear()
         return discarded, operation_count, reload_pending
 
     def _stop_pending_work_for_terminal_action() -> None:
@@ -3237,6 +3485,8 @@ def run_tui(
         """Apply ordered deferred operations, rescue steering, then start a turn."""
         if running["on"]:
             return False
+        _sync_delivered_steers()
+        _apply_idle_step_operations()
         while pending_operations and not running["on"]:
             operation = pending_operations.pop(0)
             if operation.kind is _DeferredOperationKind.COMMAND:
@@ -3244,6 +3494,7 @@ def run_tui(
                     operation.text,
                     echo=False,
                     allow_run=False,
+                    deferred=True,
                 )
                 if dispatch_outcome is _DispatchOutcome.EXIT:
                     _stop_pending_work_for_terminal_action()
@@ -3256,20 +3507,27 @@ def run_tui(
         if session is not None:
             inbox = steer_inbox_for(session)
             if inbox is not None:
-                undelivered = inbox.drain()
-                if undelivered:
+                rescued = _drain_undelivered_steers()
+                if rescued:
                     # Append late steering after earlier queued work. Keep both
                     # queues bounded by returning overflow to the inbox; each
                     # completed turn frees one slot and retries the handoff.
                     capacity = max(0, MAX_PENDING_STEER_MESSAGES - len(pending_turns))
-                    pending_turns.extend(undelivered[:capacity])
-                    for deferred_text in undelivered[capacity:]:
-                        inbox.send(deferred_text)
+                    pending_turns.extend(rescued[:capacity])
+                    pending_steers.extend(rescued[capacity:])
+                    for deferred_message in rescued[capacity:]:
+                        inbox.send(deferred_message.text)
         if not pending_turns or running["on"]:
             return False
         # Peek first and consume only after _begin_run accepts it. Popping before
         # the concurrency guard would lose the user's queued message on refusal.
-        if _begin_run(pending_turns[0], {}, notice="Running queued message."):
+        next_message = pending_turns[0]
+        if _begin_run(
+            next_message.text,
+            {},
+            notice="Running queued message.",
+            user_display_text=None if next_message.echoed else next_message.display_text,
+        ):
             pending_turns.pop(0)
             return True
         return False
@@ -3279,30 +3537,90 @@ def run_tui(
         run_kwargs: dict[str, Any],
         *,
         notice: str = "",
+        user_display_text: str | None = None,
     ) -> bool:
-        if running["on"]:
-            transcript.append("warn", "A turn is already running - Esc to interrupt it first.")
+        with turn_state_lock:
+            turn_retiring = retiring["on"]
+            turn_busy = running["on"] or turn_retiring
+        if turn_busy:
+            transcript.append(
+                "warn",
+                (
+                    "A turn is still finishing before another can start."
+                    if turn_retiring
+                    else "A turn is already running."
+                ),
+            )
             _safe_invalidate()
             return False
+        turn_cleanup: Callable[[], None] | None = None
+        if session is not None and before_turn is not None:
+            try:
+                raw_cleanup = before_turn(session, run_kwargs)
+                if raw_cleanup is not None:
+                    cleanup_lock = threading.Lock()
+                    cleanup_done = False
+
+                    def _cleanup_once() -> None:
+                        nonlocal cleanup_done
+                        with cleanup_lock:
+                            if cleanup_done:
+                                return
+                            cleanup_done = True
+                            try:
+                                raw_cleanup()
+                            except Exception as exc:  # noqa: BLE001 - restoration is best-effort
+                                transcript.append(
+                                    "error",
+                                    f"Could not restore turn Permissions: {exc}",
+                                )
+
+                    turn_cleanup = _cleanup_once
+            except Exception as exc:  # noqa: BLE001 - pending state stays retryable
+                transcript.append(
+                    "error",
+                    f"Could not prepare the next message: {exc}. The message was not sent.",
+                )
+                _safe_invalidate()
+                return False
+        turn_cleanup_box["callback"] = turn_cleanup
+        if turn_cleanup is not None:
+            run_kwargs["_alysis_turn_cleanup"] = turn_cleanup
         if notice:
             transcript.append("system", notice)
-        running["on"] = True
+        if user_display_text is not None:
+            transcript.append_user(user_display_text)
+        with turn_state_lock:
+            running["on"] = True
+            retiring["on"] = False
         subagent_panel["tip_shown"] = False
         cancel_box["token"] = _Cancellation()
         run_box["started"] = time.monotonic()
+        run_box["cancellation_started"] = 0.0
         tip_state["turn_index"] += 1
         # No "Thinking…" footer status — the transient thinking indicator now
         # renders under the question (see _transcript_fragments).
         transcript.set_status(None)
         _safe_invalidate()
-        if background_turns:
-            worker = threading.Thread(
-                target=_run_turn_blocking, args=(instruction, run_kwargs), daemon=True
-            )
-            worker_box["thread"] = worker
-            worker.start()
-        else:
-            _run_turn_blocking(instruction, run_kwargs)
+        try:
+            if background_turns:
+                worker = threading.Thread(
+                    target=_run_turn_blocking, args=(instruction, run_kwargs), daemon=True
+                )
+                worker_box["thread"] = worker
+                worker.start()
+            else:
+                _run_turn_blocking(instruction, run_kwargs)
+        except BaseException:
+            if turn_cleanup is not None:
+                turn_cleanup()
+            turn_cleanup_box["callback"] = None
+            with turn_state_lock:
+                running["on"] = False
+                retiring["on"] = False
+                cancel_box["token"] = None
+            raise
+        if not background_turns:
             # Inline tests run turns synchronously. Drain iteratively behind a
             # re-entrancy guard so N queued messages do not recurse N frame sets.
             if not draining["on"]:
@@ -3316,16 +3634,20 @@ def run_tui(
         return True
 
     def _soft_interrupt() -> None:
-        # Respond to Ctrl+C / Esc *immediately*: free the UI and show "Interrupted."
-        # now, without waiting for the (possibly still-blocked) worker to unwind.
-        # The cancel flips the token — the surface then drops that worker's output,
-        # it closes any live HTTP stream, and the worker exits at its next checkpoint
-        # (its finally no-ops since the active token has changed).
-        token = cancel_box.get("token")
-        if token is None and not running["on"]:
-            return
+        # Respond to Ctrl+C / Esc immediately without allowing two turns to mutate
+        # the same AgentSession. The composer stays usable, but submissions queue
+        # until this worker's normal finally path retires it and starts the next.
+        with turn_state_lock:
+            if retiring["on"]:
+                return
+            token = cancel_box.get("token")
+            if token is None and not running["on"]:
+                return
+            retiring["on"] = True
+            run_box["cancellation_started"] = time.monotonic()
+        transcript.set_status("Cancelling current turn…")
         if token is not None:
-            token.cancel()
+            token.cancel_nonblocking()
         pending = approval_box.get("event")
         if pending is not None:
             approval_box["decision"] = ApprovalDecision(allow=False)
@@ -3337,23 +3659,17 @@ def run_tui(
                 interrupt_forge()
             except Exception:
                 pass
-        transcript.append("warn", "Interrupted.")
-        discarded, discarded_operations, discarded_reload = _clear_pending_work()
-        if discarded:
-            if discarded_operations:
-                label = "item" if discarded == 1 else "items"
-            else:
-                label = "message" if discarded == 1 else "messages"
-            transcript.append("warn", f"Discarded {discarded} pending {label}.")
-        if discarded_reload:
+        rescued = _drain_undelivered_steers()
+        pending_turns.extend(rescued)
+        with pending_messages_lock:
+            delivered_steers.clear()
+        if rescued:
             transcript.append(
                 "warn",
-                "Configuration remains saved on disk, but this session was not reloaded. "
-                "Restart Alysis Code for the saved settings to take effect.",
+                f"interrupted - {len(rescued)} pending messages will start the next turn",
             )
-        running["on"] = False
-        cancel_box["token"] = None
-        transcript.set_status(None)
+        else:
+            transcript.append("warn", "Interrupted.")
         # The abandoned worker may never deliver its subagent-end event; drop the
         # badge now so the footer cannot claim a dead subagent is still working.
         # Also forget the surface's live-subagent stack: the abandoned runs' late
@@ -3376,6 +3692,8 @@ def run_tui(
         display_text: str | None = None,
         echo: bool = True,
         allow_run: bool = True,
+        deferred: bool = False,
+        clear_transcript_before_output: bool = False,
     ) -> _DispatchOutcome:
         """Route ``text`` straight through the chat command runner.
 
@@ -3396,13 +3714,25 @@ def run_tui(
             # re-wrapped at the transcript's content width, so render it at that
             # width too — at the raw terminal width every full-width line is one
             # column too long and splits, tearing panel borders apart.
-            action, output, instruction, run_kwargs = command_runner(
-                session, text, _transcript_content_width_for(_current_width())
-            )
+            if deferred:
+                session._alysis_applying_deferred_command = True
+            try:
+                action, output, instruction, run_kwargs = command_runner(
+                    session, text, _transcript_content_width_for(_current_width())
+                )
+            finally:
+                if deferred:
+                    try:
+                        del session._alysis_applying_deferred_command
+                    except AttributeError:
+                        pass
         except Exception as exc:  # noqa: BLE001 - never crash the UI on a command
             transcript.append("error", f"Command failed: {exc}")
             _safe_invalidate()
             return _DispatchOutcome.CONTINUE
+        if clear_transcript_before_output:
+            transcript.clear()
+            scroll["offset"] = 0
         if output:
             transcript.append("system", output)
         if action == "exit":
@@ -3436,40 +3766,174 @@ def run_tui(
         transcript.append("system", defer_message(text))
         _safe_invalidate()
 
+    def _stage_mid_turn_step_operation(
+        text: str,
+        operation: ResolvedOperation,
+        *,
+        display_text: str | None = None,
+    ) -> None:
+        input_area.buffer.reset()
+        scroll["follow"] = True
+        transcript.append_user(text if display_text is None else display_text)
+        if operation.kind == "mode":
+            # Permission selection is safe on the UI thread because it changes
+            # only a pending scalar. Never put it in the worker's step inbox:
+            # draining that inbox during the active turn would make the tool
+            # surface generation-dependent again.
+            try:
+                if step_operation_apply is None or session is None:
+                    raise RuntimeError("no Permissions staging handler is attached")
+                step_operation_apply(session, operation)
+            except Exception as exc:  # noqa: BLE001 - keep the active turn intact
+                transcript.append("error", f"{operation.display_label} - failed to select: {exc}")
+                _safe_invalidate()
+                return
+            transcript.append("system", f"{operation.display_label} - next message")
+            _safe_invalidate()
+            return
+        inbox = ops_inbox_for(session, create=True) if session is not None else None
+        if inbox is not None and inbox.send(operation):
+            transcript.append("system", defer_message(text, display_label=operation.display_label))
+            _safe_invalidate()
+            return
+        if _stage_pending_command(pending_operations, text):
+            transcript.append(
+                "system",
+                f"{operation.display_label} - next message",
+            )
+        else:
+            transcript.append(
+                "warn",
+                f"Deferred command queue is full ({_MAX_PENDING_COMMANDS}) - "
+                "let the current turn finish before adding more.",
+            )
+        _safe_invalidate()
+
+    def _latest_staged_persona() -> str | None:
+        for operation in reversed(pending_operations):
+            if operation.kind is not _DeferredOperationKind.COMMAND:
+                continue
+            parts = operation.text.strip().split(maxsplit=1)
+            if len(parts) == 2 and parts[0].lower() == "/persona":
+                return parts[1].strip().lower() or None
+        return None
+
+    def _stage_tab_persona() -> None:
+        if persona_stage_target is None:
+            transcript.append("warn", block_message("/persona"))
+            _safe_invalidate()
+            return
+        try:
+            target = persona_stage_target(_latest_staged_persona())
+        except Exception as exc:  # noqa: BLE001 - never crash the UI on Tab
+            transcript.append("error", f"persona cycle failed: {exc}")
+            _safe_invalidate()
+            return
+        if not target:
+            return
+        command = f"/persona {target}"
+        if (
+            pending_operations
+            and pending_operations[-1].kind is _DeferredOperationKind.COMMAND
+            and pending_operations[-1].text.strip().lower().startswith("/persona ")
+        ):
+            pending_operations[-1] = _DeferredOperation(
+                _DeferredOperationKind.COMMAND,
+                command,
+            )
+        elif not _stage_pending_command(pending_operations, command):
+            transcript.append(
+                "warn",
+                f"Deferred command queue is full ({_MAX_PENDING_COMMANDS}) - "
+                "let the current turn finish before adding more.",
+            )
+            _safe_invalidate()
+            return
+        _record_tui_local_interaction(session=session, action="persona_cycle")
+        transcript.append("system", defer_message(command))
+        _safe_invalidate()
+
+    def _resolve_mid_turn_step_operation(text: str) -> ResolvedOperation | None:
+        if session is None or step_operation_resolver is None:
+            return None
+        return step_operation_resolver(session, text)
+
+    def _open_mid_turn_step_picker(command: str) -> bool:
+        if command not in {"/permissions", "/stream"} or not picker_providers:
+            return False
+        provider = picker_providers.get(command)
+        if provider is None:
+            return False
+        spec = provider()
+        if not spec or not spec.get("rows"):
+            return False
+        if command == "/permissions":
+            # The provider's callback stages the selection directly. Wrapping it
+            # in the step inbox would let the running turn apply it mid-flight.
+            input_area.buffer.reset()
+            _open_picker(spec)
+            return True
+        wrapped = dict(spec)
+
+        def _stage_selected(value: Any) -> None:
+            explicit = f"{command} {value}"
+            try:
+                operation = _resolve_mid_turn_step_operation(explicit)
+            except Exception as exc:  # noqa: BLE001 - validation errors stay in the UI
+                transcript.append("error", str(exc))
+                _safe_invalidate()
+                return
+            if operation is None:
+                transcript.append("error", f"{command} selection could not be staged")
+                _safe_invalidate()
+                return
+            _stage_mid_turn_step_operation(explicit, operation)
+
+        wrapped["on_select"] = _stage_selected
+        input_area.buffer.reset()
+        _open_picker(wrapped)
+        return True
+
     def _deliver_mid_turn_message(
         text: str, *, display_text: str | None = None, queue: bool
-    ) -> None:
+    ) -> bool:
         buff = input_area.buffer
         stripped = text.strip()
         display_stripped = (text if display_text is None else display_text).strip()
         if not stripped:
-            return
+            return False
         scroll["follow"] = True
         inbox = steer_inbox_for(session, create=True) if session is not None else None
         if queue or inbox is None:
-            if len(pending_turns) >= MAX_PENDING_STEER_MESSAGES:
-                transcript.append(
-                    "warn",
-                    f"Queue is full ({MAX_PENDING_STEER_MESSAGES}) - "
-                    "let queued work run before adding more.",
-                )
-                _safe_invalidate()
-                return
-            pending_turns.append(stripped)
+            with pending_messages_lock:
+                if len(pending_turns) >= MAX_PENDING_STEER_MESSAGES:
+                    transcript.append(
+                        "warn",
+                        f"Queue is full ({MAX_PENDING_STEER_MESSAGES}) - "
+                        "let queued work run before adding more.",
+                    )
+                    _safe_invalidate()
+                    return False
+                pending_turns.append(_PendingMessage(text=stripped, display_text=display_stripped))
             buff.reset()
-            transcript.append_user(display_stripped)
-            transcript.append(
-                "system",
-                f"Queued - runs when this turn finishes ({len(pending_turns)} waiting).",
-            )
             _safe_invalidate()
-            return
+            return True
 
-        dropped_before = inbox.dropped_count()
-        delivered = inbox.send(stripped)
+        with pending_messages_lock:
+            _sync_delivered_steers()
+            display_value = display_stripped if display_text is not None else stripped
+            pending_steers.append(_PendingMessage(text=stripped, display_text=display_value))
+            dropped_before = inbox.dropped_count()
+            delivered = inbox.send(stripped)
+            newly_dropped = inbox.dropped_count() - dropped_before
+            if newly_dropped > 0:
+                del pending_steers[:newly_dropped]
+            if pending_steers:
+                pending_steers[-1] = _PendingMessage(
+                    text=delivered,
+                    display_text=display_stripped if display_text is not None else delivered,
+                )
         buff.reset()
-        transcript.append_user(display_stripped if display_text is not None else delivered)
-        newly_dropped = inbox.dropped_count() - dropped_before
         if newly_dropped > 0:
             label = "message" if newly_dropped == 1 else "messages"
             transcript.append(
@@ -3477,25 +3941,97 @@ def run_tui(
                 f"Dropped {newly_dropped} older undelivered {label} - "
                 "too many arrived before the next step.",
             )
-        transcript.append("system", "Sent to the running turn - lands at its next step.")
         _safe_invalidate()
+        return True
 
-    def _submit(*, queue_instead: bool = False) -> None:
+    def _recall_latest_queued_message() -> bool:
+        """Move the newest queued follow-up back into the composer."""
+        buff = input_area.buffer
+        if buff.text:
+            return False
+
+        with pending_messages_lock:
+            if not pending_turns:
+                return False
+            message = pending_turns.pop()
+
+        recalled_pending["queue"] = True
+        buff.reset()
+        buff.insert_text(message.display_text)
+        buff.cancel_completion()
+        _safe_invalidate()
+        return True
+
+    def _submit(*, queue_instead: bool | None = None) -> None:
         buff = input_area.buffer
         display_text = buff.text
         if not display_text.strip():
             return
-        if approval_box.get("event") is not None:
-            return
         text = paste_registry.expand(display_text)
         stripped = text.strip()
+        if approval_box.get("event") is not None:
+            return
+        command_parts = stripped.split(maxsplit=1)
+        _record_chat_local_command(
+            session=session,
+            command_token=command_parts[0],
+            has_argument=len(command_parts) == 2 and bool(command_parts[1].strip()),
+        )
+        with turn_state_lock:
+            turn_retiring = retiring["on"]
+        if turn_retiring:
+            # The cancelled worker still owns the AgentSession until its finally
+            # path returns. Accept user input now, but preserve it strictly as
+            # next-turn work so it cannot steer or reconfigure that old worker.
+            if is_command(stripped):
+                _defer_mid_turn_command(text, display_text=display_text)
+            else:
+                if _deliver_mid_turn_message(
+                    text,
+                    display_text=display_text if display_text != text else None,
+                    queue=True,
+                ):
+                    recalled_pending["queue"] = None
+            return
         if running["on"]:
+            command = stripped.split(maxsplit=1)[0].lower()
+            ui_mode = "forge" if getattr(state, "forge_mode", False) else "chat"
+            if command.startswith("/"):
+                recalled_pending["queue"] = None
+            if command.startswith("/") and not command_visible(command, ui_mode=ui_mode):
+                _dispatch_command(text, display_text=display_text, allow_run=False)
+                return
             if config_overlay is not None and stripped.lower() == "/config":
                 buff.reset()
                 config_overlay.open()
                 return
+            if stripped.lower() in {"/permissions", "/stream"}:
+                try:
+                    if _open_mid_turn_step_picker(stripped.lower()):
+                        return
+                except Exception as exc:  # noqa: BLE001 - never crash the UI on a picker
+                    buff.reset()
+                    transcript.append("error", f"{stripped.lower()} failed: {exc}")
+                    _safe_invalidate()
+                    return
+            try:
+                step_operation = _resolve_mid_turn_step_operation(stripped)
+            except Exception as exc:  # noqa: BLE001 - validation errors stay in the UI
+                buff.reset()
+                transcript.append_user(display_text)
+                transcript.append("error", str(exc))
+                _safe_invalidate()
+                return
+            if step_operation is not None:
+                _stage_mid_turn_step_operation(
+                    text,
+                    step_operation,
+                    display_text=display_text,
+                )
+                return
             action = classify_mid_turn(stripped)
             if action is MidTurnAction.BLOCK:
+                recalled_pending["queue"] = None
                 transcript.append("warn", block_message(stripped))
                 _safe_invalidate()
                 return
@@ -3503,12 +4039,20 @@ def run_tui(
                 _defer_mid_turn_command(text, display_text=display_text)
                 return
             if action is MidTurnAction.MESSAGE:
-                _deliver_mid_turn_message(
+                recalled_queue = recalled_pending["queue"]
+                effective_queue = (
+                    bool(recalled_queue)
+                    if queue_instead is None and recalled_queue is not None
+                    else bool(queue_instead)
+                )
+                if _deliver_mid_turn_message(
                     text,
                     display_text=display_text if display_text != text else None,
-                    queue=queue_instead,
-                )
+                    queue=effective_queue,
+                ):
+                    recalled_pending["queue"] = None
                 return
+        recalled_pending["queue"] = None
         # Returning to the live tail whenever the user sends something.
         scroll["follow"] = True
 
@@ -3525,12 +4069,17 @@ def run_tui(
             get_app().exit(result=("login_connection", login_parts[1].strip()))
             return
 
-        # /clear is TUI-native (the classic command clears the console screen).
+        # Keep the TUI transcript and the model-visible conversation aligned.
+        # The command runner owns the real session reset; clear the rendered
+        # transcript only after that handler returns, then show its outcome.
         if session is not None and stripped.lower() == "/clear":
-            transcript.clear()
-            scroll["offset"] = 0
             buff.reset()
-            _safe_invalidate()
+            _dispatch_command(
+                text,
+                echo=False,
+                allow_run=False,
+                clear_transcript_before_output=True,
+            )
             return
 
         # /subagents is a read-only TUI window over the scheduler's live child
@@ -3573,7 +4122,8 @@ def run_tui(
         if panel_providers:
             parts = stripped.split(maxsplit=1)
             name = parts[0].lower()
-            provider = panel_providers.get(name)
+            ui_mode = "forge" if getattr(state, "forge_mode", False) else "chat"
+            provider = panel_providers.get(name) if command_visible(name, ui_mode=ui_mode) else None
             if provider is not None:
                 cmd_arg = parts[1].strip() if len(parts) > 1 else ""
                 try:
@@ -3637,13 +4187,18 @@ def run_tui(
                     return
                 # spec is None → not a panel for this argument; fall through below.
 
-        # Picker commands (e.g. bare /mode) open the selectable popup. Only the
-        # no-arg form opens the picker; "/mode fast" falls through to the command
+        # Picker commands (e.g. bare /permissions) open the selectable popup. Only the
+        # no-arg form opens the picker; "/permissions fast" falls through to the command
         # runner so an explicit choice still applies inline.
         if picker_providers:
             parts = stripped.split()
             name = parts[0].lower()
-            if len(parts) == 1 and name in picker_providers:
+            ui_mode = "forge" if getattr(state, "forge_mode", False) else "chat"
+            if (
+                len(parts) == 1
+                and name in picker_providers
+                and command_visible(name, ui_mode=ui_mode)
+            ):
                 try:
                     spec = picker_providers[name]()
                 except Exception as exc:  # noqa: BLE001 - never crash the UI on a picker
@@ -3721,6 +4276,45 @@ def run_tui(
     )
     subagent_panel_container = _subagent_panel_container(subagent_panel)
 
+    def _pending_messages_text() -> FormattedText:
+        _sync_delivered_steers()
+        with pending_messages_lock:
+            return _pending_message_fragments(
+                list(pending_steers),
+                list(pending_turns),
+                width=_current_width(),
+            )
+
+    def _pending_messages_line_count() -> int:
+        with pending_messages_lock:
+            width = max(1, _current_width())
+            count = len(pending_steers) + len(pending_turns)
+            if pending_steers:
+                header = (
+                    _PENDING_STEER_HEADER if len(pending_steers) == 1 else _PENDING_STEERS_HEADER
+                )
+                count += max(1, (len(header) + width - 1) // width)
+            if pending_turns:
+                count += max(1, (len(_PENDING_QUEUED_HEADER) + width - 1) // width)
+            if pending_turns:
+                count += 1
+            return count
+
+    pending_messages_window = Window(
+        FormattedTextControl(_pending_messages_text, focusable=False),
+        height=lambda: D(
+            min=0,
+            preferred=_pending_messages_line_count(),
+            max=_pending_messages_line_count(),
+        ),
+        wrap_lines=True,
+        style="class:tui.pending-messages",
+    )
+    pending_messages_container = ConditionalContainer(
+        pending_messages_window,
+        filter=Condition(lambda: bool(pending_steers or pending_turns)),
+    )
+
     root = HSplit(
         [
             body,
@@ -3728,6 +4322,7 @@ def run_tui(
             # the welcome screen keeps its Phase 1 spacing exactly.
             ConditionalContainer(status_window, filter=has_messages | has_live_paste_tokens),
             subagent_panel_container,
+            pending_messages_container,
             ConditionalContainer(
                 working_tip_window,
                 filter=Condition(_working_tip_visible),
@@ -3748,7 +4343,8 @@ def run_tui(
             try:
                 from ..commands.welcome import _chat_command_sections
 
-                sections = list(_chat_command_sections(ui_mode="chat") or [])
+                ui_mode = "forge" if getattr(state, "forge_mode", False) else "chat"
+                sections = list(_chat_command_sections(ui_mode=ui_mode) or [])
             except Exception:
                 sections = []
             if not sections:
@@ -3898,7 +4494,7 @@ def run_tui(
         help_box["offset"] = new_offset
         _safe_invalidate()
 
-    # ---- picker popup (centered Float; selectable option list, e.g. /mode) ----
+    # ---- picker popup (centered Float; selectable option list, e.g. /permissions) ----
     _picker_open = Condition(lambda: picker_box["on"])
 
     def _picker_fragments() -> FormattedText:
@@ -4074,74 +4670,6 @@ def run_tui(
                 pass
         scroll["follow"] = True
         _safe_invalidate()
-
-    def _defer_plan_mode_approval(
-        *,
-        user_message: str,
-        draft: str,
-        approved_instruction: str,
-    ) -> None:
-        task = " ".join(str(user_message or "").split())
-        _ = draft
-        preview = task if len(task) <= 72 else task[:69].rstrip() + "..."
-        rows: list[PickerRow] = [
-            {
-                "value": "approve",
-                "label": "Approve and execute",
-                "description": "Run the task immediately using this approved draft.",
-                "current": True,
-            },
-            {
-                "value": "propose",
-                "label": "Propose changes",
-                "description": "Edit the task text and draft again with your requested changes.",
-            },
-            {
-                "value": "discard",
-                "label": "Discard this plan",
-                "description": "Cancel this draft and return to chat.",
-            },
-        ]
-
-        def _on_select(value: Any) -> Any:
-            selected = str(value or "").strip().lower()
-            if selected == "approve":
-                instruction = str(approved_instruction or "")
-                if not instruction.strip():
-                    return [("error", "Approved plan was empty; nothing to execute.")]
-                label = (
-                    f"Executing approved plan: {preview}" if preview else "Executing approved plan."
-                )
-                transcript.append("system", label)
-                _begin_run(instruction, {})
-                return None
-            if selected == "propose":
-                prefill = f"/plan {task} " if task else "/plan "
-                return {
-                    "messages": [
-                        (
-                            "system",
-                            "Edit the /plan task with the requested changes, "
-                            "then press Enter to draft again.",
-                        )
-                    ],
-                    "prefill": prefill,
-                }
-            return [("system", "Discarded plan. What do you want to build next?")]
-
-        _open_picker(
-            {
-                "title": "Plan approval",
-                "hint": (
-                    "Up/Down move / 1 approve / 2 revise / 3 discard / Enter select / Esc cancel"
-                ),
-                "rows": rows,
-                "on_select": _on_select,
-            }
-        )
-
-    if surface is not None:
-        surface.defer_plan_mode_approval = _defer_plan_mode_approval
 
     # ---- in-TUI editor (centered Float; e.g. /plan edit on plan.json) ----
     _editor_open = Condition(lambda: editor_box["on"])
@@ -4381,14 +4909,14 @@ def run_tui(
                     word = "change" if count == 1 else "changes"
                     transcript.append(
                         "system",
-                        f"Configuration saved ({count} {word}). The running session will "
-                        "reload when this turn finishes.",
+                        f"Configuration saved ({count} {word}). Session reload applies "
+                        "at your next message.",
                     )
                 else:
                     transcript.append(
                         "system",
-                        "Configuration saved (no changes). The running session will reload "
-                        "when this turn finishes.",
+                        "Configuration saved (no changes). Session reload applies "
+                        "at your next message.",
                     )
                 _safe_invalidate()
                 return
@@ -4570,6 +5098,8 @@ def run_tui(
     _subagent_panel_open = Condition(lambda: bool(subagent_panel["selected_run_id"]))
     # A turn (or its pending approval) is in flight — Esc / Ctrl+C interrupt it.
     _turn_active = Condition(lambda: running["on"] or approval_box.get("event") is not None)
+    _input_empty = Condition(lambda: not input_area.buffer.text)
+    _has_queued_messages = Condition(lambda: bool(pending_turns))
 
     def _navigate_subagent(delta: int) -> None:
         previous = str(subagent_panel["selected_run_id"] or "")
@@ -4683,6 +5213,20 @@ def run_tui(
         _soft_interrupt()
 
     @kb.add(
+        Keys.ShiftLeft,
+        filter=_input_focused
+        & _turn_active
+        & _input_empty
+        & _has_queued_messages
+        & ~_small_modal_open
+        & ~_config_open
+        & ~_completing,
+        eager=True,
+    )
+    def _edit_latest_queued_message(event: Any) -> None:
+        _recall_latest_queued_message()
+
+    @kb.add(
         "enter",
         filter=_input_focused & ~_small_modal_open & ~_config_open,
         eager=True,
@@ -4767,13 +5311,14 @@ def run_tui(
             buff.start_completion(select_first=True)
         elif persona_cycle is not None and not buff.document.text.strip():
             if running["on"]:
-                transcript.append("warn", block_message("/persona"))
-                _safe_invalidate()
+                _stage_tab_persona()
                 return
             try:
                 messages = persona_cycle()
             except Exception as exc:  # noqa: BLE001 - never crash the UI on Tab
                 messages = [("error", f"persona cycle failed: {exc}")]
+            else:
+                _record_tui_local_interaction(session=session, action="persona_cycle")
             for role, text in messages or []:
                 transcript.append(role, text)
             _safe_invalidate()
@@ -4890,10 +5435,10 @@ def run_tui(
 
     @kb.add("s-tab", filter=~_config_open, eager=True)
     def _cycle_exec_mode(event: Any) -> None:
-        # Shift+Tab advances the execution mode (read → safe → fast → full →
-        # read), the same primitive as the /mode picker. The callback owns the
-        # session mutation and returns the rows to echo — including the
-        # fullaccess warning, so landing on the unguarded mode is never silent.
+        # Shift+Tab advances the next-message selection (read → safe → fast →
+        # full → read), the same primitive as the /permissions picker. The
+        # callback stages the selection and returns rows to echo — including the
+        # fullaccess warning, so selecting the unguarded mode is never silent.
         # Without a callback (Phase 1 shell, tests) the key is inert rather than
         # flipping a footer field the runtime would not honour.
         if mode_cycle is None:
@@ -4902,6 +5447,8 @@ def run_tui(
             messages = mode_cycle()
         except Exception as exc:  # noqa: BLE001 - never crash the UI on Shift+Tab
             messages = [("error", f"mode cycle failed: {exc}")]
+        else:
+            _record_tui_local_interaction(session=session, action="permissions_cycle")
         for role, text in messages or []:
             transcript.append(role, text)
         _safe_invalidate()
@@ -5049,19 +5596,22 @@ def run_tui(
             owned_tui_input.close()
 
     # Unwind any in-flight turn before returning so the caller can close the
-    # session safely (no teardown racing a live worker). Cancel the turn, release
-    # a parked approval wait, then join with a bounded timeout (the worker is a
-    # daemon, so a stuck long-running tool cannot block process exit).
+    # session safely (no teardown racing a live worker). The worker remains the
+    # sole owner of per-turn permission restoration and other session mutation;
+    # cancellation must not restore from this UI thread while it is still live.
     token = cancel_box.get("token")
     if token is not None:
-        token.cancel()
+        token.cancel_nonblocking()
     pending = approval_box.get("event")
     if pending is not None:
         approval_box["decision"] = ApprovalDecision(allow=False)
         pending.set()
     worker = worker_box.get("thread")
     if worker is not None and worker.is_alive():
-        worker.join(timeout=5.0)
+        # No elapsed-time guess makes concurrent AgentSession mutation safe. A
+        # non-cooperative worker therefore keeps teardown in the retiring state
+        # until it releases ownership through its normal ``finally`` path.
+        worker.join()
     scheduler = getattr(session, "child_scheduler", None)
     set_lifecycle_listener = getattr(scheduler, "set_lifecycle_listener", None)
     if callable(set_lifecycle_listener):

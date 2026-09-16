@@ -6,6 +6,8 @@ from typing import Any
 
 from prompt_toolkit.completion import Completer, Completion
 
+from .chat.forge_visibility import command_visible
+
 
 @dataclass(frozen=True)
 class ChatSlashCommandSpec:
@@ -55,7 +57,7 @@ def _completion_display(
 
 SPECS: tuple[ChatSlashCommandSpec, ...] = (
     ChatSlashCommandSpec("help", "/help", "Show available commands"),
-    ChatSlashCommandSpec("mode", "/mode", "Change execution mode"),
+    ChatSlashCommandSpec("permissions", "/permissions", "Change execution mode"),
     ChatSlashCommandSpec("persona", "/persona", "Switch persona: code, architect, ask, debug"),
     ChatSlashCommandSpec("ask", "/ask <question>", "One read-only turn; mode restored after"),
     ChatSlashCommandSpec("status", "/status", "Show session status"),
@@ -73,12 +75,10 @@ SPECS: tuple[ChatSlashCommandSpec, ...] = (
     ChatSlashCommandSpec("login", "/login", "Connect your Alysis Code account or a subscription"),
     ChatSlashCommandSpec("logout", "/logout", "Disconnect your Alysis Code account"),
     ChatSlashCommandSpec("toolbar", "/toolbar", "Configure status toolbar"),
-    ChatSlashCommandSpec("assets", "/assets", "Open Forge assets"),
     ChatSlashCommandSpec("image", "/image [path]", "Queue an image for the next message"),
     ChatSlashCommandSpec("forge", "/forge [resume]", "Enter or resume Forge"),
     ChatSlashCommandSpec("report", "/report [text]", "Create feedback bundle and issue draft"),
     ChatSlashCommandSpec("feedback", "/feedback [text]", "Alias for /report"),
-    ChatSlashCommandSpec("plan", "/plan <task>", "Draft, review, approve, then execute"),
     ChatSlashCommandSpec(
         "skill",
         "/skill",
@@ -89,10 +89,12 @@ SPECS: tuple[ChatSlashCommandSpec, ...] = (
 
 FORGE_SPECS: tuple[ChatSlashCommandSpec, ...] = (
     ChatSlashCommandSpec("assistant", "/assistant on|off|status", "Toggle planner assistant"),
+    ChatSlashCommandSpec("assets", "/assets", "Open Forge assets"),
     ChatSlashCommandSpec("execute", "/execute plan", "Run scoped planned tasks"),
     ChatSlashCommandSpec("goal", "/goal <text>", "Set project goal"),
     ChatSlashCommandSpec("task", "/task <title>", "Add a task to the plan"),
     ChatSlashCommandSpec("show", "/show", "Show the current plan summary"),
+    ChatSlashCommandSpec("plan", "/plan tasks|markdown|edit", "View or edit the plan"),
     ChatSlashCommandSpec("done", "/done", "Save and validate the plan"),
     ChatSlashCommandSpec("back", "/back", "Return to chat without finalizing"),
 )
@@ -123,12 +125,11 @@ _SHARED_NESTED_SPECS: tuple[_ChatSlashCompletionSpec, ...] = (
 
 _CHAT_NESTED_SPECS: tuple[_ChatSlashCompletionSpec, ...] = (
     _ChatSlashCompletionSpec("/forge resume", "/forge resume", "Resume the current run pointer"),
-    _ChatSlashCompletionSpec("/plan mode", "/plan mode", "Enter persistent readonly planning"),
-    _ChatSlashCompletionSpec("/plan approve", "/plan approve", "Execute the stored plan draft"),
 )
 
 _FORGE_NESTED_SPECS: tuple[_ChatSlashCompletionSpec, ...] = (
     _ChatSlashCompletionSpec("/execute plan", "/execute plan", "Run scoped planned tasks"),
+    _ChatSlashCompletionSpec("/plan tasks", "/plan tasks", "Show the plan task table"),
     _ChatSlashCompletionSpec(
         "/plan markdown", "/plan markdown", "Preview PLAN.md for the current run"
     ),
@@ -217,9 +218,11 @@ class ChatSlashCompleter(Completer):
 
     def _top_level_entries(self) -> list[_ChatSlashCompletionSpec]:
         specs = list(get_chat_specs())
-        if self._mode() == "forge":
+        mode = self._mode()
+        if mode == "forge":
             specs = [spec for spec in specs if spec.name not in {"clear", "forge"}]
             specs.extend(get_forge_specs())
+        specs = [spec for spec in specs if command_visible(f"/{spec.name}", ui_mode=mode)]
         return [
             _ChatSlashCompletionSpec(
                 completion=f"/{spec.name}",

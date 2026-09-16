@@ -28,8 +28,9 @@ confusion, but they are not a substitute for reviewing changes before running th
 The execution mode is the only approval authority. There is no second
 "auto-approve" switch that can answer prompts on your behalf: if the footer badge
 says `safe`, writes and shell commands stop and ask. In the TUI, Shift+Tab cycles
-the mode (`read → safe → fast → full`) and `/mode` selects one directly; both
-print a warning whenever the session lands in `fullaccess`.
+the pending mode (`read → safe → fast → full`) and `/permissions` selects one directly.
+The selection activates when the next user message starts; the running turn keeps its current
+permissions. Both controls warn when selecting `fullaccess`.
 
 `--yes` is scoped to `auto` mode, where it skips the file-deletion and
 sensitive-command confirmations. It does not relax `review` and does not grant

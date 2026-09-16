@@ -17,7 +17,6 @@ from rich.text import Text
 from ..approval_scope import approval_session_scope_for_request
 from ..interactive_input_guard import interactive_prompt_guard
 from ..llm_error_display import classify_llm_error_display, friendly_llm_error_message
-from ..plan_mode import extract_approved_plan_user_message
 from ..subagent_labels import subagent_identity
 from ..tools.registry import (
     summarize_tool_output_chunk as _summarize_tool_output,
@@ -97,12 +96,10 @@ _STYLE_WARNING = STYLE_WARN
 _THINKING_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 _TERMINAL_PROGRESS_MESSAGES = {
     "Applied planner update to the Forge plan.",
-    "Plan draft ready for review.",
     "Planner response ready.",
     "Planner update was a no-op.",
 }
 _TERMINAL_PROGRESS_PREFIXES = (
-    "Plan generation failed:",
     "Planner request recovered after",
     "Planner returned an error",
     "Swarm aborted:",
@@ -639,15 +636,7 @@ class RichSurface:
         self._turn_started = True
         self._working_banner_shown = False
         self._turn_start_time = time.monotonic()
-        approved_plan_message = extract_approved_plan_user_message(text)
-        if approved_plan_message is not None:
-            self._print_left_bar_block(
-                ["Plan approved. Executing..."],
-                bar_style=_STYLE_META,
-                text_style=_STYLE_META,
-            )
-        display_text = approved_plan_message or text
-        clean = _redact(display_text.strip())
+        clean = _redact(text.strip())
         self._print_left_bar_block(
             _split_lines(clean or "(empty message)"),
             bar_style=_STYLE_EMPHASIS,
@@ -1047,7 +1036,7 @@ class RichSurface:
 
     def emit_mode_changed(self, mode: str) -> None:
         # TODO: dedicated rendering for mode_changed.
-        self._emit_event_info(f"Mode: {mode}")
+        self._emit_event_info(f"Permissions: {mode}")
 
     def reset_streamed_assistant(self) -> None:
         # Classic terminal output cannot be unprinted; mark the restart so the

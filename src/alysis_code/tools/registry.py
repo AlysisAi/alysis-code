@@ -1997,7 +1997,11 @@ _BUILTIN_TOOL_METADATA: tuple[BuiltinToolMetadata, ...] = (
         description=(
             "Wait inside one bounded tool call for a background process to emit new output, exit, "
             "or either condition. Use this instead of repeatedly polling shell_output when no new "
-            "output is available. Use the process_id returned by shell_background or shell_list, "
+            "output is available. Returns the instant the process speaks or exits, so a large "
+            "wait_seconds costs nothing when work finishes early: for a slow build or test run, "
+            "set until='process_exited' and a generous wait_seconds (e.g. 300-900) and wait once "
+            "rather than polling in a loop. The wait is automatically shortened to fit the "
+            "remaining run budget. Use the process_id returned by shell_background or shell_list, "
             "not a tool_call_id; unknown ids return structured recovery guidance."
         ),
         parameters={
@@ -2005,7 +2009,7 @@ _BUILTIN_TOOL_METADATA: tuple[BuiltinToolMetadata, ...] = (
             "properties": {
                 "process_id": {"type": "string"},
                 "since": {"type": "integer", "default": 0},
-                "wait_seconds": {"type": "number", "default": 5.0, "minimum": 0, "maximum": 60},
+                "wait_seconds": {"type": "number", "default": 5.0, "minimum": 0, "maximum": 900},
                 "until": {
                     "type": "string",
                     "enum": ["output_available", "process_exited", "either"],
@@ -2233,8 +2237,27 @@ _BUILTIN_TOOL_METADATA: tuple[BuiltinToolMetadata, ...] = (
     ),
     BuiltinToolMetadata(
         name="git_diff",
-        description="Run git diff in the working root. Prefer to review current repo changes before the final response.",
-        parameters={"type": "object", "properties": {}, "required": []},
+        description=(
+            "Read uncommitted Git changes, optionally for one path or the staging area. "
+            "If truncated, continue with next_offset and diff_id until next_offset is null. "
+            "Keep path and staged unchanged between pages. No shell runner is required."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Literal workspace-relative file or directory.",
+                },
+                "staged": {"type": "boolean", "default": False},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "diff_id": {
+                    "type": "string",
+                    "description": "Previous page's diff_id; required when offset is nonzero.",
+                },
+            },
+            "required": [],
+        },
         categories=("read", "git"),
         rich=RichToolMetadata(
             display_name="Git Diff",

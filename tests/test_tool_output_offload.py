@@ -411,7 +411,7 @@ def test_session_artifact_reader_pages_without_gaps_or_overlap(tmp_path: Path) -
     artifact_path = layout.artifact_fs_path("tool_outputs", "paged.txt")
     artifact_path.parent.mkdir(parents=True)
     original = "".join(f"record-{index:04d}\n" for index in range(100))
-    artifact_path.write_text(original, encoding="utf-8")
+    artifact_path.write_bytes(original.encode("utf-8"))
     locator = layout.locator_for_path(artifact_path)
 
     offset = 0
@@ -583,6 +583,38 @@ def test_offloaded_truncated_read_keeps_continuation_and_artifact_reference(
     assert stub["total_lines"] == 20
     assert stub["returned_range"] == {"start_line": 1, "end_line": 8}
     assert stub["next_range"] == {"start_line": 9, "end_line": 20}
+
+
+@pytest.mark.parametrize("next_offset", [20000, None])
+def test_offloaded_diff_preserves_pagination_and_full_patch(
+    tmp_path: Path, next_offset: int | None
+) -> None:
+    layout = SessionArtifactLayout(filesystem_root=tmp_path / "session-store")
+    offloader = ToolOutputOffloader(
+        artifact_layout=layout, workspace_root=tmp_path, threshold_chars=50, preview_chars=20
+    )
+    payload = {
+        "diff_id": "a" * 64,
+        "offset": 0,
+        "next_offset": next_offset,
+        "total_chars": 40000,
+        "truncated": next_offset is not None,
+        "diff": "patch" * 4000,
+    }
+    result = offloader.maybe_offload(
+        tool_name="git_diff",
+        tool_call_id="diff-page",
+        step=1,
+        result=payload,
+        content_json=json.dumps(payload),
+    )
+    stub = json.loads(result.content_for_message)
+    assert stub["diff_id"] == payload["diff_id"]
+    assert stub["next_offset"] == next_offset
+    assert stub["total_chars"] == 40000
+    assert stub["artifact_locator"]
+    saved = json.loads(Path(result.artifact_fs_path).read_text(encoding="utf-8"))
+    assert json.loads(saved["content_json"])["diff"] == payload["diff"]
 
 
 def test_session_data_dir_override_keeps_offloads_outside_workspace(

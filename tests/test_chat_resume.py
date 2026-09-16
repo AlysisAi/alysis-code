@@ -393,10 +393,9 @@ def test_load_chat_resume_messages_prefers_user_display_content(tmp_path: Path) 
         {
             "type": "user_message",
             "payload": {
-                "content": (
-                    "Fix the bug.\n\nApproved plan:\n1. Inspect code\n\n"
-                    "Now execute this task in the repository and follow the approved plan."
-                ),
+                # Older logs may carry a host-expanded instruction alongside the
+                # text the user actually typed; the resume view prefers the latter.
+                "content": "Fix the bug.\n\n<host_context>\nfocus: src/app.py\n</host_context>",
                 "display_content": "Fix the bug.",
             },
         },
@@ -464,8 +463,7 @@ def test_first_user_message_preview_prefers_user_display_content(tmp_path: Path)
             "type": "user_message",
             "payload": {
                 "content": (
-                    "Implement the feature.\n\nApproved plan:\n1. Edit src/app.py\n\n"
-                    "Now execute this task in the repository and follow the approved plan."
+                    "Implement the feature.\n\n<host_context>\nfocus: src/app.py\n</host_context>"
                 ),
                 "display_content": "Implement the feature.",
             },
@@ -1724,6 +1722,34 @@ def test_resume_chat_session_replaces_current_session_state(tmp_path: Path, monk
     )
 
     old_closed = {"value": False}
+    applied_operations: list[object] = []
+
+    def apply_staged_operation(operation: object) -> None:
+        applied_operations.append(operation)
+
+    def pending_operation_labels() -> list[str]:
+        return ["permissions: fast"]
+
+    scheduler_replacements: list[str] = []
+
+    def on_child_scheduler_replaced(reason: str) -> None:
+        scheduler_replacements.append(reason)
+
+    lifecycle_events: list[dict[str, Any]] = []
+
+    def lifecycle_listener(payload: dict[str, Any]) -> None:
+        lifecycle_events.append(payload)
+
+    class _Scheduler:
+        def __init__(self, listener=None) -> None:  # type: ignore[no-untyped-def]
+            self._listener = listener
+
+        @property
+        def lifecycle_listener(self):  # type: ignore[no-untyped-def]
+            return self._listener
+
+        def set_lifecycle_listener(self, listener) -> None:  # type: ignore[no-untyped-def]
+            self._listener = listener
 
     current = _FakeSession()
     current.cfg = AppConfig(
@@ -1745,6 +1771,11 @@ def test_resume_chat_session_replaces_current_session_state(tmp_path: Path, monk
     current.tool_output_offloader = None
     current.conversation_compactor = None
     current.messages = [{"role": "system", "content": "seed-old"}]
+    current._alysis_tui_interactive = True
+    current.apply_staged_operation = apply_staged_operation
+    current.pending_operation_labels = pending_operation_labels
+    current.on_child_scheduler_replaced = on_child_scheduler_replaced
+    current.child_scheduler = _Scheduler(lifecycle_listener)
 
     def _close_old() -> None:
         old_closed["value"] = True
@@ -1799,6 +1830,7 @@ def test_resume_chat_session_replaces_current_session_state(tmp_path: Path, monk
         new_session.tool_output_offloader = object()
         new_session.conversation_compactor = None
         new_session.messages = [{"role": "system", "content": "seed-new"}]
+        new_session.child_scheduler = _Scheduler()
         return new_session
 
     monkeypatch.setattr(cli_mod, "create_session", fake_create_session)
@@ -1812,6 +1844,17 @@ def test_resume_chat_session_replaces_current_session_state(tmp_path: Path, monk
     assert "Resumed session:" in message
     assert old_closed["value"] is True
     assert current.store.session_id == target_id
+    assert current._alysis_tui_interactive is True
+    assert current.apply_staged_operation is apply_staged_operation
+    assert current.pending_operation_labels is pending_operation_labels
+    assert current.on_child_scheduler_replaced is on_child_scheduler_replaced
+    assert current.child_scheduler.lifecycle_listener is lifecycle_listener
+    staged = object()
+    current.apply_staged_operation(staged)
+    assert applied_operations == [staged]
+    assert current.pending_operation_labels() == ["permissions: fast"]
+    assert scheduler_replacements == []
+    assert lifecycle_events == []
     assert loaded_history == [
         {"role": "user", "content": "previous question"},
         {
@@ -2467,7 +2510,6 @@ def test_classic_resume_explicit_id_survives_fully_filtered_candidates(
         pending_images=[],
         console=Console(file=out, force_terminal=False),
         forge_state=cli_mod._ForgeChatState(),
-        plan_mode_state=cli_mod._ChatPlanModeState(),
     )
 
     assert result == "handled"

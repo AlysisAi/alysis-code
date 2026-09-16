@@ -314,6 +314,10 @@ def test_rollback_after_llm_error_returns_the_note_to_the_inbox(tmp_path: Path) 
 
     client = FailingClient([])
     session = _make_session(tmp_path, client)
+    restored_notifications: list[list[str]] = []
+    session.surface.on_steer_messages_restored = lambda messages: restored_notifications.append(
+        list(messages)
+    )
     inbox = steer_inbox_for(session, create=True)
     assert inbox is not None
     inbox.send(STEER_TEXT)
@@ -325,6 +329,7 @@ def test_rollback_after_llm_error_returns_the_note_to_the_inbox(tmp_path: Path) 
         session.close()
 
     assert recovered == [STEER_TEXT]
+    assert restored_notifications == [[STEER_TEXT]]
     assert not any(
         STEER_MARKER in str(message.get("content") or "") for message in session.messages
     )

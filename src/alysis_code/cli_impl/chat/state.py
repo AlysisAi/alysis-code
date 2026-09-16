@@ -101,23 +101,17 @@ class _ForgeChatState:
         self.planner_session.pending_questions = list(value)
 
 
-@dataclass
-class _ChatPlanModeState:
-    enabled: bool = False
-    restore_mode: str | None = None
-    latest_task: str | None = None
-    latest_draft: str | None = None
-
-
 @dataclass(frozen=True)
 class _ChatExecutionRequest:
     instruction: str
     routing_mode_override: str | None = None
     ephemeral_system_messages: tuple[str, ...] = ()
     ephemeral_user_messages: tuple[str, ...] = ()
+    # One-turn execution-mode override (``/ask``): the chat loop applies
+    # ``mode_override`` before the turn and restores ``restore_mode_after``
+    # afterwards, exception-safe.
     mode_override: str | None = None
     restore_mode_after: str | None = None
-    plan_mode_capture_task: str | None = None
     chat_only: bool = False
 
 

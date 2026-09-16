@@ -28,7 +28,7 @@ _BRANCH_MARK = "⎇"
 _SUBAGENT_MARK = "↪"
 _DOT = "  ·  "
 
-# Compact labels for the execution-mode badge (full names live in the /mode popup).
+# Compact labels for the execution-mode badge (full names live in the /permissions popup).
 _MODE_SHORT = {
     "review": "safe",
     "auto": "fast",
@@ -140,16 +140,24 @@ def _line2(state: TuiState) -> tuple[Fragments, Fragments]:
             label = f"{label} {state.forge_run_id}"
         left.append(("class:tui.footer.forge", label))
     if state.exec_mode:
-        # Glanceable execution-mode badge; amber when in the unguarded full mode.
+        # Glanceable active execution-mode badge. A pending selection is shown
+        # explicitly as a transition, never as though it were already active.
+        # Amber when either side names the unguarded full mode.
         # A non-default persona prefixes it (e.g. "arch·read") so the gate half
         # of the badge is never hidden by the persona half.
         short = _MODE_SHORT.get(state.exec_mode, state.exec_mode)
+        pending = str(state.pending_exec_mode or "").strip()
+        if pending and pending != state.exec_mode:
+            pending_short = _MODE_SHORT.get(pending, pending)
+            short = f"{short}→{pending_short} next"
+        elif pending:
+            short = f"{short} (next base)"
         persona_short = _PERSONA_SHORT.get(state.persona, "")
         if persona_short:
             short = f"{persona_short} · {short}"
         mode_style = (
             "class:tui.footer.mode.warn"
-            if state.exec_mode == "fullaccess"
+            if state.exec_mode == "fullaccess" or pending == "fullaccess"
             else "class:tui.footer.mode"
         )
         if left:

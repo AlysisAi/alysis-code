@@ -22,6 +22,13 @@ class MidTurnAction(Enum):
     BLOCK = "block"
 
 
+class DeferredTier(Enum):
+    """When a deferred command is safe to apply."""
+
+    STEP = "step"
+    TURN_END = "turn_end"
+
+
 _ALLOWED_ALWAYS = frozenset(
     {
         "/help",
@@ -45,19 +52,18 @@ _ALLOWED_ALWAYS = frozenset(
 
 _ALLOWED_BARE_ONLY = frozenset({"/skill"})
 
-_DEFERRED = frozenset({"/config", "/mode", "/model", "/persona"})
+_DEFERRED_STEP = frozenset({"/stream"})
+_DEFERRED_TURN_END = frozenset({"/cd", "/config", "/model", "/permissions", "/persona", "/plan"})
 
 _BLOCK_REASONS = {
     "/clear": "clearing would discard the conversation this turn is writing to",
     "/resume": "resuming replaces the session this turn is using",
     "/compact": "compaction rewrites the history this turn is appending to",
-    "/plan": "plan mode changes the permissions this turn is using",
     "/ask": "that starts a new turn",
     "/forge": "Forge takes over the session",
     ":forge": "Forge takes over the session",
     "/login": "signing in replaces the active session",
     "/logout": "signing out replaces the active session",
-    "/stream": "streaming is read at each step and would disrupt live output",
     "/report": "report generation requires a settled session",
     "/feedback": "feedback generation requires a settled session",
     "/assets": "the assets view requires a settled Forge session",
@@ -94,19 +100,44 @@ def classify_mid_turn(text: str) -> MidTurnAction:
 
     token = _command_token(stripped)
     has_argument = len(stripped.split(maxsplit=1)) > 1
+    if token == "/stream" and stripped.lower() == "/stream status":
+        return MidTurnAction.ALLOW
     if token in _ALLOWED_ALWAYS:
         return MidTurnAction.ALLOW
     if token in _ALLOWED_BARE_ONLY and not has_argument:
         return MidTurnAction.ALLOW
-    if token in _DEFERRED:
+    if token in _DEFERRED_STEP or token in _DEFERRED_TURN_END:
         return MidTurnAction.DEFER
     return MidTurnAction.BLOCK
 
 
-def defer_message(text: str) -> str:
-    """Explain that a state-changing command will run after this turn."""
-    token = _command_token(text) or "That command"
-    return f"{token} is staged and will apply when this turn finishes."
+def deferred_tier(text: str) -> DeferredTier | None:
+    """Return the application tier for a deferred command."""
+    token = _command_token(text)
+    if token in _DEFERRED_STEP:
+        return DeferredTier.STEP
+    if token in _DEFERRED_TURN_END:
+        return DeferredTier.TURN_END
+    return None
+
+
+def deferred_display_label(text: str) -> str:
+    """Return the stable user-facing label for a deferred command."""
+    stripped = str(text or "").strip()
+    parts = stripped.split(maxsplit=1)
+    token = _command_token(stripped)
+    command = token.removeprefix("/") or "command"
+    if len(parts) == 2 and parts[1].strip():
+        return f"{command}: {parts[1].strip()}"
+    return command
+
+
+def defer_message(text: str, *, display_label: str | None = None) -> str:
+    """Explain when a resolved or turn-end command will apply."""
+    label = str(display_label or deferred_display_label(text)).strip()
+    if deferred_tier(text) is DeferredTier.STEP:
+        return f"{label} - next step"
+    return f"{label} - next message"
 
 
 def block_message(text: str) -> str:

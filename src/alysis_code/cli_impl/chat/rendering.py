@@ -1,11 +1,10 @@
 # ruff: noqa: F821
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
-from ...surface.styles import STYLE_CHROME, STYLE_CONTENT, STYLE_EMPHASIS
+from ...surface.styles import STYLE_EMPHASIS
 
 _PROTECTED_RENDERING_GLOBAL_NAMES: set[str] = set()
 
@@ -24,13 +23,10 @@ def _sync_rendering_globals(source_globals: dict[str, Any]) -> None:
 
 def _forge_plan_command_guidance_lines() -> tuple[str, ...]:
     return (
-        "Chat Plan Mode is unavailable.",
-        "In Forge, use:",
-        "/back",
-        "Forge plan commands:",
-        "/show",
-        "/plan markdown",
-        "/plan edit",
+        "[yellow]Usage:[/yellow] /plan tasks|table|markdown|md|edit",
+        "/plan tasks     show the current plan summary (same as /show)",
+        "/plan markdown  preview PLAN.md for the current run",
+        "/plan edit      edit plan.json and reload Forge state",
     )
 
 
@@ -87,60 +83,6 @@ def _render_labeled_chat_message(*, console: Any, label: str, message: str) -> N
         ),
         highlight=False,
     )
-
-
-def _render_plan_draft(*, console: Any, draft: str) -> None:
-    from rich.console import Group
-
-    clean = str(draft or "").strip() or "(empty plan)"
-    lines = [line.rstrip() for line in clean.splitlines() if line.strip()]
-    numbered_line_count = sum(1 for line in lines if re.match(r"^\s*\d+[\.\)]\s+", line))
-    header = "Plan (draft)"
-    if numbered_line_count > 0:
-        suffix = "step" if numbered_line_count == 1 else "steps"
-        header = f"{header}  {numbered_line_count} {suffix}"
-
-    renderables: list[Any] = [
-        _forge_bar_text(text=header, style=STYLE_EMPHASIS, bar_style=STYLE_CHROME)
-    ]
-    if not lines:
-        lines = ["(empty plan)"]
-    for line in lines:
-        renderables.append(
-            _forge_bar_text(
-                text=f"  {line}",
-                style=STYLE_CONTENT,
-                bar_style=STYLE_CHROME,
-            )
-        )
-    console.print(Group(*renderables), highlight=False)
-
-
-def _render_chat_plan_mode_status(*, console: Console, plan_mode_state: Any) -> None:
-    if _chat_plan_mode_enabled(plan_mode_state):
-        restore_mode = _chat_plan_mode_restore_mode(plan_mode_state) or "readonly"
-        console.print(
-            "Plan Mode: on "
-            f"(persistent readonly planning overlay; /plan <task> stays the default draft/review/approve path; restores {_chat_mode_display(restore_mode)} on /plan off)"
-        )
-        latest_task = _chat_plan_mode_latest_task(plan_mode_state)
-        latest_draft = _chat_plan_mode_latest_draft(plan_mode_state)
-        if latest_draft is None or latest_task is None:
-            console.print(
-                "Stored draft: none yet. Draft here with a normal chat message, or use /plan off then /plan <task> for the default execution path."
-            )
-            return
-        console.print(f"Stored task: {_chat_plan_task_preview(latest_task)}")
-        if restore_mode == "readonly":
-            console.print(
-                "Stored draft: captured, but exact /plan approve cannot execute because this overlay started from Read-Only mode."
-            )
-            return
-        console.print(
-            f"Stored draft: ready for exact /plan approve (leaves readonly planning, restores {_chat_mode_display(restore_mode)}, and executes)."
-        )
-        return
-    console.print("Plan Mode: off")
 
 
 def _print_chat_context(*, console: Console, session: Any) -> None:

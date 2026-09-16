@@ -518,6 +518,17 @@ def test_runtime_tui_clears_panel_when_scheduler_is_rebuilt(
     child_sequence = 0
     runtime: dict[str, Any] = {}
 
+    from alysis_code.cli_impl.tui import app as tui_app
+
+    build_panel = tui_app._subagent_panel_container
+
+    def capture_panel(panel_state: dict[str, Any]) -> Any:
+        panel = build_panel(panel_state)
+        runtime["panel"] = panel
+        return panel
+
+    monkeypatch.setattr(tui_app, "_subagent_panel_container", capture_panel)
+
     class _ChildSession:
         def __init__(self, *, child_surface: Any, index: int) -> None:
             self.surface = child_surface
@@ -617,7 +628,7 @@ def test_runtime_tui_clears_panel_when_scheduler_is_rebuilt(
             assert child_started[0].wait(timeout=2.0)
             pipe.send_text("\x0e")
             time.sleep(0.05)
-            panel = runtime["app"].layout.container.content.children[2]
+            panel = runtime["panel"]
             runtime["selected_before"] = panel.filter()
             release_child[0].set()
             assert runtime["rebuild_done"].wait(timeout=3.0)

@@ -5,16 +5,11 @@ from __future__ import annotations
 from .cli_common import *
 from ..chat.state import (
     _ChatExecutionRequest,
-    _ChatPlanModeState,
     _ForgeChatEntrySelection,
     _ForgeChatState,
     _ForgeEnterCommand,
     _ForgePlannerSessionState,
 )
-
-
-def _chat_plan_mode_enabled(plan_mode_state: _ChatPlanModeState | None) -> bool:
-    return bool(getattr(plan_mode_state, "enabled", False))
 
 
 def _forge_enter_usage_lines() -> tuple[str, ...]:
@@ -149,10 +144,8 @@ def _forge_entry_status_text(*, entry_kind: str) -> str:
     return "Started a fresh Forge run for this chat session."
 
 
-_CHAT_PROMPT_RESULT_PLAN_MODE_OFF = object()
-_CHAT_ESCAPE_ACTION_PLAN_OFF = "plan_off"
-_CHAT_ESCAPE_ACTION_PASTE_IMAGE = "paste_image"
-_CHAT_ESCAPE_ACTION_NOOP = "noop"
+# Grace window for VT100 escape sequences before a lone Esc byte is treated as
+# the standalone Esc hotkey (paste clipboard image) in the classic prompt.
 _CHAT_PROMPT_ESCAPE_SEQUENCE_TIMEOUT_S = 1.0
 
 __all__ = [name for name in globals() if (not name.startswith("__") or name == "__version__")]

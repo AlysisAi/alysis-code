@@ -1200,6 +1200,14 @@ _ALYSIS_PROXY_ERROR_MESSAGES: dict[str, str] = {
     "rate_limit_exceeded": (
         "You're sending requests too quickly. Please wait a moment and try again."
     ),
+    "hosted_capacity_exceeded": (
+        "Hosted model capacity is full. Please retry in a few seconds. "
+        "No generation was started and your reserved credits were released."
+    ),
+    "hosted_routing_unavailable": (
+        "Hosted model routing is temporarily unavailable. Please retry shortly. "
+        "No generation was started and your reserved credits were released."
+    ),
     "global_budget_exceeded": (
         "The free MiMo trial is at capacity right now. Please try again shortly."
     ),
@@ -1221,6 +1229,23 @@ def alysis_trial_error_message(err: LLMError) -> str | None:
     if not isinstance(error, dict):
         return None
     code = str(error.get("code") or "").strip()
+    # The current hosted gateway distinguishes account concurrency, rolling caps,
+    # and reservation budget in its message, while retaining the OpenAI error code.
+    # Preserve that explanation instead of mislabeling every limit as excess RPM.
+    message = error.get("message")
+    if (
+        code == "rate_limit_exceeded"
+        and isinstance(message, str)
+        and message.startswith(
+            (
+                "5-hour fair-use limit reached (",
+                "Weekly fair-use limit reached (",
+                "Four hosted requests are already running for your account.",
+                "Available credits cannot cover this request while other usage or reservations apply.",
+            )
+        )
+    ):
+        return message[:2048]
     template = _ALYSIS_PROXY_ERROR_MESSAGES.get(code)
     if template is None or "{account_url}" not in template:
         # str.format would also choke on any literal brace in an unrelated

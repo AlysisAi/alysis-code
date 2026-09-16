@@ -1,8 +1,8 @@
 """
 Engine event inventory (migration targets; current call sites are intentionally unchanged):
 - message_delta: assistant streaming tokens from agent_loop.py and plan_assistant.py via
-  on_text_delta callbacks, including Plan Mode/Forge planner streaming in cli_impl/chat.py.
-- message_end: final assistant messages from agent_loop.py and plan draft/planner completion
+  on_text_delta callbacks, including Forge planner streaming in cli_impl/chat.py.
+- message_end: final assistant messages from agent_loop.py and Forge planner completion
   flows in cli_impl/chat.py.
 - tool_call_started: tool lifecycle starts from agent_loop.py for built-ins, custom tools,
   non-repo tool-assisted turns, and nested subagent tool forwarding through hidden_surface.py.
@@ -12,9 +12,9 @@ Engine event inventory (migration targets; current call sites are intentionally 
   blocks, repeated-call guards, verify_run, shell, git, web, MCP/custom tool failures.
 - status_update: startup/session status in agent_loop.py plus command/status HUD text in
   cli_impl/chat.py.
-- mode_changed: /mode, /plan on/off readonly overlay, and Forge UI transitions in
-  cli_impl/chat.py.
-- persona_changed: persona-mode transitions (user-initiated /mode persona switches and
+- mode_changed: /permissions, persona clamps, /ask one-turn overrides, and Forge UI
+  transitions in cli_impl/chat.py.
+- persona_changed: persona-mode transitions (user-initiated /persona switches and
   approved model switch_mode proposals) applied through the chat loop's persona primitive.
 - plan_node_updated: task creation/status/validation/reconciliation updates in forge.py,
   cli_impl/forge.py, cli_impl/chat.py, plan_assistant.py, and plan_reconciliation.py.
@@ -31,8 +31,8 @@ Engine event inventory (migration targets; current call sites are intentionally 
   notices, unknown command/usage warnings, repeated tool guards, and verify/review warnings.
 - info_emitted: progress/thinking lines, planner assistant meta text, saved artifact paths,
   subagent summaries, usage/context/HUD lines, dry-run summaries, and feedback bundle paths.
-- prompt_for_input: approval prompts in RichSurface.request_approval, Plan Mode approve/revise
-  prompts in cli_impl/chat.py, workspace/model/menu selectors, and interactive chat input.
+- prompt_for_input: approval prompts in RichSurface.request_approval, Forge pickers in
+  cli_impl/chat.py, workspace/model/menu selectors, and interactive chat input.
 - config_form_request: future structured menus/forms replacing /config, setup, model metadata,
   toolbar, usage HUD, subagents, skills, and workspace binding command surfaces.
 """

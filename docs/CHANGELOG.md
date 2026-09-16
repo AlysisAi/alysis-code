@@ -8,6 +8,43 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 No user-facing changes yet.
 
+## [0.13.8] - 2026-09-16
+
+### Changed
+
+- Remove legacy chat Plan Mode, its draft/approve flow, and its prompts and toolbar
+  state. Use the Architect persona for planning in chat; Forge retains its plan views
+  and editor.
+- Replace `/mode` with `/permissions`. Permission selections and Shift+Tab apply to
+  the next user message, with the pending choice visible beside the active permissions.
+- Apply persona changes and approved persona-switch proposals only after the active
+  turn finishes. Preserve pending permission selections when resuming a conversation.
+- Show pending steering messages and queued follow-ups. Shift+Left recalls the newest
+  queued message for editing. Interruptions preserve undelivered work and wait for the
+  current worker to finish before another turn starts.
+- Read large Git diffs in complete pages with a content identifier that detects
+  changes between pages. The agent can select a path or inspect staged changes.
+- Allow a background-process wait of up to 900 seconds, bounded by the remaining
+  run budget and returning early when its requested condition is met.
+- Explain how to correct rejected verification commands, including how to use the
+  session's configured verification contract.
+
+### Fixed
+
+- Keep plain assistant replies in conversation history so follow-up requests retain
+  the previous answer even when the provider returns no extra metadata.
+- Redact credential fields inside nested JSON, tool arguments, feedback text, and
+  support bundles. Omit data that exceeds the safe redaction depth and non-UTF-8
+  diagnostic artifacts that cannot be sanitized reliably.
+- Clean up incomplete support bundles after cancellation or I/O errors, support long
+  Windows export paths, and open report drafts without disrupting terminal output.
+- Inspect Git changes without running configured diff programs, text converters,
+  filesystem monitors, or content filters. Worktree reads that require content
+  filters or submodule helpers return guidance for an approved shell command;
+  staged diffs and unaffected scoped paths remain available.
+- Preserve hosted-account explanations for rolling usage limits, concurrent requests,
+  reserved credits, and temporary routing or capacity problems.
+
 ## [0.13.7] - 2026-09-11
 
 ### Added
@@ -271,7 +308,8 @@ Public launch and repository-layout refresh.
 Release notes for versions before 0.9.8 remain available in the
 [GitHub Releases archive](https://github.com/AlysisAi/alysis-code/releases).
 
-[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.13.7...HEAD
+[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...HEAD
+[0.13.8]: https://github.com/AlysisAi/alysis-code/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.2...v0.13.7
 [0.13.6.2]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.1...v0.13.6.2
 [0.13.6.1]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6...v0.13.6.1
