@@ -1,0 +1,699 @@
+{
+  "name": "vscode-alysis",
+  "displayName": "Alysis Code",
+  "description": "A local-first VS Code agent for clear conversations, planning, and reviewed changes.",
+  "version": "0.3.0",
+  "publisher": "alysisai",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlysisAi/alysis-code.git",
+    "directory": "extensions/vscode-alysis"
+  },
+  "icon": "resources/icon.png",
+  "keywords": [
+    "alysis",
+    "ai",
+    "coding-agent",
+    "developer-tools",
+    "workspace",
+    "local-first"
+  ],
+  "galleryBanner": {
+    "color": "#0B1220",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onCommand:alysis.runtimeEvidence"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "clean": "node -e \"for (const dir of ['out', 'dist']) require('fs').rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })\"",
+    "compile": "npm run sync:ui && npm run clean && tsc -p ./ && npm run bundle",
+    "compile:tsc": "npm run sync:ui && npm run clean && tsc -p ./",
+    "bundle": "node scripts/bundle.js",
+    "bundle:production": "node scripts/bundle.js --production",
+    "vscode:prepublish": "npm run bundle:production",
+    "watch": "tsc -watch -p ./",
+    "watch:bundle": "node scripts/bundle.js --watch",
+    "lint": "node scripts/sync-shared-ui.js --check && tsc -p ./ --noEmit && tsc -p ./tsconfig.webview.json && eslint .",
+    "test": "npm run compile && node --test out/test/*.test.js && node --test ../shared-ui/test/*.test.cjs",
+    "test:integration": "npm run compile && node ./out/test/integration/runTest.js",
+    "test:cursor": "npm run compile && node scripts/test-cursor.js",
+    "test:perf-activation": "npm run compile && node ./out/test/integration/perf-activation/runTest.js",
+    "test:production-install": "npm run compile && node ./out/test/integration/production/runTest.js",
+    "test:installed-live-provider": "npm run compile && node ./out/test/integration/production-live-provider/runTest.js",
+    "test:untrusted-production": "npm run compile && node ./out/test/integration/untrusted-production/runTest.js",
+    "package": "npm run package:vsix",
+    "package:vsix": "npm run compile && npm run bundle:production && node ./scripts/package-release.js",
+    "package:pre-release": "npm run compile && npm run bundle:production && node ./scripts/package-release.js --pre-release",
+    "prepublish:check": "npm run compile && npm run lint && npm test && npm audit --audit-level=high && npm run package:vsix",
+    "publish:dry-run": "npm run prepublish:check && vsce ls --tree --no-dependencies",
+    "package:dev-vsix": "npm run compile && npm run bundle:production && vsce package --no-dependencies --baseImagesUrl https://raw.githubusercontent.com/AlysisAi/alysis-code/main/extensions/vscode-alysis",
+    "sync:ui": "node scripts/sync-shared-ui.js"
+  },
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "alysisai.alysis",
+        "name": "alysis",
+        "fullName": "Alysis Code",
+        "description": "Chat with Alysis Code and use Forge, review, and diagnostics workflows.",
+        "commands": [
+          {
+            "name": "help",
+            "description": "Show Alysis Code help and open the conversation."
+          },
+          {
+            "name": "forge",
+            "description": "Create a reviewable Forge plan for a task."
+          },
+          {
+            "name": "execute",
+            "description": "Open Alysis Code and review a plan before execution."
+          },
+          {
+            "name": "doctor",
+            "description": "Open Alysis Code and check the local setup."
+          }
+        ]
+      }
+    ],
+    "commands": [
+      { "command": "alysis.newWorktree", "title": "New Worktree", "category": "Alysis Code" },
+      { "command": "alysis.moveToWorktree", "title": "Move Session to Worktree", "category": "Alysis Code" },
+      { "command": "alysis.reviewGitChanges", "title": "Review Git Changes", "category": "Alysis Code" },
+      { "command": "alysis.openSourceControl", "title": "Open Source Control", "category": "Alysis Code" },
+      {
+        "command": "alysis.openChat",
+        "title": "Open Alysis Code",
+        "category": "Alysis Code",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "alysis.newSession",
+        "title": "New Session",
+        "category": "Alysis Code",
+        "icon": "$(add)"
+      },
+      {
+        "command": "alysis.showHistory",
+        "title": "Task History",
+        "category": "Alysis Code",
+        "icon": "$(history)"
+      },
+      {
+        "command": "alysis.showSettings",
+        "title": "Settings",
+        "category": "Alysis Code",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "alysis.showModels",
+        "title": "Models and Providers",
+        "category": "Alysis Code",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "alysis.showForge",
+        "title": "Open Forge",
+        "category": "Alysis Code",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "alysis.showBrowser",
+        "title": "Open Managed Browser",
+        "category": "Alysis Code",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "alysis.runTask",
+        "title": "Start a Task",
+        "category": "Alysis Code",
+        "enablement": "isWorkspaceTrusted && alysis.workspaceScopeResolved"
+      },
+      {
+        "command": "alysis.addSelection",
+        "title": "Add Selection to Alysis Code",
+        "category": "Alysis Code",
+        "enablement": "isWorkspaceTrusted && editorHasSelection"
+      },
+      {
+        "command": "alysis.forgePlan",
+        "title": "Create a Plan",
+        "category": "Alysis Code",
+        "enablement": "isWorkspaceTrusted",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "alysis.forgeListPlans",
+        "title": "Browse Plans",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.forgeOpenPlan",
+        "title": "Open a Plan",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.forgeExecute",
+        "title": "Review and Run Plan",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.runSwarm",
+        "title": "Run Plan in Parallel",
+        "category": "Alysis Code",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "alysis.cancelCurrentRun",
+        "title": "Cancel Current Run",
+        "category": "Alysis Code",
+        "enablement": "alysis.hasActiveJob"
+      },
+      {
+        "command": "alysis.runDoctor",
+        "title": "Check Setup",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.pickModel",
+        "title": "Choose Provider and Model",
+        "category": "Alysis Code",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "alysis.configureProvider",
+        "title": "Configure Provider",
+        "category": "Alysis Code",
+        "icon": "$(account)"
+      },
+      {
+        "command": "alysis.showBridgeHealth",
+        "title": "Check Connection",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.sessionActions",
+        "title": "Current Task Tools",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manageProfiles",
+        "title": "Model and Provider Settings",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manageToolsSkills",
+        "title": "Manage Tools and Skills",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manageMcpHooks",
+        "title": "Manage MCP, Hooks, and Conventions",
+        "category": "Alysis Code",
+        "icon": "$(server)"
+      },
+      {
+        "command": "alysis.manageExtensions",
+        "title": "Manage Alysis Code Extensions",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.healthDiagnostics",
+        "title": "Troubleshooting",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manageForgeAssets",
+        "title": "Plan Files and References",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.checkForUpdates",
+        "title": "Check for Updates",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.refresh",
+        "title": "Refresh",
+        "category": "Alysis Code",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "alysis.manage.info",
+        "title": "Show Details",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.trust",
+        "title": "Trust",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.untrust",
+        "title": "Untrust",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.enable",
+        "title": "Enable",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.disable",
+        "title": "Disable",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.remove",
+        "title": "Remove",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.mcpLogin",
+        "title": "MCP Login",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.manage.mcpLogout",
+        "title": "MCP Logout",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.copyCliInstallCommand",
+        "title": "Copy Development CLI Install Command",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.copyCliUpgradeCommand",
+        "title": "Copy Development CLI Upgrade Command",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.openSetupGuide",
+        "title": "Open Setup Guide",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.locateCli",
+        "title": "Use Development CLI Override",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.show",
+        "title": "Show Session Details",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.score",
+        "title": "Score Session",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.usage",
+        "title": "Show Session Usage",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.resume",
+        "title": "Resume Session",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.compact",
+        "title": "Compact Session",
+        "category": "Alysis Code"
+      },
+      {
+        "command": "alysis.session.clear",
+        "title": "Clear Session",
+        "category": "Alysis Code"
+      }
+    ],
+    "configuration": {
+      "title": "Alysis Code",
+      "properties": {
+        "alysis.extraCaCerts": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path to a PEM bundle of additional certificate authorities (for example a corporate TLS-inspecting proxy's CA). The CLI trusts these **in addition to** its bundled roots, and Node-based MCP servers receive it as `NODE_EXTRA_CA_CERTS`. VS Code's `http.proxy`, `http.noProxy` and `http.proxySupport` are forwarded to the CLI automatically; `http.proxyStrictSSL: false` is deliberately not honoured — add the CA here instead."
+        },
+        "alysis.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Development-only override for the `alysis` executable. Leave empty to use the signed, extension-managed runtime. Explicit paths are not managed or release-verified and are shown as non-production in Runtime Details."
+        },
+        "alysis.defaultMode": {
+          "type": "string",
+          "default": "review",
+          "enum": [
+            "readonly",
+            "review",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Read-only: inspect and explain without changing files.",
+            "Review: ask before important changes.",
+            "Auto: work independently within Alysis Code safeguards. Forge plan execution still runs in review mode and refuses to start in Auto."
+          ],
+          "markdownDescription": "Choose how much independence Alysis Code has when starting a task. Forge plan execution (`Alysis Code: Review and Run Plan`) supports review mode only — set this to `review` before running a plan."
+        },
+        "alysis.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional default model name passed to the Alysis Code IDE bridge. Configure the router model through Alysis Code: Configure Provider or CLI role_models.router.",
+          "scope": "machine-overridable"
+        },
+        "alysis.baseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Optional base URL override for the configured provider. User settings only: a workspace cannot redirect where the stored API key is sent. Plain `http://` is accepted for loopback hosts only (Ollama, LM Studio); every other host must be `https://`. Credentials are never stored here — run **Alysis Code: Configure Provider** to save an API key in VS Code SecretStorage."
+        },
+        "alysis.provider": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Provider label shown in Alysis Code UI. Run **Alysis Code: Models and Providers** to pick from the presets your CLI supports."
+        },
+        "alysis.transport": {
+          "type": "string",
+          "default": "stdio",
+          "enum": [
+            "stdio"
+          ],
+          "description": "Transport used by the extension to communicate with Alysis Code.",
+          "enumDescriptions": [
+            "Standard input/output. The only transport supported today."
+          ]
+        },
+        "alysis.sandboxProfile": {
+          "type": "string",
+          "default": "default",
+          "enum": [
+            "default",
+            "strict",
+            "warn",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Use the sandbox profile the CLI selects for this workspace.",
+            "Request the CLI’s most restrictive sandbox profile.",
+            "Request a permissive profile that warns instead of blocking.",
+            "Request that sandboxing be disabled."
+          ],
+          "markdownDescription": "Requested sandbox profile for new chat, task and worktree sessions, and Forge execution. Start a new session after changing this setting. The CLI environment policy takes precedence; Forge requires strict isolation for mutations."
+        },
+        "alysis.forgeExecuteMaxSteps": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1000,
+          "markdownDescription": "Maximum number of plan steps a single Forge execution may run. Leave at `0` to use the CLI default."
+        },
+        "alysis.forgeExecuteNoLog": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass no_log=true for IDE Forge Execute Review jobs. Structured protocol events and bounded artifacts still remain available."
+        },
+        "alysis.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Alysis Code status bar item."
+        },
+        "alysis.autoStartBridge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Check the local engine's health as soon as the extension activates, instead of waiting for the first task. No task is ever started automatically."
+        },
+        "alysis.enableForge": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Alysis Code Forge planning and execution commands. Forge Plan and non-mutating Execute Preview run when the IDE bridge supports them; real execution stays fail-closed unless the backend supports safe execution, and trusted-workspace gates always apply."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "alysis",
+          "title": "Alysis Code",
+          "icon": "resources/alysis-logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "alysis": [
+        {
+          "id": "alysis.start",
+          "name": "Alysis Code",
+          "type": "webview",
+          "visibility": "visible",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "alysis.addSelection",
+          "when": "editorHasSelection",
+          "group": "alysis@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "alysis.newSession",
+          "when": "view == alysis.start",
+          "group": "navigation@1"
+        },
+        {
+          "command": "alysis.showForge",
+          "when": "view == alysis.start",
+          "group": "navigation@2"
+        },
+        {
+          "command": "alysis.showBrowser",
+          "when": "view == alysis.start",
+          "group": "navigation@2.5"
+        },
+        {
+          "command": "alysis.showHistory",
+          "when": "view == alysis.start",
+          "group": "navigation@3"
+        },
+        {
+          "command": "alysis.configureProvider",
+          "when": "view == alysis.start",
+          "group": "navigation@5"
+        },
+        {
+          "command": "alysis.showSettings",
+          "when": "view == alysis.start",
+          "group": "navigation@6"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "alysis.session.show",
+          "when": "false"
+        },
+        {
+          "command": "alysis.session.score",
+          "when": "false"
+        },
+        {
+          "command": "alysis.session.usage",
+          "when": "false"
+        },
+        {
+          "command": "alysis.session.compact",
+          "when": "false"
+        },
+        {
+          "command": "alysis.session.clear",
+          "when": "false"
+        },
+        {
+          "command": "alysis.session.resume",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.info",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.trust",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.untrust",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.enable",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.disable",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.remove",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.mcpLogin",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.mcpLogout",
+          "when": "false"
+        },
+        {
+          "command": "alysis.manage.refresh",
+          "when": "false"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "alysis.gettingStarted",
+        "title": "Get started with Alysis Code",
+        "description": "Validate the bundled runtime, trust your workspace, configure a provider, and open Alysis Code.",
+        "steps": [
+          {
+            "id": "installCli",
+            "title": "Validate the managed Alysis Code runtime",
+            "description": "Production builds bundle a signed runtime that the extension validates, installs, and rolls back automatically. A manual CLI path is available only as a development override.\n[Check connection](command:alysis.showBridgeHealth)\n[Open troubleshooting](command:alysis.healthDiagnostics)",
+            "media": {
+              "markdown": "media/walkthrough/install-cli.md"
+            },
+            "completionEvents": [
+              "onCommand:alysis.showBridgeHealth"
+            ]
+          },
+          {
+            "id": "trustWorkspace",
+            "title": "Trust this workspace",
+            "description": "Untrusted workspaces keep Alysis Code read-only: no write-capable Forge runs and no workspace-local CLI.",
+            "media": {
+              "markdown": "media/walkthrough/trust-workspace.md"
+            },
+            "completionEvents": [
+              "onContext:isWorkspaceTrusted"
+            ]
+          },
+          {
+            "id": "configureProvider",
+            "title": "Configure a provider",
+            "description": "Store your provider API key in VS Code SecretStorage — never in plaintext settings.\n[Configure Provider](command:alysis.configureProvider)",
+            "media": {
+              "markdown": "media/walkthrough/configure-provider.md"
+            },
+            "completionEvents": [
+              "onCommand:alysis.configureProvider"
+            ]
+          },
+          {
+            "id": "openCockpit",
+            "title": "Open Alysis Code",
+            "description": "Chat, plan, and review work from one clear Alysis Code conversation.\n[Open Alysis Code](command:alysis.openChat)",
+            "media": {
+              "markdown": "media/walkthrough/open-cockpit.md"
+            },
+            "completionEvents": [
+              "onCommand:alysis.openChat"
+            ]
+          }
+        ]
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "alysis.openChat",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s"
+      },
+      {
+        "command": "alysis.addSelection",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "alysis.cancelCurrentRun",
+        "key": "ctrl+alt+backspace",
+        "mac": "cmd+alt+backspace",
+        "when": "alysis.hasActiveJob"
+      }
+    ]
+  },
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Alysis Code requires local workspace file paths and a local executable CLI; virtual workspaces are not supported."
+    },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Bridge health, provider setup, doctor checks, readonly commands, and Forge Execute Preview are available when executable-origin guards pass. Forge execution and write-capable modes require Workspace Trust.",
+      "restrictedConfigurations": [
+        "alysis.cliPath",
+        "alysis.defaultMode",
+        "alysis.defaultModel",
+        "alysis.baseUrl",
+        "alysis.provider",
+        "alysis.transport",
+        "alysis.sandboxProfile",
+        "alysis.forgeExecuteMaxSteps",
+        "alysis.forgeExecuteNoLog",
+        "alysis.autoStartBridge",
+        "alysis.enableForge",
+        "alysis.extraCaCerts"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.11.30",
+    "@types/vscode": "1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.13.0",
+    "jsdom": "^29.1.1",
+    "mocha": "^11.7.6",
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.10.0"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "mocha": {
+      "diff": "8.0.4",
+      "serialize-javascript": "7.0.5"
+    }
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "preview": false,
+  "pricing": "Free",
+  "homepage": "https://github.com/AlysisAi/alysis-code",
+  "bugs": {
+    "url": "https://github.com/AlysisAi/alysis-code/issues"
+  },
+  "qna": "https://github.com/AlysisAi/alysis-code/issues"
+}

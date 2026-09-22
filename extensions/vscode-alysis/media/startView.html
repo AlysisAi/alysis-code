@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="${csp}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alysis Code</title>
+    <link rel="stylesheet" href="${styleUri}?v=${assetVersion}">
+  </head>
+  <body>
+    <main class="agent-shell">
+      <nav class="sidebar-top-bar" aria-label="Alysis Code navigation" hidden>
+        <button class="sidebar-home" type="button" data-surface="task" aria-label="Back to conversation" aria-current="page"><img src="${markUri}" alt=""><span>Alysis Code</span></button>
+        <div class="sidebar-top-actions">
+          <button class="icon-button" type="button" data-action="new" data-icon="add" aria-label="New task" title="New task"></button>
+          <button class="icon-button" type="button" data-surface="history" data-icon="history" aria-label="Task history" title="Task history"></button>
+          <button class="icon-button" type="button" data-surface="forge" data-icon="forge" aria-label="Open Forge" title="Forge — plan and review complex work"></button>
+          <button class="icon-button" type="button" data-surface="models" data-icon="models" aria-label="Providers and models" title="Providers and models"></button>
+          <button class="icon-button" type="button" data-surface="settings" data-icon="settings" aria-label="Settings" title="Settings"></button>
+        </div>
+      </nav>
+      <div class="surface-stack">
+        <section id="taskSurface" class="surface task-surface">
+          <nav id="sessionWorkspaceBar" class="session-workspace-bar" aria-label="Session and worktree" hidden>
+            <div class="session-workspace-actions">
+              <button id="barNewSession" type="button" data-action="new" title="Start a fresh conversation">New Session</button>
+              <button id="barNewWorktree" type="button" data-worktree="new" title="Start a session on a new branch">New Worktree <span data-icon="chevron-down" aria-hidden="true"></span></button>
+              <button id="barMoveWorktree" type="button" data-worktree="move" title="Continue this conversation in a new worktree"><span data-icon="fork" aria-hidden="true"></span><span>Move to Worktree</span></button>
+              <button id="barGitChanges" class="workspace-diff-stats" type="button" data-worktree="review" aria-label="Review Git Changes" title="Run a structured code review"><span data-icon="diff" aria-hidden="true"></span><span id="barGitAdded" class="added">+0</span><span id="barGitRemoved" class="removed">−0</span></button>
+            </div>
+            <p id="barWorkspaceDetail" class="session-workspace-detail"></p>
+          </nav>
+          <header id="sessionHeader" class="session-header" hidden>
+            <div class="session-heading"><h1 id="sessionTitle">Current task</h1><span id="sessionStatus" class="session-status">Ready</span></div>
+            <button id="checkpointButton" class="icon-button" type="button" aria-label="Review checkpoints" title="Review workspace checkpoints" data-icon="diff" hidden></button>
+          </header>
+          <div id="welcome" class="welcome-scroll">
+            <section class="welcome-hero" aria-labelledby="welcomeTitle">
+              <div class="welcome-mark" aria-hidden="true"><img src="${markUri}" alt=""></div>
+              <h1 id="welcomeTitle">Alysis Code</h1>
+              <p class="welcome-subtitle">What can I help you build?</p>
+              <p class="welcome-description">Explore your code, make a change, or work through a problem.</p>
+            </section>
+
+            <section id="connectFirst" class="connect-first" aria-labelledby="connectFirstTitle" hidden>
+              <h2 id="connectFirstTitle">Connect a model to start</h2>
+              <p id="connectFirstReason">Alysis Code is checking the active provider, model, and reasoning settings.</p>
+              <div id="connectFirstActions" class="connect-first-actions">
+                <button class="primary-action" type="button" data-surface="models">Choose a provider</button>
+                <button class="quiet-link" type="button" data-command="alysis.runDoctor">Check my setup instead</button>
+              </div>
+            </section>
+
+            <section id="starterPrompts" class="starter-prompts" aria-label="Ways to start">
+              <button type="button" data-starter="Explain how this project works"><span class="starter-icon" data-icon="code" aria-hidden="true"></span><span><strong>Explore this project</strong><small>Understand the structure and key decisions</small></span><span class="starter-arrow" data-icon="chevron-right" aria-hidden="true"></span></button>
+              <button type="button" data-starter="Review the current changes for bugs, regressions, and missing tests"><span class="starter-icon" data-icon="diff" aria-hidden="true"></span><span><strong>Review my changes</strong><small>Find issues before they ship</small></span><span class="starter-arrow" data-icon="chevron-right" aria-hidden="true"></span></button>
+              <button type="button" data-starter="Help me investigate and fix a bug. "><span class="starter-icon" data-icon="debug" aria-hidden="true"></span><span><strong>Work through a bug</strong><small>Trace the cause and verify the fix</small></span><span class="starter-arrow" data-icon="chevron-right" aria-hidden="true"></span></button>
+            </section>
+
+            <section id="recentBlock" class="recent-block" aria-labelledby="recentTitle" hidden>
+              <header class="section-heading">
+                <span id="recentTitle">Recent tasks</span>
+                <button class="quiet-link" type="button" data-surface="history">View all <span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span></button>
+              </header>
+              <div id="recentCards" class="recent-cards"></div>
+            </section>
+
+            <div class="welcome-shortcuts"><button class="quiet-link" type="button" data-surface="forge">Plan with Forge <span data-icon="chevron-right" aria-hidden="true"></span></button></div>
+          </div>
+
+          <section id="conversation" class="conversation" aria-label="Conversation" hidden>
+            <!-- role="log" without aria-live: the transcript is reconciled in place and a live
+                 region here would re-announce every item on every streaming token. Finalized items
+                 are announced once through #liveAnnouncer instead. -->
+            <div id="conversationItems" class="conversation-items" role="log" aria-busy="false"></div>
+            <p id="liveAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+            <button id="jumpToLatest" class="jump-to-latest" type="button" hidden>
+              <span class="jump-to-latest-icon" data-icon="chevron-down" aria-hidden="true"></span>
+              <span>Jump to latest</span>
+            </button>
+          </section>
+        </section>
+
+        <section id="forgeSurface" class="surface secondary-surface forge-surface" hidden>
+          <header class="surface-header forge-header">
+            <button class="back-button" type="button" data-surface="task" aria-label="Back to task" data-icon="chevron-left"></button>
+            <div class="surface-heading-copy"><h1>Forge</h1><p id="forgeHeaderDetail">Plan complex work before files change.</p></div>
+            <button class="header-action" type="button" data-command="alysis.forgeListPlans">Browse</button>
+          </header>
+
+          <section id="forgeEmpty" class="forge-empty">
+            <div class="forge-logo" aria-hidden="true"><img src="${markUri}" alt=""></div>
+            <h2>Build with a plan you can inspect</h2>
+            <p>Describe the outcome. Forge breaks it into reviewable tasks, checks scope, and shows changes before execution.</p>
+            <button class="primary-action" type="button" data-forge-draft="true">Create a Forge plan</button>
+            <button class="secondary-action" type="button" data-command="alysis.forgeOpenPlan">Open an existing plan</button>
+          </section>
+
+          <div id="forgeWorkspace" class="forge-workspace" hidden>
+            <section id="forgeSummary" class="forge-summary"></section>
+            <div class="forge-primary-actions" aria-label="Forge plan actions">
+              <button type="button" data-cockpit-action="forge.executePreview">Preview</button>
+              <button class="accent" type="button" data-cockpit-action="forge.executeReview">Review &amp; run</button>
+              <button type="button" data-cockpit-action="swarm.start">Run in parallel</button>
+              <button type="button" data-cockpit-action="forge.status.refresh" aria-label="Refresh Forge status">Refresh</button>
+            </div>
+            <nav class="forge-tabs" role="tablist" aria-label="Forge workspace">
+              <button type="button" role="tab" data-forge-tab="plan" aria-selected="true">Plan <span id="forgePlanCount"></span></button>
+              <button type="button" role="tab" data-forge-tab="changes" aria-selected="false">Changes <span id="forgeDiffCount"></span></button>
+              <button type="button" role="tab" data-forge-tab="files" aria-selected="false">Files <span id="forgeFileCount"></span></button>
+              <button type="button" role="tab" data-forge-tab="activity" aria-selected="false">Activity <span id="forgeActivityCount"></span></button>
+            </nav>
+            <section id="forgePlanPanel" class="forge-tab-panel" data-forge-panel="plan"></section>
+            <section id="forgeChangesPanel" class="forge-tab-panel" data-forge-panel="changes" hidden></section>
+            <section id="forgeFilesPanel" class="forge-tab-panel" data-forge-panel="files" hidden></section>
+            <section id="forgeActivityPanel" class="forge-tab-panel" data-forge-panel="activity" hidden></section>
+          </div>
+        </section>
+
+        <section id="historySurface" class="surface secondary-surface" hidden>
+          <header class="surface-header">
+            <button class="back-button" type="button" data-surface="task" aria-label="Back to task" data-icon="chevron-left"></button>
+            <div><h1>Task History</h1><p>Continue earlier Alysis Code work.</p></div>
+          </header>
+          <div class="history-search"><span data-icon="search" aria-hidden="true"></span><label class="sr-only" for="historySearch">Search task history</label><input id="historySearch" type="search" placeholder="Search tasks…" autocomplete="off" maxlength="120"></div>
+          <div class="history-toolbar"><span id="historyCount" role="status" aria-live="polite"></span><button id="historyCurrent" class="quiet-link" type="button" aria-pressed="false">Current task</button></div>
+          <div id="historyList" class="history-list"></div>
+        </section>
+
+        <section id="modelsSurface" class="surface secondary-surface models-surface" hidden>
+          <header class="surface-header models-header">
+            <button class="back-button" type="button" data-surface="task" aria-label="Back to task" data-icon="chevron-left"></button>
+            <div class="surface-heading-copy"><h1>Models</h1><p id="modelsHeaderDetail">Connect a provider and choose a model.</p></div>
+            <button class="header-action" type="button" data-models-refresh="true" aria-label="Reload providers">Reload</button>
+          </header>
+
+          <p id="modelsNotice" class="models-notice" role="status" hidden></p>
+
+          <section id="connectionsGroup" class="models-group connections-group" aria-labelledby="connectionsTitle">
+            <h2 id="connectionsTitle">Your connections</h2>
+            <div id="connectionsList" class="connection-list"></div>
+          </section>
+
+          <section class="models-group catalog-group" aria-labelledby="catalogTitle">
+            <header class="models-group-header">
+              <h2 id="catalogTitle">Add a provider</h2>
+              <span id="catalogCount" class="models-count"></span>
+            </header>
+            <label class="sr-only" for="providerSearch">Search providers</label>
+            <input id="providerSearch" class="models-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search providers or models…" maxlength="120">
+            <div id="providerList" class="provider-list"></div>
+            <button id="catalogToggle" class="catalog-toggle" type="button" aria-expanded="false" hidden></button>
+          </section>
+        </section>
+
+        <section id="browserSurface" class="surface secondary-surface browser-surface" hidden aria-labelledby="browserTitle">
+          <header class="surface-header browser-header">
+            <button class="back-button" type="button" data-surface="task" aria-label="Back to task" data-icon="chevron-left"></button>
+            <div class="surface-heading-copy">
+              <h1 id="browserTitle">Managed browser</h1>
+              <p>Browse with Alysis Code or test a local app.</p>
+            </div>
+            <button id="browserRefresh" class="header-action" type="button">Refresh</button>
+          </header>
+          <p id="browserStatus" class="browser-status" role="status" aria-live="polite"></p>
+          <section class="browser-card browser-session-card" aria-labelledby="browserSessionTitle">
+            <div class="browser-card-heading">
+              <div><h2 id="browserSessionTitle">Browser session</h2><p id="browserSessionDetail">No browser is running.</p></div>
+              <span id="browserPhase" class="browser-phase">Idle</span>
+            </div>
+            <label for="browserSessionSelect">Browser session</label>
+            <select id="browserSessionSelect" aria-describedby="browserSessionDetail"></select>
+            <dl class="browser-facts">
+              <div><dt>Last safe location</dt><dd id="browserLastSafeLocation">Not navigated yet</dd></div>
+              <div><dt>Network access</dt><dd id="browserNetworkAccess">Public web only</dd></div>
+              <div><dt>Who can use it</dt><dd id="browserActorAccess">Alysis Code agent and IDE</dd></div>
+            </dl>
+            <div class="browser-actions">
+              <button id="browserStart" class="primary-action" type="button">Start shared browser</button>
+              <button id="browserStartLocal" type="button">Start local testing</button>
+              <button id="browserClose" class="danger-action" type="button">Close &amp; delete</button>
+            </div>
+            <p id="browserLocalHint" class="browser-help">Local testing is Direct IDE only. The agent cannot access it; LAN and link-local addresses stay blocked.</p>
+          </section>
+          <section class="browser-card" aria-labelledby="browserNavigateTitle">
+            <h2 id="browserNavigateTitle">Navigate and interact</h2>
+            <p id="browserInteractionHint" class="browser-help">These controls operate the selected browser.</p>
+            <label for="browserUrl">Open HTTP(S) URL</label>
+            <div class="browser-inline-control">
+              <input id="browserUrl" type="url" inputmode="url" maxlength="8192" autocomplete="off" spellcheck="false" placeholder="https://example.com">
+              <button id="browserNavigate" type="button">Open</button>
+            </div>
+            <details class="browser-details browser-advanced">
+            <summary>Page interaction controls</summary>
+            <label for="browserSelector">CSS selector</label>
+            <div class="browser-inline-control">
+              <input id="browserSelector" type="text" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="button[type=submit]">
+              <button id="browserClick" type="button">Click</button>
+            </div>
+            <label for="browserTypeText">Text to type</label>
+            <textarea id="browserTypeText" rows="3" maxlength="100000" autocomplete="off" spellcheck="false" placeholder="Text is sent directly and is never saved in cockpit state."></textarea>
+            <label class="browser-check"><input id="browserReplaceText" type="checkbox" checked> Replace existing text</label>
+            <button id="browserType" type="button">Type into selector</button>
+            </details>
+          </section>
+          <section class="browser-card" aria-labelledby="browserInspectTitle">
+            <h2 id="browserInspectTitle">Inspect safely</h2>
+            <div class="browser-inspect-controls">
+              <label for="browserSnapshotKind">Snapshot</label>
+              <select id="browserSnapshotKind">
+                <option value="text">Readable text</option>
+                <option value="semantic">Semantic</option>
+                <option value="accessibility">Accessibility</option>
+                <option value="dom">DOM</option>
+              </select>
+              <button id="browserSnapshot" type="button">Capture snapshot</button>
+              <button id="browserScreenshot" type="button">Capture screenshot</button>
+              <label class="browser-check"><input id="browserFullPage" type="checkbox"> Full page screenshot</label>
+              <button id="browserDiagnostics" type="button">Refresh diagnostics</button>
+            </div>
+            <figure id="browserPreviewFigure" class="browser-preview" hidden>
+              <img id="browserPreview" alt="Verified managed browser screenshot">
+              <figcaption id="browserPreviewCaption"></figcaption>
+              <button id="browserSaveScreenshot" type="button">Save screenshot as&hellip;</button>
+            </figure>
+            <details id="browserSnapshotDetails" class="browser-details" hidden>
+              <summary>Snapshot <span id="browserSnapshotMeta"></span></summary>
+              <pre id="browserSnapshotOutput"></pre>
+            </details>
+            <details id="browserDiagnosticsDetails" class="browser-details" hidden>
+              <summary>Diagnostics <span id="browserDiagnosticsMeta"></span></summary>
+              <div id="browserDiagnosticsOutput"></div>
+            </details>
+          </section>
+        </section>
+
+        <section id="settingsSurface" class="surface secondary-surface" hidden>
+          <header class="surface-header">
+            <button class="back-button" type="button" data-surface="task" aria-label="Back to task" data-icon="chevron-left"></button>
+            <div><h1>Settings</h1><p>Connection, permissions, and tools.</p></div>
+          </header>
+          <div class="history-search settings-search"><span data-icon="search" aria-hidden="true"></span><label class="sr-only" for="settingsSearch">Search settings</label><input id="settingsSearch" type="search" placeholder="Search settings…" autocomplete="off" maxlength="120"></div>
+          <p id="settingsSearchStatus" class="search-status" role="status" aria-live="polite" hidden></p>
+          <div id="settingsEmpty" class="empty-history" hidden><strong class="empty-title">No matching settings</strong><span class="empty-detail">Try a provider, permission, or tool name.</span><button id="settingsClear" class="secondary-action" type="button">Clear search</button></div>
+          <div class="settings-groups">
+            <section class="settings-group" aria-labelledby="connectionTitle">
+              <h2 id="connectionTitle">AI connection</h2>
+              <button id="providerSettings" class="settings-row" type="button" data-surface="models">
+                <span><strong>Provider and model</strong><small id="providerSettingsDetail">Choose a provider</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.configureProvider">
+                <span><strong>Advanced connection settings</strong><small>Stored keys and all Alysis Code settings</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.manageProfiles">
+                <span><strong>Provider profiles</strong><small>Inspect, create, switch, rename, or remove profiles</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+            </section>
+            <section class="settings-group" aria-labelledby="safetyTitle">
+              <h2 id="safetyTitle">Safety</h2>
+              <button id="workspaceSettings" class="settings-row" type="button" data-action="workspace">
+                <span><strong>Folder access</strong><small id="workspaceSettingsDetail">Check workspace permissions</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-action="settings">
+                <span><strong>Extension settings</strong><small>Defaults for modes, sandbox, and the local CLI</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+            </section>
+            <section class="settings-group" aria-labelledby="toolsTitle">
+              <h2 id="toolsTitle">Tools</h2>
+              <button class="settings-row" type="button" data-command="alysis.sessionActions">
+                <span><strong>Current task tools</strong><small>Usage, context, terminals, and session controls</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.manageToolsSkills">
+                <span><strong>Tools and skills</strong><small>Inspect and manage the capabilities Alysis Code can use</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-surface="browser">
+                <span><strong>Managed browser</strong><small>Browse with the agent or test a local app</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-action="mcp">
+                <span><strong>MCP servers, hooks, and conventions</strong><small>Connect and manage optional capabilities</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.manageExtensions">
+                <span><strong>Alysis Code extensions</strong><small>Search, install, enable, or remove extension packages</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button id="engineSettings" class="settings-row" type="button" data-action="engine">
+                <span><strong>Alysis Code engine</strong><small id="engineSettingsDetail">Check the local connection</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+            </section>
+            <section class="settings-group" aria-labelledby="forgeSettingsTitle">
+              <h2 id="forgeSettingsTitle">Forge</h2>
+              <button class="settings-row" type="button" data-surface="forge">
+                <span><strong>Forge workspace</strong><small>Plan work, review changes, and follow execution</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.manageForgeAssets">
+                <span><strong>Plan files and references</strong><small>Manage assets attached to the active Forge plan</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+            </section>
+            <section class="settings-group" aria-labelledby="supportTitle">
+              <h2 id="supportTitle">Support</h2>
+              <button class="settings-row" type="button" data-surface="activity">
+                <span><strong>Activity and results</strong><small>Recent actions, errors, warnings, and connection events</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.healthDiagnostics">
+                <span><strong>Troubleshooting</strong><small>Doctor, provider, sandbox, and diagnostic checks</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+              <button class="settings-row" type="button" data-command="alysis.checkForUpdates">
+                <span><strong>Check for updates</strong><small>Check Alysis Code CLI and extension compatibility</small></span><span class="row-chevron" data-icon="chevron-right" aria-hidden="true"></span>
+              </button>
+            </section>
+          </div>
+        </section>
+
+        <section id="activitySurface" class="surface secondary-surface" hidden>
+          <header class="surface-header">
+            <button class="back-button" type="button" data-surface="settings" aria-label="Back to settings" data-icon="chevron-left"></button>
+            <div><h1>Activity</h1><p>Results and important runtime events.</p></div>
+          </header>
+          <div id="actionResults" class="activity-feed"></div>
+          <div id="runtimeEvents" class="activity-feed"></div>
+        </section>
+      </div>
+
+      <form id="taskForm" class="task-composer">
+        <button id="reviewAttention" class="review-attention" type="button" hidden><span data-icon="diff" aria-hidden="true"></span><span class="review-attention-copy"><strong id="reviewAttentionTitle">Your review is needed</strong><small id="reviewAttentionDetail"></small></span><span class="review-attention-action">Review <span data-icon="chevron-right" aria-hidden="true"></span></span></button>
+        <section id="permissionPalette" class="command-palette permission-palette" aria-label="Permissions" hidden>
+          <header><strong>Permissions</strong><span>Choose what Alysis Code may do</span></header>
+          <div role="menu" aria-label="Permissions">
+            <button type="button" class="permission-option" data-permission="readonly" role="menuitemradio" aria-checked="false"><span data-icon="shield" aria-hidden="true"></span><span><strong>Read-only</strong><small>Inspect and explain without changing files</small></span><span class="permission-check" data-icon="check" aria-hidden="true"></span></button>
+            <button type="button" class="permission-option" data-permission="review" role="menuitemradio" aria-checked="true"><span data-icon="shield" aria-hidden="true"></span><span><strong>Review changes</strong><small>Ask before writes and important actions</small></span><span class="permission-check" data-icon="check" aria-hidden="true"></span></button>
+            <button type="button" class="permission-option" data-permission="auto" role="menuitemradio" aria-checked="false"><span data-icon="check" aria-hidden="true"></span><span><strong>Auto-approve</strong><small>Allow actions within the engine’s safeguards</small></span><span class="permission-check" data-icon="check" aria-hidden="true"></span></button>
+          </div>
+        </section>
+        <section id="commandPalette" class="command-palette" aria-label="Alysis Code commands" hidden>
+          <header><strong>Slash commands</strong><span id="commandHint">↑↓ to choose · Enter to select · Esc to close</span></header>
+          <div id="commandList" role="listbox"></div>
+        </section>
+        <section id="mentionPalette" class="command-palette mention-palette" aria-label="Workspace files" hidden>
+          <header><strong>Add context</strong><span id="mentionHint">Type to search files</span></header>
+          <div id="mentionList" role="listbox"></div>
+        </section>
+        <section id="modelPalette" class="command-palette model-palette" aria-label="Choose a model" hidden>
+          <header><strong>Model</strong><span id="modelPaletteHint">Type to filter</span></header>
+          <label class="sr-only" for="modelFilter">Filter models</label>
+          <input id="modelFilter" type="search" autocomplete="off" spellcheck="false" placeholder="Filter models…" maxlength="120">
+          <div id="modelList" role="listbox"></div>
+          <button class="palette-footer-action" type="button" data-surface="models">Manage providers and keys</button>
+        </section>
+        <section id="personaPalette" class="command-palette persona-palette" aria-label="Choose a persona" hidden>
+          <header><strong>Persona</strong><span id="personaPaletteHint">Type to filter</span></header>
+          <label class="sr-only" for="personaFilter">Filter personas</label>
+          <input id="personaFilter" type="search" autocomplete="off" spellcheck="false" placeholder="Filter personas…" maxlength="64">
+          <div id="personaList" role="listbox"></div>
+        </section>
+        <section id="readinessStrip" class="readiness-strip" aria-label="Setup that needs attention" hidden></section>
+        <div class="composer-box">
+          <div id="imageBasket" class="image-basket" aria-label="Images attached to the next message" hidden></div>
+          <div class="composer-input">
+            <label class="sr-only" for="taskInput">Type your task</label>
+            <textarea id="taskInput" rows="1" maxlength="20000" placeholder="Ask Alysis Code…" aria-describedby="composerHint composerError" dir="auto" title="Enter to send · Shift+Enter for a new line"></textarea>
+          </div>
+          <p id="composerError" class="composer-error" role="status" hidden></p>
+          <div class="composer-footer">
+            <div class="composer-models">
+              <button id="personaButton" class="model-button persona-button" type="button" aria-label="Choose persona" aria-haspopup="listbox" aria-expanded="false" hidden>
+                <span id="personaLabel">Persona</span>
+                <span class="model-caret" data-icon="chevron-down" aria-hidden="true"></span>
+              </button>
+              <button id="modelButton" class="model-button" type="button" aria-label="Choose provider and model" aria-haspopup="listbox" aria-expanded="false">
+                <span id="modelLabel">Default model</span>
+                <span class="model-caret" data-icon="chevron-down" aria-hidden="true"></span>
+              </button>
+              <span id="personaChip" class="persona-chip sr-only" role="status" hidden></span>
+            </div>
+            <div class="composer-actions">
+              <button id="cancelTask" class="stop-task" type="button" aria-label="Stop the running task" title="Stop (Esc)" hidden><span class="stop-glyph" aria-hidden="true"></span><span id="cancelTaskLabel" class="sr-only">Stop</span></button>
+              <button id="submitTask" class="send-task" type="submit" aria-label="Send task" title="Send (Enter)" disabled><span data-icon="send" aria-hidden="true"></span><span id="submitTaskLabel" class="sr-only">Send</span></button>
+            </div>
+          </div>
+        </div>
+        <div class="composer-meta">
+          <button id="permissionStrip" class="permission-strip" type="button" aria-label="Change permissions" aria-describedby="permissionDetail" aria-haspopup="menu" aria-expanded="false" aria-controls="permissionPalette">
+            <span data-icon="shield" aria-hidden="true"></span><span id="permissionLabel">Review changes</span><span class="sr-only" id="permissionDetail">Ask before important actions</span><span class="row-chevron" data-icon="chevron-down" aria-hidden="true"></span>
+          </button>
+          <div class="composer-tools" role="group" aria-label="Add context and commands">
+            <button class="icon-button" type="button" data-insert="@" data-icon="mention" aria-label="Mention a file" title="Mention a file or folder (@)"></button>
+            <button class="icon-button" type="button" data-action="addContext" data-icon="selection" aria-label="Add selected code" title="Add the current editor selection"></button>
+            <button class="icon-button" type="button" data-action="addFiles" data-icon="attachment" aria-label="Add files" title="Browse for files"></button>
+            <button class="icon-button slash-button" type="button" data-insert="/" data-icon="commands" aria-label="Show commands" title="Show commands (/)"></button>
+          </div>
+          <span id="composerHint" class="sr-only">Enter to send. Shift+Enter for a new line. Type @ to mention files or / for commands.</span>
+        </div>
+        <select id="taskMode" hidden aria-hidden="true" tabindex="-1" aria-label="Permissions">
+          <option value="readonly">Read-only</option>
+          <option value="review">Review changes</option>
+          <option value="auto">Auto-approve</option>
+        </select>
+        <p id="modeHint" class="sr-only">You review important changes before they happen.</p>
+        <p class="composer-keyboard-hint" aria-hidden="true"><kbd>Enter</kbd> to send <span>·</span> <kbd>Shift + Enter</kbd> for a new line</p>
+      </form>
+    </main>
+    <script nonce="${nonce}" src="${scriptUri}?v=${assetVersion}"></script>
+  </body>
+</html>
