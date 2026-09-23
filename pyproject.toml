@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alysis-code"
-version = "0.13.8"
+version = "0.13.9"
 description = "Open-source coding agent for hosted and local models."
 readme = "README.md"
 requires-python = ">=3.11"

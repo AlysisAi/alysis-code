@@ -7,6 +7,7 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
+from ...llm.tool_call_markup import contains_tool_call_markup
 from ...text_normalization import normalize_for_matching
 from ...tools.registry import get_builtin_tool_metadata
 from ...verification_command_analysis import (
@@ -185,12 +186,7 @@ def _append_recent_exploration_path(
 
 
 def _looks_like_unexecuted_tool_call_markup(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    if "dsml" in normalized and ("tool_calls" in normalized or "invoke" in normalized):
-        return True
-    return any(marker in normalized for marker in _UNEXECUTED_TOOL_CALL_MARKUP_MARKERS)
+    return contains_tool_call_markup(str(text or ""))
 
 
 def _extract_successful_exploration_paths(

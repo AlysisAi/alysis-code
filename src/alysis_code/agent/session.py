@@ -3058,6 +3058,7 @@ def create_session(
                 store=store,
                 settings=compaction_settings,
                 compactor_client=compactor_client,
+                main_client=client,
                 model_registry=registry,
                 usage_summary=usage_summary,
                 usage_role=usage_role,

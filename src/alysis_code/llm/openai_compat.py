@@ -44,6 +44,7 @@ from .cache_control_blocks import (
     strip_cache_control_blocks,
 )
 from .cache_policy import merge_cache_policy_metadata
+from .hosted_request_limits import hosted_chat_capacity_ratio, validate_hosted_chat_capacity
 from .metadata import (
     DEEPSEEK_REASONING_CONTENT_KEY as _DEEPSEEK_REASONING_CONTENT_KEY,
 )
@@ -1817,23 +1818,11 @@ class OpenAICompatClient:
             self._tool_calling_compat_key(provider_key)
         )
 
-    def count_input_tokens(
+    def _prompt_payload_for_estimation(
         self,
-        *,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any | None = None,
-    ) -> InputTokenCount:
-        """Estimate the prompt-bearing payload that this compatibility route sends.
-
-        OpenAI-compatible wire format does not imply a shared tokenizer or a
-        standard preflight counting endpoint. This method therefore exposes the
-        adapter's provider-transformed payload through the common counting
-        contract while explicitly retaining ``local_estimate`` / ``estimated``
-        provenance. Response usage and overflow recovery remain the authority.
-        """
-
-        del tool_choice  # The chat estimator intentionally excludes control-only fields.
+        tools: list[dict[str, Any]] | None,
+    ) -> tuple[dict[str, Any], str | None]:
         messages = gate_messages_for_provider_route(messages, self.route_identity)
         transport_provider_key = _transport_provider_key(
             base_url=self.base_url,
@@ -1879,6 +1868,40 @@ class OpenAICompatClient:
         if effective_tools:
             prompt_payload["tools"] = effective_tools
         prompt_payload = _sanitize_transport_value(prompt_payload)
+        return prompt_payload, transport_provider_key
+
+    def request_capacity_ratio(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> float:
+        """Measure hosted admission pressure separately from token accounting."""
+        provider = _transport_provider_key(
+            base_url=self.base_url,
+            provider_key=self.provider_key,
+            model=self.model,
+        )
+        if provider != "alysis":
+            return 0.0
+        prompt_payload, _ = self._prompt_payload_for_estimation(messages, tools)
+        # Control fields are small; reserve headroom for their exact wire shape.
+        return hosted_chat_capacity_ratio(
+            {**prompt_payload, "model": self.model, "stream": True},
+            headroom=4096,
+        )
+
+    def count_input_tokens(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+    ) -> InputTokenCount:
+        """Estimate provider-shaped prompt tokens with explicit local provenance."""
+        prompt_payload, transport_provider_key = self._prompt_payload_for_estimation(
+            messages, tools
+        )
         return InputTokenCount(
             input_tokens=estimate_provider_payload_tokens(prompt_payload),
             source=UsageSource.LOCAL_ESTIMATE,
@@ -2251,6 +2274,8 @@ class OpenAICompatClient:
         if applied_sampling_fields:
             transport_metadata["sampling_fields_applied"] = list(applied_sampling_fields)
         payload = _sanitize_transport_value(payload)
+        if transport_provider_key == "alysis":
+            validate_hosted_chat_capacity(payload)
         prompt_estimation_payload = {
             "messages": payload.get("messages", []),
         }

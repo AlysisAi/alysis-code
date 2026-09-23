@@ -2765,7 +2765,7 @@ def test_one_shot_non_final_progress_accepts_second_final_after_single_nudge(
     assert "No changes made:" in surface.final_messages[-1]
 
 
-def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
+def test_non_final_progress_tool_markup_is_retried_then_stops_without_execution(
     tmp_path: Path,
 ) -> None:
     cfg = AppConfig(model="test-model", routing_mode="code_only")
@@ -2810,14 +2810,107 @@ def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
     finally:
         session.close()
 
-    assert exit_code == 0
+    assert exit_code == 1
     events = list(read_session_events(sessions_dir / "one-shot-forced-summary-tool-markup.jsonl"))
     assert any(event.get("type") == "continuation_nudge" for event in events)
     assert not [event for event in events if event.get("type") == "forced_final_summary_fallback"]
-    # Turn-contract v2: zero-edit execute turn gets a visible advisory-completion
-    # suffix; the raw tool-markup text is preserved as the leading content.
-    assert surface.final_messages[-1].startswith(raw_tool_markup)
-    assert "No changes made:" in surface.final_messages[-1]
+    assert client.calls == 3
+    assert sum(event.get("type") == "tool_call_markup_recovery" for event in events) == 1
+    assert not any("DSML" in message for message in surface.final_messages)
+    assert "Commands in those replies were not run" in surface.final_messages[-1]
+    assert not any(
+        event.get("type") == "tool_call" and event.get("payload", {}).get("name") == "shell_run"
+        for event in events
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("one_shot", [False, True])
+@pytest.mark.parametrize("native_in_first_response", [False, True])
+def test_tool_markup_recovers_to_native_tool_call_without_executing_printed_commands(
+    tmp_path: Path,
+    stream: bool,
+    one_shot: bool,
+    native_in_first_response: bool,
+) -> None:
+    (tmp_path / "proof.txt").write_text("expected content", encoding="utf-8")
+    surface = _RecordingSurface()
+    deltas: list[str] = []
+    surface.on_assistant_token = deltas.append  # type: ignore[method-assign]
+    session = create_session(
+        cfg=AppConfig(
+            model="test-model", routing_mode="code_only", semantic_turn_contract_enabled=False
+        ),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=6,
+        no_log=False,
+        api_key_override="x",
+        one_shot_execution=one_shot,
+        surface=surface,
+        session_log_dir_override=tmp_path / "sessions",
+    )
+    session.stream = stream
+    markup = (
+        "I will check.\n<｜｜DSML｜｜ calls>\n"
+        '<｜｜DSML｜｜ invoke name="fs_write">'
+        '<｜｜DSML｜｜ parameter name="path">must-not-exist.txt</｜｜DSML｜｜ parameter>'
+        "</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
+    )
+    read_call = ToolCall(id="read", name="fs_read", arguments={"path": "proof.txt"})
+    malformed = LLMResponse(
+        content=markup,
+        tool_calls=[read_call] if native_in_first_response else [],
+        raw={},
+        provider_metadata={"deepseek": {"reasoning_content": "Preserved state"}},
+    )
+    client = _ScriptedClient(
+        [
+            malformed,
+            *(
+                []
+                if native_in_first_response
+                else [LLMResponse(content="", tool_calls=[read_call], raw={})]
+            ),
+            LLMResponse(content="The file contains expected content.", tool_calls=[], raw={}),
+        ]
+    )
+    original_chat = client.chat
+
+    def chat(*, on_reasoning_delta=None, **kwargs):
+        response = original_chat(**kwargs)
+        if kwargs.get("stream") and kwargs.get("on_text_delta"):
+            for char in response.content:
+                kwargs["on_text_delta"](char)
+        return response
+
+    client.chat = chat  # type: ignore[method-assign]
+    session.client = client  # type: ignore[assignment]
+    event_path = session.store.path
+    try:
+        assert session.run_turn("Read proof.txt and tell me its contents.") == 0
+    finally:
+        session.close()
+    # The public runtime adds a completion-gate nudge in one-shot mode.
+    assert client.calls == (2 if native_in_first_response else 3) + int(one_shot)
+    assert not (tmp_path / "must-not-exist.txt").exists()
+    assert "DSML" not in "".join(deltas + surface.final_messages)
+    assert surface.final_messages[-1].startswith("The file contains expected content.")
+    events = list(read_session_events(event_path))
+    assert sum(e["type"] == "tool_call_markup_recovery" for e in events) == (
+        0 if native_in_first_response else 1
+    )
+    tool_events = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_events) == 1
+    assert tool_events[0]["payload"]["name"] == "fs_read"
+    assert all("must-not-exist" not in str(m) for m in client.call_records[1]["messages"])
+    assistant = next(
+        m for m in reversed(client.call_records[1]["messages"]) if m["role"] == "assistant"
+    )
+    assert (
+        assistant["_alysis_provider_metadata"]["deepseek"]["reasoning_content"] == "Preserved state"
+    )
 
 
 def test_one_shot_non_final_progress_accepts_after_single_nudge_without_forced_summary(

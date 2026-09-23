@@ -216,6 +216,71 @@ def _make_cfg() -> AppConfig:
     return cfg
 
 
+def test_hosted_envelope_pressure_compacts_below_the_token_window(tmp_path: Path) -> None:
+    from alysis_code.llm.openai_compat import OpenAICompatClient
+
+    cfg = _make_cfg()
+    cfg.extra_fields["compaction"].update(trigger_ratio=0.9, target_ratio=0.7)
+    cfg.extra_fields["model_metadata_overrides"] = {
+        "models": {
+            "gpt-5-nano": {
+                "context_window_tokens": 1_000_000,
+                "max_output_tokens": 8192,
+            }
+        }
+    }
+    session = create_session(
+        cfg=cfg,
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=2,
+        no_log=False,
+        api_key_override="x",
+        session_log_dir_override=tmp_path / "sessions",
+    )
+    try:
+        compactor = session.conversation_compactor
+        assert compactor is not None
+        compactor.update_main_client(
+            OpenAICompatClient(
+                base_url="https://gateway.test/v1",
+                api_key="test",
+                model="deepseek-flash",
+                provider_key="alysis",
+            )
+        )
+        compactor.compactor_client = _FakeCompactorClient(
+            [_summary(decisions=["retained"]) for _ in range(20)]
+        )
+        compactor._input_token_counter = None
+        for i in range(10):
+            session.messages.extend(
+                [
+                    {"role": "user", "content": f"old request {i} " + "abc " * 7500},
+                    {"role": "assistant", "content": f"old answer {i} " + "def " * 7500},
+                ]
+            )
+        session.messages.append({"role": "user", "content": "Continue the current task."})
+        args = {"tool_list": None, "main_model": "gpt-5-nano"}
+        assert not compactor.request_fits_input_budget(messages=session.messages, **args)
+        result, changed = compactor.maybe_compact(messages=session.messages, **args)
+        assert changed
+        assert result[-1]["content"] == "Continue the current task."
+        assert compactor.request_fits_input_budget(messages=result, **args)
+        checks = [
+            e["payload"]
+            for e in read_session_events(session.store.path)
+            if e["type"] == "compaction_check"
+        ]
+        assert checks[0]["used_tokens"] < checks[0]["target_tokens"]
+        assert checks[0]["request_capacity_ratio"] > 1
+        assert checks[-1]["request_capacity_ratio"] <= 0.7
+        assert compactor.state.history_chunk_index > 0
+    finally:
+        session.close()
+
+
 def _init_git_repo_with_commit(repo: Path) -> None:
     repo.mkdir()
     subprocess.run(

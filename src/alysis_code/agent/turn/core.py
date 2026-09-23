@@ -43,6 +43,7 @@ from ...failure_category import (
 from ...file_classification import is_generated_or_vendor_path
 from ...llm.base import effective_tools_for_client
 from ...llm.metadata import assistant_message_from_response
+from ...llm.tool_call_markup import ToolCallMarkupFilter, contains_tool_call_markup
 from ...llm.types import AssistantResponsePhase, LLMError
 from ...model_router import ROLE_ROUTER
 from ...provider_telemetry import provider_telemetry_operation
@@ -3081,6 +3082,7 @@ def run_turn(
     empty_response_stall_tracker = self.empty_response_stall_tracker
     forced_tool_choice_for_next_step: dict[str, Any] | None = None
     finalization_empty_anomaly_recovery_pending = False
+    tool_markup_recoveries = 0
     continuation_nudges_sent = 0
     last_continuation_nudge_material_edit_generation = -1
     last_continuation_nudge_verification_attempt_count = -1
@@ -4068,17 +4070,24 @@ def run_turn(
             )
 
         streamed_text_emitted = False
+        tool_markup_filter = ToolCallMarkupFilter()
 
-        def _on_text_delta(delta: str) -> None:
+        def _emit_filtered_text_delta(delta: str) -> None:
             nonlocal streamed_text_emitted
-            _throw_if_cancelled()  # interruptible mid-stream (see _on_reasoning_delta)
             if delta:
                 _emit_message_delta_event(self.surface, delta)
                 streamed_text_emitted = True
-            if _legacy_message_tool_events_required(self.surface):
-                self.surface.on_assistant_token(delta)
+                if _legacy_message_tool_events_required(self.surface):
+                    self.surface.on_assistant_token(delta)
 
-        def _on_stream_restart() -> None:
+        def _on_text_delta(delta: str, _filter: ToolCallMarkupFilter = tool_markup_filter) -> None:
+            _throw_if_cancelled()  # interruptible mid-stream (see _on_reasoning_delta)
+            _emit_filtered_text_delta(_filter.feed(delta) if turn_tool_list else delta)
+
+        def _on_stream_restart(_filter: ToolCallMarkupFilter = tool_markup_filter) -> None:
+            nonlocal streamed_text_emitted
+            _filter.reset()
+            streamed_text_emitted = False
             # A transport retry restreams the reply from scratch after tokens
             # already rendered. Tell the surface to reset its live block so
             # the abandoned generation never shows doubled; surfaces without
@@ -4184,6 +4193,11 @@ def run_turn(
         request_messages = _request_messages_for_step(self.messages)
         try:
             if self.conversation_compactor is not None:
+                update_main_client = getattr(
+                    self.conversation_compactor, "update_main_client", None
+                )
+                if callable(update_main_client):
+                    update_main_client(self.client)
                 if not _deadline_allows(
                     DeadlineOperation.COMPACTION_LLM,
                     minimum_remaining_seconds=MINIMUM_LLM_START_SECONDS,
@@ -4726,6 +4740,66 @@ def run_turn(
             tool_list=turn_tool_list,
             operation="main_llm",
         )
+
+        malformed_tool_text = bool(turn_tool_list) and contains_tool_call_markup(resp.content)
+        if response_was_streamed and not malformed_tool_text:
+            _emit_filtered_text_delta(tool_markup_filter.finish())
+        if malformed_tool_text and not resp.tool_calls:
+            # Preserve reasoning state for DeepSeek replay, but never retain or
+            # execute the printed commands as a real tool transcript.
+            self.store.append("tool_call_markup_detected", {"step": step})
+            can_retry = (
+                tool_markup_recoveries < 1
+                and _step_limit_allows_more(step)
+                and _deadline_allows(
+                    DeadlineOperation.MAIN_LLM_RETRY,
+                    minimum_remaining_seconds=MINIMUM_LLM_START_SECONDS,
+                )
+            )
+            _on_stream_restart()
+            if can_retry:
+                tool_markup_recoveries += 1
+                self.messages.append(
+                    assistant_message_from_response(
+                        resp,
+                        content="[Malformed tool-call response omitted; no tools were executed.]",
+                    )
+                )
+                _append_controller_system_message(
+                    "Your last response printed tool-call markup as text. No commands from it "
+                    "were executed. To continue the user's task, use the API's structured "
+                    "tool_calls field with an available tool and JSON arguments. Do not print "
+                    "DSML/XML calls in your answer. If no tool is needed, answer normally.",
+                    intervention_class="tool_call_recovery",
+                    detail="tool_call_markup_recovery",
+                    step=step,
+                )
+                self.store.append("tool_call_markup_recovery", {"step": step, "attempt": 1})
+                continue
+            final_text = (
+                "The model returned malformed tool calls instead of executable actions. "
+                "Commands in those replies were not run. Retry, or switch to another model "
+                "if the problem repeats."
+            )
+            _emit_surface_error(self.surface, "model_control_error", final_text, True)
+            self._emit_final_assistant_text(
+                final_text=final_text,
+                internal_fallback=True,
+                internal_fallback_kind="tool_call_markup",
+                language=turn_language,
+                script=turn_script,
+                explicit_language_override=turn_language_explicit,
+                prior_visible_text=last_visible_assistant_text,
+                streamed_text_emitted=False,
+                final_event_payload={"degraded": True, "degraded_reason": "tool_call_markup"},
+            )
+            assistant_message_emitted = True
+            return _finish_turn(1, reason="tool_call_markup_retry_exhausted", final_text=final_text)
+        if malformed_tool_text:
+            # Native tool calls remain the sole authority even when the same
+            # response also contains a leaked duplicate in its prose.
+            clean = ToolCallMarkupFilter()
+            resp = replace(resp, content=clean.feed(resp.content) + clean.finish())
 
         # A response with neither text nor a tool call leaves the runtime nothing
         # to act on. Counting them here — before any downstream branch, which each
