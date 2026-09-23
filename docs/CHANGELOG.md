@@ -15,6 +15,7 @@ No user-facing changes yet.
 - Compact hosted conversations before they exceed gateway request limits, while keeping token usage estimates separate from transport limits.
 - Recover once when a model prints DSML/XML tool calls as text. Only native tool calls execute; repeated malformed replies stop with an actionable error.
 - Hide malformed live tool-call markup while preserving quoted code examples and normal streamed text.
+- Require patched AnyIO 4.14.2 or newer and update the release lockfile.
 
 ## [0.13.8] - 2026-09-16
 

@@ -32,6 +32,7 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
+  "anyio>=4.14.2",
   "click>=8.0.0",
   "cryptography>=50.0.0",
   "ddgs>=9.0.0",
