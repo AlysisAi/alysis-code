@@ -1196,7 +1196,13 @@ def _matching_model_presets(model: str) -> tuple[tuple[Any, str], ...]:
 
 
 def _provider_switch_is_unsafe(preset: Any) -> bool:
-    return str(getattr(preset, "key", "") or "").strip().lower() in {"openrouter", "custom"}
+    # Hosted account credentials cannot authenticate a direct provider. Keep an
+    # unsupported model on the selected gateway until the user changes it.
+    return str(getattr(preset, "key", "") or "").strip().lower() in {
+        "alysis",
+        "openrouter",
+        "custom",
+    }
 
 
 def _align_active_profile_to_preset(

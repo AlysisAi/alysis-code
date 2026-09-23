@@ -906,5 +906,5 @@ def test_hosted_alysis_preset_stays_intact_behind_the_advanced_picker() -> None:
     assert preset_selection_label(hosted) == "Alysis Code Pro (hosted models) - requires login"
     # The preset itself must keep working for `alysis login` / alysis_cloud.
     assert hosted.api_key_env is None
-    # Retired MiMo-trial ids migrate to the Pro default.
-    assert canonical_model_alias_for_preset(hosted, "mimo") == "deepseek-v4-flash"
+    # The retired Xiaomi campaign must not redirect hosted model selections.
+    assert canonical_model_alias_for_preset(hosted, "mimo") == "mimo"

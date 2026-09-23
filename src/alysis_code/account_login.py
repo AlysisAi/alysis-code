@@ -444,8 +444,7 @@ def _activate_alysis_profile(cfg: AppConfig, *, email: str | None) -> LoginResul
     Fresh logins default to the Pro flagship (``deepseek-v4-flash``) so
     subscribe → login → chat works with zero extra steps. Re-logins preserve
     whatever model the user selected since, so logging in again never undoes
-    their choice. Legacy MiMo ids (the retired Xiaomi trial) are remapped to
-    the current default via the preset's model_aliases at config load.
+    their choice.
     """
     preset = get_preset(cloud.PROFILE_KEY)
     if preset is not None:
