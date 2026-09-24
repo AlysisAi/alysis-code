@@ -15,6 +15,7 @@ configuration, operation, extension points, and security in more detail.
 ## Core guides
 
 - [Architecture](architecture.md): session loop, providers, tools, and verification.
+- [Agent system prompts](agent_prompts.md): shared prompt, model guidance, and child prompts.
 - [Security model](security_model.md): trust boundaries and host-enforced controls.
 - [Shell sandbox](shell_sandbox.md): Docker and Bubblewrap configuration.
 - [Forge](forge.md): plan and execute larger tasks.
@@ -40,6 +41,7 @@ configuration, operation, extension points, and security in more detail.
 
 - [Contributing](../.github/CONTRIBUTING.md): local development and pull request guidance.
 - [Release process](RELEASING.md): package and sandbox-image release steps.
+- [Release checklist](release_checklist.md): focused runtime reliability checks for maintainers.
 - [Security policy](../.github/SECURITY.md): private vulnerability reporting.
 - [Code of Conduct](../.github/CODE_OF_CONDUCT.md): community participation expectations.
 - [Changelog](CHANGELOG.md): user-facing release history.

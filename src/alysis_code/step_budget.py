@@ -53,7 +53,7 @@ def resolve_subagent_step_profile(subagent_name: Any) -> str | None:
         return None
     if normalized in {
         "explorer",
-        "implementer",
+        "general",
         "frontend-engineer",
         "debugger",
         "verifier",

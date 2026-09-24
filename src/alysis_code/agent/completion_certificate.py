@@ -147,15 +147,34 @@ def evaluate_completion_certificate(
     certificate_input: CompletionCertificateInput,
 ) -> CompletionCertificate:
     problems: list[str] = []
+    if certificate_input.contract is not None and not certificate_input.contract.baseline_available:
+        problems.append("acceptance_baseline_unavailable")
     failed_hard: list[str] = []
     covered_hard: list[str] = []
+    required_checks = [
+        criterion for criterion in _hard_criteria(certificate_input.contract) if criterion.commands
+    ]
+    no_edit_requirement_proven = bool(
+        required_checks
+        and all(
+            criterion.status == AcceptanceCriterionStatus.PASSED for criterion in required_checks
+        )
+        and certificate_input.accepted_verification_evidence
+        and not certificate_input.failed_verification_commands
+        and not certificate_input.missing_verification_commands
+        and not certificate_input.verification_coverage_stale
+    )
 
     if not str(certificate_input.final_text or "").strip():
         problems.append("empty_final_response")
     if certificate_input.blocked:
         if not certificate_input.blocker_valid:
             problems.append("acceptance_evidence_insufficient")
-    elif certificate_input.require_material_result and certificate_input.material_edit_count <= 0:
+    elif (
+        certificate_input.require_material_result
+        and certificate_input.material_edit_count <= 0
+        and not no_edit_requirement_proven
+    ):
         problems.append("no_material_edits")
 
     regression_enabled = certificate_input.regression_baseline_enabled

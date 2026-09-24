@@ -1,15 +1,13 @@
 """Static per-model reasoning contracts — the wire truth table.
 
-Source: ``MODEL_CAPABILITY_CONTRACTS_2026-07-19.md`` (19 provider blocks, each
-adversarially verified against official docs). This module is step 1 of that
-report's implementation order: the data nothing at runtime can discover —
-whether a model's reasoning is ``always-on`` / ``optional`` / ``none``, the
+This module records provider-specific reasoning behavior: whether a model's
+reasoning is ``always-on`` / ``optional`` / ``none``, the
 exact wire spelling that controls it, the allowed value strings, and what
 "off" actually does (omit the param, send an explicit disable, impossible, or
 — worst — silently swap the model).
 
-Emission rule this table exists to enforce (report hazard ranks 5, 8, 9, 12,
-16, 18): **allowlist-based emission** — a client may send a reasoning
+Emission rule this table exists to enforce: **allowlist-based emission** —
+a client may send a reasoning
 parameter only when the contract says this model accepts that exact spelling
 and value. ``UNKNOWN`` means send nothing.
 
@@ -98,12 +96,14 @@ def reasoning_labels_allowed_by_contract(
     allowed: list[str] = []
     for label in labels:
         normalized = label.casefold()
+        # An inherited Off setting must not survive a switch to an always-on
+        # model such as Opus 5.5, even when it is the current saved value.
+        if normalized == "off" and contract.mode == ALWAYS_ON and contract.off != OFF_SWAPS_MODEL:
+            continue
         if label == current:
             allowed.append(label)
             continue
         if normalized == "off":
-            if contract.mode == ALWAYS_ON and contract.off != OFF_SWAPS_MODEL:
-                continue
             allowed.append(label)
             continue
         if normalized == "auto":
@@ -137,6 +137,23 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 notes="GPT-6 Astra always reasons; Chat Completions and Responses both "
                 "supported; 'none' is not a documented effort",
             ),
+        ),
+        # September 22 releases share the API effort range, but Codex's
+        # subscription catalog owns its separate per-model efforts.
+        *tuple(
+            (
+                model,
+                _C(
+                    mode=OPTIONAL,
+                    wire=WIRE_REASONING_EFFORT,
+                    values=("none", "low", "medium", "high", "xhigh", "max"),
+                    default="medium",
+                    off=OFF_EXPLICIT,
+                    notes="Chat Completions function calling requires effort none; "
+                    "use Responses for tools with reasoning",
+                ),
+            )
+            for model in ("gpt-6-sol", "gpt-6-luna")
         ),
         (
             "gpt-5.6-",
@@ -223,6 +240,20 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 values=("low", "medium", "high", "xhigh", "max"),
                 off=OFF_OMIT,
                 notes="extended shape = 400; non-default temperature/top_p/top_k = 400",
+            ),
+        ),
+        # Must precede the Opus 5 prefix: 5.5 removed thinking-off support.
+        # https://platform.claude.com/docs/en/models/opus-5-5/overview
+        (
+            "claude-opus-5-5",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_THINKING_ADAPTIVE,
+                values=("low", "medium", "high", "xhigh", "max"),
+                default="medium",
+                off=OFF_IMPOSSIBLE,
+                accepts_tool_choice_while_reasoning=False,
+                notes="always adaptive; forced tool_choice (any/tool) returns an error",
             ),
         ),
         (
@@ -322,9 +353,7 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
             ),
         ),
     ),
-    # The Alysis Code hosted proxy forwards request bodies verbatim to DeepSeek,
-    # so its models follow the deepseek contract exactly (same wire, same
-    # levels, same off semantics).
+    # Hosted models retain their upstream reasoning and replay contracts.
     "alysis": (
         (
             "deepseek-",
@@ -338,6 +367,19 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 accepts_tool_choice_while_reasoning=False,
                 notes="hosted proxy passes reasoning fields through to DeepSeek unchanged; "
                 "mirrors the deepseek provider contract",
+            ),
+        ),
+        (
+            "glm-5.3-flash",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_EFFORT,
+                values=("low", "high", "max"),
+                default="max",
+                off=OFF_IMPOSSIBLE,
+                emits_flat_reasoning_effort=True,
+                replay_reasoning_content=True,
+                notes="Z.ai hosted pay-as-you-go; preserved thinking requires complete reasoning replay",
             ),
         ),
     ),
@@ -496,6 +538,9 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "zai_coding_plan": (
+        # Preserved thinking is enabled by default on this surface and requires
+        # complete reasoning_content replay, including ordinary assistant turns.
+        # https://docs.z.ai/guides/capabilities/thinking-mode
         # Sources: https://docs.z.ai/guides/llm/glm-5.3
         # https://docs.z.ai/guides/vlm/glm-5.3-flash
         # https://docs.z.ai/devpack/overview — the plan serves exactly glm-5.3
@@ -510,6 +555,7 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 default="max",
                 off=OFF_IMPOSSIBLE,
                 emits_flat_reasoning_effort=True,
+                replay_reasoning_content=True,
                 notes=(
                     "Coding Plan surface: disabling thinking is coerced to low rather than "
                     "turning reasoning off; aliases are normalized server-side"
@@ -525,6 +571,7 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
                 default="max",
                 off=OFF_IMPOSSIBLE,
                 emits_flat_reasoning_effort=True,
+                replay_reasoning_content=True,
                 notes="every other glm id is server-routed to glm-5.3 or glm-5.3-flash",
             ),
         ),
@@ -738,8 +785,9 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ("mistral-large-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
         ("codestral-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
         ("ministral-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
-        # Source: https://docs.mistral.ai/models/zai-glm-5-2 — the page lists
-        # no reasoning feature for the hosted GLM-5.2 route.
+        # Sources: https://docs.mistral.ai/models/zai-glm-5-2 and
+        # https://docs.mistral.ai/models/zai-glm-5-3 — neither page documents
+        # a reasoning control for these hosted GLM routes.
         (
             "zai-glm-",
             _C(
@@ -752,11 +800,23 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "xai": (
-        # The current xAI reasoning guide documents the flat field for its SDK,
-        # while the legacy Chat Completions reference does not. Keep emission
-        # off until that transport surface is explicitly documented.
+        # Grok 4.7 launch verification (2026-09-21): ChatRequest in xAI's
+        # OpenAPI schema explicitly accepts the flat reasoning_effort field.
+        # Keep older model emission policies unchanged until revalidated.
         # Sources: https://docs.x.ai/developers/model-capabilities/text/reasoning
-        # https://docs.x.ai/developers/model-capabilities/legacy/chat-completions
+        # https://api.x.ai/api-docs/openapi.json (ChatRequest.reasoning_effort)
+        (
+            "grok-4.7",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_EFFORT,
+                values=("low", "medium", "high", "xhigh"),
+                default="high",
+                off=OFF_IMPOSSIBLE,
+                emits_flat_reasoning_effort=True,
+                notes="stop/presence_penalty/frequency_penalty = documented error",
+            ),
+        ),
         (
             "grok-4.6",
             _C(
@@ -820,6 +880,16 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ("command-", _C(mode=NONE, wire=WIRE_NONE, off=OFF_OMIT)),
     ),
     "openrouter": (
+        (
+            "anthropic/claude-opus-5.5",
+            _C(
+                mode=ALWAYS_ON,
+                wire=WIRE_REASONING_OBJECT,
+                off=OFF_IMPOSSIBLE,
+                accepts_tool_choice_while_reasoning=False,
+                notes="Opus 5.5 always thinks; OpenRouter uses its reasoning object",
+            ),
+        ),
         (
             "",
             _C(

@@ -9,8 +9,8 @@ at a `SKILL.md` file.
 - `loader.py`, `models.py`, and `validation.py` parse and validate bundles.
 - `scaffold.py`, `install.py`, `state.py`, and `transactions.py` support the
   local skill lifecycle.
-- `prompting.py` prepares concise skill context for sessions.
-- `selection.py` builds and validates bounded model-led selection requests.
+- `prompting.py` advertises a compact catalog so the working model can choose and
+  read skills on demand, without a separate selector call.
 - `eval_models.py`, `eval_runner.py`, and `evals.py` provide the skills evaluation harness.
 - `matching.py` retains a legacy lexical matcher for compatibility tests; production automatic
   selection does not use it.

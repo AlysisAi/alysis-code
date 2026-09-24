@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import ssl
+import threading
 
 import httpx
 import pytest
 
+from alysis_code.cancellation import InteractiveCancellationToken
 from alysis_code.execution_deadline import DeadlineExhausted
 from alysis_code.llm import openai_compat as openai_compat_mod
 from alysis_code.llm import types as shared_types
@@ -862,11 +864,13 @@ def test_stream_cancellation_token_interrupts_midstream() -> None:
         def __init__(self) -> None:
             self._cancelled = False
             self._abort = None
+            self.clear_calls = 0
 
         def set_abort_callback(self, fn):
             self._abort = fn
 
         def clear_abort_callback(self):
+            self.clear_calls += 1
             self._abort = None
 
         @property
@@ -893,6 +897,60 @@ def test_stream_cancellation_token_interrupts_midstream() -> None:
             cancellation_token=tok,
         )
     assert seen == ["a"]  # stopped immediately, did not consume "b"/"c"
+    assert tok.clear_calls == 1
+    assert tok._abort is None
+
+
+def test_stream_cancellation_aborts_request_blocked_before_response_headers() -> None:
+    class _BlockedBeforeHeadersTransport(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.request_started = threading.Event()
+            self.close_called = threading.Event()
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.request_started.set()
+            assert self.close_called.wait(timeout=2), "live HTTP client was not aborted"
+            raise httpx.ReadError("request closed before response headers", request=request)
+
+        def close(self) -> None:
+            self.close_called.set()
+
+    transport = _BlockedBeforeHeadersTransport()
+    client = OpenAICompatClient(
+        base_url="https://example.com/v1",
+        api_key="test",
+        model="test-model",
+        transport=transport,
+        provider_retry_settings=ProviderRetrySettings(max_retries=0),
+    )
+    token = InteractiveCancellationToken()
+    outcome: list[BaseException | LLMResponse] = []
+
+    def _chat() -> None:
+        try:
+            outcome.append(
+                client.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                    cancellation_token=token,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - cancellation is the assertion
+            outcome.append(exc)
+
+    worker = threading.Thread(target=_chat, daemon=True)
+    worker.start()
+    assert transport.request_started.wait(timeout=1)
+
+    token.cancel()
+    worker.join(timeout=1)
+
+    assert transport.close_called.is_set()
+    assert not worker.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], KeyboardInterrupt)
+    assert "cancelled_by_user" in str(outcome[0])
+    assert token._abort is None  # noqa: SLF001
 
 
 def test_chat_sends_tool_choice_and_response_format() -> None:
@@ -4968,9 +5026,7 @@ def test_stream_parser_reconstructs_split_crlf_and_utf8_chunks() -> None:
 
 
 def test_stream_watchdog_checks_cancellation_before_buffered_newline() -> None:
-    from alysis_code.cli_impl.tui.app import _Cancellation
-
-    token = _Cancellation()
+    token = InteractiveCancellationToken()
     token.cancel()
     stream = _TrackedCompatSseStream([b"x"], fail_on_exhaustion=True)
     response = httpx.Response(200, stream=stream)

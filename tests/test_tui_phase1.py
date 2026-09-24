@@ -83,6 +83,7 @@ def test_disconnected_landing_uses_one_neutral_model_access_instruction():
         # DeepSeek hyphenates the whole name ("DeepSeek-V4-Flash"); dated beta
         # ids drop their expiry suffix.
         ("deepseek-chat", "DeepSeek-Chat"),
+        ("deepseek-flash", "DeepSeek-V4.1-Flash"),
         ("deepseek-v4-pro", "DeepSeek-V4-Pro"),
         ("deepseek-v4-flash-vision-exp", "DeepSeek-V4-Flash-Vision-Exp"),
         ("deepseek-v4.1-flash-expires-on-0910", "DeepSeek-V4.1-Flash"),

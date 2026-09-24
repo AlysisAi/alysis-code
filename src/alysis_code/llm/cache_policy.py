@@ -16,6 +16,8 @@ from ..config import (
 )
 from .cache_capabilities import (
     CACHE_CONTROL_FIELD,
+    CACHE_STRATEGY_GEMINI_IMPLICIT,
+    CACHE_STRATEGY_IMPLICIT_PROVIDER,
     CACHED_CONTENT_FIELD,
     OPENROUTER_SESSION_ID_FIELD,
     OPENROUTER_SESSION_ID_HEADER_FIELD,
@@ -42,6 +44,7 @@ class ResolvedPromptCachePolicy:
     anthropic_cache_control_ttl: str = "5m"
     gemini_explicit_cached_content_enabled: bool = False
     gemini_cached_content_ttl: str | None = None
+    implicit_cache_enabled: bool = False
     mode: str = "manual"
     strategy: str = "none"
     capability_source: str = "default"
@@ -57,7 +60,7 @@ class ResolvedPromptCachePolicy:
     def status(self) -> str:
         if self.mode == "off":
             return "disabled"
-        if self.emitted_fields:
+        if self.emitted_fields or self.implicit_cache_enabled:
             return "enabled"
         if self.strategy == "none":
             return "unsupported"
@@ -71,6 +74,7 @@ class ResolvedPromptCachePolicy:
             "strategy": self.strategy,
             "mode": "automatic" if self.mode == "auto" else self.mode,
             "enabled": self.status == "enabled",
+            "implicit_cache_enabled": self.implicit_cache_enabled,
             "capability_source": self.capability_source,
             "source": self.capability_source,
             "allowed_fields": list(self.allowed_fields),
@@ -247,6 +251,10 @@ def resolve_prompt_cache_policy(
         anthropic_cache_control_ttl=ttl,
         gemini_explicit_cached_content_enabled=gemini_explicit_enabled,
         gemini_cached_content_ttl=gemini_ttl,
+        # Implicit strategies cache eligible prefixes without a request marker.
+        # Diagnostic-only explicit strategies remain merely available.
+        implicit_cache_enabled=strategy
+        in {CACHE_STRATEGY_IMPLICIT_PROVIDER, CACHE_STRATEGY_GEMINI_IMPLICIT},
         mode=mode,
         strategy=strategy,
         capability_source=effective_capability.source,

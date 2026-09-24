@@ -81,6 +81,21 @@ _CONSERVATIVE_ENV_KEYS = (
     "COMSPEC",
     "PATHEXT",
     "WINDIR",
+    # Network plumbing: a server behind a corporate proxy or a TLS-inspecting gateway
+    # cannot reach anything without these. Both spellings, since tools differ.
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
 )
 _INTERNAL_CLIENT_REQUEST_CODE = -32603
 _INVALID_STDOUT_UTF8_MESSAGE = "received invalid UTF-8 on stdio stdout"

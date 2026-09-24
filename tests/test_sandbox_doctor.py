@@ -257,8 +257,9 @@ def test_detect_bubblewrap_install_plan_apt_with_sudo(monkeypatch: pytest.Monkey
 
     assert plan is not None
     assert plan.manager == "apt-get"
+    assert plan.refresh_command == ("sudo", "apt-get", "update")
     assert plan.command == ("sudo", "apt-get", "install", "-y", "bubblewrap")
-    assert plan.display == "sudo apt-get install -y bubblewrap"
+    assert plan.display == "sudo apt-get update && sudo apt-get install -y bubblewrap"
 
 
 def test_detect_bubblewrap_install_plan_root_drops_sudo(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,6 +275,26 @@ def test_detect_bubblewrap_install_plan_root_drops_sudo(monkeypatch: pytest.Monk
 
     assert plan is not None
     assert plan.command == ("apk", "add", "bubblewrap")
+    assert plan.refresh_command is None
+    assert plan.display == "apk add bubblewrap"
+
+
+def test_detect_bubblewrap_install_plan_apt_as_root_refreshes_without_sudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sandbox_doctor_mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandbox_doctor_mod, "_needs_sudo", lambda: False)
+    monkeypatch.setattr(
+        sandbox_doctor_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+    )
+
+    plan = sandbox_doctor_mod.detect_bubblewrap_install_plan()
+
+    assert plan is not None
+    assert plan.refresh_command == ("apt-get", "update")
+    assert plan.command == ("apt-get", "install", "-y", "bubblewrap")
 
 
 def test_detect_bubblewrap_install_plan_none_when_already_installed(
@@ -368,6 +389,118 @@ def test_install_bubblewrap_reports_nonzero_exit(monkeypatch: pytest.MonkeyPatch
 
     assert result.ok is False
     assert "code 100" in result.detail
+
+
+def _apt_plan_with_refresh() -> sandbox_doctor_mod.BubblewrapInstallPlan:
+    return sandbox_doctor_mod.BubblewrapInstallPlan(
+        manager="apt-get",
+        command=("sudo", "apt-get", "install", "-y", "bubblewrap"),
+        display="sudo apt-get update && sudo apt-get install -y bubblewrap",
+        refresh_command=("sudo", "apt-get", "update"),
+    )
+
+
+def test_install_bubblewrap_refreshes_package_index_before_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
+        ran.append(list(args))
+        return _cp(args, returncode=0)
+
+    monkeypatch.setattr(sandbox_doctor_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sandbox_doctor_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+    )
+
+    result = sandbox_doctor_mod.install_bubblewrap(plan=_apt_plan_with_refresh())
+
+    assert result.ok is True
+    assert ran == [
+        ["sudo", "apt-get", "update"],
+        ["sudo", "apt-get", "install", "-y", "bubblewrap"],
+    ]
+
+
+def test_install_bubblewrap_continues_after_partial_apt_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One broken third-party repository makes `apt-get update` exit 100; the
+    # distro archive still serves bubblewrap, so the install must still run.
+    ran: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
+        ran.append(list(args))
+        return _cp(args, returncode=100 if "update" in args else 0)
+
+    monkeypatch.setattr(sandbox_doctor_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sandbox_doctor_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+    )
+
+    result = sandbox_doctor_mod.install_bubblewrap(plan=_apt_plan_with_refresh())
+
+    assert result.ok is True
+    assert ran[-1] == ["sudo", "apt-get", "install", "-y", "bubblewrap"]
+
+
+def test_install_bubblewrap_failure_mentions_partial_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sandbox_doctor_mod.subprocess,
+        "run",
+        lambda args, **_kwargs: _cp(args, returncode=100),
+    )
+
+    result = sandbox_doctor_mod.install_bubblewrap(plan=_apt_plan_with_refresh())
+
+    assert result.ok is False
+    assert "package manager exited with code 100" in result.detail
+    assert "refresh also reported errors" in result.detail
+
+
+def test_install_bubblewrap_stops_when_refresh_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # sudo exits 1 on a rejected password; running the install next would only
+    # prompt for the password a second time.
+    ran: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):  # type: ignore[no-untyped-def]
+        ran.append(list(args))
+        return _cp(args, returncode=1)
+
+    monkeypatch.setattr(sandbox_doctor_mod.subprocess, "run", fake_run)
+
+    result = sandbox_doctor_mod.install_bubblewrap(plan=_apt_plan_with_refresh())
+
+    assert result.ok is False
+    assert ran == [["sudo", "apt-get", "update"]]
+    assert "package index refresh exited with code 1" in result.detail
+
+
+def test_install_bubblewrap_refresh_timeout_stops_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ran: list[list[str]] = []
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        ran.append(list(args))
+        raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(sandbox_doctor_mod.subprocess, "run", fake_run)
+
+    result = sandbox_doctor_mod.install_bubblewrap(plan=_apt_plan_with_refresh(), timeout_s=7)
+
+    assert result.ok is False
+    assert ran == [["sudo", "apt-get", "update"]]
+    assert "refresh timed out after 7s" in result.detail
 
 
 def test_install_bubblewrap_without_plan_when_unsupported(

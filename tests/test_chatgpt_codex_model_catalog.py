@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 import alysis_code.provider_auth as provider_auth_mod
 from alysis_code.chatgpt_codex_static_provider import (
@@ -57,19 +58,38 @@ def test_subscription_snapshot_contains_current_visible_capacity_tiers() -> None
     models = {model.id: model for model in load_chatgpt_codex_static_models()}
 
     assert set(models) == {
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
         "gpt-5.5",
-        "gpt-5.3-codex-spark",
     }
+    astra = models["gpt-6-astra"]
+    assert astra.context_window_tokens == 272_000
+    assert astra.default_reasoning_effort == "medium"
+    assert astra.input_modalities == ("text", "image")
+    assert [effort for effort, _description in astra.reasoning_efforts] == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    ]
     assert models["gpt-5.6-sol"].context_window_tokens == 272_000
     assert models["gpt-5.6-sol"].default_reasoning_effort == "low"
     assert models["gpt-5.6-terra"].context_window_tokens == 272_000
     assert models["gpt-5.6-luna"].context_window_tokens == 272_000
     assert models["gpt-5.5"].context_window_tokens == 272_000
-    assert models["gpt-5.3-codex-spark"].context_window_tokens == 128_000
-    assert models["gpt-5.3-codex-spark"].input_modalities == ("text",)
+    for model in ("gpt-6-sol", "gpt-6-luna"):
+        assert models[model].context_window_tokens == 272_000
+        assert models[model].default_reasoning_effort == "medium"
+        efforts = [effort for effort, _ in models[model].reasoning_efforts]
+        assert efforts == ["low", "medium", "high", "xhigh", "max"] + (
+            ["ultra"] if model == "gpt-6-sol" else []
+        )
 
 
 class _OfflineSubscriptionAdapter:
@@ -78,17 +98,20 @@ class _OfflineSubscriptionAdapter:
         raise RuntimeError("catalog offline")
 
 
-def test_registry_uses_subscription_snapshot_when_live_catalog_is_offline(monkeypatch) -> None:
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])
+def test_registry_uses_subscription_snapshot_when_live_catalog_is_offline(
+    monkeypatch, model
+) -> None:
     monkeypatch.setattr(
         provider_auth_mod,
         "create_provider_auth",
         lambda _provider_id: _OfflineSubscriptionAdapter(),
     )
 
-    meta = ModelRegistry(cfg=_subscription_cfg("gpt-5.6-sol")).get("gpt-5.6-sol")
+    meta = ModelRegistry(cfg=_subscription_cfg(model)).get(model)
 
     assert meta.context_window_tokens == 272_000
-    assert meta.max_output_tokens == 8_192
+    assert meta.max_output_tokens == 32_000
     assert meta.supports_vision is True
     assert meta.input_cost_per_token == 0.0
     assert meta.field_sources["context_window_tokens"] == (
@@ -109,7 +132,7 @@ def test_registry_never_uses_api_capacity_for_unknown_subscription_model(monkeyp
     )
 
     assert meta.context_window_tokens == 128_000
-    assert meta.max_output_tokens == 8_192
+    assert meta.max_output_tokens == 32_000
     assert meta.field_sources["context_window_tokens"] == (
         "provider_auth:openai-codex:conservative-default"
     )

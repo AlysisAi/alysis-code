@@ -2509,6 +2509,7 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pages = [[_prompts_payload()[0]], [_prompts_payload()[1]]]
+    expected_text = "Review repo owner/alysis."
 
     def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
         if request.method == "DELETE":
@@ -2549,7 +2550,7 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
                     _prompt_get_result(
                         name="review_pr",
                         description="Review helper",
-                        text="Review repo owner/alysis.",
+                        text=expected_text,
                     ),
                 )
             )
@@ -2566,8 +2567,8 @@ def test_http_client_supports_paginated_prompts_list_and_get_over_json(
             arguments={"repo": "owner/alysis"},
         )
         assert prompt_result.description == "Review helper"
-        assert prompt_result.text == "Review repo owner/alysis."
-        assert "user: text(25 chars)" in prompt_result.content_summary
+        assert prompt_result.text == expected_text
+        assert f"user: text({len(expected_text)} chars)" in prompt_result.content_summary
     finally:
         client.close()
         server.close()

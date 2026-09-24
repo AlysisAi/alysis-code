@@ -361,6 +361,71 @@ def test_helper_budget_step_and_deadline_bounds_are_enforced(
         store.close()
 
 
+def test_default_helper_has_no_step_or_wall_clock_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AppConfig(model="test-model", web_search_mode="off")
+    captured: dict[str, Any] = {}
+
+    def create_helper(**kwargs: Any) -> _HelperSession:
+        captured.update(kwargs)
+        return _HelperSession(session_id="helper-unlimited")
+
+    monkeypatch.setattr(agent_loop, "create_session", create_helper)
+    tools, store = _child_tools(
+        tmp_path=tmp_path,
+        cfg=cfg,
+        create_session_factory=create_helper,
+    )
+    try:
+        result = tools["subagent_run"].run({"name": "explorer", "task": "Inspect the repository."})
+    finally:
+        store.close()
+
+    assert result.get("result") == "Helper report.", result
+    assert captured["max_steps"] is None
+    assert captured["execution_deadline"].enabled is False
+    assert captured["execution_deadline"].remaining_seconds() is None
+    assert cfg.subagent_orchestration.helper_timeout_s is None
+    assert cfg.subagent_orchestration.helper_max_steps is None
+
+
+def test_explicit_helper_timeout_applies_without_parent_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AppConfig(
+        model="test-model",
+        web_search_mode="off",
+        subagent_orchestration={"helper_timeout_s": 30.0},
+    )
+    captured: dict[str, Any] = {}
+
+    def create_helper(**kwargs: Any) -> _HelperSession:
+        captured.update(kwargs)
+        return _HelperSession(session_id="helper-with-timeout")
+
+    monkeypatch.setattr(agent_loop, "create_session", create_helper)
+    tools, store = _child_tools(
+        tmp_path=tmp_path,
+        cfg=cfg,
+        create_session_factory=create_helper,
+    )
+    try:
+        result = tools["subagent_run"].run({"name": "explorer", "task": "Inspect the repository."})
+    finally:
+        store.close()
+
+    assert result.get("result") == "Helper report.", result
+    child_deadline = captured["execution_deadline"]
+    assert child_deadline.enabled is True
+    assert child_deadline.configured_duration_seconds == 30.0
+    remaining_seconds = child_deadline.remaining_seconds()
+    assert remaining_seconds is not None
+    assert 0 < remaining_seconds <= 30.0
+
+
 def test_nested_helper_refuses_when_two_observed_calls_do_not_fit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -420,11 +485,13 @@ def test_helper_config_rejects_invalid_bounds(values: dict[str, Any]) -> None:
 def test_writer_prompts_and_child_catalog_explain_advisory_helpers() -> None:
     registry = built_in_subagents()
 
-    for writer in ("implementer", "frontend-engineer"):
+    for writer in ("general", "frontend-engineer"):
         prompt = registry[writer].system_prompt
         assert "bounded read-only helpers" in prompt
         assert "their reports are advisory" in prompt
-        assert "do not replace your own verification duty" in prompt
+        assert "do not transfer your responsibility for assessing the actual candidate" in prompt
+        assert "Reuse attributable, still-current helper checks" in prompt
+        assert "without claiming you ran them yourself" in prompt
 
     catalog = _subagent_helper_catalog_message(
         registry=registry,
@@ -538,7 +605,7 @@ def test_writer_helper_uses_child_workspace_and_rolls_up_usage_once(
     try:
         result = tools["subagent_run"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Inspect app.txt with a helper.",
                 "workspace_view": workspace_view,
             }

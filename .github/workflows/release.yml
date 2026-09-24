@@ -51,10 +51,55 @@ jobs:
           version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
           test "$GITHUB_REF_NAME" = "v$version"
 
+  reliability-qualification:
+    name: Qualify release (${{ matrix.os }}, py3.12)
+    needs: validate-release-source
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # Match CI's macOS runner while Python loopback listeners fail on
+        # newer images: https://github.com/actions/runner-images/issues/14409
+        os: [ubuntu-latest, windows-latest, macos-14]
+    env:
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    steps:
+      - name: Check out the exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+      - name: Sync locked qualification dependencies
+        run: uv sync --frozen --python "3.12" --extra dev
+      - name: Qualify source and installed wheel
+        run: >-
+          uv run --frozen --no-sync python scripts/qa/qualify_production_reliability.py
+          --require-clean --output-dir "${{ runner.temp }}/production-reliability"
+      - name: Preserve qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-reliability-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/production-reliability/manifest.json
+            ${{ runner.temp }}/production-reliability/*.log
+            ${{ runner.temp }}/production-reliability/*.xml
+            ${{ runner.temp }}/production-reliability/dist/*.whl
+          if-no-files-found: error
+
   build:
     name: Build, validate, and attest
     runs-on: ubuntu-latest
-    needs: validate-release-source
+    needs: [validate-release-source, reliability-qualification]
     timeout-minutes: 45
     permissions:
       contents: read

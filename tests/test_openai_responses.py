@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from alysis_code.cli_impl.tui.app import _Cancellation
+from alysis_code.cancellation import InteractiveCancellationToken
 from alysis_code.execution_deadline import DeadlineExhausted
+from alysis_code.llm import provider_limits as provider_limits_mod
 from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     attach_provider_metadata_to_assistant_message,
@@ -424,7 +426,7 @@ def test_stream_watchdog_checks_cancellation_between_keepalives() -> None:
         api_key="test-key",
         model="search-model",
     )
-    token = _Cancellation()
+    token = InteractiveCancellationToken()
     token.cancel()
     response = httpx.Response(200, content=b": keepalive\n\n")
 
@@ -523,10 +525,13 @@ def test_count_input_tokens_uses_shared_provider_retry_policy() -> None:
     assert sleeps == [pytest.approx(0.01)]
 
 
-def test_subscription_count_input_tokens_uses_adapter_without_generation_fields() -> None:
-    class SubscriptionAuth:
+def test_opted_in_auth_count_input_tokens_uses_adapter_without_generation_fields() -> None:
+    class CountingAuth:
+        """A count-capable test adapter, not the actual ChatGPT endpoint contract."""
+
         requires_streaming = True
         supports_previous_response_id = False
+        supports_input_token_count = True
 
         def authorization_headers(
             self,
@@ -559,7 +564,7 @@ def test_subscription_count_input_tokens_uses_adapter_without_generation_fields(
         base_url="https://chatgpt.example/backend-api/codex",
         api_key="",
         model="subscription-model",
-        provider_auth=SubscriptionAuth(),  # type: ignore[arg-type]
+        provider_auth=CountingAuth(),  # type: ignore[arg-type]
         transport=httpx.MockTransport(handler),
     )
 
@@ -2680,9 +2685,33 @@ def test_chat_completed_reasoning_only_response_routes_to_agent_recovery() -> No
     assert [item.text for item in response.reasoning] == ["Checked the repository."]
 
 
-def test_responses_chat_retries_are_bounded_by_wall_clock_cap() -> None:
+@pytest.mark.parametrize(
+    ("cap_seconds", "expected_attempts", "expected_sleeps"),
+    [(1.0, 1, []), (5.0, 2, [2.0])],
+    ids=["first-backoff-blocked", "elapsed-sleep-counted"],
+)
+def test_responses_chat_retries_are_bounded_by_wall_clock_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    cap_seconds: float,
+    expected_attempts: int,
+    expected_sleeps: list[float],
+) -> None:
     attempts = 0
     sleeps: list[float] = []
+    now = 0.0
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    # Connection drops use 2/4/8s backoff. Its sleeper and clock must agree
+    # so the cap includes elapsed waits without sleeping in the test.
+    monkeypatch.setattr(
+        provider_limits_mod,
+        "time",
+        SimpleNamespace(monotonic=lambda: now, sleep=sleep),
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -2699,16 +2728,16 @@ def test_responses_chat_retries_are_bounded_by_wall_clock_cap() -> None:
             base_delay_seconds=10.0,
             max_delay_seconds=120.0,
         ),
-        provider_sleep_fn=sleeps.append,
+        provider_sleep_fn=sleep,
         provider_random_fn=lambda: 0.5,
     )
-    client._provider_retry_wall_clock_cap_seconds = 5.0
+    client._provider_retry_wall_clock_cap_seconds = cap_seconds
 
     with pytest.raises(LLMError, match="stream ended early"):
         client.chat(messages=[{"role": "user", "content": "hello"}])
 
-    assert attempts == 3
-    assert sleeps == [2.0, 4.0]
+    assert attempts == expected_attempts
+    assert sleeps == expected_sleeps
 
 
 def test_web_search_parses_output_text_citations_and_sources() -> None:
@@ -3226,6 +3255,46 @@ def test_chat_drops_temperature_when_model_rejects_it() -> None:
     assert resp2.content == "ok"
     assert len(calls) == 3
     assert "temperature" not in calls[2]
+
+
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("effort", [None, "none"])
+def test_gpt6_responses_payload_respects_sampling_constraint(
+    model: str, effort: str | None
+) -> None:
+    sent: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_ok",
+                "model": model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    }
+                ],
+            },
+        )
+
+    client = OpenAIResponsesClient(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model=model,
+        provider_key="openai",
+        reasoning_effort=effort,
+        temperature=0.2,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.chat(messages=[{"role": "user", "content": "hello"}]).content == "ok"
+    assert ("temperature" in sent) is (effort == "none")
+    if effort == "none":
+        assert sent["reasoning"] == {"effort": "none"}
 
 
 def test_responses_chat_and_count_strip_state_from_different_credential_route() -> None:

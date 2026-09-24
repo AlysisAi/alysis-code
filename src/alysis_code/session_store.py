@@ -72,6 +72,51 @@ def local_session_owner() -> str | None:
     return f"{user}@{host}"
 
 
+class SessionStoreWriteError(OSError):
+    """The session log did not accept a record; the event was not published.
+
+    Raised by :meth:`SessionStore.append` when the store is durable and the
+    JSONL write did not complete. The event is never visible through
+    ``events_snapshot`` / ``events_since``. On disk the outcome is one of
+    (:attr:`outcome`):
+
+    * ``refused`` — nothing of the record remains authoritative: the file was
+      truncated back, or an uncommitted-record boundary was recorded so a
+      replay (:func:`read_session_events`) skips the bytes the attempt left;
+    * ``indeterminate`` — the attempt may have left a complete-looking record
+      on disk and the store could record neither the truncation nor a
+      boundary. The store then refuses every further record until the
+      boundary is recorded (:meth:`SessionStore.reconcile`); the persisted
+      state of the session must not be trusted as complete until then.
+    """
+
+    def __init__(self, message: str, *, outcome: str = "refused") -> None:
+        super().__init__(message)
+        self.outcome = outcome
+
+
+class SessionStoreUnavailableError(SessionStoreWriteError):
+    """A durable session log was requested but cannot be opened.
+
+    Raised by :class:`SessionStore` at construction when ``enabled=True`` and
+    the sessions directory or the log file is unusable. Distinct from a
+    deliberate ``enabled=False`` (``--no-log``): the caller asked for a
+    durable record and did not get one, and must not run as if it had.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, outcome="unavailable")
+
+
+# A record type the store writes *itself* (never through ``append``) right
+# after a failed, non-truncatable write: everything between ``from_offset``
+# and ``to_offset`` (or, when unknown, up to this record) was not committed and
+# is skipped by :func:`read_session_events`. Also carried by the sidecar file
+# ``<log>.uncommitted.json`` when the marker could not be written to the log.
+SESSION_STORE_UNCOMMITTED_EVENT = "session_store_uncommitted"
+_UNCOMMITTED_SIDECAR_SUFFIX = ".uncommitted.json"
+
+
 @dataclass
 class SessionInfo:
     session_id: str
@@ -147,16 +192,33 @@ class SessionStore:
         )
         self._events: list[dict[str, Any]] = []
         self._web_research = SessionWebResearchTracker()
+        # An uncommitted-record boundary the store still owes the log: set
+        # when a failed write could not be truncated away and the boundary
+        # marker could not be written either. While pending, every append is
+        # refused as ``indeterminate`` (see :meth:`reconcile`).
+        self._pending_uncommitted: dict[str, Any] | None = None
         self._hydrate_existing_state()
 
         self._fh = None
         if self.enabled:
+            # A durable log was requested. It either opens, or the store
+            # refuses to exist: silently continuing without a log would
+            # indistinguishably look like a deliberate ``--no-log`` session.
             try:
                 self.sessions_dir.mkdir(parents=True, exist_ok=True)
                 self._fh = self.path.open("a", encoding="utf-8")
-            except OSError:
-                self.enabled = False
-                self.artifact_persistence_enabled = False
+            except OSError as exc:
+                raise SessionStoreUnavailableError(
+                    f"session log {self.path} cannot be opened for writing: {exc}"
+                ) from exc
+            self._adopt_uncommitted_sidecar()
+            if self._pending_uncommitted is not None:
+                self.close()
+                raise SessionStoreUnavailableError(
+                    f"session log {self.path} holds an uncommitted record that cannot be "
+                    "marked as such (neither the log nor its sidecar is writable); the log "
+                    "must be reconciled before it can be used"
+                )
 
     @property
     def session_artifact_root(self) -> Path:
@@ -175,10 +237,38 @@ class SessionStore:
         payload: dict[str, Any],
         *,
         observation_payload: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str:
+        """Record one event and return its ``event_id`` (``<session_id>:<n>``).
+
+        The id lets host-owned state reference the originating event (for
+        example the ``user_message`` a task objective came from).
+
+        Publication is commit-consistent: for a durable store the record is
+        written and flushed to the JSONL log *before* it becomes visible to
+        ``events_snapshot`` / ``events_since``. A failed write raises
+        :class:`SessionStoreWriteError` and publishes nothing, so host-owned
+        state that treats a returned event id as "accepted" never diverges
+        from what a later replay of the log will see. A store created with
+        ``enabled=False`` (deliberate no-log operation) keeps events in memory
+        only, as before.
+        """
+
         event = self._build_event(event_type=event_type, payload=payload)
         with self._lock:
-            event["event_id"] = f"{self.session_id}:{len(self._events) + 1}"
+            event_id = f"{self.session_id}:{len(self._events) + 1}"
+            event["event_id"] = event_id
+            if self.enabled:
+                # An earlier failed write left disowned bytes whose in-log
+                # boundary marker is still owed: it goes in first, so the
+                # refusal stays authoritative however many records follow.
+                if self._pending_uncommitted is not None and not self.reconcile():
+                    raise SessionStoreWriteError(
+                        f"session log {self.path} holds an uncommitted record whose boundary "
+                        "marker cannot be written; refusing to record "
+                        f"{event_type!r} until the log is reconciled",
+                        outcome="indeterminate",
+                    )
+                self._write_record(event)
             self._events.append(event)
             observed_web_research = self._web_research.observe_event(
                 event_type=event_type,
@@ -186,11 +276,236 @@ class SessionStore:
                 ts=str(event.get("ts") or "").strip() or None,
                 event_id=str(event.get("event_id") or "").strip() or None,
             )
-            if self.enabled and self._fh:
-                self._fh.write(redact_log_text(json.dumps(event, ensure_ascii=True) + "\n"))
-                self._fh.flush()
             if observed_web_research and self.artifact_persistence_enabled:
                 self._persist_web_research_artifact()
+        return event_id
+
+    def _write_record(self, event: dict[str, Any]) -> None:
+        """Append one record to the log; raise without publishing on failure.
+
+        The record is complete on disk when this returns. When the write or
+        flush fails, the handle is closed and the attempt is undone
+        (:meth:`_discard_partial_record`): the file is truncated back to the
+        length it had before the attempt or, when that is impossible, an
+        uncommitted-record boundary is recorded so a replay never treats the
+        bytes the attempt left as a committed record. The raised error says
+        which outcome applies (``refused`` or ``indeterminate``). The handle is
+        reopened on the next append so a transient failure does not silently
+        disable logging.
+        """
+
+        line = redact_log_text(json.dumps(event, ensure_ascii=True) + "\n")
+        fh = self._fh
+        if fh is None:
+            fh = self._reopen_log()
+        if fh is None:
+            raise SessionStoreWriteError(f"session log {self.path} is not writable")
+        start = self._measure_log_end(fh)
+        if start is None:
+            # Without the pre-write length the attempt could not be undone
+            # or even identified afterwards, so it is not made: nothing
+            # reaches the file, the record is refused, and the handle is
+            # dropped so the next append starts from a fresh one.
+            self._close_log_handle()
+            raise SessionStoreWriteError(
+                f"could not measure session log {self.path} before writing "
+                f"{event.get('type', 'event')!r}; the record was not attempted"
+            )
+        try:
+            fh.write(line)
+            fh.flush()
+        except Exception as exc:
+            outcome = self._discard_partial_record(start, event_type=str(event.get("type") or ""))
+            detail = (
+                ""
+                if outcome == "refused"
+                else "; the log may hold the uncommitted record and "
+                "refuses further records until it can be marked (indeterminate)"
+            )
+            raise SessionStoreWriteError(
+                f"could not write {event.get('type', 'event')!r} to session log "
+                f"{self.path}: {exc}{detail}",
+                outcome=outcome,
+            ) from exc
+
+    def _reopen_log(self) -> Any | None:
+        try:
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            self._fh = self.path.open("a", encoding="utf-8")
+        except OSError:
+            self._fh = None
+        return self._fh
+
+    def _close_log_handle(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001 - the handle may already be failing
+                pass
+
+    def _measure_log_end(self, fh: Any) -> int | None:
+        """The log's current length in bytes, or ``None`` when it cannot be known.
+
+        Measured through the handle first, then through the path; the store
+        holds its lock and is the only writer, so both describe the same
+        end. The value is the only reliable identity of a record the store
+        may have to disown later (:meth:`_discard_partial_record`).
+        """
+
+        try:
+            return int(os.fstat(fh.fileno()).st_size)
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        try:
+            position = fh.tell()
+            if isinstance(position, int) and position >= 0:
+                return position
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        try:
+            return int(self.path.stat().st_size) if self.path.exists() else 0
+        except OSError:
+            return None
+
+    def _discard_partial_record(self, start: int, *, event_type: str = "") -> str:
+        """Undo a failed write; returns ``refused`` or ``indeterminate``.
+
+        First choice: truncate the file back to ``start`` (nothing of the
+        attempt remains). When the file cannot be truncated, the bytes the
+        attempt left may parse as a complete record, so the store records an
+        uncommitted-record boundary ``[start, end)`` instead
+        (:meth:`_record_uncommitted_boundary`) that :func:`read_session_events`
+        honours for every record starting inside it, however many committed
+        records follow later. Only when the boundary cannot be recorded at
+        all is the outcome indeterminate, and the store then refuses further
+        records until reconciled.
+        """
+
+        self._close_log_handle()
+        end: int | None = None
+        try:
+            end = self.path.stat().st_size if self.path.exists() else 0
+        except OSError:
+            end = None
+        if end is not None and end <= start:
+            # Nothing reached the file.
+            return "refused"
+        try:
+            os.truncate(self.path, start)
+            return "refused"
+        except OSError:
+            pass
+        boundary = {
+            "from_offset": start,
+            "to_offset": end,
+            "event_type": event_type,
+            "ts": _now_ts(),
+        }
+        recorded = self._record_uncommitted_boundary(boundary)
+        if recorded == "marker":
+            return "refused"
+        # The marker is still owed to the log: until it is there, no further
+        # record may follow the disowned bytes (see ``append``), so a
+        # boundary whose end could not be measured stays "up to the marker"
+        # and a sidecar's range stays "up to the end of the file".
+        self._pending_uncommitted = boundary
+        return "refused" if recorded == "sidecar" else "indeterminate"
+
+    def _uncommitted_marker_line(self, boundary: dict[str, Any]) -> str:
+        record = {
+            "type": SESSION_STORE_UNCOMMITTED_EVENT,
+            "ts": _now_ts(),
+            "session_id": self.session_id,
+            "payload": dict(boundary),
+        }
+        # A leading newline guarantees the marker starts its own line even
+        # when the failed attempt left a partial line without a terminator.
+        return "\n" + json.dumps(record, ensure_ascii=True) + "\n"
+
+    def _write_uncommitted_marker(self, boundary: dict[str, Any]) -> bool:
+        try:
+            with self.path.open("a", encoding="utf-8") as marker_fh:
+                marker_fh.write(self._uncommitted_marker_line(boundary))
+                marker_fh.flush()
+        except OSError:
+            return False
+        self._remove_uncommitted_sidecar()
+        return True
+
+    def _write_uncommitted_sidecar(self, boundary: dict[str, Any]) -> bool:
+        try:
+            self._uncommitted_sidecar_path.write_text(
+                json.dumps(boundary, ensure_ascii=True), encoding="utf-8"
+            )
+        except OSError:
+            return False
+        return True
+
+    def _record_uncommitted_boundary(self, boundary: dict[str, Any]) -> str:
+        """Persist the boundary; returns ``marker``, ``sidecar`` or ``none``.
+
+        The marker in the log is the reconciled form: replay reads it in
+        place and it survives every later append. The sidecar file is the
+        durable fallback for the next open (:meth:`_adopt_uncommitted_sidecar`)
+        when the log itself cannot be appended to; it does not count as
+        reconciled.
+        """
+
+        if self._write_uncommitted_marker(boundary):
+            return "marker"
+        if self._write_uncommitted_sidecar(boundary):
+            return "sidecar"
+        return "none"
+
+    @property
+    def _uncommitted_sidecar_path(self) -> Path:
+        return self.path.with_name(self.path.name + _UNCOMMITTED_SIDECAR_SUFFIX)
+
+    def _remove_uncommitted_sidecar(self) -> None:
+        try:
+            self._uncommitted_sidecar_path.unlink()
+        except OSError:
+            pass
+
+    def _adopt_uncommitted_sidecar(self) -> None:
+        """At open: fold a sidecar boundary left by an earlier process into the
+        log as a marker (or keep it pending, refusing records, if that fails)."""
+
+        boundary = _read_uncommitted_sidecar(self.path)
+        if boundary is None:
+            return
+        if not self._write_uncommitted_marker(boundary):
+            self._pending_uncommitted = boundary
+
+    @property
+    def integrity_uncertain(self) -> bool:
+        """True while an uncommitted-record boundary is still owed to the log.
+
+        The refusal itself may already be durable (sidecar written); what is
+        owed is the in-log marker, and no record is appended before it.
+        """
+
+        return self._pending_uncommitted is not None
+
+    def reconcile(self) -> bool:
+        """Try again to write a pending uncommitted-record boundary marker.
+
+        Returns True when the log is reconciled (the marker is in the log or
+        none was pending) and the store accepts records again. When the
+        marker still cannot be written, the sidecar is (re)written so the
+        refusal at least survives to the next open.
+        """
+
+        with self._lock:
+            boundary = self._pending_uncommitted
+            if boundary is None:
+                return True
+            if self._write_uncommitted_marker(boundary):
+                self._pending_uncommitted = None
+                return True
+            self._write_uncommitted_sidecar(boundary)
+            return False
 
     def _build_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         event = {
@@ -267,6 +582,16 @@ class SessionStore:
 
     def fetchable_web_fetch_urls(self, *, limit: int = 10) -> list[str]:
         return self._web_research.fetchable_urls(limit=limit)
+
+    def configure_web_fetch_trusted_domains(self, domains: Iterable[Any] | None) -> tuple[str, ...]:
+        """Install the configured trusted-domain allowlist for web_fetch.
+
+        Session configuration rather than observed evidence: idempotent, never
+        persisted into the web-research artifact, and it survives artifact
+        hydration on session resume.
+        """
+        with self._lock:
+            return self._web_research.configure_trusted_domains(domains)
 
     def establish_search_mediated_web_fetch_url(
         self,
@@ -351,6 +676,9 @@ class SessionStore:
     def close(self) -> None:
         if self.artifact_persistence_enabled and self._web_research.has_activity():
             self._persist_web_research_artifact()
+        if self._pending_uncommitted is not None:
+            # Last chance to leave the boundary on disk for the next process.
+            self.reconcile()
         if self._fh:
             self._fh.close()
             self._fh = None
@@ -610,10 +938,47 @@ def list_sessions(sessions_dir: Path) -> list[SessionInfo]:
     return out
 
 
-def read_session_events(path: Path) -> Iterable[dict[str, Any]]:
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
+def _read_uncommitted_sidecar(path: Path) -> dict[str, Any] | None:
+    sidecar = path.with_name(path.name + _UNCOMMITTED_SIDECAR_SUFFIX)
+    try:
+        if not sidecar.exists():
+            return None
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _offset_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+@dataclass(frozen=True)
+class _UncommittedRange:
+    """Bytes a boundary disowns: records starting in ``[start, end)``.
+
+    ``start`` is ``None`` when the boundary could not say where the failed
+    attempt began (a record from an earlier build; the store no longer
+    attempts a write it cannot locate). Such a boundary cannot identify the
+    disowned bytes and is reported to consumers instead of applied.
+    """
+
+    start: int | None
+    end: int
+    source: str  # marker | sidecar
+
+
+def _iter_log_lines(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
+    """``(byte_offset, record)`` for every parseable JSON object line."""
+
+    offset = 0
+    with path.open("rb") as fh:
+        for raw in fh:
+            record_offset = offset
+            offset += len(raw)
+            line = raw.decode("utf-8").strip()
             if not line:
                 continue
             try:
@@ -621,4 +986,94 @@ def read_session_events(path: Path) -> Iterable[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(obj, dict):
-                yield obj
+                yield record_offset, obj
+
+
+def _uncommitted_ranges(path: Path) -> list[_UncommittedRange]:
+    """Every boundary the log (markers) and its sidecar declare."""
+
+    ranges: list[_UncommittedRange] = []
+    marker_starts: set[int | None] = set()
+    log_end = 0
+    for record_offset, obj in _iter_log_lines(path):
+        log_end = max(log_end, record_offset + 1)
+        if str(obj.get("type") or "") != SESSION_STORE_UNCOMMITTED_EVENT:
+            continue
+        boundary = obj.get("payload")
+        boundary = boundary if isinstance(boundary, dict) else {}
+        start = _offset_or_none(boundary.get("from_offset"))
+        end = _offset_or_none(boundary.get("to_offset"))
+        # A marker is written right after the failed attempt, before any
+        # other record, so "up to the marker" is exact when the end could
+        # not be measured at the time.
+        ranges.append(
+            _UncommittedRange(
+                start=start,
+                end=record_offset if end is None else min(end, record_offset),
+                source="marker",
+            )
+        )
+        marker_starts.add(start)
+    sidecar = _read_uncommitted_sidecar(path)
+    if sidecar is not None:
+        start = _offset_or_none(sidecar.get("from_offset"))
+        if start not in marker_starts:
+            end = _offset_or_none(sidecar.get("to_offset"))
+            if end is None:
+                # No record is appended after a sidecar-only refusal until the
+                # marker is in the log, so the disowned bytes run to the end.
+                try:
+                    end = int(path.stat().st_size)
+                except OSError:
+                    end = log_end
+            ranges.append(_UncommittedRange(start=start, end=end, source="sidecar"))
+    return ranges
+
+
+def read_session_events(path: Path) -> Iterable[dict[str, Any]]:
+    """Replay a session log's committed records in order.
+
+    Malformed and blank lines are skipped. Every uncommitted-record boundary
+    the log declares — a ``session_store_uncommitted`` marker written by the
+    store after a failed write it could not truncate away, or the sidecar
+    ``<log>.uncommitted.json`` holding the marker it could not write into the
+    log — is applied by byte range: a record whose bytes start inside
+    ``[from_offset, to_offset)`` is not yielded, however many committed
+    records follow it and whether or not the store was reopened since.
+    Markers themselves are not yielded. Replay therefore agrees with what the
+    store published in memory: a refused record is never read back as
+    authoritative.
+
+    A boundary that cannot say where the failed attempt began (no
+    ``from_offset``; only records from an earlier build can carry one) is not
+    applied to a guessed record: it is yielded as a
+    ``session_store_uncommitted`` event with ``payload.unidentified`` set, so
+    consumers that need a trustworthy history (task recovery) can refuse
+    explicitly instead of adopting or discarding the wrong record.
+    """
+
+    ranges = _uncommitted_ranges(path)
+    identified: list[tuple[int, int]] = [
+        (item.start, item.end) for item in ranges if item.start is not None
+    ]
+    unidentified = [item for item in ranges if item.start is None]
+    for record_offset, obj in _iter_log_lines(path):
+        if str(obj.get("type") or "") == SESSION_STORE_UNCOMMITTED_EVENT:
+            payload = obj.get("payload")
+            if isinstance(payload, dict) and _offset_or_none(payload.get("from_offset")) is None:
+                yield {**obj, "payload": {**payload, "unidentified": True}}
+            continue
+        if any(start <= record_offset < end for start, end in identified):
+            continue
+        yield obj
+    for item in unidentified:
+        if item.source == "sidecar":
+            yield {
+                "type": SESSION_STORE_UNCOMMITTED_EVENT,
+                "payload": {
+                    "from_offset": None,
+                    "to_offset": item.end,
+                    "source": "sidecar",
+                    "unidentified": True,
+                },
+            }

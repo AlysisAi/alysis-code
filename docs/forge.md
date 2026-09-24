@@ -584,5 +584,5 @@ verification commands are clear.
 - Treat failed verification as review evidence, not as noise to hide.
 - Commit or merge only after reviewing the final diff and verification output.
 
-See [Execution modes](../README.md#execution-modes), [Shell sandbox](shell_sandbox.md), [Security model](security_model.md),
+See [Permissions](../README.md#permissions--personas), [Shell sandbox](shell_sandbox.md), [Security model](security_model.md),
 and [MCP](mcp.md) for the lower-level controls Forge builds on.

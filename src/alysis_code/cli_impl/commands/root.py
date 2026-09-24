@@ -6,7 +6,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -144,25 +144,21 @@ def _enforce_clean_build(flag: bool) -> None:
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: Annotated[
-        bool,
-        typer.Option(
-            "--version",
-            callback=_show_version,
-            is_eager=True,
-            help="Show the installed Alysis Code version, commit and build stamp, then exit.",
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_show_version,
+        is_eager=True,
+        help="Show the installed Alysis Code version, commit and build stamp, then exit.",
+    ),
+    require_clean_build: bool = typer.Option(
+        False,
+        "--require-clean-build",
+        help=(
+            "Refuse to run unless this build recorded a commit and a clean tree at "
+            "build time. Also enabled by ALYSIS_REQUIRE_CLEAN_BUILD=1."
         ),
-    ] = False,
-    require_clean_build: Annotated[
-        bool,
-        typer.Option(
-            "--require-clean-build",
-            help=(
-                "Refuse to run unless this build recorded a commit and a clean tree at "
-                "build time. Also enabled by ALYSIS_REQUIRE_CLEAN_BUILD=1."
-            ),
-        ),
-    ] = False,
+    ),
 ) -> None:
     # Before anything else, and before the subcommand dispatch below, so that
     # `alysis run ...` under a benchmark harness is refused just as the bare

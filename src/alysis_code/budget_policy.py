@@ -298,6 +298,11 @@ class BudgetCancellationToken:
         if self.is_cancelled:
             raise self._error_class(self.reason)
 
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait until budget cancellation or ``timeout`` without polling."""
+
+        return self._event.wait(timeout)
+
 
 class BudgetWatchdog:
     """Daemon timer that trips a cancellation event at ``budget + grace``.

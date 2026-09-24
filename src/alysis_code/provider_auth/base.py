@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..llm.cache_capabilities import CacheCapabilitySpec
 
 
 class ProviderAuthError(RuntimeError):
@@ -63,6 +66,7 @@ class ProviderAuthAdapter(Protocol):
     supports_previous_response_id: bool
     supports_temperature: bool
     requires_streaming: bool
+    cache_capability: CacheCapabilitySpec | None
 
     def account_status(self) -> ProviderAccountStatus: ...
 

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import alysis_code.compaction.tool_output_offload as offload_module
+from alysis_code import private_artifact_io
 from alysis_code.agent_loop import create_session
 from alysis_code.compaction.settings import resolve_compaction_settings
 from alysis_code.compaction.tool_output_offload import ToolOutputOffloader
@@ -268,18 +269,18 @@ def test_session_artifact_reader_returns_clean_error_for_unknown_locator(
 ) -> None:
     layout = SessionArtifactLayout(filesystem_root=tmp_path / "session")
 
-    with pytest.raises(SessionArtifactReadError, match="not present in this session") as exc_info:
+    with pytest.raises(SessionArtifactReadError, match="not found in this session") as exc_info:
         session_artifact_read(
             artifact_layout=layout,
             locator="session_artifacts/tool_outputs/missing.json",
         )
 
     payload = exc_info.value.result_payload
-    assert payload["error_code"] == "session_artifact_session_mismatch"
+    assert payload["error_code"] == "session_artifact_not_found"
     assert payload["terminal"] is True
     assert payload["retryable"] is False
-    assert "different session" in payload["error"]
-    assert "produced the locator must read it" in payload["error"]
+    assert "other sessions are not authorized" in payload["error"]
+    assert payload["available_handles"] == []
 
 
 def test_child_runtime_rejects_parent_session_artifact_locator_terminally(
@@ -346,17 +347,17 @@ def test_child_runtime_rejects_parent_session_artifact_locator_terminally(
         message for message in client.calls[1]["messages"] if message.get("role") == "tool"
     )
     result = json.loads(str(tool_message["content"]))
-    assert result["error_code"] == "session_artifact_session_mismatch"
+    assert result["error_code"] == "session_artifact_not_found"
     assert result["terminal"] is True
     assert result["retryable"] is False
-    assert "different session" in result["error"]
-    assert "produced the locator must read it" in result["error"]
+    assert "other sessions are not authorized" in result["error"]
+    assert result["available_handles"] == []
     assert "parent-only" not in str(result)
 
     mismatch_events = [
         event
         for event in read_session_events(child_log_path)
-        if event.get("type") == "session_artifact_read_session_mismatch"
+        if event.get("type") == "session_artifact_read_not_found"
     ]
     assert len(mismatch_events) == 1
     assert mismatch_events[0]["payload"] == {
@@ -733,7 +734,7 @@ def test_offloader_atomic_publish_preserves_old_artifact_after_replace_failure(
     def _crash_before_replace(_source: Path, _target: Path) -> None:
         raise OSError("simulated crash before rename")
 
-    monkeypatch.setattr(offload_module.os, "replace", _crash_before_replace)
+    monkeypatch.setattr(private_artifact_io.os, "replace", _crash_before_replace)
     second = offloader.maybe_offload(
         tool_name="shell_run",
         tool_call_id="same-call",
@@ -805,8 +806,13 @@ def test_offloader_is_session_scoped_and_artifact_read_is_bounded_and_redacted(
     assert outputs[0][0].artifact_root != outputs[1][0].artifact_root
     first_store = ArtifactStore([ArtifactRoot("session", outputs[0][0].artifact_root)])
     listed = first_store.list()
-    assert len(listed["artifacts"]) == 1
-    artifact_id = str(listed["artifacts"][0]["artifact_id"])
+    tool_outputs = [
+        artifact
+        for artifact in listed["artifacts"]
+        if str(artifact["path"]).startswith("tool_outputs/")
+    ]
+    assert len(tool_outputs) == 1
+    artifact_id = str(tool_outputs[0]["artifact_id"])
     read = first_store.read(artifact_id, max_bytes=256)
     serialized = json.dumps(read)
     assert "alpha" in serialized

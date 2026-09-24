@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import (
+    normalize_verify_module_invocation,
+    split_verify_command_parts,
     strip_verify_runner_prefix,
 )
 from ..verification_command_analysis import (
@@ -16,10 +18,13 @@ from .prompt_context import _normalized_verify_commands
 
 
 def _normalize_shell_command_for_match(raw: str) -> str:
-    return " ".join(str(raw or "").casefold().split())
+    # This value participates in authority comparisons. Case and whitespace
+    # inside quotes can select different files, expressions or environments.
+    # Broader runner classification belongs to analyze_verification_command.
+    return str(raw or "").strip()
 
 
-_VERIFICATION_ENV_ASSIGNMENT_RE = re.compile(r"^[a-z_][a-z0-9_]*=.*$")
+_VERIFICATION_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
 
 _DISALLOWED_VERIFICATION_SHELL_TOKENS = {"||", "&&", ";", "|", "&"}
@@ -47,6 +52,16 @@ _MYPY_NON_EXECUTING_OPTIONS = {"--install-types"}
 
 
 _PYTEST_REPORTER_OPTIONS = {"-q", "--quiet", "--verbose"}
+
+
+_PYTEST_NO_ARGUMENT_OPTIONS = {
+    "-x",
+    "--exitfirst",
+    "--disable-warnings",
+    "--disable-pytest-warnings",
+    "--strict-config",
+    "--strict-markers",
+}
 
 
 @dataclass(frozen=True)
@@ -215,6 +230,8 @@ def _expand_simple_verify_command_chain(
 
 
 def _canonicalize_verification_command_for_match(raw: str) -> str | None:
+    """Legacy capability projection; never use it as a contract coverage key."""
+
     analysis = analyze_verification_command(raw, trusted=True)
     if analysis.rejection_reason:
         return None
@@ -300,20 +317,177 @@ def _verification_command_shapes_match(
 ) -> bool:
     if observed.family != expected.family:
         return False
-    observed_options = set(observed.options)
-    expected_options = set(expected.options)
     if observed.family == "pytest":
-        observed_options = {
-            option for option in observed_options if not _pytest_option_is_reporter_variant(option)
-        }
-        expected_options = {
-            option for option in expected_options if not _pytest_option_is_reporter_variant(option)
-        }
-    return expected_options.issubset(observed_options)
+        return _pytest_coverage_args(observed.args) == _pytest_coverage_args(expected.args)
+    return observed.args == expected.args
 
 
 def _pytest_option_is_reporter_variant(option: str) -> bool:
-    return option in _PYTEST_REPORTER_OPTIONS or bool(re.fullmatch(r"-v+", option))
+    return option in _PYTEST_REPORTER_OPTIONS or bool(re.fullmatch(r"-(?:v+|q+)", option))
+
+
+def _pytest_coverage_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    """Ignore only reporting flags, never an option's value or a target.
+
+    Known switches consume no value; selectors consume their exact value.
+    Unknown/plugin options may consume the following token. If that token
+    is itself option-shaped, keep the remainder unchanged: guessing its
+    arity could erase a selection expression later in the argument list.
+    """
+
+    kept: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            kept.extend(args[index:])
+            break
+        if _pytest_option_is_reporter_variant(token):
+            index += 1
+            continue
+        kept.append(token)
+        if (
+            token.startswith("-")
+            and token not in _PYTEST_NO_ARGUMENT_OPTIONS
+            and "=" not in token
+            and index + 1 < len(args)
+        ):
+            if args[index + 1].startswith("-") and token not in {"-k", "-m"}:
+                kept.extend(args[index + 1 :])
+                break
+            index += 1
+            kept.append(args[index])
+        index += 1
+    return tuple(kept)
+
+
+@dataclass(frozen=True)
+class _VerificationCoverageKey:
+    context: tuple[tuple[str, ...], ...]
+    argv: tuple[str, ...]
+
+
+def _source_command_words(command: str) -> list[str] | None:
+    """Keep each word's source spelling for shell assignment comparisons."""
+
+    words: list[str] = []
+    start: int | None = None
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(command):
+        if start is None:
+            if char.isspace():
+                continue
+            start = index
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote is not None:
+            if char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char.isspace():
+            words.append(command[start:index])
+            start = None
+    if quote is not None or escaped:
+        return None
+    if start is not None:
+        words.append(command[start:])
+    return words
+
+
+def _verification_coverage_key(raw: str) -> _VerificationCoverageKey | None:
+    """A conservative source-derived key for satisfying a required command.
+
+    The capability analyzer intentionally removes environment/runner/cwd
+    prefixes to identify what can execute checks. Its canonical command is
+    therefore unsuitable for coverage. This key retains those prefixes and
+    all case-sensitive argument values. Shell expansion syntax stays on the
+    exact-source path because dequoting it can change its meaning.
+    """
+
+    command = _normalize_shell_command_for_match(raw)
+    if not command or any(char in command for char in "\n\r$`%*?[]{}~#<>"):
+        return None
+    analysis = analyze_verification_command(command, trusted=True)
+    if analysis.rejection_reason or analysis.command_family is None:
+        return None
+    chain = _top_level_shell_chain_segments(command)
+    if chain is not None:
+        segments, separators = chain
+        if separators != ("&&",) or len(segments) != 2:
+            return None
+        prefix = split_verify_command_parts(segments[0])
+        if not prefix or len(prefix) != 2 or prefix[0] != "cd":
+            return None
+        nested = _verification_coverage_key(segments[1])
+        if nested is None:
+            return None
+        return _VerificationCoverageKey((tuple(prefix), *nested.context), nested.argv)
+
+    parts = split_verify_command_parts(command)
+    source_words = _source_command_words(command)
+    if not parts or source_words is None or len(parts) != len(source_words):
+        return None
+    context: list[tuple[str, ...]] = []
+    while parts:
+        # Keep explicit environment assignments and runner selection, including
+        # their order. Even two invocations of the same test family may run
+        # different checks under these settings.
+        if parts[0] == "env":
+            context.append(("env",))
+            parts = parts[1:]
+            source_words = source_words[1:]
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", parts[0]):
+            # Quoting/escaping the assignment name can turn it into a command
+            # argument. Preserve source syntax, not just its dequoted value.
+            context.append(("assignment", source_words[0]))
+            parts = parts[1:]
+            source_words = source_words[1:]
+            continue
+        runner_stripped = _strip_verification_runner_prefix(parts)
+        if runner_stripped is None:
+            return None
+        if runner_stripped != parts:
+            prefix_len = len(parts) - len(runner_stripped)
+            context.append(tuple(parts[:prefix_len]))
+            parts = runner_stripped
+            source_words = source_words[prefix_len:]
+            continue
+        if parts[0] == "command":
+            context.append(("command",))
+            parts = parts[1:]
+            source_words = source_words[1:]
+            continue
+        break
+    if not parts:
+        return None
+    wrapped = _unwrap_shell_wrapper_command(shlex.join(parts))
+    if wrapped is not None:
+        nested = _verification_coverage_key(wrapped)
+        if nested is None:
+            return None
+        return _VerificationCoverageKey((*context, tuple(parts[:2]), *nested.context), nested.argv)
+    normalized_parts = normalize_verify_module_invocation(parts)
+    if normalized_parts != parts:
+        # Bare standard launchers are the supported CLI/module aliases.
+        # Explicit interpreter paths keep their environment identity.
+        if parts[0] not in {"python", "python3", "py"}:
+            context.append(("python_launcher", parts[0]))
+        # Module names are case-sensitive even though the capability analyzer
+        # recognizes their family case-insensitively.
+        if parts[2] != normalized_parts[0]:
+            return None
+        parts = normalized_parts
+    if parts[0] == "py.test":
+        parts[0] = "pytest"
+    argv = tuple(parts)
+    if parts[0] == "pytest":
+        argv = ("pytest", *_pytest_coverage_args(tuple(parts[1:])))
+    return _VerificationCoverageKey(tuple(context), argv)
 
 
 def _effective_verification_command_matches(
@@ -321,23 +495,11 @@ def _effective_verification_command_matches(
     normalized_cmd: str,
     known_verification_commands: list[str],
 ) -> bool:
-    observed_canonical = _canonicalize_verification_command_for_match(normalized_cmd)
-    if observed_canonical:
-        for configured in known_verification_commands:
-            expected_canonical = _canonicalize_verification_command_for_match(configured)
-            if expected_canonical and observed_canonical == expected_canonical:
-                return True
-
-    observed = _parse_verification_command_shape(normalized_cmd)
-    if observed is None:
-        return False
-    return any(
-        _verification_command_shapes_match(observed=observed, expected=expected)
-        for expected in (
-            _parse_verification_command_shape(configured)
-            for configured in known_verification_commands
+    return bool(
+        _matching_effective_verification_commands(
+            observed_command=normalized_cmd,
+            effective_verification_commands=known_verification_commands,
         )
-        if expected is not None
     )
 
 
@@ -381,25 +543,15 @@ def _matching_effective_verification_commands(
     }
     if exact_matches:
         return exact_matches
-    observed_canonical = _canonicalize_verification_command_for_match(normalized_observed)
-    if observed_canonical:
-        exact_matches: set[str] = set()
-        for configured in known:
-            configured_canonical = _canonicalize_verification_command_for_match(configured)
-            if configured_canonical and configured_canonical == observed_canonical:
-                exact_matches.add(configured)
-        if exact_matches:
-            return exact_matches
-
-    observed = _parse_verification_command_shape(normalized_observed)
+    observed = _verification_coverage_key(normalized_observed)
     if observed is None:
         return set()
     matches: set[str] = set()
     for configured in known:
-        expected = _parse_verification_command_shape(configured)
+        expected = _verification_coverage_key(configured)
         if expected is None:
             continue
-        if _verification_command_shapes_match(observed=observed, expected=expected):
+        if observed == expected:
             matches.add(configured)
     return matches
 

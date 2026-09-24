@@ -195,9 +195,7 @@ def test_docker_toolchains_and_external_images_are_immutable_inputs() -> None:
 
 def test_server_image_installs_the_exact_python_lock() -> None:
     dockerfile = _dockerfile()
-    dockerignore = (ROOT / "scripts" / "sandbox" / "Dockerfile.dockerignore").read_text(
-        encoding="utf-8"
-    )
+    dockerignore = DOCKERFILE.with_name("Dockerfile.dockerignore").read_text(encoding="utf-8")
 
     assert "COPY pyproject.toml uv.lock README.md" in dockerfile
     assert "uv sync --locked --no-dev --no-editable --extra server" in dockerfile

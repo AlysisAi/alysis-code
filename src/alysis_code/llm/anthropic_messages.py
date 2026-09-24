@@ -21,6 +21,11 @@ from .cache_control_blocks import (
     strip_cache_control_blocks,
 )
 from .cache_policy import merge_cache_policy_metadata
+from .http_cancellation import (
+    cancellable_httpx_request,
+    cancellable_httpx_send,
+    raise_if_cancelled,
+)
 from .metadata import (
     ANTHROPIC_MESSAGES_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
@@ -39,7 +44,7 @@ from .provider_limits import (
     mark_provider_call_non_retryable,
     run_provider_limited_call,
 )
-from .request_plan import LLMRequestPlan, RequestCachePlan
+from .request_plan import LLMRequestPlan, RequestCachePlan, WireRequestDiagnostics
 from .request_shape import build_request_shape_report
 from .streaming import SSEFrame, iter_sse_frames, parse_sse_json_frame
 from .temperature_compat import documented_temperature_omit_reason
@@ -141,6 +146,8 @@ def _supports_disabled_thinking(model: str) -> bool:
     version = _claude_model_version(model)
     if version is None:
         return True
+    if version.family == "opus" and version.major == 5 and version.minor == 5:
+        return False
     return not (version.family in {"fable", "mythos"} and version.major >= 5)
 
 
@@ -1511,6 +1518,7 @@ class AnthropicMessagesClient:
         self._input_token_count_available: bool | None = None
         self._temperature_omit_after_rejection = False
         self._thinking_display_supported: bool | None = None
+        self._wire_request_diagnostics = WireRequestDiagnostics()
 
     def _headers(self) -> dict[str, str]:
         headers = merge_canonical_headers(
@@ -1653,6 +1661,7 @@ class AnthropicMessagesClient:
         on_reasoning_delta: Callable[[str], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        cancellation_token: Any | None = None,
         request_plan: LLMRequestPlan | None = None,
     ) -> LLMResponse:
         default_cache = RequestCachePlan(
@@ -1823,6 +1832,7 @@ class AnthropicMessagesClient:
                     "tool_choice_omit_reason": "anthropic_extended_thinking_forced_tool_unsupported",
                 }
             )
+        wire_diagnostics = self._wire_request_diagnostics.begin_request()
         request_plan_metadata = plan.request_plan_metadata(
             input_mode="full",
             continuation_strategy="full_replay",
@@ -1830,6 +1840,10 @@ class AnthropicMessagesClient:
             sent_provider_payload=_prompt_estimation_payload(payload),
             cache_policy_metadata=cache_policy,
             extra=request_plan_extra or None,
+        )
+
+        request_plan_metadata.update(
+            wire_diagnostics(payload, history_key="messages", instructions_key="system")
         )
 
         provider_key = self.provider_key or best_effort_provider_key(
@@ -1889,6 +1903,11 @@ class AnthropicMessagesClient:
                     "reasoning_summary_fallback_reason": reason,
                 },
             )
+            fallback_plan.update(
+                wire_diagnostics(
+                    downgraded_payload, history_key="messages", instructions_key="system"
+                )
+            )
             telemetry.set_request_plan(fallback_plan)
             telemetry.set_request_shape(
                 _request_shape_metadata(
@@ -1924,9 +1943,12 @@ class AnthropicMessagesClient:
                     thinking_display_retry_used = False
                     while True:
                         if stream:
-                            with client.stream(
-                                "POST",
-                                url,
+                            with cancellable_httpx_request(
+                                client=client,
+                                cancellation_token=cancellation_token,
+                                method="POST",
+                                url=url,
+                                stream=True,
                                 headers=self._headers(),
                                 json=request_payload,
                             ) as response:
@@ -1975,6 +1997,13 @@ class AnthropicMessagesClient:
                                                 "temperature_omit_reason": (temperature_rejection),
                                             },
                                         )
+                                        active_request_plan_metadata.update(
+                                            wire_diagnostics(
+                                                request_payload,
+                                                history_key="messages",
+                                                instructions_key="system",
+                                            )
+                                        )
                                         telemetry.set_request_plan(active_request_plan_metadata)
                                         telemetry.set_request_shape(
                                             _request_shape_metadata(
@@ -2019,6 +2048,13 @@ class AnthropicMessagesClient:
                                             cache_policy_metadata=cache_policy,
                                             extra={"fallback_used": True},
                                         )
+                                        active_request_plan_metadata.update(
+                                            wire_diagnostics(
+                                                request_payload,
+                                                history_key="messages",
+                                                instructions_key="system",
+                                            )
+                                        )
                                         telemetry.set_request_plan(active_request_plan_metadata)
                                         telemetry.set_request_shape(
                                             _request_shape_metadata(
@@ -2054,8 +2090,11 @@ class AnthropicMessagesClient:
                                     cache_policy,
                                     active_request_plan_metadata,
                                 )
-                        response = client.post(
-                            url,
+                        response = cancellable_httpx_send(
+                            client=client,
+                            cancellation_token=cancellation_token,
+                            method="POST",
+                            url=url,
                             headers=self._headers(),
                             json=request_payload,
                         )
@@ -2099,6 +2138,13 @@ class AnthropicMessagesClient:
                                     "temperature_omit_reason": temperature_rejection,
                                 },
                             )
+                            active_request_plan_metadata.update(
+                                wire_diagnostics(
+                                    request_payload,
+                                    history_key="messages",
+                                    instructions_key="system",
+                                )
+                            )
                             telemetry.set_request_plan(active_request_plan_metadata)
                             telemetry.set_request_shape(
                                 _request_shape_metadata(
@@ -2137,6 +2183,13 @@ class AnthropicMessagesClient:
                                 cache_policy_metadata=cache_policy,
                                 extra={"fallback_used": True},
                             )
+                            active_request_plan_metadata.update(
+                                wire_diagnostics(
+                                    request_payload,
+                                    history_key="messages",
+                                    instructions_key="system",
+                                )
+                            )
                             telemetry.set_request_plan(active_request_plan_metadata)
                             telemetry.set_request_shape(
                                 _request_shape_metadata(
@@ -2153,6 +2206,7 @@ class AnthropicMessagesClient:
                             continue
                         break
             except httpx.DecodingError as e:
+                raise_if_cancelled(cancellation_token)
                 err = LLMError(
                     f"Anthropic Messages decompression failed: {sanitize_error_text_for_output(e)}"
                 )
@@ -2160,6 +2214,7 @@ class AnthropicMessagesClient:
                     mark_provider_call_non_retryable(err)
                 raise err from e
             except Exception as e:  # noqa: BLE001
+                raise_if_cancelled(cancellation_token)
                 if isinstance(e, LLMError):
                     if stream and public_output_emitted:
                         mark_provider_call_non_retryable(e)
@@ -2199,6 +2254,7 @@ class AnthropicMessagesClient:
                         None,
                     ),
                     retry_deadline_allows=getattr(self, "_provider_retry_deadline_allows", None),
+                    cancellation_token=cancellation_token,
                 )
             ),
             self.route_identity,

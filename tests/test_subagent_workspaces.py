@@ -243,8 +243,8 @@ class _Harness:
             subagents_enabled=True,
             subagent_registry=subagent_registry
             or {
-                "implementer": SubagentDefinition(
-                    name="implementer",
+                "general": SubagentDefinition(
+                    name="general",
                     description="implementation child",
                     system_prompt="Implement the requested change.",
                     mode="auto",
@@ -260,7 +260,7 @@ class _Harness:
     def run(self) -> dict[str, Any]:
         return self.tools["subagent_run"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Change app.txt from base to child.",
                 "workspace_view": "isolated",
             }
@@ -300,12 +300,12 @@ def test_parallel_children_serialize_parent_approval_prompts(
         results = scheduler.run_readonly_batch(
             [
                 {
-                    "name": "implementer",
+                    "name": "general",
                     "task": "alpha",
                     "workspace_view": "isolated",
                 },
                 {
-                    "name": "implementer",
+                    "name": "general",
                     "task": "beta",
                     "workspace_view": "isolated",
                 },
@@ -322,7 +322,7 @@ def test_parallel_children_serialize_parent_approval_prompts(
         harness.close()
 
 
-def test_isolated_implementer_edits_worktree_not_parent(
+def test_isolated_general_edits_worktree_not_parent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -349,6 +349,514 @@ def test_isolated_implementer_edits_worktree_not_parent(
         assert (root / "app.txt").read_text(encoding="utf-8") == "base\n"
         assert child_roots[0] != root
         assert (child_roots[0] / "app.txt").read_text(encoding="utf-8") == "child\n"
+    finally:
+        harness.close()
+
+
+def test_identical_isolated_results_share_one_material_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        first = harness.run()
+        duplicate = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+        first_record = provider.get(first["run_id"])
+        duplicate_record = provider.get(duplicate["run_id"])
+
+        assert first_record is not None and first_record.state == "captured"
+        assert first_record.worktree_path.exists() is True
+        assert duplicate_record is not None and duplicate_record.state == "duplicate"
+        assert duplicate_record.worktree_path.exists() is False
+        assert duplicate["semantic_no_progress"] is True
+        assert duplicate["duplicate_of"] == first["run_id"]
+        assert duplicate["canonical_run_id"] == first["run_id"]
+        assert duplicate["already_integrated"] is False
+        assert duplicate["candidate_worktree_retained"] is False
+        assert duplicate["physical_worktree_removed"] is True
+        assert duplicate["material_identity"] == first["material_identity"]
+        assert duplicate["material_identity_sha256"] == first["material_identity_sha256"]
+        assert (
+            duplicate["patch_summary"]["patch_artifact"] != first["patch_summary"]["patch_artifact"]
+        )
+        assert harness.launcher.child_scheduler.unapplied_isolated_results() == [
+            {
+                "run_id": first["run_id"],
+                "files": ["app.txt"],
+                "insertions": 1,
+                "deletions": 1,
+            }
+        ]
+        worktrees = _git(root, "worktree", "list", "--porcelain")
+        assert sum(line.startswith("worktree ") for line in worktrees.splitlines()) == 2
+
+        pinned = provider.acquire_pin(duplicate["run_id"], consumer_run_id="reader")
+        assert pinned["ok"] is True
+        assert pinned["run_id"] == first["run_id"]
+        assert pinned["requested_run_id"] == duplicate["run_id"]
+        provider.release_pin(duplicate["run_id"], consumer_run_id="reader")
+        assert provider.get(first["run_id"]).pinned_by_run_ids == ()  # type: ignore[union-attr]
+
+        discarded = harness.tools["subagent_discard"].run({"run_id": duplicate["run_id"]})
+        assert discarded["ok"] is True
+        assert discarded["semantic_no_progress"] is True
+        assert discarded["canonical_state"] == "captured"
+        assert provider.get(first["run_id"]).state == "captured"  # type: ignore[union-attr]
+        assert first_record.worktree_path.exists() is True
+
+        duplicate_events = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace"
+            and event.get("payload", {}).get("action") == "duplicate"
+        ]
+        assert len(duplicate_events) == 1
+        assert duplicate_events[0]["duplicate_of"] == first["run_id"]
+        assert duplicate_events[0]["semantic_no_progress"] is True
+    finally:
+        harness.close()
+
+
+def test_discarded_duplicate_alias_is_terminal_but_canonical_remains_applicable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        duplicate = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+
+        discarded = harness.tools["subagent_discard"].run({"run_id": duplicate["run_id"]})
+
+        assert discarded["ok"] is True
+        assert discarded["duplicate_of"] == canonical["run_id"]
+        assert discarded["canonical_state"] == "captured"
+        discarded_record = provider.get(duplicate["run_id"])
+        assert discarded_record is not None
+        assert discarded_record.state == "discarded"
+        assert discarded_record.duplicate_of == canonical["run_id"]
+
+        repeated_discard = harness.tools["subagent_discard"].run({"run_id": duplicate["run_id"]})
+        stale_apply = harness.tools["subagent_apply"].run({"run_id": duplicate["run_id"]})
+
+        assert repeated_discard["ok"] is False
+        assert repeated_discard["error_code"] == "workspace_already_discarded"
+        assert stale_apply["ok"] is False
+        assert stale_apply["error_code"] == "workspace_already_discarded"
+        canonical_record = provider.get(canonical["run_id"])
+        assert canonical_record is not None
+        assert canonical_record.state == "captured"
+        assert canonical_record.worktree_path.exists() is True
+
+        applied = harness.tools["subagent_apply"].run({"run_id": canonical["run_id"]})
+        assert applied["ok"] is True
+        assert applied["applied_paths"] == ["app.txt"]
+        assert (root / "app.txt").read_text(encoding="utf-8") == "child\n"
+    finally:
+        harness.close()
+
+
+def test_duplicate_cleanup_failure_is_retried_at_provider_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+        original_remove = provider._remove_worktree
+        attempts = 0
+
+        def fail_once(worktree_path: Path) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return "simulated duplicate cleanup failure"
+            return original_remove(worktree_path)
+
+        monkeypatch.setattr(provider, "_remove_worktree", fail_once)
+        duplicate = harness.run()
+        duplicate_record = provider.get(duplicate["run_id"])
+
+        assert duplicate["duplicate_of"] == canonical["run_id"]
+        assert duplicate["cleanup_pending"] is True
+        assert duplicate["cleanup_warning"] == "simulated duplicate cleanup failure"
+        assert duplicate["physical_worktree_removed"] is False
+        assert duplicate["candidate_worktree_retained"] is True
+        assert duplicate_record is not None
+        assert duplicate_record.state == "duplicate"
+        assert duplicate_record.cleanup_pending is True
+        assert duplicate_record.worktree_path.exists() is True
+        assert [
+            result["run_id"]
+            for result in harness.launcher.child_scheduler.unapplied_isolated_results()
+        ] == [canonical["run_id"]]
+
+        provider.close()
+
+        cleaned = provider.get(duplicate["run_id"])
+        assert cleaned is not None
+        assert cleaned.cleanup_pending is False
+        assert cleaned.worktree_path.exists() is False
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 1
+        )
+        actions = [
+            event["payload"]["action"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace"
+        ]
+        assert actions[-3:] == ["cleanup_failed", "discarded", "cleanup_completed"]
+    finally:
+        harness.close()
+
+
+def test_duplicate_alias_actions_report_and_retry_pending_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+        original_remove = provider._remove_worktree
+        attempts = 0
+
+        def fail_first_cleanup(worktree_path: Path) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return "simulated duplicate cleanup failure"
+            return original_remove(worktree_path)
+
+        monkeypatch.setattr(provider, "_remove_worktree", fail_first_cleanup)
+        duplicate = harness.run()
+
+        assert duplicate["cleanup_pending"] is True
+        inspected = provider.inspect_pin_source(duplicate["run_id"])
+        assert inspected["ok"] is True
+        assert inspected["cleanup_pending"] is True
+        assert inspected["cleanup_warning"] == "simulated duplicate cleanup failure"
+        assert inspected["physical_worktree_removed"] is False
+
+        applied = harness.tools["subagent_apply"].run({"run_id": duplicate["run_id"]})
+
+        assert applied["ok"] is True
+        assert applied["canonical_run_id"] == canonical["run_id"]
+        assert applied["cleanup_pending"] is True
+        assert applied["cleanup_warning"] == "simulated duplicate cleanup failure"
+        assert applied["physical_worktree_removed"] is False
+        assert (root / "app.txt").read_text(encoding="utf-8") == "child\n"
+
+        discarded = harness.tools["subagent_discard"].run({"run_id": duplicate["run_id"]})
+
+        assert discarded["ok"] is True
+        assert discarded["cleanup_pending"] is False
+        assert discarded["physical_worktree_removed"] is True
+        assert "cleanup_warning" not in discarded
+        duplicate_record = provider.get(duplicate["run_id"])
+        assert duplicate_record is not None
+        assert duplicate_record.cleanup_pending is False
+        assert duplicate_record.worktree_path.exists() is False
+        cleanup_events = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace"
+            and event.get("payload", {}).get("action") in {"cleanup_failed", "cleanup_completed"}
+            and event.get("payload", {}).get("run_id") == duplicate["run_id"]
+        ]
+        assert [event["action"] for event in cleanup_events] == [
+            "cleanup_failed",
+            "cleanup_completed",
+        ]
+        assert cleanup_events[-1]["retry"] == "explicit_discard"
+    finally:
+        harness.close()
+
+
+def test_duplicate_apply_reports_failed_canonical_worktree_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        duplicate = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+        canonical_record = provider.get(canonical["run_id"])
+        assert canonical_record is not None
+        original_remove = provider._remove_worktree
+
+        def fail_canonical_cleanup(worktree_path: Path) -> str:
+            if worktree_path == canonical_record.worktree_path:
+                return "simulated canonical cleanup failure"
+            return original_remove(worktree_path)
+
+        monkeypatch.setattr(provider, "_remove_worktree", fail_canonical_cleanup)
+
+        applied = harness.tools["subagent_apply"].run({"run_id": duplicate["run_id"]})
+
+        assert applied["ok"] is True
+        assert applied["applied_via_canonical"] is True
+        assert applied["cleanup_pending"] is True
+        assert applied["cleanup_pending_run_ids"] == [canonical["run_id"]]
+        assert applied["cleanup_warning"] == "simulated canonical cleanup failure"
+        assert applied["physical_worktree_removed"] is False
+        discarded_alias = harness.tools["subagent_discard"].run({"run_id": duplicate["run_id"]})
+        assert discarded_alias["cleanup_pending"] is True
+        assert discarded_alias["cleanup_pending_run_ids"] == [canonical["run_id"]]
+        assert discarded_alias["physical_worktree_removed"] is False
+
+        monkeypatch.setattr(provider, "_remove_worktree", original_remove)
+        recovered = provider.close()
+        assert recovered["ok"] is True
+        recovered_canonical = provider.get(canonical["run_id"])
+        assert recovered_canonical is not None
+        assert recovered_canonical.cleanup_pending is False
+        assert recovered_canonical.worktree_path.exists() is False
+    finally:
+        harness.close()
+
+
+def test_applying_duplicate_uses_canonical_candidate_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        duplicate = harness.run()
+
+        applied = harness.tools["subagent_apply"].run({"run_id": duplicate["run_id"]})
+
+        assert applied["ok"] is True
+        assert applied["run_id"] == duplicate["run_id"]
+        assert applied["canonical_run_id"] == canonical["run_id"]
+        assert applied["duplicate_of"] == canonical["run_id"]
+        assert applied["applied_via_canonical"] is True
+        assert applied["semantic_no_progress"] is False
+        assert applied["applied_paths"] == ["app.txt"]
+        assert (root / "app.txt").read_text(encoding="utf-8") == "child\n"
+        assert harness.launcher.child_scheduler.unapplied_isolated_results() == []
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 1
+        )
+    finally:
+        harness.close()
+
+
+def test_rerun_starts_from_applied_parent_state_and_reports_no_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        canonical = harness.run()
+        assert harness.tools["subagent_apply"].run({"run_id": canonical["run_id"]})["ok"] is True
+
+        unchanged = harness.run()
+
+        assert unchanged["semantic_no_progress"] is True
+        assert unchanged["status"] == "no_changes"
+        assert unchanged["workspace"]["no_changes"] is True
+        assert unchanged["patch_summary"]["files"] == []
+        assert (root / "app.txt").read_text(encoding="utf-8") == "child\n"
+        assert harness.launcher.child_scheduler.unapplied_isolated_results() == []
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 1
+        )
+    finally:
+        harness.close()
+
+
+def test_reverted_applied_result_becomes_a_fresh_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        applied_result = harness.run()
+        assert (
+            harness.tools["subagent_apply"].run({"run_id": applied_result["run_id"]})["ok"] is True
+        )
+        (root / "app.txt").write_text("base\n", encoding="utf-8")
+
+        fresh = harness.run()
+
+        assert "duplicate_of" not in fresh
+        assert fresh["material_identity_sha256"] == applied_result["material_identity_sha256"]
+        assert harness.launcher.child_scheduler.unapplied_isolated_results() == [
+            {
+                "run_id": fresh["run_id"],
+                "files": ["app.txt"],
+                "insertions": 1,
+                "deletions": 1,
+            }
+        ]
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 2
+        )
+        invalidated = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace"
+            and event.get("payload", {}).get("action") == "integration_invalidated"
+        ]
+        assert [event["run_id"] for event in invalidated] == [applied_result["run_id"]]
+    finally:
+        harness.close()
+
+
+def test_different_isolated_patches_remain_distinct_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    contents = iter(("first child\n", "second child\n"))
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(
+            root=Path(kwargs["root"]),
+            content=next(contents),
+        ),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        first = harness.run()
+        second = harness.run()
+
+        assert "duplicate_of" not in first
+        assert "duplicate_of" not in second
+        assert first["material_identity_sha256"] != second["material_identity_sha256"]
+        assert len(harness.launcher.child_scheduler.unapplied_isolated_results()) == 2
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 3
+        )
+    finally:
+        harness.close()
+
+
+def test_same_patch_against_changed_base_is_a_distinct_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        first = harness.run()
+        (root / "dirty.txt").write_text("new base\n", encoding="utf-8")
+        _git(root, "add", "dirty.txt")
+        _git(
+            root,
+            "-c",
+            "user.name=Alysis Code Tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--no-gpg-sign",
+            "--no-verify",
+            "-qm",
+            "advance base",
+        )
+        second = harness.run()
+
+        assert first["patch_summary"]["sha256"] == second["patch_summary"]["sha256"]
+        assert (
+            first["material_identity"]["base_commit"] != second["material_identity"]["base_commit"]
+        )
+        assert first["material_identity_sha256"] != second["material_identity_sha256"]
+        assert "duplicate_of" not in second
+        assert len(harness.launcher.child_scheduler.unapplied_isolated_results()) == 2
+        assert (
+            sum(
+                line.startswith("worktree ")
+                for line in _git(root, "worktree", "list", "--porcelain").splitlines()
+            )
+            == 3
+        )
     finally:
         harness.close()
 
@@ -394,8 +902,8 @@ def test_capture_apply_roundtrip_is_uncommitted(
             "subagent_state:running",
             "subagent_start",
             "subagent_tool_catalog",
-            "subagent_end",
             "subagent_workspace:captured",
+            "subagent_end",
             "subagent_state:joined",
             "subagent_workspace:applied",
         ]
@@ -541,9 +1049,11 @@ def test_discard_and_apply_errors_are_structured(
         empty_result = harness.run()
         assert empty_result["patch_summary"]["files"] == []
         assert empty_result["workspace"]["no_changes"] is True
-        assert empty_result["status"] == "degraded"
-        assert empty_result["failure_category"] == "final_report"
-        assert empty_result["final_report_problem"] == "workspace_evidence_mismatch"
+        assert empty_result["status"] == "no_changes"
+        assert empty_result["semantic_no_progress"] is True
+        assert "error" not in empty_result
+        assert "failure_category" not in empty_result
+        assert "final_report_problem" not in empty_result
         assert harness.launcher.child_scheduler.unapplied_isolated_results() == []
         assert (
             harness.tools["subagent_apply"].run({"run_id": empty_result["run_id"]})["error_code"]
@@ -553,7 +1063,7 @@ def test_discard_and_apply_errors_are_structured(
         harness.close()
 
 
-def test_explicit_no_change_is_successful_and_auto_released(
+def test_no_change_is_host_derived_and_auto_released(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -561,7 +1071,7 @@ def test_explicit_no_change_is_successful_and_auto_released(
 
     def create_child(**kwargs: Any) -> _EditingChildSession:
         child = _EditingChildSession(root=Path(kwargs["root"]), edit_path=None)
-        final = "Result: status=no_change_needed; the requested behavior already exists."
+        final = "The requested behavior already exists."
         child.messages = [{"role": "assistant", "content": final}]
         child.store.final_content = final
         return child
@@ -577,7 +1087,11 @@ def test_explicit_no_change_is_successful_and_auto_released(
         record = harness.launcher.workspace_provider.get(result["run_id"])
 
         assert "error" not in result
+        assert result["status"] == "no_changes"
         assert result["workspace"]["no_changes"] is True
+        assert result["semantic_no_progress"] is True
+        assert result["candidate_worktree_retained"] is False
+        assert result["physical_worktree_removed"] is True
         assert record is not None and record.state == "discarded"
         assert record.worktree_path.exists() is False
         assert harness.launcher.child_scheduler.unapplied_isolated_results() == []
@@ -619,6 +1133,150 @@ def test_session_close_discards_unapplied_worktree(tmp_path: Path) -> None:
     session.close()
 
     assert worktree_path.exists() is False
+
+
+def test_provider_close_records_failed_release_and_recovers_on_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        result = harness.run()
+        provider = harness.launcher.workspace_provider
+        assert provider is not None
+        original_remove = provider._remove_worktree
+        monkeypatch.setattr(
+            provider,
+            "_remove_worktree",
+            lambda _path: "simulated close release failure",
+        )
+
+        failed = provider.close()
+
+        record = provider.get(result["run_id"])
+        assert failed == {
+            "ok": False,
+            "released_run_ids": [],
+            "cleanup_completed_run_ids": [],
+            "cleanup_pending_run_ids": [result["run_id"]],
+            "failures": [
+                {
+                    "run_id": result["run_id"],
+                    "error": "simulated close release failure",
+                    "error_code": "workspace_release_failed",
+                }
+            ],
+        }
+        assert record is not None
+        assert record.state == "captured"
+        assert record.cleanup_pending is True
+        assert record.cleanup_error == "simulated close release failure"
+        assert record.worktree_path.exists() is True
+        failures = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace"
+            and event.get("payload", {}).get("action") == "cleanup_failed"
+        ]
+        assert failures[-1] == {
+            "run_id": result["run_id"],
+            "action": "cleanup_failed",
+            "release_action": "discarded",
+            "error": "simulated close release failure",
+            "error_code": "workspace_release_failed",
+            "retry": "session_close",
+        }
+        cleanup_summaries = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace_cleanup_summary"
+        ]
+        assert cleanup_summaries[-1] == failed
+
+        monkeypatch.setattr(provider, "_remove_worktree", original_remove)
+        recovered = provider.close()
+
+        assert recovered == {
+            "ok": True,
+            "released_run_ids": [result["run_id"]],
+            "cleanup_completed_run_ids": [],
+            "cleanup_pending_run_ids": [],
+            "failures": [],
+        }
+        recovered_record = provider.get(result["run_id"])
+        assert recovered_record is not None
+        assert recovered_record.state == "discarded"
+        assert recovered_record.cleanup_pending is False
+        assert recovered_record.cleanup_error == ""
+        assert recovered_record.worktree_path.exists() is False
+        cleanup_summaries = [
+            event["payload"]
+            for event in harness.store.events_snapshot()
+            if event.get("type") == "subagent_workspace_cleanup_summary"
+        ]
+        assert cleanup_summaries[-1] == recovered
+    finally:
+        harness.close()
+
+
+def test_coordinator_cleanup_retry_works_after_store_callback_closes_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    harness = _Harness(
+        tmp_path=tmp_path,
+        root=root,
+        create_child=lambda **kwargs: _EditingChildSession(root=Path(kwargs["root"])),
+        monkeypatch=monkeypatch,
+    )
+    try:
+        result = harness.run()
+        coordinator = harness.launcher.child_scheduler
+        provider = harness.launcher.workspace_provider
+        assert coordinator is not None
+        assert provider is not None
+        original_remove = provider._remove_worktree
+        monkeypatch.setattr(
+            provider,
+            "_remove_worktree",
+            lambda _path: "simulated first cleanup failure",
+        )
+        coordinator.run_after_shutdown_cleanup(harness.store.close)
+
+        coordinator.shutdown(cancel_pending=True, wait_for_running=True)
+
+        assert harness.store._fh is None  # noqa: SLF001
+        failed_status = coordinator.workspace_cleanup_status()
+        assert failed_status["attempted"] is True
+        assert failed_status["succeeded"] is False
+        assert failed_status["summary"]["cleanup_pending_run_ids"] == [result["run_id"]]
+        retained = provider.get(result["run_id"])
+        assert retained is not None
+        assert retained.cleanup_pending is True
+        assert retained.worktree_path.exists() is True
+
+        monkeypatch.setattr(provider, "_remove_worktree", original_remove)
+        retried = coordinator.retry_workspace_cleanup()
+
+        assert retried["ok"] is True
+        assert retried["cleanup_pending_run_ids"] == []
+        recovered_status = coordinator.workspace_cleanup_status()
+        assert recovered_status["succeeded"] is True
+        assert recovered_status["attempt_count"] == 2
+        recovered = provider.get(result["run_id"])
+        assert recovered is not None
+        assert recovered.state == "discarded"
+        assert recovered.cleanup_pending is False
+        assert recovered.worktree_path.exists() is False
+    finally:
+        harness.close()
 
 
 def test_non_git_isolated_view_returns_structured_error(
@@ -728,7 +1386,7 @@ def test_parent_dirty_paths_are_reported_in_result_and_prepare_event(
         assert prepared[-1]["parent_dirty_paths"] == ["dirty.txt", "untracked.txt"]
         assert (
             harness.launcher.workspace_provider.get(result["run_id"]).worktree_path / "dirty.txt"
-        ).read_text(encoding="utf-8") == "clean\n"
+        ).read_text(encoding="utf-8") == "parent dirty\n"
         harness.tools["subagent_discard"].run({"run_id": result["run_id"]})
     finally:
         harness.close()
@@ -790,6 +1448,56 @@ def test_workspace_action_tools_respect_kill_switch(tmp_path: Path) -> None:
             launcher = tools["subagent_run"].run.__self__
             launcher.child_scheduler.shutdown(cancel_pending=True)
             store.close()
+
+
+def test_background_isolated_spawn_respects_disabled_launcher_snapshot(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    store = SessionStore(
+        enabled=False,
+        sessions_dir=tmp_path / "sessions-isolation-disabled",
+        session_id="parent-isolation-disabled",
+        cwd=os.fspath(root),
+        repo_root=os.fspath(root),
+    )
+    cfg = AppConfig(model="test-model", routing_mode="code_only", web_search_mode="off")
+    cfg.subagent_orchestration.workspace_isolation_enabled = False
+    tools = build_tools(
+        root=root,
+        console=None,
+        store=store,
+        mode="auto",
+        yes=True,
+        cfg=cfg,
+        api_key="test-key",
+        subagents_enabled=True,
+        subagent_registry=built_in_subagents(),
+        runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+    )
+    launcher = tools["subagent_run"].run.__self__
+    try:
+        # The provider remains passive and reusable if a later launcher snapshot
+        # enables isolation, but this snapshot must reject admission immediately.
+        assert launcher.workspace_provider is not None
+
+        result = tools["subagent_spawn"].run(
+            {
+                "name": "general",
+                "task": "Change app.txt in an isolated candidate.",
+                "workspace_view": "isolated",
+            }
+        )
+
+        assert result == {
+            "error": "Isolated subagent workspaces are disabled for this session.",
+            "error_code": "workspace_isolation_disabled",
+            "subagent": "general",
+        }
+        assert launcher.child_scheduler.status()["children"] == []
+    finally:
+        launcher.child_scheduler.shutdown(cancel_pending=True)
+        store.close()
 
 
 def _run_isolated_writer_batch(
@@ -854,7 +1562,7 @@ def _run_isolated_writer_batch(
                         id=f"call-{index}",
                         name="subagent_run",
                         arguments={
-                            "name": "implementer",
+                            "name": "general",
                             "task": task,
                             "workspace_view": "isolated",
                         },
@@ -875,7 +1583,7 @@ def _run_isolated_writer_batch(
     return session, root, results, start_times, end_times
 
 
-def test_parallel_isolated_implementers_apply_independent_files(
+def test_parallel_isolated_generals_apply_independent_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -908,7 +1616,7 @@ def test_parallel_isolated_implementers_apply_independent_files(
         session.close()
 
 
-def test_parallel_isolated_implementers_conflict_without_partial_second_apply(
+def test_parallel_isolated_generals_conflict_without_partial_second_apply(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -958,7 +1666,7 @@ def test_background_isolated_writer_is_retained_at_turn_end(
     )
     spawn = session.tools["subagent_spawn"].run(
         {
-            "name": "implementer",
+            "name": "general",
             "task": "Change app.txt in the isolated candidate.",
             "workspace_view": "isolated",
         }
@@ -988,7 +1696,16 @@ def test_background_isolated_writer_is_retained_at_turn_end(
             for event in session.store.events_snapshot()
             if event.get("type") == "subagent_turn_end_enforcement"
         ]
-        assert "wait" in enforcement
+        completion_deliveries = [
+            event["payload"]
+            for event in session.store.events_snapshot()
+            if event.get("type") == "background_child_completion_delivery"
+        ]
+        # A fast child may finish before the host needs to wait. In both
+        # orders, its result must reach the parent before finalization.
+        assert "wait" in enforcement or any(
+            spawn["run_id"] in delivery.get("run_ids", []) for delivery in completion_deliveries
+        )
         assert (
             session.tools["subagent_status"].run({})["unapplied_isolated_results"][0]["run_id"]
             == spawn["run_id"]
@@ -1025,7 +1742,7 @@ def test_verifier_reads_pinned_candidate_before_apply(
         root=root,
         create_child=create_child,
         monkeypatch=monkeypatch,
-        subagent_registry={name: registry[name] for name in ("implementer", "verifier")},
+        subagent_registry={name: registry[name] for name in ("general", "verifier")},
     )
     try:
         implementation = harness.run()
@@ -1072,8 +1789,8 @@ def test_verifier_reads_pinned_candidate_before_apply(
             "state:running",
             "subagent_start",
             "subagent_tool_catalog",
-            "subagent_end",
             "workspace:captured",
+            "subagent_end",
             "state:joined",
             "state:spawned",
             "workspace:pinned",
@@ -1117,7 +1834,7 @@ def test_discard_is_release_locked_while_background_verifier_reads_candidate(
         root=root,
         create_child=create_child,
         monkeypatch=monkeypatch,
-        subagent_registry={name: registry[name] for name in ("implementer", "verifier")},
+        subagent_registry={name: registry[name] for name in ("general", "verifier")},
     )
     try:
         implementation = harness.run()
@@ -1181,12 +1898,12 @@ def test_dependency_chain_implements_verifies_pinned_worktree_and_applies(
         root=root,
         create_child=create_child,
         monkeypatch=monkeypatch,
-        subagent_registry={name: registry[name] for name in ("implementer", "verifier")},
+        subagent_registry={name: registry[name] for name in ("general", "verifier")},
     )
     try:
         implementation = harness.tools["subagent_spawn"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Edit app.txt in isolation.",
                 "run_id": "impl",
                 "workspace_view": "isolated",
@@ -1197,7 +1914,7 @@ def test_dependency_chain_implements_verifies_pinned_worktree_and_applies(
         verification = harness.tools["subagent_spawn"].run(
             {
                 "name": "verifier",
-                "task": "Verify the implementer's app.txt.",
+                "task": "Verify the general's app.txt.",
                 "depends_on": [implementation["run_id"]],
                 "workspace_from_run": implementation["run_id"],
             }
@@ -1241,12 +1958,12 @@ def test_dependency_chain_implements_verifies_pinned_worktree_and_applies(
             "impl:state:spawned",
             "impl:workspace:prepared",
             "impl:state:running",
-            "implementer:subagent_start",
-            "implementer:subagent_tool_catalog",
+            "general:subagent_start",
+            "general:subagent_tool_catalog",
             "verify:state:spawned",
             "verify:state:waiting",
-            "implementer:subagent_end",
             "impl:workspace:captured",
+            "general:subagent_end",
             "impl:state:joined",
             "verify:state:queued",
             "impl:workspace:pinned",
@@ -1337,7 +2054,7 @@ def test_one_response_spawns_implement_verify_chain_then_applies(
                         id="spawn-impl",
                         name="subagent_spawn",
                         arguments={
-                            "name": "implementer",
+                            "name": "general",
                             "task": "Edit app.txt in isolation.",
                             "run_id": "impl",
                             "workspace_view": "isolated",
@@ -1438,16 +2155,44 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
             self.messages = []
             self.store = _EventStore("incomplete-child")
             self.read_ledger = SessionReadLedger(root=child_root)
+            self.read_events: list[dict[str, Any]] = []
 
         def _read(self, path: str) -> dict[str, Any]:
             content_hash = self.read_ledger.content_hash(path)
             result = {"path": path, "content": (self.root / path).read_text()}
-            return self.read_ledger.filter_result(
+            result = self.read_ledger.filter_result(
                 path=path,
                 result=result,
                 content_hash_before=content_hash,
                 force=False,
             )
+            content = json.dumps(result)
+            self.read_ledger.record_delivery(result=result, content_for_message=content)
+            self.read_events.extend(
+                [
+                    {
+                        "type": "assistant_message",
+                        "payload": {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": path,
+                                        "type": "function",
+                                        "function": {
+                                            "name": "fs_read",
+                                            "arguments": json.dumps({"path": path}),
+                                        },
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                    {"type": "tool_result", "payload": {"tool_call_id": path, "content": content}},
+                ]
+            )
+            return result
 
         def run_turn(self, task: str, *, cancellation_token: Any | None = None) -> int:
             _ = cancellation_token
@@ -1459,6 +2204,7 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
             self.messages.append({"role": "assistant", "content": partial})
             self.store.events = [
                 {"type": "user_message", "payload": {"content": task}},
+                *self.read_events,
                 {
                     "type": "assistant_message",
                     "payload": {
@@ -1538,7 +2284,7 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
     )
     try:
         launch_args = {
-            "name": "implementer",
+            "name": "general",
             "task": "Start the isolated edit.",
             "workspace_view": "isolated",
             "max_steps": 20,
@@ -1554,7 +2300,7 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
         assert first_result["stop_reason"] == "max_steps"
         assert first_result["steps_used"] == 0
         assert first_result["resolved_step_ceiling"] > first_result["steps_used"]
-        assert first_result["deadline_remaining_s"] is not None
+        assert first_result["deadline_remaining_s"] is None
         assert first_result["run_id"] == spawned["run_id"]
         assert first_result["retained_worktree_run_id"] == spawned["run_id"]
         assert first_result["resume_affordance"] == (
@@ -1599,6 +2345,11 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
         )
         assert resumed["run_id"] != spawned["run_id"]
         assert resumed["resumed_from"] == spawned["run_id"]
+        assert "assigned work with this child" in resumed["orchestration_note"]
+        if launch_kind == "background":
+            assert resumed["orchestration_note"] == spawned["orchestration_note"]
+        else:
+            assert "orchestration_note" not in spawned
         second_wait = harness.tools["subagent_wait"].run({"run_id": resumed["run_id"]})
         second_result = second_wait["results"][resumed["run_id"]]
         assert second_result["resumed_from"] == spawned["run_id"]
@@ -1658,8 +2409,8 @@ def test_resume_incomplete_child_reuses_history_and_retained_worktree(
             "state:running",
             "subagent_start",
             "subagent_tool_catalog",
-            "subagent_end",
             "workspace:captured",
+            "subagent_end",
             "state:joined",
             "workspace:applied",
         ]
@@ -1844,7 +2595,7 @@ def test_applying_incomplete_candidate_requires_explicit_acknowledgement(
     try:
         result = harness.tools["subagent_run"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Start the isolated edit.",
                 "workspace_view": "isolated",
             }
@@ -1892,7 +2643,7 @@ def test_resume_rejects_running_child(
     try:
         spawned = harness.tools["subagent_spawn"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Block briefly.",
                 "workspace_view": "isolated",
             }
@@ -1926,7 +2677,7 @@ def test_resume_rejects_released_isolated_worktree(
     try:
         spawned = harness.tools["subagent_spawn"].run(
             {
-                "name": "implementer",
+                "name": "general",
                 "task": "Fail after editing.",
                 "workspace_view": "isolated",
             }

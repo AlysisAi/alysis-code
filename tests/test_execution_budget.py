@@ -149,7 +149,13 @@ def test_compute_execution_prompt_budget_matches_real_session_prefix_and_tools(
         session.close()
 
 
-def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "minimum_instruction_budget_tokens",
+    [0, DEFAULT_MINIMUM_EXECUTION_INSTRUCTION_BUDGET_TOKENS],
+)
+def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(
+    tmp_path, minimum_instruction_budget_tokens: int
+) -> None:
     cfg = AppConfig(model="budget-model", skills_enabled=False)
     cfg.extra_fields = {
         "model_metadata_overrides": {
@@ -170,6 +176,7 @@ def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(tmp
         yes=True,
         subagents_enabled=False,
         image_count=0,
+        minimum_instruction_budget_tokens=minimum_instruction_budget_tokens,
     )
     with_images = compute_execution_prompt_budget(
         cfg=cfg,
@@ -178,6 +185,7 @@ def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(tmp
         yes=True,
         subagents_enabled=False,
         image_count=2,
+        minimum_instruction_budget_tokens=minimum_instruction_budget_tokens,
     )
 
     assert with_images.subagents_enabled is False
@@ -186,10 +194,27 @@ def test_compute_execution_prompt_budget_reserves_tokens_for_attached_images(tmp
         with_images.image_budget_reserve_tokens
         == 2 * DEFAULT_EXECUTION_IMAGE_RESERVE_TOKENS_PER_IMAGE
     )
+
+    # Images consume available context even when the instruction floor causes
+    # the allocator to reclaim part of the headroom or response reserve.
+    def remaining_allocation(budget):
+        return (
+            budget.final_instruction_budget
+            + budget.effective_execution_response_reserve_tokens
+            + budget.effective_execution_headroom_reserve_tokens
+        )
+
+    assert with_images.final_instruction_budget < baseline.final_instruction_budget
+    assert with_images.final_instruction_budget >= minimum_instruction_budget_tokens
     assert (
-        baseline.final_instruction_budget - with_images.final_instruction_budget
+        remaining_allocation(baseline) - remaining_allocation(with_images)
         == with_images.image_budget_reserve_tokens
     )
+    if not with_images.reserve_adjustment_applied:
+        assert (
+            baseline.final_instruction_budget - with_images.final_instruction_budget
+            == with_images.image_budget_reserve_tokens
+        )
 
 
 def test_compute_execution_prompt_budget_reduces_reserves_to_preserve_instruction_floor(
@@ -200,7 +225,9 @@ def test_compute_execution_prompt_budget_reduces_reserves_to_preserve_instructio
         "model_metadata_overrides": {
             "models": {
                 "budget-model": {
-                    "context_window_tokens": 12000,
+                    # Extra schema semantics must fit, while the requested
+                    # reserves still force reduction to reach the 4k floor.
+                    "context_window_tokens": 14_500,
                     "max_output_tokens": 4096,
                     "supports_vision": False,
                 }
@@ -413,7 +440,9 @@ def test_managed_execution_startup_headroom_reduces_first_request_below_trigger(
         "model_metadata_overrides": {
             "models": {
                 "managed-8k": {
-                    "context_window_tokens": 11264,
+                    # Enough for the complete task and required context at the
+                    # soft target; only the deliberately dense plan may shrink.
+                    "context_window_tokens": 14_000,
                     "max_output_tokens": 1024,
                     "supports_vision": False,
                 }
@@ -426,7 +455,7 @@ def test_managed_execution_startup_headroom_reduces_first_request_below_trigger(
         "title": "Keep the first managed request below the compaction trigger",
         "description": (
             "Need the startup pack to preserve execution rules, selected assets, and the active "
-            "task while still leaving headroom before execution compaction would fire. " * 120
+            "task while still leaving headroom before execution compaction would fire."
         ),
         "acceptance_criteria": [
             f"criterion {i}: retain the required execution detail" for i in range(24)
@@ -461,7 +490,7 @@ def test_managed_execution_startup_headroom_reduces_first_request_below_trigger(
         managed_execution_startup_headroom=True,
         leading_sections=[
             "## Execution Knowledge\n"
-            + "Carry forward the exact forge execution contract and reporting invariants.\n" * 16
+            + "Carry forward the exact forge execution contract and reporting invariants.\n"
         ],
     )
 
@@ -510,7 +539,9 @@ def test_managed_execution_startup_headroom_skips_adjustment_when_request_alread
         "model_metadata_overrides": {
             "models": {
                 "managed-8k": {
-                    "context_window_tokens": 11264,
+                    # Keep this the already-fitting case after retaining
+                    # parameter contracts; the dense case above has more optional context.
+                    "context_window_tokens": 14_800,
                     "max_output_tokens": 1024,
                     "supports_vision": False,
                 }

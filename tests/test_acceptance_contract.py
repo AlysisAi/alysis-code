@@ -778,7 +778,14 @@ def test_durable_service_evidence_satisfies_persistent_service_after_recheck(
         "ownership": "DURABLE_SERVICE",
         "status": "running",
         "alive": True,
-        "readiness": {"type": "tcp", "status": "ready", "port": 8080},
+        "identity_valid": True,
+        "readiness": {
+            "type": "tcp",
+            "status": "ready",
+            "port": 8080,
+            "endpoint_owned": True,
+            "strength": "owned_endpoint",
+        },
     }
 
     record_acceptance_tool_effect(

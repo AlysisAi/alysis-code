@@ -34,7 +34,14 @@ def _ellipsize(text: str, limit: int) -> str:
         return clean
     if limit <= 3:
         return "." * limit
-    return clean[: limit - 3].rstrip() + "..."
+    clipped = clean[: limit - 3]
+    # Don't cut mid-word - when the cut lands inside a word and at least
+    # one whole word fits, retreat to the last word boundary before eliding.
+    if clean[limit - 3 : limit - 2] not in ("", " ") and " " in clipped:
+        head, _, _tail = clipped.rpartition(" ")
+        if head:
+            clipped = head
+    return clipped.rstrip().rstrip(",;:") + "..."
 
 
 def _completion_display(
@@ -60,6 +67,11 @@ SPECS: tuple[ChatSlashCommandSpec, ...] = (
     ChatSlashCommandSpec("permissions", "/permissions", "Change execution mode"),
     ChatSlashCommandSpec("persona", "/persona", "Switch persona: code, architect, ask, debug"),
     ChatSlashCommandSpec("ask", "/ask <question>", "One read-only turn; mode restored after"),
+    ChatSlashCommandSpec(
+        "objective",
+        "/objective [new <request>|amend <constraint>]",
+        "Show the current task, start a new one, or add a constraint",
+    ),
     ChatSlashCommandSpec("status", "/status", "Show session status"),
     ChatSlashCommandSpec("subagents", "/subagents", "Open an active subagent run"),
     ChatSlashCommandSpec("terminals", "/terminals [list|show|kill]", "Manage background processes"),
@@ -75,7 +87,7 @@ SPECS: tuple[ChatSlashCommandSpec, ...] = (
     ChatSlashCommandSpec("login", "/login", "Connect your Alysis Code account or a subscription"),
     ChatSlashCommandSpec("logout", "/logout", "Disconnect your Alysis Code account"),
     ChatSlashCommandSpec("toolbar", "/toolbar", "Configure status toolbar"),
-    ChatSlashCommandSpec("image", "/image [path]", "Queue an image for the next message"),
+    ChatSlashCommandSpec("image", "/image [path]", "Attach an image or file to the next message"),
     ChatSlashCommandSpec("forge", "/forge [resume]", "Enter or resume Forge"),
     ChatSlashCommandSpec("report", "/report [text]", "Create feedback bundle and issue draft"),
     ChatSlashCommandSpec("feedback", "/feedback [text]", "Alias for /report"),

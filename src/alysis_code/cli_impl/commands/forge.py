@@ -30,6 +30,7 @@ from ...plan_repair import (
     plan_status,
     plan_status_detail,
 )
+from ...profiles import apply_runtime_base_url_override
 from ...review_gate import ReviewError, review_task
 from . import _patchable
 from ._shared import Mode, _console, _Table
@@ -431,7 +432,7 @@ def forge_review(
         cfg = _patchable("load_config", load_config)()
         effective = clone_cfg(cfg)
         if base_url is not None:
-            effective.base_url = base_url
+            apply_runtime_base_url_override(effective, base_url)
         if model is not None:
             effective.model = model
         if temperature is not None:

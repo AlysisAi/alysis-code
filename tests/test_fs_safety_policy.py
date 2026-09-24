@@ -473,15 +473,18 @@ def test_git_apply_rejects_change_during_approval(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "human\n"
 
 
-def test_sensitive_read_requires_one_time_approval_even_in_fullaccess(tmp_path: Path) -> None:
+@pytest.mark.parametrize("line_options", [{}, {"start_line": 1, "end_line": 1}])
+def test_sensitive_read_requires_one_time_approval_even_in_fullaccess(
+    tmp_path: Path, line_options: dict[str, int]
+) -> None:
     secret = "token=do-not-render"
     (tmp_path / ".env").write_text(secret, encoding="utf-8")
     surface = _RecordingSurface()
     tools = _tools(tmp_path, surface=surface, mode="fullaccess", yes=True)
 
-    result = tools["fs_read"].run({"path": ".env"})  # type: ignore[attr-defined]
+    result = tools["fs_read"].run({"path": ".env", **line_options})  # type: ignore[attr-defined]
 
-    assert result["content"] == secret
+    assert result["content"] == (f"1: {secret}" if line_options else secret)
     assert result["_alysis_output_policy"]["persist"] == "redact"
     [request] = surface.requests
     assert request.kind == "fs_read"
@@ -499,7 +502,7 @@ def test_runtime_sensitive_missing_path_reports_terminal_nonexistence(tmp_path: 
         session_id="sensitive-missing-runtime",
     )
     client = _RuntimeReadClient(
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": ".git/logs/HEAD", "start_line": 1, "end_line": 10},
     )
     session.client = client  # type: ignore[assignment]

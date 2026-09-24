@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from alysis_code import auth_diagnostics as auth_diagnostics_mod
 from alysis_code import cli as cli_mod
 from alysis_code.agent_runtimes.base import RuntimeAccountStatus
 from alysis_code.cli import app
@@ -102,9 +101,12 @@ def test_auth_status_json_reports_unavailable_keyring_and_exits_zero(
 def test_auth_status_json_reports_available_keyring_without_a_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from alysis_code import auth_diagnostics
+
     monkeypatch.setattr(cli_mod, "load_config", AppConfig)
+    monkeypatch.setattr(auth_diagnostics, "last_keyring_outcome", lambda: None)
     monkeypatch.setattr(
-        auth_diagnostics_mod,
+        auth_diagnostics,
         "keyring_availability",
         lambda **_kwargs: token_store_mod.KeyringOutcome(available=True, backend="test.Backend"),
     )

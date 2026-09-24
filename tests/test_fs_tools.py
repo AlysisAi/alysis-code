@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from alysis_code.tools import fs as fs_mod
-from alysis_code.tools.fs import FsError, fs_list, fs_read, fs_read_lines
+from alysis_code.tools.fs import FsError, fs_list, fs_read
 
 
 def _init_git_repo(path: Path) -> None:
@@ -28,15 +28,21 @@ def test_fs_read_large_file_respects_max_bytes(tmp_path: Path) -> None:
     assert len(result["content"].encode("utf-8")) <= 4096
 
 
-def test_fs_read_truncation_reports_exact_line_continuation(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("newline", "max_bytes", "next_start"),
+    [(b"\n", 8, 3), (b"\r\n", 10, 3), (b"\r\n", 8, 2)],
+)
+def test_fs_read_truncation_reports_continuation_without_guessing_file_end(
+    tmp_path: Path, newline: bytes, max_bytes: int, next_start: int
+) -> None:
     path = tmp_path / "continued.txt"
-    path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+    path.write_bytes(newline.join([b"one", b"two", b"three", b"four", b"five", b""]))
 
-    result = fs_read(root=tmp_path, path="continued.txt", max_bytes=8)
+    result = fs_read(root=tmp_path, path="continued.txt", max_bytes=max_bytes)
 
-    assert result["total_lines"] == 5
+    assert result["total_lines"] is None
     assert result["returned_range"] == {"start_line": 1, "end_line": 2}
-    assert result["next_range"] == {"start_line": 3, "end_line": 5}
+    assert result["next_range"] == {"start_line": next_start, "end_line": next_start + 199}
 
 
 def test_fs_read_default_is_bounded_and_reports_limit_metadata(tmp_path: Path) -> None:
@@ -51,11 +57,11 @@ def test_fs_read_default_is_bounded_and_reports_limit_metadata(tmp_path: Path) -
     assert len(result["content"].encode("utf-8")) <= 12_000
 
 
-def test_fs_read_lines_returns_requested_range_with_line_numbers(tmp_path: Path) -> None:
+def test_fs_read_range_returns_requested_range_with_line_numbers(tmp_path: Path) -> None:
     path = tmp_path / "demo.txt"
     path.write_text("alpha\nbeta\ngamma\ndelta\n", encoding="utf-8", newline="\n")
 
-    result = fs_read_lines(root=tmp_path, path="demo.txt", start_line=2, end_line=3)
+    result = fs_read(root=tmp_path, path="demo.txt", start_line=2, end_line=3)
 
     assert result == {
         "path": "demo.txt",
@@ -67,11 +73,11 @@ def test_fs_read_lines_returns_requested_range_with_line_numbers(tmp_path: Path)
     }
 
 
-def test_fs_read_lines_handles_end_line_past_eof_and_reports_total_lines(tmp_path: Path) -> None:
+def test_fs_read_range_handles_end_line_past_eof_and_reports_total_lines(tmp_path: Path) -> None:
     path = tmp_path / "demo.txt"
     path.write_text("alpha\nbeta\ngamma\n", encoding="utf-8", newline="\n")
 
-    result = fs_read_lines(
+    result = fs_read(
         root=tmp_path,
         path="demo.txt",
         start_line=2,
@@ -97,7 +103,7 @@ def test_fs_read_lines_handles_end_line_past_eof_and_reports_total_lines(tmp_pat
         ({"start_line": 1, "max_lines": 0}, "Invalid max_lines"),
     ],
 )
-def test_fs_read_lines_rejects_invalid_ranges(
+def test_fs_read_range_rejects_invalid_ranges(
     tmp_path: Path,
     kwargs: dict[str, int],
     message: str,
@@ -106,28 +112,28 @@ def test_fs_read_lines_rejects_invalid_ranges(
     path.write_text("alpha\nbeta\n", encoding="utf-8")
 
     with pytest.raises(FsError, match=message):
-        fs_read_lines(root=tmp_path, path="demo.txt", **kwargs)
+        fs_read(root=tmp_path, path="demo.txt", **kwargs)
 
 
-def test_fs_read_lines_rejects_start_line_beyond_eof(tmp_path: Path) -> None:
+def test_fs_read_range_rejects_start_line_beyond_eof(tmp_path: Path) -> None:
     path = tmp_path / "demo.txt"
     path.write_text("alpha\nbeta\n", encoding="utf-8")
 
     with pytest.raises(FsError, match="beyond end of file"):
-        fs_read_lines(root=tmp_path, path="demo.txt", start_line=5)
+        fs_read(root=tmp_path, path="demo.txt", start_line=5)
 
 
-def test_fs_read_lines_marks_truncated_when_max_lines_caps_output(tmp_path: Path) -> None:
+def test_fs_read_range_marks_truncated_when_max_lines_caps_output(tmp_path: Path) -> None:
     path = tmp_path / "demo.txt"
     path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8", newline="\n")
 
-    result = fs_read_lines(root=tmp_path, path="demo.txt", start_line=2, max_lines=2)
+    result = fs_read(root=tmp_path, path="demo.txt", start_line=2, max_lines=2)
 
     assert result == {
         "path": "demo.txt",
         "start_line": 2,
         "end_line": 3,
-        "total_lines": 5,
+        "total_lines": None,
         "content": "2: two\n3: three\n",
         "truncated": True,
         "returned_range": {"start_line": 2, "end_line": 3},
@@ -135,38 +141,38 @@ def test_fs_read_lines_marks_truncated_when_max_lines_caps_output(tmp_path: Path
     }
 
 
-def test_fs_read_lines_truncation_reports_exact_line_continuation(tmp_path: Path) -> None:
+def test_fs_read_range_truncation_reports_bounded_line_continuation(tmp_path: Path) -> None:
     path = tmp_path / "continued-lines.txt"
     path.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
 
-    result = fs_read_lines(
+    result = fs_read(
         root=tmp_path,
         path="continued-lines.txt",
         start_line=2,
         max_lines=2,
     )
 
-    assert result["total_lines"] == 5
+    assert result["total_lines"] is None
     assert result["returned_range"] == {"start_line": 2, "end_line": 3}
     assert result["next_range"] == {"start_line": 4, "end_line": 5}
 
 
-def test_fs_read_lines_reports_missing_file_and_directory_errors(tmp_path: Path) -> None:
+def test_fs_read_range_reports_missing_file_and_directory_errors(tmp_path: Path) -> None:
     (tmp_path / "subdir").mkdir()
 
     with pytest.raises(FsError, match="Not found: missing.txt"):
-        fs_read_lines(root=tmp_path, path="missing.txt", start_line=1)
+        fs_read(root=tmp_path, path="missing.txt", start_line=1)
 
     with pytest.raises(FsError, match="Is a directory: subdir"):
-        fs_read_lines(root=tmp_path, path="subdir", start_line=1)
+        fs_read(root=tmp_path, path="subdir", start_line=1)
 
 
-def test_fs_read_lines_rejects_root_escape(tmp_path: Path) -> None:
+def test_fs_read_range_rejects_root_escape(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("nope\n", encoding="utf-8")
 
     with pytest.raises(FsError, match="Path escapes root"):
-        fs_read_lines(root=tmp_path, path="../outside.txt", start_line=1)
+        fs_read(root=tmp_path, path="../outside.txt", start_line=1)
 
 
 def test_fs_list_ignored_candidates_do_not_consume_visible_result_budget(tmp_path: Path) -> None:
@@ -316,10 +322,10 @@ def test_fs_read_withholds_generated_dir_content(tmp_path: Path) -> None:
     assert result["derived_artifact_reason"] == "generated or vendored path"
 
 
-def test_fs_read_lines_byte_ceiling_bounds_enormous_single_line(tmp_path: Path) -> None:
+def test_fs_read_range_byte_ceiling_bounds_enormous_single_line(tmp_path: Path) -> None:
     (tmp_path / "generated.js").write_text("y" * 200_000 + "\n", encoding="utf-8")
 
-    result = fs_read_lines(root=tmp_path, path="generated.js", start_line=1)
+    result = fs_read(root=tmp_path, path="generated.js", start_line=1, max_bytes=48_000)
 
     assert result["byte_truncated"] is True
     assert result["line_clipped"] is True
@@ -328,7 +334,7 @@ def test_fs_read_lines_byte_ceiling_bounds_enormous_single_line(tmp_path: Path) 
     assert len(result["content"].encode("utf-8")) <= 48_000
     assert "max_bytes" in result
 
-    small = fs_read_lines(root=tmp_path, path="generated.js", start_line=1, max_bytes=500)
+    small = fs_read(root=tmp_path, path="generated.js", start_line=1, max_bytes=500)
     assert len(small["content"].encode("utf-8")) <= 500
     assert small["byte_truncated"] is True
 
@@ -349,14 +355,14 @@ def test_fs_read_derived_stub_honors_explicit_max_bytes(tmp_path: Path) -> None:
     assert default_stub["bytes_read"] <= 1000
 
 
-def test_fs_read_lines_clip_never_exceeds_ceiling_on_multibyte_text(tmp_path: Path) -> None:
+def test_fs_read_range_clip_never_exceeds_ceiling_on_multibyte_text(tmp_path: Path) -> None:
     """Clipping at a UTF-8 boundary drops the partial character instead of
     substituting U+FFFD, which would re-encode to three bytes and overshoot
     a one-byte ceiling."""
     (tmp_path / "emoji.txt").write_text("你好世界" * 5000 + "\n", encoding="utf-8")
 
     for limit in (1, 2, 3, 4, 5, 500):
-        clipped = fs_read_lines(
+        clipped = fs_read(
             root=tmp_path,
             path="emoji.txt",
             start_line=1,
@@ -369,11 +375,11 @@ def test_fs_read_lines_clip_never_exceeds_ceiling_on_multibyte_text(tmp_path: Pa
         assert clipped["line_clipped"] is True
 
 
-def test_fs_read_lines_byte_ceiling_stops_between_lines(tmp_path: Path) -> None:
+def test_fs_read_range_byte_ceiling_stops_between_lines(tmp_path: Path) -> None:
     lines = [f"line-{index} " + "z" * 30_000 for index in range(1, 11)]
     (tmp_path / "wide.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    result = fs_read_lines(
+    result = fs_read(
         root=tmp_path,
         path="wide.txt",
         start_line=1,
@@ -384,16 +390,16 @@ def test_fs_read_lines_byte_ceiling_stops_between_lines(tmp_path: Path) -> None:
     assert "line_clipped" not in result
     assert result["truncated"] is True
     assert result["end_line"] == 2
-    assert result["total_lines"] == 10
+    assert result["total_lines"] is None
     assert result["returned_range"] == {"start_line": 1, "end_line": 2}
-    assert result["next_range"] == {"start_line": 3, "end_line": 10}
+    assert result["next_range"] == {"start_line": 3, "end_line": 202}
     assert len(result["content"].encode("utf-8")) <= 65_000
 
 
-def test_fs_read_lines_normal_reads_have_no_byte_truncation_keys(tmp_path: Path) -> None:
+def test_fs_read_range_normal_reads_have_no_byte_truncation_keys(tmp_path: Path) -> None:
     (tmp_path / "normal.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
-    result = fs_read_lines(root=tmp_path, path="normal.txt", start_line=1)
+    result = fs_read(root=tmp_path, path="normal.txt", start_line=1)
 
     assert "byte_truncated" not in result
     assert "line_clipped" not in result
@@ -401,8 +407,8 @@ def test_fs_read_lines_normal_reads_have_no_byte_truncation_keys(tmp_path: Path)
     assert result["total_lines"] == 3
 
 
-def test_fs_read_lines_rejects_invalid_max_bytes(tmp_path: Path) -> None:
+def test_fs_read_range_rejects_invalid_max_bytes(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
 
     with pytest.raises(FsError, match="max_bytes"):
-        fs_read_lines(root=tmp_path, path="a.txt", start_line=1, max_bytes=0)
+        fs_read(root=tmp_path, path="a.txt", start_line=1, max_bytes=0)

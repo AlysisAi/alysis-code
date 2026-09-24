@@ -9,7 +9,9 @@ from .session_store import read_session_events
 from .tools.registry import builtin_tool_names_with_category
 from .web_research import build_web_research_metrics_from_events
 
-_READ_TOOLS = frozenset(builtin_tool_names_with_category("read"))
+# Classify historical events from before the single-reader migration. This name
+# is no longer an executable tool or an alias in the runtime registry.
+_READ_TOOLS = frozenset((*builtin_tool_names_with_category("read"), "fs_read_lines"))
 _WRITE_TOOLS = frozenset(builtin_tool_names_with_category("write"))
 
 _TEST_CMD_HINTS = [
@@ -281,6 +283,10 @@ def score_session_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 payload.get("verification_authoritative", metrics["verification_authoritative"])
             )
             all_passed = payload.get("all_passed")
+            run_status = str(payload.get("status") or "")
+            if run_status == "not_run":
+                # Tri-state: nothing executed — not a verification failure.
+                continue
             if all_passed is False:
                 if authoritative:
                     metrics["authoritative_verification_failures"] += 1

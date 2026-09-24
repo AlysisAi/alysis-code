@@ -6,7 +6,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..repo_scan import scan_workspace
+from ..verification_command_analysis import analyze_verification_command
 from ..workspace_context import resolve_workspace_context
+from ..workspace_provisioning import detect_declared_test_runner
 
 
 class TestDiscoveryError(RuntimeError):
@@ -44,13 +46,23 @@ def test_discover(
 
     candidate_tests: list[dict[str, Any]] = []
     candidate_commands: list[dict[str, Any]] = []
-    frameworks: set[str] = set()
+    broad_commands = _broad_commands(root_abs)
+    frameworks = _frameworks_from_commands(broad_commands, root=root_abs)
+    declared_runner = detect_declared_test_runner(root_abs)
+    if declared_runner is not None:
+        frameworks.add(declared_runner.package)
+    summary_framework = (
+        str(failure_summary.get("framework") or "").strip().casefold()
+        if isinstance(failure_summary, dict)
+        else ""
+    )
+    if summary_framework in {"pytest", "unittest"}:
+        frameworks.add(summary_framework)
 
     for test in summary_tests:
         candidate_tests.append(test)
         path = str(test.get("path") or "")
-        if path.endswith(".py"):
-            frameworks.add("pytest")
+        if path.endswith(".py") and summary_framework == "pytest":
             if include_commands:
                 node_id = str(test.get("id") or path)
                 candidate_commands.append(
@@ -66,7 +78,6 @@ def test_discover(
     for rel_path in normalized_paths:
         suffix = PurePosixPath(rel_path).suffix.lower()
         if suffix in _PY_EXTENSIONS:
-            frameworks.add("pytest")
             candidate_tests.extend(_python_test_candidates(root_abs, rel_path, test_files))
         elif suffix in _JS_EXTENSIONS:
             frameworks.update(_node_frameworks(root_abs))
@@ -98,12 +109,8 @@ def test_discover(
             _commands_for_tests(root_abs, candidate_tests, frameworks=frameworks)
         )
         if not candidate_commands:
-            candidate_commands.extend(_broad_commands(root_abs))
+            candidate_commands.extend(broad_commands)
         candidate_commands = _dedupe_commands(candidate_commands)[:safe_max]
-
-    broad_commands = _broad_commands(root_abs)
-    if not frameworks:
-        frameworks.update(_frameworks_from_commands(broad_commands))
 
     return {
         "paths": normalized_paths,
@@ -114,6 +121,10 @@ def test_discover(
         "broad_commands": [item["command"] for item in broad_commands] if include_commands else [],
         "changed_only": bool(changed_only),
         "heuristic": True,
+        "discovery_note": (
+            "Repository/test hints only. Runner availability is unverified; "
+            "this tool does not execute tests."
+        ),
     }
 
 
@@ -367,7 +378,7 @@ def _commands_for_tests(
             continue
         suffix = PurePosixPath(path).suffix.lower()
         confidence = float(candidate.get("confidence") or 0.5)
-        if suffix == ".py":
+        if suffix == ".py" and "pytest" in frameworks:
             commands.append(
                 _command(
                     f"python -m pytest {path} -q",
@@ -458,19 +469,6 @@ def _broad_commands(root: Path) -> list[dict[str, Any]]:
             )
     if commands:
         return _dedupe_commands(commands)
-    if (
-        (root / "pyproject.toml").exists()
-        or (root / "pytest.ini").exists()
-        or (root / "tests").is_dir()
-    ):
-        commands.append(
-            _command(
-                "python -m pytest -q",
-                scope="broad",
-                confidence=0.7,
-                reason="Python test surface detected",
-            )
-        )
     if (root / "package.json").exists():
         manager = _node_package_manager(root)
         commands.append(
@@ -502,12 +500,14 @@ def _broad_commands(root: Path) -> list[dict[str, Any]]:
     return _dedupe_commands(commands)
 
 
-def _frameworks_from_commands(commands: list[dict[str, Any]]) -> set[str]:
+def _frameworks_from_commands(commands: list[dict[str, Any]], *, root: Path) -> set[str]:
     frameworks: set[str] = set()
     for item in commands:
-        command = str(item.get("command") or "").casefold()
-        if "pytest" in command:
-            frameworks.add("pytest")
+        raw_command = str(item.get("command") or "")
+        command = raw_command.casefold()
+        analysis = analyze_verification_command(raw_command, trusted=True, workspace_root=root)
+        if analysis.command_family in {"pytest", "unittest"}:
+            frameworks.add(analysis.command_family)
         if "npm" in command or "yarn" in command or "pnpm" in command or "bun" in command:
             frameworks.add("node")
         if "go test" in command:

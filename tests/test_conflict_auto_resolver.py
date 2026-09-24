@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from alysis_code.config import AppConfig
 from alysis_code.conflict_auto_resolver import (
     CONFLICT_RESOLVER_SYSTEM_PROMPT,
@@ -15,6 +17,7 @@ from alysis_code.conflict_auto_resolver import (
     attempt_auto_resolve_conflict,
     load_conflict_auto_resolve_settings,
 )
+from alysis_code.execution_context import ExecutionContextBudgetError
 from alysis_code.execution_shared import build_task_execution_instruction_bundle
 from alysis_code.forge import add_task, create_plan_run, load_plan, save_plan
 from alysis_code.knowledge_base import write_task_attempt_entry
@@ -1082,8 +1085,10 @@ def test_attempt_auto_resolve_conflict_uses_structured_node_text_refinement(
     assert captured["verify_commands"] == ["node --test"]
 
 
+@pytest.mark.parametrize("context_tokens", [9948, 13_000])
 def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_tight_budget(
     tmp_path: Path,
+    context_tokens: int,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1124,11 +1129,9 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
         "model_metadata_overrides": {
             "models": {
                 "resolver-model": {
-                    # Sized to stay one notch above the minimal truncation tier so
-                    # omission notes are still emitted. Reserve room for the
-                    # bundled skill catalog in the fixed prompt overhead; the
-                    # oversized plan still forces execution-priority reduction.
-                    "context_window_tokens": 9472,
+                    # The smaller budget must reject the full required task;
+                    # the fitting case may reduce only supplementary plan context.
+                    "context_window_tokens": context_tokens,
                     "max_output_tokens": 2048,
                     "supports_vision": False,
                 }
@@ -1137,7 +1140,7 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
     }
     unmerged_files = [f"src/conflict_{i:02d}.py" for i in range(18)] + ["tests/test_parser.py"]
 
-    bundle = build_task_execution_instruction_bundle(
+    bundle_args = dict(
         plan=plan,
         task=task,
         root=repo,
@@ -1167,6 +1170,15 @@ def test_conflict_instruction_bundle_preserves_scope_and_unmerged_files_under_ti
         ],
     )
 
+    if context_tokens == 9948:
+        with pytest.raises(ExecutionContextBudgetError) as caught:
+            build_task_execution_instruction_bundle(**bundle_args)
+        assert caught.value.required_tokens > caught.value.available_tokens
+        return
+    bundle = build_task_execution_instruction_bundle(**bundle_args)
+    assert task["description"].strip() in bundle.instruction
+    assert all(item in bundle.instruction for item in task["acceptance_criteria"])
+    assert all(path in bundle.instruction for path in unmerged_files)
     assert bundle.truncation_strategy.startswith("execution_priority")
     assert "## Conflict Resolution Scope" in bundle.instruction
     assert "- `src/conflict_00.py`" in bundle.instruction
@@ -2179,7 +2191,7 @@ def test_attempt_auto_resolve_conflict_warn_verify_failure_is_warning(
 
 
 def test_conflict_resolver_prompt_matches_current_tool_policy() -> None:
-    assert "Prefer search_rg plus fs_read_lines for focused conflict inspection" in (
+    assert "Prefer search_rg plus fs_read line ranges for focused conflict inspection" in (
         CONFLICT_RESOLVER_SYSTEM_PROMPT
     )
     assert "Prefer fs_edit for deterministic localized edits in one existing conflicted file." in (
@@ -2191,3 +2203,58 @@ def test_conflict_resolver_prompt_matches_current_tool_policy() -> None:
     assert "If verification tools/commands are available in this run" in (
         CONFLICT_RESOLVER_SYSTEM_PROMPT
     )
+
+
+def test_conflict_budget_rejection_is_reported_without_agent_dispatch(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    paths = create_plan_run(repo)
+    plan = load_plan(paths)
+    task = add_task(
+        plan, title="Resolve bounded conflict", branch="feat/task", estimated_files=["src/owned.py"]
+    )
+    save_plan(paths, plan)
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver.ensure_task_worktree",
+        lambda **kwargs: kwargs["worktree_repo_path"].mkdir(parents=True),
+    )
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver.mirror_plan_into_worktree", lambda **_: None
+    )
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver._run_git",
+        lambda *args: subprocess.CompletedProcess(args, 1, "conflict", ""),
+    )
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver.list_unmerged_files", lambda _: ["src/owned.py"]
+    )
+    _stub_conflict_knowledge_mirror(monkeypatch)
+
+    def reject(**kwargs):
+        raise ExecutionContextBudgetError(available_tokens=100, required_tokens=900)
+
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver.build_task_execution_instruction_bundle", reject
+    )
+    monkeypatch.setattr(
+        "alysis_code.conflict_auto_resolver.run_agent",
+        lambda **_: pytest.fail("Budget rejection must precede dispatch"),
+    )
+    outcome = attempt_auto_resolve_conflict(
+        paths=paths,
+        plan=plan,
+        task=task,
+        cfg=AppConfig(model="test-model"),
+        api_key_override=None,
+        base_branch="main",
+        task_branch="feat/task",
+        keep_worktrees=True,
+        settings=ConflictAutoResolveSettings(True, "off", 1),
+    )
+    assert outcome.success is False
+    assert outcome.agent_exit_code is None
+    assert "Increase the context allowance" in outcome.error
+    payload = json.loads(outcome.result_json_path.read_text())
+    assert payload["success"] is False
+    assert payload["context_artifact_path"] is None
+    assert "900 estimated tokens" in outcome.report_path.read_text()

@@ -153,7 +153,7 @@ def test_tui_config_persists_subscription_model_and_supported_effort(monkeypatch
     assert flow.stage == "model_thinking"
     assert [row.value for row in flow.screen().rows] == ["auto", "medium", "max", "ultra"]
     flow.choose("medium")
-    flow.submit_input("60")
+    assert flow.stage == "menu"
     result = flow.state.commit_to(cfg)
 
     assert result.saved is True
@@ -172,6 +172,8 @@ def test_native_session_accepts_subscription_profile_without_api_key(
     monkeypatch,
     tmp_path,
 ) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
         "alysis_code.provider_auth.create_provider_auth",
         lambda _provider_id: _CatalogAdapter(),
@@ -196,10 +198,13 @@ def test_native_session_accepts_subscription_profile_without_api_key(
         non_interactive=True,
     )
 
-    assert session.api_key == ""
-    assert session.api_key_source == "provider-auth:openai-codex"
-    assert session.client.model == "gpt-codex-a"
-    assert session.client.provider_auth.provider_id == "openai-codex"
+    try:
+        assert session.api_key == ""
+        assert session.api_key_source == "provider-auth:openai-codex"
+        assert session.client.model == "gpt-codex-a"
+        assert session.client.provider_auth.provider_id == "openai-codex"
+    finally:
+        session.close()
 
 
 def test_config_preserves_saved_subscription_effort_when_catalog_is_offline(

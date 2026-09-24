@@ -37,8 +37,9 @@ def build_skill_advertise_block(
             "- Compare all descriptions with the requested outcome and workflow, not shared "
             "steps or concept mentions; honor exclusions. Choose the narrowest fit; broad "
             "skills are fallbacks.",
-            "- For each match, call skill_read(name) before any other task action; "
-            "otherwise continue without a skill.",
+            "- Honor explicit user skill requests. Read a chosen workflow with skill_read(name) "
+            "before relying on it, unless its instructions are already in context. "
+            "Otherwise continue directly.",
             "- skill_read only loads instructions; it never executes them. Use "
             "skill_read(name, path) for bundle files.",
         ]

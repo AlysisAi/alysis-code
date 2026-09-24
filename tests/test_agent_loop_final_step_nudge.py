@@ -216,11 +216,15 @@ def test_low_step_budget_nudge_applies_before_final_step(tmp_path: Path) -> None
     assert _has_final_step_nudge(client.calls[3]["messages"])
 
 
-def test_interactive_phase_budget_nudges_after_repeated_exploration(
+def test_interactive_phase_budget_does_not_manufacture_execution_authority(
     tmp_path: Path,
 ) -> None:
     session = create_session(
-        cfg=AppConfig(model=SMOKE_MODEL, routing_mode="code_only"),
+        cfg=AppConfig(
+            model=SMOKE_MODEL,
+            routing_mode="code_only",
+            step_budget_policy="limited",
+        ),
         root=tmp_path,
         mode="auto",
         yes=True,
@@ -248,29 +252,59 @@ def test_interactive_phase_budget_nudges_after_repeated_exploration(
     assert exit_code == 0
     assert len(client.calls) == 4
     assert not _has_phase_exploration_nudge(client.calls[0]["messages"], exploration_steps=3)
-    assert _has_phase_exploration_nudge(client.calls[3]["messages"], exploration_steps=3)
+    assert not _has_phase_exploration_nudge(client.calls[3]["messages"], exploration_steps=3)
 
 
-def test_phase_budget_exploration_prompt_is_capped_but_telemetry_continues(
+def test_phase_budget_exploration_prompt_is_capped_after_mutation_engagement(
     tmp_path: Path,
 ) -> None:
     session = create_session(
-        cfg=AppConfig(model=SMOKE_MODEL, routing_mode="code_only"),
+        cfg=AppConfig(
+            model=SMOKE_MODEL,
+            routing_mode="code_only",
+            step_budget_policy="limited",
+        ),
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=20,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         session_log_dir_override=tmp_path / "sessions",
         enable_chat_turn_step_budget=True,
     )
     responses = [
+        LLMResponse(
+            content="Attempting the requested mutation before continuing.",
+            tool_calls=[
+                ToolCall(
+                    id="mutation-attempt",
+                    name="fs_edit",
+                    arguments={
+                        "path": "missing.txt",
+                        "old_text": "before",
+                        "new_text": "after",
+                    },
+                )
+            ],
+            raw={},
+        )
+    ] + [
         LLMResponse(content=f"Inspecting {idx}.", tool_calls=[_tool_call(idx)], raw={})
         for idx in range(1, 9)
     ]
-    responses.append(LLMResponse(content="Blocked by missing requirements.", tool_calls=[], raw={}))
-    client = _ScriptedClient(responses)
+    client = _ScriptedClient(
+        responses,
+        finalization_response=LLMResponse(
+            content=(
+                "Completed work: inspected the repository.\n"
+                "Remaining work: no implementation was requested by this test.\n"
+                "Known issues or risks: the step budget ended."
+            ),
+            tool_calls=[],
+            raw={},
+        ),
+    )
     session.client = client  # type: ignore[assignment]
 
     try:
@@ -289,22 +323,21 @@ def test_phase_budget_exploration_prompt_is_capped_but_telemetry_continues(
             for message in call["messages"]
         )
     ]
-    assert injected_steps == [4, 7]
-    assert _has_phase_exploration_nudge(client.calls[3]["messages"], exploration_steps=3)
-    assert _has_phase_exploration_nudge(client.calls[6]["messages"], exploration_steps=6)
+    assert injected_steps == [5, 8]
+    assert _has_phase_exploration_nudge(client.calls[4]["messages"], exploration_steps=3)
+    assert _has_phase_exploration_nudge(client.calls[7]["messages"], exploration_steps=6)
 
     intervention_events = [
         payload
         for payload in _event_payloads(log_path, "controller_intervention")
         if payload.get("detail") == "phase_budget_exploration_prompt"
     ]
-    assert [event["step"] for event in intervention_events] == [4, 5, 6, 7, 8, 9]
+    assert [event["step"] for event in intervention_events] == [5, 6, 7, 8, 9]
     assert [event["headline_counted"] for event in intervention_events] == [
         True,
         False,
         False,
         True,
-        False,
         False,
     ]
     assert [event["metadata"]["exploration_steps"] for event in intervention_events] == [
@@ -313,17 +346,73 @@ def test_phase_budget_exploration_prompt_is_capped_but_telemetry_continues(
         5,
         6,
         7,
-        8,
     ]
     suppressed_events = [event for event in intervention_events if not event["headline_counted"]]
     assert suppressed_events
     assert all(event["metadata"]["suppressed"] is True for event in suppressed_events)
     headline_totals = [event["controller_interventions_total"] for event in intervention_events]
-    assert headline_totals[1] == headline_totals[0]
-    assert headline_totals[2] == headline_totals[0]
-    assert headline_totals[3] == headline_totals[0] + 1
-    assert headline_totals[4] == headline_totals[3]
-    assert headline_totals[5] == headline_totals[3]
+    assert headline_totals == sorted(headline_totals)
+
+
+def test_verification_only_turn_does_not_trigger_phase_budget_implementation_pressure(
+    tmp_path: Path,
+) -> None:
+    session = create_session(
+        cfg=AppConfig(
+            model=SMOKE_MODEL,
+            routing_mode="code_only",
+            step_budget_policy="limited",
+        ),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=7,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        enable_chat_turn_step_budget=True,
+    )
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="Reproducing the current behavior.",
+                tool_calls=[
+                    ToolCall(
+                        id="verification-attempt",
+                        name="verify_run",
+                        arguments={"commands": ["true"]},
+                    )
+                ],
+                raw={},
+            ),
+            *[
+                LLMResponse(content=f"Inspecting {idx}.", tool_calls=[_tool_call(idx)], raw={})
+                for idx in range(1, 4)
+            ],
+            *[
+                LLMResponse(
+                    content="Diagnosis complete; no edit was requested.", tool_calls=[], raw={}
+                )
+                for _ in range(3)
+            ],
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Reproduce and diagnose the current behavior without edits.") == 0
+        log_path = session.store.path
+    finally:
+        session.close()
+
+    assert not any(
+        _has_phase_exploration_nudge(call["messages"], exploration_steps=3) for call in client.calls
+    )
+    assert [
+        payload
+        for payload in _event_payloads(log_path, "controller_intervention")
+        if payload.get("detail") == "phase_budget_exploration_prompt"
+    ] == []
 
 
 def test_final_step_nudge_keeps_tools_available_before_forced_summary(tmp_path: Path) -> None:

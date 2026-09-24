@@ -187,7 +187,6 @@ def build_verification_command_spec(
     requirement = (
         VerificationCommandRequirement.ADVISORY
         if provenance == VerificationCommandProvenance.INFERRED_HEURISTIC
-        and contract_type in {"generic_fallback", "unavailable"}
         else VerificationCommandRequirement.REQUIRED
     )
     parsed_parts: tuple[str, ...] = tuple()
@@ -319,6 +318,11 @@ def _provenance_for_source(
 ) -> VerificationCommandProvenance:
     source = str(source or "")
     contract_type = str(contract_type or "")
+    # A scan can suggest a runner from files or layout without finding a
+    # declared command. Its legacy repo_native label does not establish an
+    # explicit requirement or independent checker provenance.
+    if source in {"repo_scan.likely_test_commands", "verification_fallback.detected_runner"}:
+        return VerificationCommandProvenance.INFERRED_HEURISTIC
     if source == "environment.authoritative_verification_commands" or contract_type in {
         "authoritative_override",
         "explicit_override",
@@ -328,11 +332,11 @@ def _provenance_for_source(
             if source == "environment.authoritative_verification_commands"
             else VerificationCommandProvenance.EXPLICIT_USER_COMMAND
         )
-    if source == "cli.verify_cmd" or source.startswith("task_refinement.explicit"):
+    if source in {"cli.verify_cmd", "config.verify_commands"}:
         return VerificationCommandProvenance.EXPLICIT_USER_COMMAND
     if source == "task_refinement.explicit_user_command" or contract_type == "task_acceptance":
         return VerificationCommandProvenance.EXPLICIT_USER_COMMAND
-    if source == "repo_scan.likely_test_commands" or contract_type == "repo_native":
+    if contract_type == "repo_native":
         return VerificationCommandProvenance.PREEXISTING_REPO_NATIVE
     if source.startswith("task_refinement.") and contract_type == "task_inferred":
         return VerificationCommandProvenance.INFERRED_HEURISTIC

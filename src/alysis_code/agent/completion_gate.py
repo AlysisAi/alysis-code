@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -89,6 +91,7 @@ class CompletionGateEvidenceSnapshot:
     def payload(self) -> dict[str, Any]:
         return {
             "stage": self.stage,
+            "problems": list(self.problems),
             "material_edit_count": self.material_edit_count,
             "material_edit_tools": list(self.material_edit_tools),
             "touched_repo_paths": list(self.touched_repo_paths),
@@ -122,6 +125,42 @@ class CompletionGateControllerState:
     last_stage: str = ""
     last_problems: tuple[str, ...] = tuple()
     last_snapshot_payload: dict[str, Any] = field(default_factory=dict)
+    repair_rounds_by_generation: dict[int, int] = field(default_factory=dict)
+    repair_rounds_by_evidence: dict[str, int] = field(default_factory=dict)
+
+    def claim_repair(self, snapshot: dict[str, Any]) -> str | None:
+        """Bound finalization repairs across stages without banning ordinary checks.
+
+        Repeating a warning is not progress. Relevant edits establish a new
+        generation; changed failure/coverage evidence establishes a new attempt
+        within that generation. All criteria still share its finite budget.
+        """
+        generation = int(snapshot.get("verification_relevant_edit_generation") or 0)
+        stable = {
+            key: snapshot.get(key)
+            for key in (
+                "verification_relevant_edit_generation",
+                "problems",
+                "missing_verification_commands",
+                "covered_verification_commands",
+                "failed_verification_signatures",
+                "acceptance_problems",
+                "acceptance_failure_signatures",
+                "acceptance_status_counts",
+            )
+        }
+        signature = hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
+        if self.repair_rounds_by_evidence.get(signature, 0) >= 2:
+            return "unchanged_evidence_repair_exhausted"
+        if self.repair_rounds_by_generation.get(generation, 0) >= 3:
+            return "shared_generation_repair_exhausted"
+        self.repair_rounds_by_generation[generation] = (
+            self.repair_rounds_by_generation.get(generation, 0) + 1
+        )
+        self.repair_rounds_by_evidence[signature] = (
+            self.repair_rounds_by_evidence.get(signature, 0) + 1
+        )
+        return None
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -132,6 +171,7 @@ class CompletionGateControllerState:
             "last_stage": self.last_stage,
             "last_problems": list(self.last_problems),
             "last_snapshot_payload": dict(self.last_snapshot_payload),
+            "repair_rounds_by_generation": dict(self.repair_rounds_by_generation),
         }
 
 

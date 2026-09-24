@@ -204,6 +204,28 @@ def test_stdio_transport_env_policy_is_conservative_and_overlays_config() -> Non
     assert "SECRET" not in env
 
 
+def test_stdio_transport_env_forwards_proxy_and_ca_bundle_plumbing() -> None:
+    # A server behind a corporate proxy or a TLS-inspecting gateway cannot reach anything
+    # without these; they are forwarded from the host while everything else stays out.
+    env = build_stdio_subprocess_env(
+        overlay_env={},
+        host_env={
+            "PATH": "/usr/bin",
+            "HTTPS_PROXY": "http://proxy.corp.example:3128",
+            "no_proxy": "localhost,.corp.example",
+            "SSL_CERT_FILE": "/cache/ca-bundle-abc.pem",
+            "NODE_EXTRA_CA_CERTS": "/etc/pki/corp-ca.pem",
+            "OPENAI_API_KEY": "sk-hidden",
+        },
+    )
+
+    assert env["HTTPS_PROXY"] == "http://proxy.corp.example:3128"
+    assert env["no_proxy"] == "localhost,.corp.example"
+    assert env["SSL_CERT_FILE"] == "/cache/ca-bundle-abc.pem"
+    assert env["NODE_EXTRA_CA_CERTS"] == "/etc/pki/corp-ca.pem"
+    assert "OPENAI_API_KEY" not in env
+
+
 def test_stdio_client_supports_initialize_paginated_list_and_tool_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

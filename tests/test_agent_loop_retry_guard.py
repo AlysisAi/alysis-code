@@ -74,6 +74,17 @@ def _task_brief_message_count(session: Any) -> int:
     )
 
 
+def _messages_without_task_brief(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        message
+        for message in messages
+        if not (
+            str(message.get("role") or "") == "user"
+            and str(message.get("content") or "").startswith("<task_brief>")
+        )
+    ]
+
+
 def test_run_turn_blocks_repeated_identical_failed_tool_calls(tmp_path: Path) -> None:
     cfg = AppConfig(model="test-model", routing_mode="code_only")
     sessions_dir = tmp_path / "sessions"
@@ -353,13 +364,19 @@ def test_run_turn_rolls_back_user_message_after_llm_error(tmp_path: Path) -> Non
     try:
         with pytest.raises(LLMError):
             session.run_turn("Refactor src/app.py and explain the change.")
-        assert session.messages == baseline_messages
+        # The turn's transient messages (its user message) are rolled back and
+        # the pinned prefix is unchanged. The one pinned message that may differ
+        # is the task brief, which is re-rendered from the task the turn
+        # accepted before dispatch (acceptance is not withdrawn by the failure).
+        assert _messages_without_task_brief(session.messages) == _messages_without_task_brief(
+            baseline_messages
+        )
         assert _resolve_session_pinned_prefix_len(session) == baseline_pinned_prefix_len
     finally:
         session.close()
 
 
-def test_run_turn_llm_error_restores_exact_pre_turn_task_brief_state(tmp_path: Path) -> None:
+def test_run_turn_llm_error_keeps_accepted_task_and_brief_in_agreement(tmp_path: Path) -> None:
     cfg = AppConfig(model="test-model", routing_mode="code_only")
     session = create_session(
         cfg=cfg,
@@ -374,13 +391,23 @@ def test_run_turn_llm_error_restores_exact_pre_turn_task_brief_state(tmp_path: P
     baseline_messages = copy.deepcopy(session.messages)
     baseline_task_brief = _session_task_brief_content(session)
     baseline_pinned_prefix_len = _resolve_session_pinned_prefix_len(session)
+    assert "awaiting_substantive_repo_request" in baseline_task_brief
 
     try:
         with pytest.raises(LLMError):
             session.run_turn("Fix src/parser.py without changing the CSV shape.")
-        assert session.messages == baseline_messages
-        assert _session_task_brief_content(session) == baseline_task_brief
+        assert _messages_without_task_brief(session.messages) == _messages_without_task_brief(
+            baseline_messages
+        )
+        # Exactly one brief, rendered from the kept task rather than reverted to
+        # the placeholder: the authoritative state and the model-visible brief
+        # never disagree after a rollback.
         assert _task_brief_message_count(session) == 1
+        assert session.task_state is not None
+        assert session.task_state.objective == "Fix src/parser.py without changing the CSV shape."
+        brief = _session_task_brief_content(session)
+        assert "- Fix src/parser.py without changing the CSV shape." in brief
+        assert "awaiting_substantive_repo_request" not in brief
         assert _resolve_session_pinned_prefix_len(session) == baseline_pinned_prefix_len
     finally:
         session.close()

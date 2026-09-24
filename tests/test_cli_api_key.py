@@ -26,6 +26,7 @@ from alysis_code.agent.turn_contract import (
     TurnSemantics,
 )
 from alysis_code.agent_loop import SYSTEM_PROMPT, create_session
+from alysis_code.cancellation import InteractiveCancellationToken
 from alysis_code.cli import app as alysis_app
 from alysis_code.config import AppConfig, ConfigError
 from alysis_code.interactive_input_guard import interactive_prompt_guard
@@ -139,8 +140,8 @@ def test_create_session_prefers_repo_inferred_verify_commands_for_normal_chat_js
     try:
         assert session.effective_verification_commands == ["npm test"]
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
     finally:
         session.close()
 
@@ -246,24 +247,17 @@ def test_create_session_skips_repo_scan_when_normal_chat_does_not_need_it(
         session.close()
 
 
-@pytest.mark.parametrize(
-    ("resolved_timeout_s", "expected_selector_timeout_s"),
-    [(44.0, 15.0), (7.0, 7.0)],
-)
-def test_create_session_bounds_selector_independently_from_main_and_compactor(
+@pytest.mark.parametrize("resolved_timeout_s", [44.0, 7.0])
+def test_create_session_applies_timeout_to_main_and_compactor_only(
     tmp_path: Path,
     monkeypatch,
     resolved_timeout_s: float,
-    expected_selector_timeout_s: float,
 ) -> None:
-    # The main and compactor use the resolved timeout while automatic skill
-    # selection gets an independent ceiling, including forced-SSE transports.
+    # Automatic skill choice adds no separate client or timeout policy.
     captured: list[dict[str, Any]] = []
     monkeypatch.setenv("ALYSIS_LLM_TIMEOUT_S", str(resolved_timeout_s))
 
     class FakeClient:
-        # Provisioning happens before runtime protocol compatibility is known;
-        # a no-tool main route must not suppress the independent selector.
         supports_tool_calling = False
 
         def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -291,14 +285,9 @@ def test_create_session_bounds_selector_independently_from_main_and_compactor(
         session_log_dir_override=tmp_path / "sessions",
     )
     try:
-        assert len(captured) == 3
-        selector = next(item for item in captured if item["temperature"] == 0.0)
-        non_selectors = [item for item in captured if item is not selector]
-        assert selector["timeout_s"] == expected_selector_timeout_s
-        assert {item["timeout_s"] for item in non_selectors} == {resolved_timeout_s}
-        assert session.router_client.stream_no_progress_timeout_s == expected_selector_timeout_s
-        assert selector["enable_thinking"] is False
-        assert selector["reasoning_effort"] == ""
+        assert len(captured) == 2
+        assert {item["timeout_s"] for item in captured} == {resolved_timeout_s}
+        assert session.router_client is None
     finally:
         session.close()
 
@@ -418,8 +407,8 @@ def test_create_session_records_model_metadata_diagnostics_and_dedupes_same_mode
     surface = _Surface()
     session_id = "metadata-warn"
     sessions_dir = tmp_path / "sessions"
-    # The selector and compactor share the main model, exercising warning
-    # deduplication across all three active roles.
+    # The compactor shares the main model, exercising warning deduplication
+    # across the two active roles.
     session = create_session(
         cfg=AppConfig(model="unknown-model-xyz"),
         root=tmp_path,
@@ -443,7 +432,7 @@ def test_create_session_records_model_metadata_diagnostics_and_dedupes_same_mode
     payload = dict(session_start.get("payload") or {})
     diagnostics = list(payload.get("model_metadata_diagnostics") or [])
     assert payload["model_metadata_policy"] == "warn"
-    assert {item["role"] for item in diagnostics} == {"coding", "router", "compactor"}
+    assert {item["role"] for item in diagnostics} == {"coding", "compactor"}
     assert all(item["fallback_capacity_active"] is True for item in diagnostics)
     assert all("context_window_tokens" in item["fallback_capacity_fields"] for item in diagnostics)
     assert all("max_output_tokens" in item["fallback_capacity_fields"] for item in diagnostics)
@@ -653,7 +642,7 @@ def test_agent_session_context_left_uses_model_window_and_effective_budget(
         "model_metadata_overrides": {
             "models": {
                 "custom-model": {
-                    "context_window_tokens": 10000,
+                    "context_window_tokens": 20000,
                     "max_output_tokens": 2000,
                 }
             }
@@ -2802,7 +2791,9 @@ def test_chat_image_command_queues_for_next_turn(tmp_path: Path, monkeypatch) ->
     class _DummySession:
         store = _DummyStore()
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["image_paths"] = image_paths
             return 0
 
@@ -2839,7 +2830,9 @@ def test_chat_image_command_without_path_pastes_clipboard(tmp_path: Path, monkey
     class _DummySession:
         store = _DummyStore()
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["image_paths"] = image_paths
             return 0
 
@@ -2884,7 +2877,9 @@ def test_chat_paste_image_command_queues_for_next_turn(tmp_path: Path, monkeypat
     class _DummySession:
         store = _DummyStore()
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["image_paths"] = image_paths
             return 0
 
@@ -2946,7 +2941,9 @@ def test_chat_trace_command_updates_reasoning_level_for_following_turn(
         stream = True
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["trace"] = self.surface.trace_level
             return 0
 
@@ -3024,7 +3021,9 @@ def test_chat_trace_command_without_arg_uses_picker_selection(tmp_path: Path, mo
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["trace"] = self.surface.trace_level
             return 0
 
@@ -3076,7 +3075,9 @@ def test_chat_model_command_updates_model_for_following_turn(tmp_path: Path, mon
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["model"] = self.client.model
             return 0
 
@@ -3124,7 +3125,9 @@ def test_chat_mode_command_updates_mode_for_following_turn(tmp_path: Path, monke
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -3221,7 +3224,9 @@ def test_chat_mode_command_refreshes_environment_context_message(
             {"role": "user", "content": "<other_pin>\nkeep me\n</other_pin>\n"},
         ]
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             return 0
 
@@ -3325,7 +3330,9 @@ def test_persona_clamp_and_restore_refresh_environment_context_message(
         ]
 
         @staticmethod
-        def run_turn(_instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             return 0
 
@@ -3380,7 +3387,9 @@ def test_chat_mode_command_accepts_friendly_alias(tmp_path: Path, monkeypatch) -
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -3434,7 +3443,9 @@ def test_chat_mode_command_without_arg_uses_picker_selection(tmp_path: Path, mon
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -3493,7 +3504,9 @@ def test_chat_mode_command_without_arg_falls_back_to_panel(tmp_path: Path, monke
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -3531,7 +3544,7 @@ def test_chat_mode_command_without_arg_falls_back_to_panel(tmp_path: Path, monke
         env=env,
     )
     assert result.exit_code == 0
-    assert "Permissions" in result.output
+    assert "Permissions (current:" in result.output
     assert "mode" not in rebuilt
     assert captured["mode"] == "review"
 
@@ -3548,7 +3561,9 @@ def test_removed_onboarding_commands_are_unknown(tmp_path: Path, monkeypatch) ->
         stream = False
         mode = "review"
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["instruction"] = instruction
             return 0
 
@@ -3639,7 +3654,9 @@ def test_chat_usage_and_context_commands_are_handled(tmp_path: Path, monkeypatch
         def context_left(self) -> _DummyContext:
             return _DummyContext()
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["instruction"] = instruction
             return 0
 
@@ -3795,6 +3812,7 @@ def test_chat_compact_command_forces_compaction(tmp_path: Path, monkeypatch) -> 
             main_model: str,
             cache_policy: dict[str, Any] | None = None,
             focus: str | None = None,
+            request_messages_builder: Any = None,
         ) -> tuple[list[dict[str, Any]], bool]:
             captured["focus"] = focus
             captured["main_model"] = main_model
@@ -3836,7 +3854,9 @@ def test_chat_compact_command_forces_compaction(tmp_path: Path, monkeypatch) -> 
         def context_left(self) -> _DummyContext:
             return _DummyContext()
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["run_turn_called"] = True
             _ = image_paths
             return 0
@@ -4092,8 +4112,9 @@ def test_chat_compact_nothing_to_compact_prints_message(tmp_path: Path, monkeypa
             main_model: str,
             cache_policy: dict[str, Any] | None = None,
             focus: str | None = None,
+            request_messages_builder: Any = None,
         ) -> tuple[list[dict[str, Any]], bool]:
-            _ = tool_list, main_model, cache_policy, focus
+            _ = tool_list, main_model, cache_policy, focus, request_messages_builder
             return messages, False
 
     class _DummyContext:
@@ -4194,7 +4215,9 @@ def test_chat_usage_hud_off_keeps_usage_tracking(tmp_path: Path, monkeypatch) ->
         def context_left(self) -> _DummyContext:
             return _DummyContext()
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             return 0
 
@@ -4238,7 +4261,9 @@ def test_chat_usage_hud_subcommand_without_arg_uses_picker_selection(
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["usage_hud_enabled"] = bool(getattr(self, "_usage_hud_enabled", True))
             return 0
 
@@ -4281,7 +4306,9 @@ def test_chat_removed_usage_hud_command_suggests_usage(tmp_path: Path, monkeypat
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             return 0
 
@@ -4323,7 +4350,9 @@ def test_chat_toolbar_command_shows_updates_and_resets_session_items(
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["toolbar_items"] = list(self.cfg.toolbar_items)
             return 0
 
@@ -4792,7 +4821,9 @@ def test_chat_removed_help_aliases_and_colon_picker_fall_through(
     class _DummySession:
         store = _DummyStore()
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["instruction"] = instruction
             return 0
 
@@ -4838,7 +4869,9 @@ def test_chat_mode_command_accepts_numeric_shortcut(tmp_path: Path, monkeypatch)
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -4893,7 +4926,9 @@ def test_chat_mode_command_accepts_fullaccess_numeric_alias(tmp_path: Path, monk
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             captured["mode"] = self.mode
             return 0
 
@@ -4943,7 +4978,9 @@ def test_chat_turn_keyboard_interrupt_is_handled(tmp_path: Path, monkeypatch) ->
         stream = False
         mode = "review"
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             calls["run_turn"] += 1
             raise KeyboardInterrupt
 
@@ -5000,7 +5037,9 @@ def test_chat_turn_keyboard_interrupt_finishes_surface_activity(
         mode = "review"
         surface = _DummySurface()
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             self.surface.on_user_message(instruction)
             self.surface.on_progress_update("Understanding your request.")
@@ -5045,7 +5084,9 @@ def test_chat_llm_error_is_recoverable_without_traceback(tmp_path: Path, monkeyp
                 show_status_line=False,
             )
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             calls["run_turn"] += 1
             raise LLMError("LLM request failed: connection timed out")
@@ -5107,7 +5148,9 @@ def test_chat_llm_error_reports_tool_transcript_problems_without_network_hint(
                 show_status_line=False,
             )
 
-        def run_turn(self, _instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self, _instruction: str, *, image_paths: list[str] | None = None, **_kwargs: object
+        ) -> int:
             _ = image_paths
             calls["run_turn"] += 1
             raise LLMError(broken_tool_error)
@@ -5354,17 +5397,89 @@ def test_chat_turn_interrupt_monitor_keeps_escape_interrupt_behavior(monkeypatch
     monkeypatch.setattr(
         cli_mod.os, "read", lambda fd, size: read_calls.append((fd, size)) or b"\x1b"
     )
-    monkeypatch.setattr(cli_mod.os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    token = InteractiveCancellationToken()
+
+    def _record_kill(pid: int, sig: int) -> None:
+        assert token.is_cancelled is True
+        kill_calls.append((pid, sig))
+
+    monkeypatch.setattr(cli_mod.os, "kill", _record_kill)
     monkeypatch.setitem(sys.modules, "select", SimpleNamespace(select=fake_select))
     monkeypatch.setitem(sys.modules, "termios", fake_termios)
     monkeypatch.setitem(sys.modules, "tty", fake_tty)
 
-    with cli_mod._chat_turn_interrupt_monitor():
+    with cli_mod._chat_turn_interrupt_monitor(cancellation_token=token):
         time.sleep(0.12)
 
+    assert token.is_cancelled is True
     assert read_calls == [(9, 1)]
     assert len(kill_calls) == 1
     assert select_calls
+
+
+def test_classic_chat_uses_a_fresh_cancellation_token_for_each_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    tokens: list[InteractiveCancellationToken] = []
+
+    class _DummyStore:
+        session_id = "sid"
+
+    class _DummySession:
+        store = _DummyStore()
+        stream = False
+        mode = "review"
+
+        def run_turn(
+            self,
+            _instruction: str,
+            *,
+            image_paths: list[str] | None = None,
+            cancellation_token: InteractiveCancellationToken | None = None,
+        ) -> int:
+            _ = image_paths
+            assert cancellation_token is not None
+            tokens.append(cancellation_token)
+            if len(tokens) == 1:
+                raise KeyboardInterrupt
+            assert cancellation_token.is_cancelled is False
+            return 0
+
+        def close(self) -> None:
+            return None
+
+    class _FakePromptSession:
+        def __init__(self) -> None:
+            self._responses = iter(["first", "second", "exit"])
+
+        def prompt(self, *_args: object, **_kwargs: object) -> str:
+            return next(self._responses)
+
+    monkeypatch.setattr(cli_mod, "create_session", lambda **_kwargs: _DummySession())
+    monkeypatch.setattr(
+        cli_mod,
+        "_maybe_make_chat_prompt_session",
+        lambda **_kwargs: _FakePromptSession(),
+    )
+
+    result = runner.invoke(
+        alysis_app,
+        ["chat", "--model", "test-model", "--api-key", "k", "--no-log"],
+        input="",
+        env={
+            "ALYSIS_CONFIG_DIR": os.fspath(tmp_path),
+            "ALYSIS_DATA_DIR": os.fspath(tmp_path),
+            "ALYSIS_TUI": "0",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert len(tokens) == 2
+    assert tokens[0] is not tokens[1]
+    assert tokens[0].is_cancelled is True
+    assert tokens[1].is_cancelled is False
 
 
 def test_chat_prompt_session_does_not_pass_erase_when_done_kwarg(
@@ -5381,7 +5496,14 @@ def test_chat_prompt_session_does_not_pass_erase_when_done_kwarg(
         stream = False
         mode = "review"
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self,
+            instruction: str,
+            *,
+            image_paths: list[str] | None = None,
+            cancellation_token: InteractiveCancellationToken | None = None,
+        ) -> int:
+            assert cancellation_token is not None
             captured["run_turn_calls"].append((instruction, image_paths))
             return 0
 
@@ -5577,7 +5699,14 @@ def test_chat_prompt_session_never_passes_erase_when_done_kwarg(
         stream = False
         mode = "review"
 
-        def run_turn(self, instruction: str, *, image_paths: list[str] | None = None) -> int:
+        def run_turn(
+            self,
+            instruction: str,
+            *,
+            image_paths: list[str] | None = None,
+            cancellation_token: InteractiveCancellationToken | None = None,
+        ) -> int:
+            assert cancellation_token is not None
             captured["run_turn_calls"].append((instruction, image_paths))
             return 0
 

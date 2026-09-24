@@ -11,7 +11,10 @@ from typing import Any
 import typer
 
 from ...agent.steering import ResolvedOperation
+from ...agent.task_state import clear_session_task
+from ...agent.turn.subagent_progress import render_subagent_lifecycle_capsule
 from ...branding import env_get
+from ...cancellation import InteractiveCancellationToken
 from ...compaction.conversation_compactor import CompactionState
 from ...error_text import sanitize_error_text_for_output
 from ...failure_category import exit_code_for_failure
@@ -26,6 +29,7 @@ from ...personas import (
     persona_overlay_user_messages,
     resolve_persona_exec_mode,
 )
+from ...profiles import apply_runtime_base_url_override
 from ...run_outcome import INFRASTRUCTURE_FAILURE_EXIT_CODE
 from ...runtime_kind import RuntimeKind
 from ...surface.console import safe_plain_error
@@ -548,7 +552,10 @@ def _apply_chat_persona(
     default keeps the user's mode (code/debug) restore any mode narrowed by a
     previous persona (architect/ask).
     """
-    from ...agent.prompt_context import refresh_session_environment_context_message
+    from ...agent.prompt_context import (
+        refresh_session_environment_context_message,
+        refresh_session_prompt_guidance,
+    )
 
     definition = get_persona(persona, _session_persona_registry(session))
     current_mode = str(getattr(session, "mode", "review") or "review").strip().lower()
@@ -610,11 +617,6 @@ def _apply_chat_persona(
     if prepared_client is not None and prepared_client_key is not None:
         session.client = prepared_client
         session.persona_client_key = prepared_client_key
-        # This is a session-owned main-client transition, so keep the dedicated
-        # selector bound to the new legitimate client. External embedders that
-        # replace only ``session.client`` still trip the turn-time stale guard.
-        if hasattr(session, "_semantic_router_bound_client"):
-            session._semantic_router_bound_client = prepared_client
     if target_mode != current_mode or scope_changed:
         # The rebuild inside _apply_chat_effective_mode re-reads the session's
         # allow_write_globs, so a scope-only change still needs it.
@@ -625,6 +627,7 @@ def _apply_chat_persona(
         )
     else:
         refresh_session_environment_context_message(session)
+    refresh_session_prompt_guidance(session)
     surface = getattr(session, "surface", None)
     emit_persona_changed = getattr(surface, "emit_persona_changed", None)
     if callable(emit_persona_changed):
@@ -639,6 +642,7 @@ def _apply_chat_persona(
                 "effective_mode": target_mode,
                 "source": source,
                 "model": str(getattr(getattr(session, "client", None), "model", "") or ""),
+                "prompt_guidance_profile": getattr(session, "prompt_guidance_profile", None),
             },
         )
     return target_mode
@@ -948,12 +952,16 @@ _RELOAD_SESSION_FIELDS = (
     "api_key",
     "api_key_source",
     "model_registry",
+    "messages",
+    "startup_messages",
+    "prompt_guidance_profile",
 )
 _RELOAD_CLIENT_FIELDS = (
     "base_url",
     "provider_auth",
     "api_key",
     "model",
+    "default_max_tokens",
     "timeout_s",
     "stream_no_progress_timeout_s",
     "temperature",
@@ -997,7 +1005,6 @@ def _reload_snapshot_value(value: Any) -> Any:
 def _reload_clients(session: Any) -> list[Any]:
     candidates = [
         getattr(session, "client", None),
-        getattr(session, "router_client", None),
         getattr(
             getattr(session, "conversation_compactor", None),
             "compactor_client",
@@ -1072,10 +1079,7 @@ def _apply_config_menu_changes_to_session(*, session: Any, cfg: AppConfig) -> No
 
 
 def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConfig) -> None:
-    from ...agent.session import (
-        _SKILL_SELECTOR_TIMEOUT_S,
-        _skill_selector_provider_retry_settings,
-    )
+    from ...agent.prompt_context import refresh_session_prompt_guidance
     from ...config import (
         ConfigError,
         clone_cfg,
@@ -1089,9 +1093,9 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     )
     from ...llm.cache_capabilities import resolve_effective_cache_capability
     from ...llm.cache_policy import build_prompt_cache_namespace, resolve_prompt_cache_policy
+    from ...llm.factory import _session_routing_headers
     from ...llm.metadata import (
         build_provider_route_identity,
-        canonicalize_extra_headers,
         credential_scope_fingerprint,
     )
     from ...llm.protocols import (
@@ -1106,7 +1110,6 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     from ...model_router import (
         ROLE_CODING,
         ROLE_COMPACTOR,
-        ROLE_ROUTER,
         resolve_model_for_role,
     )
     from ...profile_presets import find_preset_for_profile
@@ -1133,8 +1136,14 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     provider_auth = (
         create_provider_auth(active_profile.auth_provider) if active_profile.auth_provider else None
     )
-    route_session_scope = credential_scope_fingerprint(
-        getattr(getattr(session, "store", None), "session_id", None)
+    provider_session_id = getattr(session, "provider_session_id", None) or getattr(
+        getattr(session, "store", None), "session_id", None
+    )
+    route_session_scope = credential_scope_fingerprint(provider_session_id)
+    request_headers = _session_routing_headers(
+        base_url=effective_base_url,
+        extra_headers=active_profile.extra_headers,
+        session_id=provider_session_id,
     )
 
     timeout_s = resolve_llm_timeout_s(session.cfg)
@@ -1157,22 +1166,16 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         model: str,
         role: str,
         temperature: float | None = None,
-        disable_reasoning: bool = False,
-        timeout_override_s: float | None = None,
-        stream_no_progress_timeout_override_s: float | None = None,
-        disable_retries: bool = False,
     ) -> None:
         existing_route_identity = getattr(client, "route_identity", None)
         client.base_url = effective_base_url
         if hasattr(client, "provider_auth"):
             client.provider_auth = provider_auth
+        if provider_session_id and hasattr(client, "session_id"):
+            client.session_id = provider_session_id
         client.api_key = session.api_key
         client.model = model
-        client.timeout_s = timeout_s if timeout_override_s is None else timeout_override_s
-        if stream_no_progress_timeout_override_s is not None and hasattr(
-            client, "stream_no_progress_timeout_s"
-        ):
-            client.stream_no_progress_timeout_s = stream_no_progress_timeout_override_s
+        client.timeout_s = timeout_s
         if temperature is not None:
             client.temperature = temperature
         provider_key = resolve_model_provider_key(
@@ -1192,6 +1195,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             model=model,
             base_url=effective_base_url,
             transport_capabilities=capabilities,
+            auth_cache_capability=getattr(provider_auth, "cache_capability", None),
             preset_cache_capability=(preset.cache_capability if preset is not None else None),
             profile_cache_capability=active_profile.cache_capability,
         )
@@ -1232,7 +1236,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             profile_name=active_profile.name,
             auth_provider=active_profile.auth_provider,
             credential_scope=credential_scope,
-            routing_headers=active_profile.extra_headers,
+            routing_headers=request_headers,
             routing_fields=dict(cache_policy.request_field_values),
             reasoning_state_adapter=active_profile.reasoning_trace_adapter,
             protocol_revision=protocol_revision,
@@ -1300,22 +1304,17 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
                     clear_cached_content = getattr(cached_content_by_signature, "clear", None)
                     if callable(clear_cached_content):
                         clear_cached_content()
-        # The automatic-skill selector is built reasoning-off in session.py.
-        # Re-applying session-wide reasoning settings here would silently make
-        # selection inherit the main client's latency, so preserve that contract.
-        if disable_reasoning:
-            client.enable_thinking = False
-            client.reasoning_effort = ""
-        else:
-            client.enable_thinking = enable_thinking
-            client.reasoning_effort = reasoning_effort
+        client.enable_thinking = enable_thinking
+        client.reasoning_effort = reasoning_effort
         if hasattr(client, "extra_headers"):
-            client.extra_headers = canonicalize_extra_headers(active_profile.extra_headers)
+            client.extra_headers = dict(request_headers)
         if hasattr(client, "provider_key"):
             client.provider_key = provider_key
         if hasattr(client, "reasoning_trace_adapter"):
             client.reasoning_trace_adapter = active_profile.reasoning_trace_adapter
         model_meta = model_registry.get(model, include_provider_auth=False)
+        if protocol == ANTHROPIC_MESSAGES_PROTOCOL:
+            client.default_max_tokens = model_meta.max_output_tokens
         model_supports_reasoning = model_meta.supports_reasoning
         model_capability_source = model_meta.field_sources.get("supports_reasoning")
         if active_profile.auth_provider and active_profile.reasoning_effort is not None:
@@ -1331,11 +1330,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         if hasattr(client, "provider_concurrency_caps"):
             client.provider_concurrency_caps = dict(session.cfg.provider_concurrency_caps)
         if hasattr(client, "provider_retry_settings"):
-            client.provider_retry_settings = (
-                _skill_selector_provider_retry_settings(session.cfg)
-                if disable_retries
-                else provider_retry_settings
-            )
+            client.provider_retry_settings = provider_retry_settings
 
     client = getattr(session, "client", None)
     if client is not None:
@@ -1344,29 +1339,6 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             model=str(session.cfg.model or ""),
             role=ROLE_CODING,
             temperature=coding_temperature,
-        )
-
-    router_client = getattr(session, "router_client", None)
-    if router_client is not None:
-        selector_timeout_s = min(timeout_s, _SKILL_SELECTOR_TIMEOUT_S)
-        selector_stream_timeout_s = min(
-            float(session.cfg.llm_stream_no_progress_timeout_s),
-            selector_timeout_s,
-        )
-        router_model = resolve_model_for_role(
-            cfg=session.cfg,
-            role=ROLE_ROUTER,
-            plan=None,
-        )
-        _apply_client_config(
-            router_client,
-            model=router_model,
-            role=ROLE_ROUTER,
-            temperature=0.0,
-            disable_reasoning=True,
-            disable_retries=True,
-            timeout_override_s=selector_timeout_s,
-            stream_no_progress_timeout_override_s=selector_stream_timeout_s,
         )
 
     compactor = getattr(session, "conversation_compactor", None)
@@ -1394,6 +1366,17 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     )
     refresh_session_environment_context_message(session)
     _refresh_chat_hud_context_cache(session)
+    if refresh_session_prompt_guidance(session):
+        append = getattr(getattr(session, "store", None), "append", None)
+        if callable(append):
+            append(
+                "prompt_guidance_changed",
+                {
+                    "source": "config_reload",
+                    "model": str(getattr(getattr(session, "client", None), "model", "") or ""),
+                    "prompt_guidance_profile": getattr(session, "prompt_guidance_profile", None),
+                },
+            )
 
 
 def _clone_chat_startup_messages(session: Any) -> list[dict[str, Any]]:
@@ -1407,22 +1390,71 @@ def _clone_chat_startup_messages(session: Any) -> list[dict[str, Any]]:
     pinned_prefix_len = max(0, int(getattr(session, "pinned_prefix_len", 0) or 0))
     if not isinstance(messages_obj, list) or pinned_prefix_len <= 0:
         return []
+    from ...agent.prompt_context import _TASK_REQUIREMENTS_MARKER
+
     return [
-        dict(message) for message in messages_obj[:pinned_prefix_len] if isinstance(message, dict)
+        dict(message)
+        for message in messages_obj[:pinned_prefix_len]
+        if isinstance(message, dict)
+        # Rendered from task state on every refresh, never part of startup.
+        and not (
+            str(message.get("role") or "") == "user"
+            and isinstance(message.get("content"), str)
+            and str(message.get("content")).lstrip().startswith(_TASK_REQUIREMENTS_MARKER)
+        )
     ]
 
 
-def _clear_chat_conversation(*, session: Any, pending_images: list[str]) -> None:
+def _reset_chat_conversation(
+    *,
+    session: Any,
+    trigger: str,
+    retained_system_messages: tuple[str, ...] = (),
+    pending_images: list[str] | None = None,
+    clear_pending_images: bool = False,
+    event_payload: dict[str, Any] | None = None,
+    retire_task: bool = False,
+) -> None:
+    """Replace the model-visible conversation with the startup prefix.
+
+    ``retire_task`` is the deliberate host transition that ends the active
+    task (``/clear``). A history reset that is not a task boundary — the typed
+    TUI rollover — keeps the host-owned objective and re-renders its brief.
+    """
+
     startup_messages = _clone_chat_startup_messages(session)
     if not startup_messages:
         raise RuntimeError("session startup messages unavailable")
 
+    retained_messages = [
+        {"role": "system", "content": content}
+        for content in retained_system_messages
+        if isinstance(content, str) and content.strip()
+    ]
+
     store = getattr(session, "store", None)
     if store is None or not hasattr(store, "append"):
         raise RuntimeError("session store unavailable")
-    store.append("conversation_cleared", {"trigger": "user_command"})
+    clear_payload: dict[str, Any] = {"trigger": str(trigger or "unknown")}
+    if event_payload:
+        clear_payload.update(event_payload)
+    if retire_task:
+        # The task retirement is the authoritative record and is persisted
+        # first: if it cannot be recorded, nothing else changes (the live
+        # task, the log and the prompt still agree on the active task). Once
+        # recorded, the task is retired live as well, so a failure of the
+        # history boundary below cannot leave the log saying "no task" while
+        # the session still holds one.
+        clear_session_task(session, reason=f"conversation_reset:{trigger}")
+    store.append("conversation_cleared", clear_payload)
 
-    session.messages = startup_messages
+    # The pinned ``<task_requirements>`` message (if any) is not part of the
+    # startup prefix: drop it so the pinned prefix length stays consistent
+    # across the reset; the brief refresh below re-renders it from state.
+    from ...agent.prompt_context import drop_session_task_requirements_message
+
+    drop_session_task_requirements_message(session)
+    session.messages = [*startup_messages, *retained_messages]
     invalidate_request_context = getattr(session, "invalidate_request_context", None)
     if callable(invalidate_request_context):
         invalidate_request_context(reason="conversation_cleared")
@@ -1430,21 +1462,98 @@ def _clear_chat_conversation(*, session: Any, pending_images: list[str]) -> None
         session.request_context_measurement = None
     refresh_session_workspace_binding_context_message(session)
     refresh_session_environment_context_message(session)
+    # The startup prefix carries the empty placeholder; render the brief from
+    # the host-owned state (retired above, or still active for a rollover).
+    from ...agent.prompt_context import refresh_session_task_brief_message
+
+    refresh_session_task_brief_message(session)
 
     compactor = getattr(session, "conversation_compactor", None)
-    if compactor is not None and hasattr(compactor, "state"):
+    reset_compactor = getattr(compactor, "reset_for_model_history_boundary", None)
+    if callable(reset_compactor):
+        reset_compactor()
+    elif compactor is not None and hasattr(compactor, "state"):
         pinned_prefix_len = max(0, int(getattr(compactor.state, "pinned_prefix_len", 0) or 0))
+        history_chunk_index = max(
+            0,
+            int(getattr(compactor.state, "history_chunk_index", 0) or 0),
+        )
         compactor.state = CompactionState(
             summary={},
-            history_chunk_index=0,
+            history_chunk_index=history_chunk_index,
             memory_message_index=None,
             pinned_prefix_len=pinned_prefix_len,
             pins=[],
             pins_message_index=None,
         )
 
-    pending_images.clear()
+    read_ledger = getattr(session, "read_ledger", None)
+    reset_read_ledger = getattr(read_ledger, "reset", None)
+    if callable(reset_read_ledger):
+        store.append(
+            "read_ledger_reset",
+            {
+                "trigger": str(trigger or "unknown"),
+                "cleared_paths": int(reset_read_ledger() or 0),
+            },
+        )
+
+    if clear_pending_images and pending_images is not None:
+        pending_images.clear()
     _refresh_chat_hud_context_cache(session)
+
+
+def _clear_chat_conversation(*, session: Any, pending_images: list[str]) -> None:
+    _reset_chat_conversation(
+        session=session,
+        trigger="user_command",
+        pending_images=pending_images,
+        clear_pending_images=True,
+        retire_task=True,
+    )
+
+
+def _apply_pending_subagent_history_rollover(session: Any) -> bool:
+    """Consume one typed TUI rollover without changing the rendered transcript."""
+
+    pending_reader = getattr(session, "pending_subagent_history_rollover", None)
+    if not callable(pending_reader):
+        return False
+    pending = pending_reader()
+    if pending is None:
+        return False
+    if (
+        getattr(session, "runtime_kind", None) != RuntimeKind.INTERACTIVE_CHAT
+        or int(getattr(session, "subagent_depth", 0) or 0) != 0
+        or not bool(getattr(session, "_alysis_tui_interactive", False))
+    ):
+        raise RuntimeError("subagent history rollover is only valid in a depth-0 TUI chat")
+    capsule = pending.get("capsule") if isinstance(pending, dict) else None
+    capsule_sha256 = str(pending.get("capsule_sha256") or "") if isinstance(pending, dict) else ""
+    if not isinstance(capsule, dict) or not capsule_sha256:
+        raise RuntimeError("pending subagent history rollover is malformed")
+    capsule_message = render_subagent_lifecycle_capsule(capsule)
+    _reset_chat_conversation(
+        session=session,
+        trigger="captured_duplicate_subagent_result",
+        retained_system_messages=(capsule_message,),
+        event_payload={
+            "source_event": "captured_duplicate_subagent_turn_terminalized",
+            "capsule_sha256": capsule_sha256,
+        },
+    )
+    store = getattr(session, "store", None)
+    store.append(
+        "subagent_history_rollover_applied",
+        {
+            "trigger": "captured_duplicate_subagent_result",
+            "capsule_sha256": capsule_sha256,
+        },
+    )
+    acknowledge = getattr(session, "acknowledge_subagent_history_rollover", None)
+    if not callable(acknowledge) or not acknowledge(capsule_sha256=capsule_sha256):
+        raise RuntimeError("subagent history rollover acknowledgement failed")
+    return True
 
 
 def _handle_chat_command(*args: Any, **kwargs: Any) -> Any:
@@ -1666,7 +1775,7 @@ def chat(
     cfg = load_config()
     effective = clone_cfg(cfg)
     if base_url is not None:
-        effective.base_url = base_url
+        apply_runtime_base_url_override(effective, base_url)
     if model is not None:
         effective.model = model
     if temperature is not None:
@@ -1749,7 +1858,7 @@ def chat(
                 return
             effective = clone_cfg(load_config())
             if base_url is not None:
-                effective.base_url = base_url
+                apply_runtime_base_url_override(effective, base_url)
             if model is not None:
                 effective.model = model
             if temperature is not None:
@@ -1980,8 +2089,9 @@ def chat(
                     # any tool result while the provider loop is still active.
                     try:
                         _apply_pending_persona_switch(session=built, console=None)
-                    except Exception:  # noqa: BLE001 - HUD refresh must still run
+                    except Exception:  # noqa: BLE001 - rollover remains authoritative
                         pass
+                    _apply_pending_subagent_history_rollover(built)
                     _tui_refresh_hud()
 
                 def _tui_config_flow_factory() -> Any:
@@ -2020,7 +2130,7 @@ def chat(
 
                             reloaded = clone_cfg(load_config())
                             if base_url is not None:
-                                reloaded.base_url = base_url
+                                apply_runtime_base_url_override(reloaded, base_url)
                             if model is not None:
                                 reloaded.model = model
                             _tui_box["cfg_override"] = reloaded
@@ -2042,7 +2152,7 @@ def chat(
                         # change, and before the live reload so /config cannot silently
                         # replace the active CLI model or endpoint.
                         if base_url is not None:
-                            reloaded.base_url = base_url
+                            apply_runtime_base_url_override(reloaded, base_url)
                         if model is not None:
                             reloaded.model = model
                         if connection_fingerprint(reloaded) != connection_fingerprint(built.cfg):
@@ -2368,7 +2478,10 @@ def chat(
                                 pending_images=[],
                                 console=cap,
                                 forge_state=_tui_forge_state,
-                                # The TUI already recorded this local command.
+                                # run_tui records every submitted slash/exit
+                                # command before choosing a native overlay or this
+                                # shared handler. Suppress the classic-path marker
+                                # here so routed TUI commands are not double-counted.
                                 record_local_command=False,
                             )
                         )
@@ -2413,6 +2526,8 @@ def chat(
                             run_kwargs["_alysis_restore_mode_after_turn"] = (
                                 result.restore_mode_after is not None
                             )
+                        if result.task_relation is not None:
+                            run_kwargs["task_relation"] = result.task_relation
                         return ("run", output, result.instruction, run_kwargs)
                     return ("handled", output, None, None)
 
@@ -3198,6 +3313,11 @@ def chat(
                     built: Any,
                     run_kwargs: dict[str, Any],
                 ) -> Any:
+                    # A post-turn callback failure must not allow the next
+                    # provider request to see stale lifecycle history. Retry
+                    # the consume-once rollover here and reject the turn if it
+                    # still cannot be applied.
+                    _apply_pending_subagent_history_rollover(built)
                     temporary_mode = str(run_kwargs.pop("_alysis_mode_override", "") or "").strip()
                     restore_after = bool(run_kwargs.pop("_alysis_restore_mode_after_turn", False))
                     # A staged base Permissions choice becomes authoritative at
@@ -3565,6 +3685,7 @@ def chat(
                         open_config_on_start=bool(
                             subscription_blocked and subscription_availability.selection_required
                         ),
+                        workspace_root=focus_path,
                     )
                     _tui_ok = True
                     built = _tui_box.get("session")
@@ -3837,6 +3958,11 @@ def chat(
                 if isinstance(command_result, _ChatExecutionRequest)
                 else False
             )
+            task_relation_for_turn = (
+                command_result.task_relation
+                if isinstance(command_result, _ChatExecutionRequest)
+                else None
+            )
 
             images_for_turn = pending_images.copy()
             interrupted = False
@@ -3874,9 +4000,13 @@ def chat(
                 except Exception as e:  # noqa: BLE001
                     console.print(f"[red]Failed to prepare approved execution:[/red] {e}")
                     continue
+            turn_cancellation = InteractiveCancellationToken()
             try:
-                with _chat_turn_interrupt_monitor():
-                    run_turn_kwargs: dict[str, Any] = {"image_paths": images_for_turn or None}
+                with _chat_turn_interrupt_monitor(cancellation_token=turn_cancellation):
+                    run_turn_kwargs: dict[str, Any] = {
+                        "image_paths": images_for_turn or None,
+                        "cancellation_token": turn_cancellation,
+                    }
                     if routing_mode_override is not None:
                         run_turn_kwargs["routing_mode_override"] = routing_mode_override
                     combined_ephemeral_system = list(ephemeral_system_messages or [])
@@ -3897,6 +4027,8 @@ def chat(
                         run_turn_kwargs["ephemeral_user_messages"] = combined_ephemeral_user
                     if chat_only_turn:
                         run_turn_kwargs["chat_only"] = True
+                    if task_relation_for_turn is not None:
+                        run_turn_kwargs["task_relation"] = task_relation_for_turn
                     session.run_turn(execution_instruction, **run_turn_kwargs)
             except KeyboardInterrupt:
                 interrupted = True
@@ -4087,7 +4219,7 @@ def run(
     if raw_benchmark_profile:
         _apply_raw_benchmark_profile(effective)
     if base_url is not None:
-        effective.base_url = base_url
+        apply_runtime_base_url_override(effective, base_url)
     if model is not None:
         effective.model = model
     if temperature is not None:

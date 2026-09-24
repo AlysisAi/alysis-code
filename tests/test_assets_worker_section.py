@@ -293,7 +293,6 @@ def test_relevant_assets_reduction_tracks_asset_counts_per_mode() -> None:
     states = _reduction_candidates(
         compact={},
         selected_assets=[],
-        task={},
         relevant_assets_section=section,
     )
 

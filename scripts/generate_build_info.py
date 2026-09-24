@@ -20,6 +20,13 @@ contents when stamping a working checkout. ``scripts/build_benchmark_wheel.sh``
 handles restoration automatically. The dirty check deliberately ignores this
 one file, so stamping a clean tree still reports ``dirty: no``.
 
+The stamp also records the commit's subject line and the SHA ``origin/main``
+resolved to at build time, the latter after a ``git fetch origin``. An offline
+build records ``origin/main`` as ``unavailable`` and still stamps; pass
+``--no-fetch`` to skip the network probe deliberately. What an unresolved
+remote costs is the ability to *claim* to be latest main, which the benchmark
+adapter's provenance guard checks.
+
 Exit codes: ``0`` stamped, ``1`` refused (with ``--require-clean``, when the
 tree is dirty or has no commit).
 """
@@ -72,10 +79,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Report what would be stamped without writing the file.",
     )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help=(
+            "Skip the `git fetch origin` before resolving origin/main. The "
+            "resolved SHA is then stamped as 'unavailable', so the build can "
+            "never satisfy a latest-main provenance check."
+        ),
+    )
     args = parser.parse_args(argv)
 
     build_identity = _load_build_identity()
-    info = build_identity.generate_build_info(repo_root=args.repo_root)
+    info = build_identity.generate_build_info(repo_root=args.repo_root, fetch=not args.no_fetch)
 
     if args.require_clean and not info.is_clean:
         print(f"refusing to stamp: {info.describe()}", file=sys.stderr)

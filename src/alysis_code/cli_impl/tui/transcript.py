@@ -218,7 +218,33 @@ class TuiTranscript:
                 elif current and text:
                     cur_norm = _normalize_visible(current)
                     txt_norm = _normalize_visible(text)
+                    boundary_index = len(current) - len(text)
+                    glued_boundary = (
+                        current.endswith(text)
+                        and boundary_index > 0
+                        and not current[boundary_index - 1].isspace()
+                    )
                     if (
+                        cur_norm != txt_norm
+                        and cur_norm.endswith(txt_norm)
+                        and len(txt_norm) * 4 < len(cur_norm)
+                        and glued_boundary
+                    ):
+                        # A separate closing message streamed into the same
+                        # open block with no boundary, gluing "…(exit code 5)The
+                        # fix is done." into one paragraph. The final text marks
+                        # the exact boundary — restore the paragraph break there.
+                        # A WHITESPACE boundary is the tail-fragment-final case
+                        # instead (the final restates the streamed ending, e.g.
+                        # "…Finally, run the tests." + "run the tests.") and the
+                        # streamed block stays untouched.
+                        prefix = current[:boundary_index].rstrip()
+                        if prefix:
+                            self.entries[self._assistant_index] = (
+                                role,
+                                f"{prefix}\n\n{text}",
+                            )
+                    elif (
                         cur_norm != txt_norm
                         and cur_norm.endswith(txt_norm)
                         and len(txt_norm) * 4 >= len(cur_norm)

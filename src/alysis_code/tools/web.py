@@ -6,7 +6,8 @@ import ipaddress
 import json
 import re
 import socket
-from collections.abc import Callable
+import ssl
+from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -21,13 +22,35 @@ class WebFetchError(RuntimeError):
     """Raised for any web_fetch failure.
 
     ``recoverable=True`` marks failures the calling model can fix by adjusting its
-    own tool arguments (input validation). The agent loop returns those to the
-    model as plain errors instead of disabling web tools for the rest of the turn.
+    own tool arguments (input validation) or by picking a different source. The
+    agent loop returns those to the model as plain errors instead of disabling
+    web tools for the rest of the turn.
+
+    ``remote_site_reason`` is a short user-facing phrase ("site requires
+    sign-in") set when the failure is the remote site's doing rather than
+    Alysis's or the local network's: it refused automated clients, stalled, or
+    dropped the connection. Surfaces render these as neutral trace notices, not
+    failures; the correct model response is to pick a different source, never to
+    retry the same host. ``blocked_by_remote_site=True`` narrows that to explicit
+    refusals — the server answered and said no (anti-bot/challenge pages, 401,
+    403, 429, 451).
     """
 
-    def __init__(self, message: str, *, recoverable: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        recoverable: bool = False,
+        blocked_by_remote_site: bool = False,
+        remote_site_reason: str = "",
+    ) -> None:
         super().__init__(message)
         self.recoverable = recoverable
+        self.blocked_by_remote_site = blocked_by_remote_site
+        reason = str(remote_site_reason or "").strip()
+        if blocked_by_remote_site and not reason:
+            reason = _BOT_WALL_REASON
+        self.remote_site_reason = reason
 
 
 _DEFAULT_MAX_CHARS = 20_000
@@ -77,8 +100,53 @@ _BLOCK_CLOSE_TAG_RE = re.compile(
 )
 _HTML_HINT_RE = re.compile(r"(?is)<!doctype\s+html|<html\b|<body\b|<head\b|<title\b")
 _CHARSET_RE = re.compile(r"charset=([^\s;]+)", re.IGNORECASE)
-_REMOTE_CHALLENGE_BODY_RE = re.compile(
-    r"(?is)\b(cloudflare|checking your browser|just a moment|enable javascript and cookies)\b"
+# Cloudflare interstitial wording. Trusted only on pages Cloudflare served:
+# ordinary maintenance pages also say "just a moment".
+_CLOUDFLARE_CHALLENGE_BODY_RE = re.compile(
+    r"(?is)\b(checking your browser|just a moment|enable javascript and cookies)\b"
+)
+# Vendor-neutral bot-mitigation interstitial markers (Akamai, DataDome,
+# PerimeterX/HUMAN, Imperva, Amazon, F5, Vercel, Cloudflare block pages).
+_BOT_WALL_BODY_RE = re.compile(
+    r"(?is)captcha|/cdn-cgi/challenge-platform|automated access|unusual traffic|"
+    r"are you a robot|not a robot|verify (?:that )?you are (?:a )?human|"
+    r"disable any ad blocker|access denied|access to this page has been denied|"
+    r"you have been blocked|incapsula incident|pardon our interruption|"
+    r"errors\.edgesuite\.net|the requested url was rejected|security checkpoint"
+)
+_BOT_WALL_SAMPLE_CHARS = 8192
+# A missing page is this URL's problem, not a refusal — even when the site's
+# 404 template happens to mention a captcha or "access denied".
+_NOT_FOUND_STATUSES = frozenset({404, 410})
+
+# User-facing trace reasons for failures that are the remote site's doing.
+_BOT_WALL_REASON = "site doesn't allow automated access"
+_STALLED_REASON = "site didn't respond"
+_DROPPED_REASON = "site closed the connection"
+_INVALID_RESPONSE_REASON = "site sent an invalid response"
+_BAD_CERTIFICATE_REASON = "site's certificate couldn't be verified"
+_TLS_FAILED_REASON = "secure connection to the site failed"
+
+# The server answered and refused this client: its policy, not a fetch failure.
+# Status -> (model-facing clause, user-facing trace reason).
+_REFUSAL_STATUSES: dict[int, tuple[str, str]] = {
+    401: ("remote site requires sign-in", "site requires sign-in"),
+    403: ("remote site declined automated access", _BOT_WALL_REASON),
+    429: ("remote site is rate-limiting requests", "site is rate-limiting requests"),
+    451: (
+        "remote site is unavailable for legal reasons",
+        "site is unavailable for legal reasons",
+    ),
+    # LinkedIn's non-standard "request denied" status.
+    999: ("remote site declined automated access", _BOT_WALL_REASON),
+}
+
+# getaddrinfo codes for a host that does not exist (NXDOMAIN / no address
+# record), as opposed to a resolver that could not be reached (EAI_AGAIN).
+_NONEXISTENT_HOST_ERRNOS = frozenset(
+    code
+    for code in (getattr(socket, "EAI_NONAME", None), getattr(socket, "EAI_NODATA", None))
+    if code is not None
 )
 
 
@@ -235,6 +303,13 @@ def _resolve_host_addresses(host: str, port: int) -> list[str]:
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as e:
+        if isinstance(e, socket.gaierror) and e.errno in _NONEXISTENT_HOST_ERRNOS:
+            # The name does not exist: a bad URL, not a DNS outage, so the model
+            # can recover with a different source and web tools stay available.
+            raise WebFetchError(
+                f"Host '{host}' does not exist ({e}). Check the URL or use a different source.",
+                recoverable=True,
+            ) from e
         raise WebFetchError(f"Failed to resolve host '{host}': {e}") from e
 
     addresses: list[str] = []
@@ -313,25 +388,91 @@ def _read_limited_response_bytes(response: httpx.Response, *, limit: int) -> tup
     return bytes(buf), truncated
 
 
-def _http_status_error_message(
+_REMOTE_BLOCK_GUIDANCE = (
+    " The block is the site's own policy, not a fetch failure; do not retry "
+    "this host — use a different source."
+)
+_REMOTE_FAILURE_GUIDANCE = (
+    " The failure is specific to this site, not a web outage; do not retry "
+    "this host — use a different source."
+)
+
+
+def _looks_like_bot_wall(response_headers: dict[str, str], body_sample: str) -> bool:
+    if str(response_headers.get("cf-mitigated") or "").strip().casefold() == "challenge":
+        return True
+    # AWS WAF sets this only when it served a CAPTCHA/challenge instead of the page.
+    if str(response_headers.get("x-amzn-waf-action") or "").strip():
+        return True
+    server = str(response_headers.get("server") or "").strip().casefold()
+    if "cloudflare" in server and _CLOUDFLARE_CHALLENGE_BODY_RE.search(body_sample):
+        return True
+    return _BOT_WALL_BODY_RE.search(body_sample) is not None
+
+
+def _classify_http_status_error(
     *,
     status_code: int,
     final_url: str,
     response_headers: dict[str, str],
     decoded_body: str,
-) -> str:
-    if status_code in {403, 429, 503}:
-        cf_mitigated = str(response_headers.get("cf-mitigated") or "").strip().casefold()
-        server = str(response_headers.get("server") or "").strip().casefold()
-        body_sample = decoded_body[:4096]
-        if cf_mitigated == "challenge" or (
-            "cloudflare" in server and _REMOTE_CHALLENGE_BODY_RE.search(body_sample)
-        ):
-            return (
-                f"HTTP error {status_code} while fetching '{final_url}': remote site "
-                "blocked automated retrieval with anti-bot/challenge protection."
-            )
-    return f"HTTP error {status_code} while fetching '{final_url}'."
+) -> tuple[str, bool, str]:
+    """Return (error message, blocked_by_remote_site, remote_site_reason)."""
+    prefix = f"HTTP error {status_code} while fetching '{final_url}'"
+    # Bot walls also arrive as 401 (DataDome), 405 (AWS WAF), or 503 (Amazon),
+    # so the interstitial is recognized by its markers, not only by 403.
+    if status_code not in _NOT_FOUND_STATUSES and _looks_like_bot_wall(
+        response_headers, decoded_body[:_BOT_WALL_SAMPLE_CHARS]
+    ):
+        return (
+            f"{prefix}: remote site blocked automated retrieval with anti-bot/challenge "
+            "protection." + _REMOTE_BLOCK_GUIDANCE,
+            True,
+            _BOT_WALL_REASON,
+        )
+    refusal = _REFUSAL_STATUSES.get(status_code)
+    if refusal is not None:
+        clause, reason = refusal
+        return f"{prefix}: {clause}." + _REMOTE_BLOCK_GUIDANCE, True, reason
+    return f"{prefix}.", False, ""
+
+
+def _exception_chain(error: BaseException) -> Iterator[BaseException]:
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _remote_transport_failure_reason(error: httpx.HTTPError) -> str:
+    """Trace reason when a transport failure is specific to the remote host, else "".
+
+    Qualifies only once the host was reached: a TLS handshake the server
+    completed badly (untrusted certificate, protocol failure) or a connection
+    the server dropped. Connect-phase failures (refused, unreachable, proxy)
+    stay environment-level, since a network outage looks the same.
+    """
+    chain = list(_exception_chain(error))
+    if "CERTIFICATE_VERIFY_FAILED" in str(error) or any(
+        isinstance(exc, ssl.SSLCertVerificationError) for exc in chain
+    ):
+        return _BAD_CERTIFICATE_REASON
+    if any(isinstance(exc, ssl.SSLError) for exc in chain):
+        return _TLS_FAILED_REASON
+    if isinstance(error, httpx.ReadError | httpx.WriteError):
+        return _DROPPED_REASON
+    if isinstance(error, httpx.RemoteProtocolError):
+        detail = str(error).casefold()
+        if "disconnect" in detail or "closed" in detail:
+            return _DROPPED_REASON
+        return _INVALID_RESPONSE_REASON
+    return ""
+
+
+def _with_guidance(message: str, guidance: str) -> str:
+    return message.rstrip().rstrip(".") + "." + guidance
 
 
 def web_fetch(
@@ -394,15 +535,31 @@ def web_fetch(
         # that so one bad target does not disable web tools for the whole turn.
         raise WebFetchError(str(e), recoverable=getattr(e, "recoverable", False)) from e
     except httpx.TimeoutException as e:
-        raise WebFetchError(
-            format_http_timeout_error(
-                operation=f"web_fetch request to '{current_url}'",
-                budget=timeout_budget,
-                error=e,
-            )
-        ) from e
+        timeout_message = format_http_timeout_error(
+            operation=f"web_fetch request to '{current_url}'",
+            budget=timeout_budget,
+            error=e,
+        )
+        if isinstance(e, httpx.ReadTimeout | httpx.WriteTimeout):
+            # The connection was already up (a stalled connect raises
+            # ConnectTimeout), so the network works: this host is slow or
+            # deliberately stalls automated clients.
+            raise WebFetchError(
+                _with_guidance(timeout_message, _REMOTE_FAILURE_GUIDANCE),
+                recoverable=True,
+                remote_site_reason=_STALLED_REASON,
+            ) from e
+        raise WebFetchError(timeout_message) from e
     except httpx.HTTPError as e:
-        raise WebFetchError(f"HTTP request failed for '{current_url}': {e}") from e
+        failure_message = f"HTTP request failed for '{current_url}': {e}"
+        transport_reason = _remote_transport_failure_reason(e)
+        if transport_reason:
+            raise WebFetchError(
+                _with_guidance(failure_message, _REMOTE_FAILURE_GUIDANCE),
+                recoverable=True,
+                remote_site_reason=transport_reason,
+            ) from e
+        raise WebFetchError(failure_message) from e
 
     status_code = int(response.status_code)
     final_url = str(response.url)
@@ -419,16 +576,20 @@ def web_fetch(
     # The site responded, so the web itself is reachable: an HTTP error status or
     # unusable payload is specific to this URL and the model can recover by
     # choosing a different source. Only genuine connectivity signals (DNS
-    # resolution outage, connect failures, timeouts) remain unrecoverable.
+    # resolution outage, connect failures and connect timeouts) remain
+    # unrecoverable.
     if status_code >= 400:
+        status_message, blocked_by_remote_site, remote_site_reason = _classify_http_status_error(
+            status_code=status_code,
+            final_url=final_url,
+            response_headers=response_headers,
+            decoded_body=decoded,
+        )
         raise WebFetchError(
-            _http_status_error_message(
-                status_code=status_code,
-                final_url=final_url,
-                response_headers=response_headers,
-                decoded_body=decoded,
-            ),
+            status_message,
             recoverable=True,
+            blocked_by_remote_site=blocked_by_remote_site,
+            remote_site_reason=remote_site_reason,
         )
 
     if content_type and not _is_text_like_content_type(content_type):

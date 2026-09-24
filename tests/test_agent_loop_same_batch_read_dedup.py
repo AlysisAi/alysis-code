@@ -74,19 +74,13 @@ def _make_session(tmp_path: Path, client: _ScriptedClient):
 
 def _patch_read_counters(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     original_read = agent_loop_mod.fs_read
-    original_read_lines = agent_loop_mod.fs_read_lines
-    counts = {"fs_read": 0, "fs_read_lines": 0}
+    counts = {"fs_read": 0}
 
     def _wrapped_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
         counts["fs_read"] += 1
         return original_read(*args, **kwargs)
 
-    def _wrapped_read_lines(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        counts["fs_read_lines"] += 1
-        return original_read_lines(*args, **kwargs)
-
     monkeypatch.setattr(agent_loop_mod, "fs_read", _wrapped_read)
-    monkeypatch.setattr(agent_loop_mod, "fs_read_lines", _wrapped_read_lines)
     return counts
 
 
@@ -94,7 +88,7 @@ def _tool_messages(session) -> list[dict[str, Any]]:
     return [message for message in session.messages if str(message.get("role")) == "tool"]
 
 
-def test_same_batch_duplicate_fs_read_lines_is_short_circuited(
+def test_same_batch_duplicate_fs_read_range_is_short_circuited(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,12 +104,12 @@ def test_same_batch_duplicate_fs_read_lines_is_short_circuited(
                 tool_calls=[
                     _tool_call(
                         "tc-1",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 2, "end_line": 3},
                     ),
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 2, "end_line": 3},
                     ),
                 ],
@@ -133,7 +127,7 @@ def test_same_batch_duplicate_fs_read_lines_is_short_circuited(
         session.close()
 
     assert exit_code == 0
-    assert counts["fs_read_lines"] == 1
+    assert counts["fs_read"] == 1
     assert len(tool_messages) == 2
     assert json.loads(str(tool_messages[0]["content"])) == json.loads(
         str(tool_messages[1]["content"])
@@ -186,7 +180,7 @@ def test_same_batch_read_lines_reuses_earlier_full_fs_read_when_untruncated(
                     _tool_call("tc-1", "fs_read", {"path": "demo.txt", "max_bytes": 500}),
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 2, "end_line": 3},
                     ),
                 ],
@@ -205,7 +199,6 @@ def test_same_batch_read_lines_reuses_earlier_full_fs_read_when_untruncated(
 
     assert exit_code == 0
     assert counts["fs_read"] == 1
-    assert counts["fs_read_lines"] == 0
     ranged_result = json.loads(str(tool_messages[-1]["content"]))
     assert ranged_result == {
         "path": "demo.txt",
@@ -230,12 +223,12 @@ def test_same_batch_read_lines_reuses_broader_prior_read_lines_range(
                 tool_calls=[
                     _tool_call(
                         "tc-1",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 5},
                     ),
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 2, "end_line": 3},
                     ),
                 ],
@@ -253,7 +246,7 @@ def test_same_batch_read_lines_reuses_broader_prior_read_lines_range(
         session.close()
 
     assert exit_code == 0
-    assert counts["fs_read_lines"] == 1
+    assert counts["fs_read"] == 1
     narrowed = json.loads(str(tool_messages[-1]["content"]))
     assert narrowed["content"] == "2: two\n3: three\n"
     assert narrowed["start_line"] == 2
@@ -274,7 +267,7 @@ def test_same_batch_does_not_reuse_truncated_fs_read_for_read_lines(
                     _tool_call("tc-1", "fs_read", {"path": "demo.txt", "max_bytes": 12}),
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     ),
                 ],
@@ -291,8 +284,7 @@ def test_same_batch_does_not_reuse_truncated_fs_read_for_read_lines(
         session.close()
 
     assert exit_code == 0
-    assert counts["fs_read"] == 1
-    assert counts["fs_read_lines"] == 1
+    assert counts["fs_read"] == 2
 
 
 def test_same_batch_exact_duplicate_truncated_fs_read_is_short_circuited(
@@ -377,13 +369,13 @@ def test_same_batch_cache_is_invalidated_after_mutating_tool_call(
                 tool_calls=[
                     _tool_call(
                         "tc-1",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     ),
                     _tool_call("tc-2", "fs_mkdir", {"path": "scratch"}),
                     _tool_call(
                         "tc-3",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     ),
                 ],
@@ -400,7 +392,7 @@ def test_same_batch_cache_is_invalidated_after_mutating_tool_call(
         session.close()
 
     assert exit_code == 0
-    assert counts["fs_read_lines"] == 2
+    assert counts["fs_read"] == 2
 
 
 def test_same_batch_reuse_does_not_cross_step_boundaries(
@@ -416,7 +408,7 @@ def test_same_batch_reuse_does_not_cross_step_boundaries(
                 tool_calls=[
                     _tool_call(
                         "tc-1",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     )
                 ],
@@ -427,7 +419,7 @@ def test_same_batch_reuse_does_not_cross_step_boundaries(
                 tool_calls=[
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     )
                 ],
@@ -444,7 +436,7 @@ def test_same_batch_reuse_does_not_cross_step_boundaries(
         session.close()
 
     assert exit_code == 0
-    assert counts["fs_read_lines"] == 2
+    assert counts["fs_read"] == 2
 
 
 def test_same_batch_reuse_does_not_cross_turn_boundaries(
@@ -460,7 +452,7 @@ def test_same_batch_reuse_does_not_cross_turn_boundaries(
                 tool_calls=[
                     _tool_call(
                         "tc-1",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     )
                 ],
@@ -472,7 +464,7 @@ def test_same_batch_reuse_does_not_cross_turn_boundaries(
                 tool_calls=[
                     _tool_call(
                         "tc-2",
-                        "fs_read_lines",
+                        "fs_read",
                         {"path": "demo.txt", "start_line": 1, "end_line": 2},
                     )
                 ],
@@ -491,4 +483,4 @@ def test_same_batch_reuse_does_not_cross_turn_boundaries(
 
     assert first_exit == 0
     assert second_exit == 0
-    assert counts["fs_read_lines"] == 2
+    assert counts["fs_read"] == 2

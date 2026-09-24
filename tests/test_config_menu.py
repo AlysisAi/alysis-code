@@ -396,6 +396,7 @@ def test_classic_default_model_preserves_managed_endpoint_and_byok_editing(
     if not hosted:
         state.fields["base_url"] = "https://custom.example/v1"
     original_url = state.fields["base_url"]
+    original_timeout = state.fields["llm_timeout_s"]
     prompts = []
 
     def prompt(label, current):
@@ -411,6 +412,21 @@ def test_classic_default_model_preserves_managed_endpoint_and_byok_editing(
     assert ("Base URL" in prompts) is not hosted
     assert state.fields["base_url"] == original_url
     assert state.fields["model"] == "selected-model"
+    assert state.fields["llm_timeout_s"] == original_timeout
+    assert "Request timeout (seconds)" not in prompts
+
+
+def test_classic_model_summary_uses_release_name_and_timeout_is_separate(monkeypatch) -> None:
+    state = ConfigMenuState.from_cfg(AppConfig(model="deepseek-flash", llm_timeout_s=95.5))
+    rows = {
+        value: description for value, _, description in config_menu_mod._top_level_menu_rows(state)
+    }
+    assert rows["default"].startswith("DeepSeek V4.1 Flash · thinking ")
+    assert rows["request_timeout"] == "95.5 seconds"
+    monkeypatch.setattr(config_menu_mod, "_prompt_positive_float_text", lambda *_args: "120")
+    config_menu_mod._run_request_timeout_section(state, SimpleNamespace())
+    assert state.fields["llm_timeout_s"] == "120"
+    assert state.fields["model"] == "deepseek-flash"
 
 
 def test_classic_hosted_profile_edit_directs_to_managed_model_settings(
@@ -425,6 +441,30 @@ def test_classic_hosted_profile_edit_directs_to_managed_model_settings(
     output = []
     config_menu_mod._run_profile_edit_current(state, SimpleNamespace(print=output.append))
     assert "provider-managed" in output[0]
+
+
+def test_classic_provider_section_lists_no_gateway_host_or_url_credentials(
+    hosted_config: AppConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hosted gateway's host is a Supabase project ref, and a custom base URL
+    can carry a token as userinfo; the profile list shows neither."""
+    add_profile(
+        hosted_config,
+        ProfileSpec(name="proxy", base_url="https://team:s3cret@proxy.example.com/v1"),
+    )
+    state = ConfigMenuState.from_cfg(hosted_config)
+    monkeypatch.setattr(config_menu_mod, "_run_config_picker", lambda **_kwargs: "back")
+    printed: list[str] = []
+    console = SimpleNamespace(
+        print=lambda *args, **_kwargs: printed.append(" ".join(str(arg) for arg in args)),
+        rule=lambda *_args, **_kwargs: None,
+    )
+
+    config_menu_mod._run_provider_section(state, console)
+
+    assert "alysis: Alysis Code gateway active" in printed
+    assert "proxy: proxy.example.com" in printed
+    assert not any("supabase" in line or "s3cret" in line for line in printed)
 
 
 def test_classic_hosted_login_keeps_gateway_after_save_and_signals_reload(
@@ -550,13 +590,33 @@ def test_config_menu_round_trips_subagent_timeout() -> None:
     assert cfg.subagent_timeout_s == 321.5
 
 
-@pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf", "not-a-number"])
+def test_config_menu_defaults_subagent_timeout_to_unlimited() -> None:
+    state = ConfigMenuState.from_cfg(AppConfig(model="default"))
+
+    assert state.fields["subagent_timeout_s"] == "unlimited"
+    assert state.validate() is None
+
+
+@pytest.mark.parametrize("value", ["off", "unlimited", "none", "never", ""])
+def test_config_menu_accepts_unlimited_subagent_timeout(value: str) -> None:
+    cfg = AppConfig(model="default", subagent_timeout_s=123.5)
+    state = ConfigMenuState.from_cfg(cfg)
+
+    state.set_subagent_timeout_s(value)
+    assert state.validate() is None
+    result = state.commit_to(cfg)
+
+    assert result.changes["subagent_timeout_s"] is None
+    assert cfg.subagent_timeout_s is None
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "not-a-number"])
 def test_config_menu_rejects_invalid_subagent_timeout(value: str) -> None:
     state = ConfigMenuState.from_cfg(AppConfig(model="default"))
 
     state.set_field("subagent_timeout_s", value)
 
-    assert state.validate() == "Subagent timeout (seconds) must be a positive number."
+    assert state.validate() == "Subagent timeout must be a positive number or unlimited."
 
 
 def test_commit_persists_default_model_section_to_active_profile(
@@ -774,7 +834,7 @@ def test_default_model_rows_include_active_profile_preset_suggestions() -> None:
     ]
 
     assert "deepseek-v4-pro" in model_values
-    assert "deepseek-v4-flash" in model_values
+    assert "deepseek-flash" in model_values
     assert "deepseek-coder" not in model_values
 
 
@@ -910,38 +970,55 @@ def test_zai_coding_plan_drops_stale_effort_and_never_offers_reasoning_off() -> 
     )
 
 
-def test_default_model_rows_include_discovered_alysis_trial_models(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "saved_model",
+    [
+        "deepseek-flash",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro",
+        "deepseek-v4.1-flash-expires-on-0910",
+        "custom-hosted-model",
+    ],
+)
+def test_alysis_model_picker_only_offers_named_v41_flash_despite_stale_gateway(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    saved_model: str,
 ) -> None:
     from alysis_code.profile_presets import get_preset, make_profile_from_preset
 
     monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path / "config"))
     monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
-    # Live gateway advertises a provider-prefixed variant of a curated model,
-    # plus a genuinely new one.
-    monkeypatch.setattr(
-        "alysis_code.account_login.list_trial_models",
-        lambda _cfg: ["deepseek/deepseek-v4-flash", "deepseek-v5-preview"],
-    )
+    calls = []
 
-    cfg = AppConfig(model="deepseek-v4-flash")
-    add_profile(cfg, make_profile_from_preset(get_preset("alysis"), name="alysis"))
+    def stale_catalog(_cfg):
+        calls.append(True)
+        return [
+            "deepseek/deepseek-flash",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "deepseek-v4-pro",
+            "deepseek-v4.1-flash-expires-on-0910",
+            "deepseek-v5-preview",
+        ]
+
+    monkeypatch.setattr("alysis_code.account_login.list_trial_models", stale_catalog)
+    cfg = AppConfig(model=saved_model)
+    preset = get_preset("alysis")
+    add_profile(cfg, make_profile_from_preset(preset, name="alysis"))
     set_active_profile(cfg, "alysis")
     state = ConfigMenuState.from_cfg(cfg)
+    # Exercise an existing session even before saved configuration is migrated.
+    state.fields["model"] = saved_model
 
     rows = config_menu_mod._default_model_rows(state)
-    model_values = [value for value, _label, _description in rows]
-    # Curated clean names present...
-    assert "deepseek-v4-flash" in model_values
-    assert "deepseek-v4-pro" in model_values
-    # ...the provider-prefixed duplicate of a curated model is suppressed...
-    assert "deepseek/deepseek-v4-flash" not in model_values
-    # ...but a genuinely new discovered model still shows, attributed to the
-    # Pro plan rather than the retired MiMo trial.
-    assert "deepseek-v5-preview" in model_values
-    descriptions = {value: description for value, _label, description in rows}
-    assert descriptions["deepseek-v5-preview"] == "available on your Alysis Code Pro plan"
-    assert "trial" not in descriptions["deepseek-v5-preview"]
+    assert [(value, label) for value, label, _ in rows] == [
+        ("deepseek-flash", "DeepSeek V4.1 Flash"),
+        ("glm-5.3-flash", "GLM 5.3 Flash"),
+    ]
+    assert calls == []
+    assert config_menu_mod._preset_model_option_rows(preset) == rows
 
 
 def test_default_model_rows_survive_alysis_discovery_failure(
@@ -957,7 +1034,7 @@ def test_default_model_rows_survive_alysis_discovery_failure(
 
     monkeypatch.setattr("alysis_code.account_login.list_trial_models", _boom)
 
-    cfg = AppConfig(model="deepseek-v4-flash")
+    cfg = AppConfig(model="deepseek-flash")
     add_profile(cfg, make_profile_from_preset(get_preset("alysis"), name="alysis"))
     set_active_profile(cfg, "alysis")
     state = ConfigMenuState.from_cfg(cfg)
@@ -966,7 +1043,7 @@ def test_default_model_rows_survive_alysis_discovery_failure(
     model_values = [
         value for value, _label, _description in config_menu_mod._default_model_rows(state)
     ]
-    assert "deepseek-v4-flash" in model_values
+    assert model_values == ["deepseek-flash", "glm-5.3-flash"]
 
 
 def test_default_model_rows_fallback_to_base_url_provider() -> None:
@@ -998,7 +1075,7 @@ def test_default_model_rows_fallback_to_base_url_provider() -> None:
     ]
 
     assert "claude-sonnet-5" in model_values
-    assert "deepseek-v4-flash" not in model_values
+    assert "deepseek-flash" not in model_values
 
 
 def test_config_reload_updates_clients_with_effective_profile_base_url(
@@ -1071,15 +1148,15 @@ def test_config_reload_recomputes_auto_reasoning_trace_capability_for_model_rout
     monkeypatch.setenv("ALYSIS_CONFIG_DIR", os.fspath(tmp_path))
     monkeypatch.setenv("ALYSIS_API_KEY", "sk-test")
     cfg = AppConfig(
-        model="deepseek-reasoner",
-        base_url="https://gateway.example/v1",
+        model="deepseek-v4-pro",
+        base_url="https://api.deepseek.com/v1",
     )
     cfg.extra_fields = {"profiles": {}, "active_profile": ""}
     add_profile(
         cfg,
         ProfileSpec(
             name="gateway",
-            base_url="https://gateway.example/v1",
+            base_url="https://api.deepseek.com/v1",
             default_model=cfg.model,
         ),
     )
@@ -1126,19 +1203,27 @@ def test_config_reload_recomputes_auto_reasoning_trace_capability_for_model_rout
     )
 
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=cfg)
-    # Unknown OpenAI-compatible gateways stay passive unless model metadata
-    # explicitly opts them into a reasoning adapter.
-    assert client.reasoning_trace_capability.adapter == "openai_compat_passive"
+    assert client.reasoning_trace_capability.adapter == "deepseek_reasoning"
 
     session.cfg.extra_fields["model_metadata_overrides"] = {
-        "models": {"deepseek-reasoner": {"supports_reasoning": False}}
+        "models": {"deepseek-v4-pro": {"supports_reasoning": False}}
     }
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=session.cfg)
     assert client.reasoning_trace_capability.adapter == "openai_compat_passive"
     assert client.reasoning_trace_capability.model_supports_reasoning is False
 
     session.cfg.extra_fields.pop("model_metadata_overrides")
-    session.cfg.model = "vendor/plain-model"
+    # Use concrete provider routes: an arbitrary gateway does not identify itself
+    # as DeepSeek merely because its configured model has a DeepSeek name.
+    add_profile(
+        session.cfg,
+        ProfileSpec(
+            name="gateway",
+            base_url="https://gateway.example/v1",
+            default_model="vendor/plain-model",
+        ),
+    )
+    set_active_profile(session.cfg, "gateway")
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=session.cfg)
 
     assert client.reasoning_trace_capability.adapter == "openai_compat_passive"
@@ -1298,7 +1383,7 @@ def test_config_reload_updates_gemini_cached_content_settings(
     ("fixed_step_override", "expected_max_steps"),
     [(None, 73), (19, 19)],
 )
-def test_config_reload_updates_main_and_skill_selector_routes(
+def test_config_reload_updates_main_route_without_selector_provisioning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fixed_step_override: int | None,
@@ -1325,26 +1410,10 @@ def test_config_reload_updates_main_and_skill_selector_routes(
         provider_concurrency_caps={},
         provider_retry_settings=None,
     )
-    router_client = SimpleNamespace(
-        base_url="",
-        api_key="",
-        model="router-v1",
-        timeout_s=0.0,
-        temperature=0.8,
-        prompt_cache_key=None,
-        prompt_cache_retention=None,
-        enable_thinking=True,
-        reasoning_effort="high",
-        extra_headers={},
-        provider_key=None,
-        provider_concurrency_caps={},
-        provider_retry_settings=None,
-        stream_no_progress_timeout_s=240.0,
-    )
     session = SimpleNamespace(
         cfg=AppConfig(model="coding-v1", routing_mode="auto", max_steps=25),
         client=client,
-        router_client=router_client,
+        router_client=None,
         conversation_compactor=None,
         mode="review",
         routing_mode="auto",
@@ -1374,15 +1443,8 @@ def test_config_reload_updates_main_and_skill_selector_routes(
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=cfg)
 
     assert client.model == "coding-v2"
-    assert router_client.model == "router-v2"
-    assert router_client.temperature == 0.0
-    assert router_client.timeout_s == 15.0
-    assert router_client.stream_no_progress_timeout_s == 15.0
-    assert router_client.enable_thinking is False
-    assert router_client.reasoning_effort == ""
-    assert router_client.provider_retry_settings.disable_retries is True
+    assert session.router_client is None
     assert client.provider_retry_settings.disable_retries is False
-    assert router_client.route_identity.model == "router-v2"
     assert session.routing_mode == "auto"
     assert session.max_steps == expected_max_steps
 
@@ -1414,15 +1476,8 @@ def test_config_reload_updates_main_and_skill_selector_routes(
     chat_loop._apply_config_menu_changes_to_session(session=session, cfg=next_cfg)
 
     assert client.route_identity.model == "coding-v3"
-    assert router_client.route_identity.model == "router-v3"
-    assert router_client.model == "router-v3"
-    assert router_client.timeout_s == 9.0
-    assert router_client.stream_no_progress_timeout_s == 9.0
-    assert router_client.provider_retry_settings.disable_retries is True
+    assert session.router_client is None
     assert client.provider_retry_settings.disable_retries is False
-    assert router_client.route_identity.profile_name == "alternate-route"
-    assert router_client.route_identity.base_url == "https://openrouter.ai/api/v1"
-    assert router_client.route_identity.provider_key == "openrouter"
     assert client.route_identity.profile_name == "alternate-route"
     assert client.route_identity.base_url == "https://openrouter.ai/api/v1"
     assert client.route_identity.provider_key == "openrouter"
@@ -1649,9 +1704,8 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
         )
 
     main_client = make_client("old-model")
-    router_client = make_client("router-old-model")
     compactor_client = make_client("compactor-old-model")
-    clients = [main_client, router_client, compactor_client]
+    clients = [main_client, compactor_client]
     for client in clients:
         client._disabled_prompt_cache_fields.add("prompt_cache_key")
 
@@ -1673,7 +1727,7 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
     session = SimpleNamespace(
         cfg=old_cfg,
         client=main_client,
-        router_client=router_client,
+        router_client=None,
         conversation_compactor=SimpleNamespace(compactor_client=compactor_client),
         mode="review",
         routing_mode="auto",
@@ -1685,19 +1739,19 @@ def test_config_reload_failure_restores_session_and_all_client_routes(
     original_get = ModelRegistry.get
     get_calls = 0
 
-    def fail_after_router_refresh(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def fail_after_main_refresh(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         nonlocal get_calls
         get_calls += 1
-        if get_calls == 3:
+        if get_calls == 2:
             raise RuntimeError("injected route refresh failure")
         return original_get(self, *args, **kwargs)
 
-    monkeypatch.setattr(ModelRegistry, "get", fail_after_router_refresh)
+    monkeypatch.setattr(ModelRegistry, "get", fail_after_main_refresh)
 
     with pytest.raises(RuntimeError, match="injected route refresh failure"):
         chat_loop._apply_config_menu_changes_to_session(session=session, cfg=next_cfg)
 
-    assert get_calls == 3
+    assert get_calls == 2
     assert session.cfg is old_cfg
     assert session.routing_mode == "auto"
     assert session.max_steps == 25

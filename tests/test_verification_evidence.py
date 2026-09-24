@@ -21,9 +21,10 @@ from alysis_code.agent_loop import (
 
 
 def test_authoritative_matching_command_is_authoritative_evidence() -> None:
+    required = "PYTHONPATH=src python -m pytest tests/test_cli.py -v"
     evidence = classify_verification_evidence(
         "PYTHONPATH=src pytest tests/test_cli.py -q",
-        known_verification_commands=["pytest -q"],
+        known_verification_commands=[required],
         authoritative=True,
         exit_code=0,
         output="1 passed\n",
@@ -32,7 +33,7 @@ def test_authoritative_matching_command_is_authoritative_evidence() -> None:
 
     assert evidence.category == VerificationEvidenceCategory.AUTHORITATIVE
     assert evidence.allowed_to_satisfy_contract is True
-    assert evidence.covered_verification_commands == ("pytest -q",)
+    assert evidence.covered_verification_commands == (required,)
     assert evidence.reason == "matched_authoritative_contract"
 
 
@@ -168,9 +169,10 @@ def test_authoritative_contract_rejects_unrelated_task_specific_check(tmp_path: 
 
 
 def test_partial_authoritative_coverage_remains_partial() -> None:
+    required = "pytest tests/test_cli.py -q"
     evidence = classify_verification_evidence(
-        "pytest tests/test_cli.py -q",
-        known_verification_commands=["pytest -q", "ruff check ."],
+        required,
+        known_verification_commands=[required, "ruff check ."],
         authoritative=True,
         exit_code=0,
         output="1 passed\n",
@@ -179,7 +181,29 @@ def test_partial_authoritative_coverage_remains_partial() -> None:
 
     assert evidence.category == VerificationEvidenceCategory.AUTHORITATIVE
     assert evidence.allowed_to_satisfy_contract is True
-    assert evidence.covered_verification_commands == ("pytest -q",)
+    assert evidence.covered_verification_commands == (required,)
+
+
+@pytest.mark.parametrize("authoritative", [False, True])
+@pytest.mark.parametrize("passed", [False, True])
+def test_targeted_runner_evidence_does_not_satisfy_whole_suite(
+    authoritative: bool, passed: bool
+) -> None:
+    evidence = classify_verification_evidence(
+        "pytest tests/test_cli.py -q",
+        known_verification_commands=["pytest -q", "ruff check ."],
+        authoritative=authoritative,
+        exit_code=0 if passed else 1,
+        output="1 passed\n" if passed else "1 failed\n",
+        real_execution=True if passed else None,
+    )
+
+    assert evidence.category == VerificationEvidenceCategory.REPO_NATIVE
+    assert evidence.allowed_to_satisfy_contract is False
+    assert evidence.supplemental_only is True
+    assert evidence.covered_verification_commands == ()
+    assert evidence.reason == "supplemental_only_contract_selection_differs"
+    assert evidence.real_execution is (True if passed else None)
 
 
 @pytest.mark.parametrize(
@@ -335,8 +359,16 @@ def test_material_mutating_verifier_is_not_allowed_to_satisfy_contract() -> None
 
 def test_boolean_shell_helper_preserves_contract_matching_behavior() -> None:
     assert _shell_command_is_verification_attempt(
+        "python -m pytest -v",
+        known_verification_commands=["pytest -q"],
+    )
+    assert not _shell_command_is_verification_attempt(
         "pytest tests/test_cli.py -q",
         known_verification_commands=["pytest -q"],
+    )
+    assert _shell_command_is_verification_attempt(
+        "python -m pytest tests/test_cli.py -v",
+        known_verification_commands=["pytest tests/test_cli.py -q"],
     )
     assert not _shell_command_is_verification_attempt(
         "python check.py",
@@ -433,7 +465,6 @@ def test_silent_successful_execution_has_observed_output_capture(
 
     observation = _verification_evidence_observation(
         tool_name=tool_name,
-        evidence=evidence,
         result=result,
     )
     assert observation == (0, True)
@@ -479,18 +510,8 @@ def test_successful_execution_without_output_capture_is_unobserved(
     tool_name: str,
     result: dict[str, object],
 ) -> None:
-    evidence = classify_verification_evidence(
-        "python check.py",
-        known_verification_commands=["python check.py"],
-        authoritative=True,
-        exit_code=0,
-        output="",
-        real_execution=True,
-    )
-
     assert _verification_evidence_observation(
         tool_name=tool_name,
-        evidence=evidence,
         result=result,
     ) == (0, False)
 

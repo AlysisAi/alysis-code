@@ -360,6 +360,19 @@ def update_active_profile_defaults(
     return True
 
 
+def apply_runtime_base_url_override(cfg: AppConfig, base_url: str) -> None:
+    """Apply an explicit launch endpoint to the actual transient provider profile.
+
+    Updating only the legacy top-level field leaves the transport pointing at the
+    saved profile endpoint. Keep both representations aligned without persisting
+    the user's launch override or inferring a different protocol/provider.
+    """
+    normalized = validate_base_url(base_url, key="base_url")
+    get_active_profile(cfg)
+    update_active_profile_defaults(cfg, base_url=normalized)
+    cfg.base_url = normalized
+
+
 def update_profile(
     cfg: AppConfig,
     name: str,

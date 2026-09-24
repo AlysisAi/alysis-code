@@ -64,19 +64,50 @@ def _tool_response_many(
     }
 
 
+# The agent appends call-varying host context as *user*-role messages after the real prompt so
+# reusable history stays a stable prompt-cache prefix (see
+# ``_VOLATILE_HOST_CONTEXT_PREFIXES`` in ``alysis_code/agent/llm_calls.py``). They are not the
+# user's request, so "last user text" must look past them or every keyword branch below sees
+# ``<environment_context>`` instead of the prompt and falls through to the generic reply.
+_VOLATILE_HOST_CONTEXT_PREFIXES = (
+    "<workspace_binding_context>",
+    "<task_brief>",
+    "<environment_context>",
+    "<subagent_context>",
+)
+
+
+def _user_message_text(message: dict[str, Any]) -> str | None:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts)
+    return None
+
+
+def _is_volatile_host_context(text: str) -> bool:
+    return text.lstrip().startswith(_VOLATILE_HOST_CONTEXT_PREFIXES)
+
+
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    fallback: str | None = None
     for message in reversed(messages):
-        if message.get("role") == "user":
-            content = message.get("content")
-            if isinstance(content, str):
-                return content
-            if isinstance(content, list):
-                parts: list[str] = []
-                for item in content:
-                    if isinstance(item, dict) and isinstance(item.get("text"), str):
-                        parts.append(item["text"])
-                return "\n".join(parts)
-    return ""
+        if message.get("role") != "user":
+            continue
+        text = _user_message_text(message)
+        if text is None:
+            continue
+        if _is_volatile_host_context(text):
+            if fallback is None:
+                fallback = text
+            continue
+        return text
+    return fallback or ""
 
 
 def _has_tool_result(messages: list[dict[str, Any]]) -> bool:
@@ -103,7 +134,14 @@ def _has_completion_gate_nudge(messages: list[dict[str, Any]], marker: str) -> b
         if not isinstance(content, str):
             continue
         normalized = content.casefold()
-        if "completion gate:" in normalized and normalized_marker in normalized:
+        is_nudge = (
+            "completion gate:" in normalized
+            or "finalization check - one pass before you finish:" in normalized
+        )
+        marker_present = normalized_marker in normalized or (
+            normalized_marker == "git_diff" and "reviewing the current diff" in normalized
+        )
+        if is_nudge and marker_present:
             return True
     return False
 
@@ -160,7 +198,7 @@ def _raw_agent_proxy_response(
             return _tool_response(
                 "subagent_run",
                 {
-                    "name": "implementer",
+                    "name": "general",
                     "task": (
                         "SUBAGENT_BENCH_M03 update src/a.py and tests/test_a.py, "
                         "run focused tests, and report changed files."
@@ -190,11 +228,11 @@ def _raw_agent_proxy_response(
             )
         )
     if "subagent_bench_m04_child_" in lowered and not _has_tool_call(messages, "subagent_run"):
-        if _has_tool_call(messages, "fs_read_lines"):
+        if _has_tool_call(messages, "fs_read"):
             return _response("Readonly inspection completed with file-backed evidence.")
         path = "src/app.py" if "child_beta" in lowered else "README.md"
         return _tool_response(
-            "fs_read_lines",
+            "fs_read",
             {"path": path, "start_line": 1, "end_line": 40},
         )
     if "subagent_bench_m04" in lowered:
@@ -392,7 +430,7 @@ class _Handler(BaseHTTPRequestHandler):
         if (
             "subagent_bench_m04_child_" in all_text.lower()
             and not _has_tool_call(messages, "subagent_run")
-            and not _has_tool_call(messages, "fs_read_lines")
+            and not _has_tool_call(messages, "fs_read")
         ):
             child_label = "beta" if "child_beta" in all_text.lower() else "alpha"
             with self.server.benchmark_parallel_lock:

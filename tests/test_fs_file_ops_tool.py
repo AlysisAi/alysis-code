@@ -59,7 +59,11 @@ def test_build_tools_registers_fs_mkdir_move_copy_delete(tmp_path: Path) -> None
     assert mkdir_schema["properties"]["exist_ok"]["default"] is True
     assert move_schema["required"] == ["source_path", "destination_path"]
     assert copy_schema["required"] == ["source_path", "destination_path"]
-    assert delete_schema["required"] == ["path"]
+    # fs_delete gained a batch ``paths`` form, so ``path`` alone is no
+    # longer required by the schema (the executor enforces exactly one of the
+    # two at runtime).
+    assert "required" not in delete_schema
+    assert "paths" in delete_schema["properties"]
 
 
 def test_fs_mkdir_success(tmp_path: Path) -> None:

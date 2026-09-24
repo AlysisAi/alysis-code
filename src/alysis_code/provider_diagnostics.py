@@ -47,6 +47,7 @@ from .profile_presets import (
     profile_provider_family,
 )
 from .profiles import ProfileSpec, get_active_profile, resolve_effective_base_url
+from .provider_auth import ProviderAuthError, create_provider_auth
 from .tools.web_search import resolve_web_search_runtime_status
 from .web_search_adapters import (
     AUTO_WEB_SEARCH_ADAPTER,
@@ -166,12 +167,26 @@ def build_provider_diagnostics(cfg: AppConfig) -> ProviderDiagnostics:
         protocol=protocol,
     )
     preset = find_preset_for_profile(profile)
+    provider_auth = None
+    auth_issues: list[str] = []
+    try:
+        if profile.auth_provider:
+            provider_auth = create_provider_auth(profile.auth_provider)
+    except ProviderAuthError:
+        # Diagnostics must remain available for broken profiles. Adapter
+        # exceptions can contain credentials; do not copy their text here.
+        auth_issues.append(
+            "The active profile's authentication adapter could not be initialized. "
+            "Check its auth_provider setting and installed authentication support "
+            "before using the profile."
+        )
     cache_capability = resolve_effective_cache_capability(
         provider_key=provider_key,
         protocol=protocol,
         model=model,
         base_url=base_url,
         transport_capabilities=capabilities,
+        auth_cache_capability=getattr(provider_auth, "cache_capability", None),
         preset_cache_capability=(preset.cache_capability if preset is not None else None),
         profile_cache_capability=profile.cache_capability,
     )
@@ -223,6 +238,7 @@ def build_provider_diagnostics(cfg: AppConfig) -> ProviderDiagnostics:
         search_ready=search_status.registration_ready,
         search_notes=search_status.notes,
     )
+    issues.extend(auth_issues)
 
     unsupported = capabilities.unsupported_parameters if capabilities is not None else ()
     quirks = (

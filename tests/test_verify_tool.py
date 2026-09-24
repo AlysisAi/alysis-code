@@ -10,11 +10,25 @@ from rich.console import Console
 
 import alysis_code.agent_loop as agent_loop_mod
 import alysis_code.verify_gate as verify_gate_mod
-from alysis_code.agent_loop import AgentRuntimeError, build_tools, create_session
+from alysis_code.agent.prompt_context import (
+    _extract_workspace_relation_paths_from_text,
+    _session_verify_command_selection,
+)
+from alysis_code.agent_loop import (
+    AgentRuntimeError,
+    TurnExecutionState,
+    _record_tool_effect,
+    build_tools,
+    create_session,
+)
 from alysis_code.config import AppConfig, clone_cfg
 from alysis_code.runtime_kind import RuntimeKind
 from alysis_code.session_store import SessionStore, read_session_events
 from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.verification_contract import (
+    VerificationCommandProvenance,
+    VerificationCommandRequirement,
+)
 from alysis_code.verify_gate import ResolvedVerifyCommands, VerifyRunResult
 
 
@@ -134,6 +148,17 @@ def _write_repo_files(root: Path, files: dict[str, str]) -> None:
         target.write_text(body, encoding="utf-8")
 
 
+def _assert_inferred_commands_are_advisory(session, commands: list[str]) -> None:
+    selection = _session_verify_command_selection(session)
+    specs = verify_gate_mod.verification_command_specs_for_selection(selection)
+    assert [spec.original_text for spec in specs] == commands
+    assert all(
+        spec.provenance == VerificationCommandProvenance.INFERRED_HEURISTIC for spec in specs
+    )
+    assert all(spec.requirement == VerificationCommandRequirement.ADVISORY for spec in specs)
+    assert verify_gate_mod.required_verify_commands(selection) == ()
+
+
 def _create_interactive_session(
     repo: Path,
     *,
@@ -208,6 +233,17 @@ def test_verify_run_uses_configured_commands_and_writes_artifact(
         "fallback_used": False,
     }
     command_results = result["command_results"]
+    unknown_report = {
+        "runner": "unknown",
+        "failed_ids": [],
+        "error_ids": [],
+        "passed": None,
+        "failed": None,
+        "skipped": None,
+        "errors": None,
+        "counts_known": False,
+        "ids_complete": False,
+    }
     assert command_results[0] == {
         "command": "pytest -q",
         "effective_command": "pytest -q",
@@ -219,6 +255,7 @@ def test_verify_run_uses_configured_commands_and_writes_artifact(
         "output_chars": 9,
         "output_truncated": False,
         "fallback_used": False,
+        "host_test_report": unknown_report,
     }
     failed_command = dict(command_results[1])
     failure_summary = failed_command.pop("failure_summary")
@@ -233,6 +270,7 @@ def test_verify_run_uses_configured_commands_and_writes_artifact(
         "output_chars": 12,
         "output_truncated": False,
         "fallback_used": False,
+        "host_test_report": unknown_report,
     }
     assert failure_summary["primary_error"] == "lint failed"
 
@@ -266,7 +304,8 @@ def test_verify_run_treats_pytest_exit_5_no_tests_as_skipped_pass(
 
     result = tools["verify_run"].run({})
 
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["failed_commands"] == []
     assert result["summary"] == "verification skipped: nothing to verify (1/1)"
     assert result["command_results"][0]["status"] == "skipped"
@@ -403,7 +442,8 @@ def test_interactive_docs_only_pathless_prompt_updates_verification_contract_wit
 
     assert result["commands"] == []
     assert result["summary"] == "verification skipped: no commands"
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
 
     events = list(read_session_events(sessions_dir / "interactive-docs-verify.jsonl"))
     contract_updates = [
@@ -517,9 +557,10 @@ def test_interactive_pathless_non_python_tasks_do_not_inherit_generic_pytest_fal
         )
         assert session.verification_selection_reason == expected_reason
         assert session.verification_contract_type == (
-            "repo_native" if expected_commands else "unavailable"
+            "selected" if expected_commands else "unavailable"
         )
-        assert session.verification_authoritative is bool(expected_commands)
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, expected_commands)
 
         result = session.tools["verify_run"].run({})
     finally:
@@ -527,7 +568,9 @@ def test_interactive_pathless_non_python_tasks_do_not_inherit_generic_pytest_fal
 
     assert [call for call in calls if call in expected_commands] == expected_commands
     assert result["commands"] == expected_commands
-    assert result["all_passed"] is True
+    # Tri-state: with no commands to run, nothing executed - not a pass.
+    assert result["all_passed"] is bool(expected_commands)
+    assert result["status"] == ("passed" if expected_commands else "not_run")
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     contract_updates = [
@@ -536,9 +579,9 @@ def test_interactive_pathless_non_python_tasks_do_not_inherit_generic_pytest_fal
     assert contract_updates
     assert contract_updates[-1]["payload"]["verification_selection_reason"] == expected_reason
     assert contract_updates[-1]["payload"]["verification_contract_type"] == (
-        "repo_native" if expected_commands else "unavailable"
+        "selected" if expected_commands else "unavailable"
     )
-    assert contract_updates[-1]["payload"]["verification_authoritative"] is bool(expected_commands)
+    assert contract_updates[-1]["payload"]["verification_authoritative"] is False
 
 
 @pytest.mark.parametrize(
@@ -642,9 +685,10 @@ def test_interactive_neutral_config_paths_keep_repo_grounded_invalidation(
         )
         assert session.verification_selection_reason == expected_reason
         assert session.verification_contract_type == (
-            "repo_native" if expected_commands else "unavailable"
+            "selected" if expected_commands else "unavailable"
         )
-        assert session.verification_authoritative is bool(expected_commands)
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, expected_commands)
 
         result = session.tools["verify_run"].run({})
     finally:
@@ -652,7 +696,9 @@ def test_interactive_neutral_config_paths_keep_repo_grounded_invalidation(
 
     assert [call for call in calls if call in expected_commands] == expected_commands
     assert result["commands"] == expected_commands
-    assert result["all_passed"] is True
+    # Tri-state: with no commands to run, nothing executed - not a pass.
+    assert result["all_passed"] is bool(expected_commands)
+    assert result["status"] == ("passed" if expected_commands else "not_run")
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     contract_updates = [
@@ -722,7 +768,8 @@ def test_interactive_mixed_workspace_vague_prompts_use_repo_grounded_invalidatio
 
     assert result["commands"] == []
     assert result["summary"] == "verification skipped: no commands"
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     contract_updates = [
@@ -785,7 +832,8 @@ def test_interactive_mixed_workspace_neutral_config_path_keeps_repo_grounded_inv
 
     assert result["commands"] == []
     assert result["summary"] == "verification skipped: no commands"
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
 
     events = list(read_session_events(sessions_dir / "interactive-mixed-env-example-verify.jsonl"))
     contract_updates = [
@@ -809,7 +857,7 @@ def test_interactive_mixed_workspace_neutral_config_path_keeps_repo_grounded_inv
         ("interactive-js-tsconfig-verify", "Update tsconfig.json."),
     ],
 )
-def test_interactive_js_bootstrap_paths_select_repo_native_build_command(
+def test_interactive_js_bootstrap_paths_select_advisory_repo_build_command(
     tmp_path: Path,
     session_id: str,
     instruction: str,
@@ -841,8 +889,9 @@ def test_interactive_js_bootstrap_paths_select_repo_native_build_command(
 
         assert session.effective_verification_commands == ["npm run build"]
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, ["npm run build"])
     finally:
         session.close()
 
@@ -851,8 +900,8 @@ def test_interactive_js_bootstrap_paths_select_repo_native_build_command(
         event for event in events if event.get("type") == "verification_contract_updated"
     ]
     assert contract_updates
-    assert contract_updates[-1]["payload"]["verification_contract_type"] == "repo_native"
-    assert contract_updates[-1]["payload"]["verification_authoritative"] is True
+    assert contract_updates[-1]["payload"]["verification_contract_type"] == "selected"
+    assert contract_updates[-1]["payload"]["verification_authoritative"] is False
 
 
 @pytest.mark.parametrize(
@@ -908,7 +957,8 @@ def test_interactive_python_repo_without_tests_marks_verification_unavailable(
 
     assert result["commands"] == []
     assert result["summary"] == "verification skipped: no commands"
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
 
 
 def test_verify_run_ignores_model_commands_when_verification_contract_is_unavailable(
@@ -951,11 +1001,29 @@ def test_verify_run_ignores_model_commands_when_verification_contract_is_unavail
     assert observed_commands == [[]]
     assert result["commands"] == []
     assert result["summary"] == "verification skipped: no commands"
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["ignored_model_verification_commands"] == [
         'python -c "from calc import divide; divide(1, 0)"'
     ]
     assert result["verification_skip_reason"] == "verification_contract_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected"),
+    [
+        ("Update vercel.json config.", ["vercel.json"]),
+        ("Update .env.example handling.", [".env.example"]),
+        ("Adjust .npmrc defaults.", [".npmrc"]),
+        ("Fix the failing tests.", []),
+    ],
+)
+def test_sentence_final_words_are_not_task_paths(
+    tmp_path: Path, instruction: str, expected: list[str]
+) -> None:
+    # Python 3.14 counts a trailing dot as a suffix (PurePath("config.").suffix is
+    # "."), so a sentence-final word looked like a file name on 3.14 only.
+    assert _extract_workspace_relation_paths_from_text(root=tmp_path, text=instruction) == expected
 
 
 def test_interactive_plain_non_python_turn_does_not_require_generic_pytest(
@@ -987,10 +1055,11 @@ def test_interactive_plain_non_python_turn_does_not_require_generic_pytest(
         session.close()
 
     assert result["commands"] == []
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
 
 
-def test_interactive_pathless_js_repo_with_repo_native_tests_keeps_authoritative_command(
+def test_interactive_pathless_js_repo_tests_keep_advisory_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1021,8 +1090,9 @@ def test_interactive_pathless_js_repo_with_repo_native_tests_keeps_authoritative
     try:
         assert session.effective_verification_commands == ["npm test"]
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, ["npm test"])
 
         agent_loop_mod._refresh_interactive_turn_verification_selection(
             session,
@@ -1032,8 +1102,9 @@ def test_interactive_pathless_js_repo_with_repo_native_tests_keeps_authoritative
 
         assert session.effective_verification_commands == ["npm test"]
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, ["npm test"])
 
         result = session.tools["verify_run"].run({})
     finally:
@@ -1112,7 +1183,7 @@ def test_interactive_unittest_repo_authorizes_declared_native_command(
         ),
     ],
 )
-def test_interactive_mixed_workspace_repo_native_commands_remain_authoritative(
+def test_interactive_mixed_workspace_inferred_commands_remain_advisory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_id: str,
@@ -1141,8 +1212,9 @@ def test_interactive_mixed_workspace_repo_native_commands_remain_authoritative(
     try:
         assert session.effective_verification_commands == expected_commands
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, expected_commands)
 
         agent_loop_mod._refresh_interactive_turn_verification_selection(
             session,
@@ -1152,8 +1224,9 @@ def test_interactive_mixed_workspace_repo_native_commands_remain_authoritative(
 
         assert session.effective_verification_commands == expected_commands
         assert session.verification_selection_source == "repo_scan.likely_test_commands"
-        assert session.verification_contract_type == "repo_native"
-        assert session.verification_authoritative is True
+        assert session.verification_contract_type == "selected"
+        assert session.verification_authoritative is False
+        _assert_inferred_commands_are_advisory(session, expected_commands)
 
         result = session.tools["verify_run"].run({})
     finally:
@@ -1161,7 +1234,9 @@ def test_interactive_mixed_workspace_repo_native_commands_remain_authoritative(
 
     assert [call for call in calls if call in expected_commands] == expected_commands
     assert result["commands"] == expected_commands
-    assert result["all_passed"] is True
+    # Tri-state: with no commands to run, nothing executed - not a pass.
+    assert result["all_passed"] is bool(expected_commands)
+    assert result["status"] == ("passed" if expected_commands else "not_run")
 
 
 @pytest.mark.parametrize(
@@ -1182,8 +1257,8 @@ def test_interactive_mixed_workspace_repo_native_commands_remain_authoritative(
             "src/index.ts",
             ["npm run build"],
             "repo_scan.likely_test_commands",
-            "repo_native",
-            True,
+            "selected",
+            False,
             "repo scan discovered package.json verification scripts",
         ),
         (
@@ -1249,6 +1324,7 @@ def test_interactive_mixed_workspace_explicit_targets_keep_task_specific_selecti
         assert session.verification_selection_reason == expected_reason
         assert session.verification_contract_type == expected_contract_type
         assert session.verification_authoritative is expected_authoritative
+        _assert_inferred_commands_are_advisory(session, expected_commands)
 
         result = session.tools["verify_run"].run({})
     finally:
@@ -1256,7 +1332,9 @@ def test_interactive_mixed_workspace_explicit_targets_keep_task_specific_selecti
 
     assert [call for call in calls if call in expected_commands] == expected_commands
     assert result["commands"] == expected_commands
-    assert result["all_passed"] is True
+    # Tri-state: with no commands to run, nothing executed - not a pass.
+    assert result["all_passed"] is bool(expected_commands)
+    assert result["status"] == ("passed" if expected_commands else "not_run")
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     contract_updates = [
@@ -1504,14 +1582,14 @@ def test_verify_run_pipeline_rejection_carries_actionable_guidance(
     assert "pytest" in message
 
 
-def test_verify_run_rejects_incompatible_override_against_effective_contract(
+def test_verify_run_rejects_nonassertive_override_with_existing_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         agent_loop_mod,
         "run_task_verification",
-        lambda **_kwargs: pytest.fail("verify engine should not run for incompatible overrides"),
+        lambda **_kwargs: pytest.fail("verify engine should not run for nonassertive overrides"),
     )
 
     cfg = AppConfig(model="test-model")
@@ -1522,14 +1600,11 @@ def test_verify_run_rejects_incompatible_override_against_effective_contract(
         effective_verification_commands=["pytest -q"],
     )
 
-    with pytest.raises(
-        verify_gate_mod.VerifyError,
-        match="verify_run commands must stay within the session's effective verification contract.",
-    ):
+    with pytest.raises(verify_gate_mod.VerifyError):
         tools["verify_run"].run({"commands": ['python3 -c "print(123)"']})
 
 
-def test_verify_run_allows_targeted_override_against_effective_contract(
+def test_verify_run_targeted_override_executes_without_whole_suite_credit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1554,6 +1629,27 @@ def test_verify_run_allows_targeted_override_against_effective_contract(
     assert calls == ["pytest tests/test_cli.py -q"]
     assert result["commands"] == ["pytest tests/test_cli.py -q"]
     assert result["all_passed"] is True
+    assert result["verification_evidence_allowed"] is False
+    assert result["verification_evidence_supplemental_only"] is True
+    assert result["verification_evidence_reason"] == "supplemental_only_contract_selection_differs"
+
+    state = TurnExecutionState(
+        execution_requested=True, expected_verification_commands={"pytest -q"}
+    )
+    state.note_verification_relevant_edit()
+    _record_tool_effect(
+        root=tmp_path,
+        state=state,
+        tool_name="verify_run",
+        arguments={"commands": ["pytest tests/test_cli.py -q"]},
+        status="ok",
+        result=result,
+        known_verification_commands=["pytest -q"],
+    )
+    assert state.covered_verification_commands == set()
+    assert state.missing_verification_commands() == {"pytest -q"}
+    assert state.accepted_verification_evidence == []
+    assert len(state.supplemental_verification_evidence) == 1
 
 
 @pytest.mark.parametrize(
@@ -1594,6 +1690,9 @@ def test_verify_run_allows_targeted_pytest_variants_against_effective_contract(
     assert calls == [requested_command]
     assert result["commands"] == [requested_command]
     assert result["all_passed"] is True
+    assert result["verification_evidence_allowed"] is False
+    assert result["verification_evidence_supplemental_only"] is True
+    assert result["verification_evidence_reason"] == "supplemental_only_contract_selection_differs"
 
 
 def test_verify_run_marks_go_no_tests_to_run_as_skipped_verification(
@@ -1609,17 +1708,18 @@ def test_verify_run_marks_go_no_tests_to_run_as_skipped_verification(
     _patch_host_execution(monkeypatch, fake_run)
 
     cfg = AppConfig(model="test-model")
-    cfg.verify_commands = ["go test ./..."]
+    cfg.verify_commands = ["go test -run NonExistent ./..."]
     tools = _build_tools(
         tmp_path,
         cfg=cfg,
-        effective_verification_commands=["go test ./..."],
+        effective_verification_commands=["go test -run NonExistent ./..."],
     )
 
     result = tools["verify_run"].run({"commands": ["go test -run NonExistent ./..."]})
 
     assert calls == ["go test -run NonExistent ./..."]
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["failed_commands"] == []
     assert result["summary"] == "verification skipped: nothing to verify (1/1)"
     assert result["command_results"][0]["status"] == "skipped"
@@ -1651,7 +1751,8 @@ def test_verify_run_marks_go_no_test_files_as_skipped_verification(
     result = tools["verify_run"].run({"commands": ["go test ./..."]})
 
     assert calls == ["go test ./..."]
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["failed_commands"] == []
     assert result["summary"] == "verification skipped: nothing to verify (1/1)"
     assert result["command_results"][0]["status"] == "skipped"
@@ -1719,7 +1820,8 @@ def test_verify_run_marks_unittest_zero_tests_as_skipped_verification(
     result = tools["verify_run"].run({})
 
     assert calls == ["python -m unittest discover -s tests"]
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["failed_commands"] == []
     assert result["summary"] == "verification skipped: nothing to verify (1/1)"
     assert result["command_results"][0]["status"] == "skipped"
@@ -1754,7 +1856,8 @@ def test_verify_run_marks_maven_zero_tests_as_skipped_verification(
     result = tools["verify_run"].run({})
 
     assert calls == ["mvn test"]
-    assert result["all_passed"] is True
+    assert result["all_passed"] is False
+    assert result["status"] == "not_run"
     assert result["failed_commands"] == []
     assert result["summary"] == "verification skipped: nothing to verify (1/1)"
     assert result["command_results"][0]["status"] == "skipped"
@@ -1845,39 +1948,54 @@ def test_verify_run_expands_recursive_globs_portably(
     )
 
 
-def test_verify_run_rejects_different_family_override_against_effective_contract(
+@pytest.mark.parametrize(
+    ("configured_command", "requested_command", "output"),
+    [
+        ("pytest -q", "ruff check src", "All checks passed!\n"),
+        ("npm test", "npm run lint", "Lint completed.\n"),
+    ],
+)
+def test_verify_run_different_assertive_family_executes_without_contract_credit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    configured_command: str,
+    requested_command: str,
+    output: str,
 ) -> None:
-    monkeypatch.setattr(
-        agent_loop_mod,
-        "run_task_verification",
-        lambda **_kwargs: pytest.fail("verify engine should not run for incompatible overrides"),
-    )
+    calls: list[str] = []
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(str(cmd))
+        return _cp(returncode=0, stdout=output)
+
+    _patch_host_execution(monkeypatch, fake_run)
 
     cfg = AppConfig(model="test-model")
-    cfg.verify_commands = ["pytest -q"]
+    cfg.verify_commands = [configured_command]
     tools = _build_tools(
         tmp_path,
         cfg=cfg,
-        effective_verification_commands=["pytest -q"],
+        effective_verification_commands=[configured_command],
     )
 
-    with pytest.raises(
-        verify_gate_mod.VerifyError,
-        match="verify_run commands must stay within the session's effective verification contract.",
-    ):
-        tools["verify_run"].run({"commands": ["ruff check src"]})
+    result = tools["verify_run"].run({"commands": [requested_command]})
+
+    assert calls == [requested_command]
+    assert result["commands"] == [requested_command]
+    assert result["all_passed"] is True
+    assert result["verification_evidence_allowed"] is False
+    assert result["verification_evidence_supplemental_only"] is True
+    assert result["verification_evidence_reason"] == "supplemental_only_contract_selection_differs"
 
 
-def test_verify_run_rejects_npm_lint_override_against_effective_contract(
+def test_verify_run_rejects_unknown_npm_script_override_with_existing_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         agent_loop_mod,
         "run_task_verification",
-        lambda **_kwargs: pytest.fail("verify engine should not run for incompatible overrides"),
+        lambda **_kwargs: pytest.fail("verify engine should not run for an unknown script"),
     )
 
     cfg = AppConfig(model="test-model")
@@ -1888,11 +2006,8 @@ def test_verify_run_rejects_npm_lint_override_against_effective_contract(
         effective_verification_commands=["npm test"],
     )
 
-    with pytest.raises(
-        verify_gate_mod.VerifyError,
-        match="verify_run commands must stay within the session's effective verification contract.",
-    ):
-        tools["verify_run"].run({"commands": ["npm run lint"]})
+    with pytest.raises(verify_gate_mod.VerifyError):
+        tools["verify_run"].run({"commands": ["npm run arbitrary_script"]})
 
 
 @pytest.mark.parametrize(
@@ -1940,14 +2055,20 @@ def test_verify_run_rejects_non_executing_override_against_effective_contract(
         tools["verify_run"].run({"commands": [requested_command]})
 
 
+@pytest.mark.parametrize(
+    "requested_command",
+    ["ruff check .", "pytest tests/test_cli.py -q", "python -m pytest -q"],
+)
 def test_verify_run_rejects_divergent_override_in_managed_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    requested_command: str,
 ) -> None:
-    def fake_run(_cmd, **_kwargs):  # type: ignore[no-untyped-def]
-        return _cp(returncode=0, stdout="ok\n")
-
-    _patch_host_execution(monkeypatch, fake_run)
+    monkeypatch.setattr(
+        agent_loop_mod,
+        "run_task_verification",
+        lambda **_kwargs: pytest.fail("managed overrides must be rejected before execution"),
+    )
 
     cfg = AppConfig(model="test-model")
     cfg.verify_commands = ["pytest -q"]
@@ -1961,7 +2082,7 @@ def test_verify_run_rejects_divergent_override_in_managed_session(
         verify_gate_mod.VerifyError,
         match="Managed verification commands are locked to the authoritative Forge command set.",
     ):
-        tools["verify_run"].run({"commands": ["ruff check ."]})
+        tools["verify_run"].run({"commands": [requested_command]})
 
 
 def test_verify_run_allows_identical_override_in_managed_session(
@@ -1989,6 +2110,61 @@ def test_verify_run_allows_identical_override_in_managed_session(
     assert calls == ["pytest -q"]
     assert result["commands"] == ["pytest -q"]
     assert result["all_passed"] is True
+
+
+@pytest.mark.parametrize("managed", [False, True], ids=["configured", "managed"])
+def test_verify_run_exact_custom_check_preserves_configured_and_managed_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, managed: bool
+) -> None:
+    command = "custom-ci-driver --suite core"
+    calls: list[str] = []
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(str(cmd))
+        return _cp(returncode=0, stdout="Custom driver completed.\n")
+
+    _patch_host_execution(monkeypatch, fake_run)
+    tools = _build_tools(
+        tmp_path,
+        cfg=AppConfig(model="test-model", verify_commands=[command]),
+        effective_verification_commands=[command],
+        authoritative_verification_commands=[command] if managed else None,
+    )
+
+    if managed:
+        # Managed typed selection already rejects unknown verifier semantics;
+        # preserving configured-command admission must not bypass that policy.
+        with pytest.raises(verify_gate_mod.VerifyError, match="unknown_verification_capability"):
+            tools["verify_run"].run({"commands": [command]})
+        assert calls == []
+        return
+
+    result = tools["verify_run"].run({"commands": [command]})
+
+    assert calls == [command]
+    assert result["commands"] == [command]
+    assert result["command_results"][0]["exit_code"] == 0
+    assert result["command_results"][0]["real_execution"] is None
+    assert result["verification_evidence_allowed"] is False
+
+
+def test_verify_run_unknown_custom_check_cannot_change_configured_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        agent_loop_mod,
+        "run_task_verification",
+        lambda **_kwargs: pytest.fail("unconfigured unknown check must not reach execution"),
+    )
+    command = "custom-ci-driver --suite core"
+    tools = _build_tools(
+        tmp_path,
+        cfg=AppConfig(model="test-model", verify_commands=[command]),
+        effective_verification_commands=[command],
+    )
+
+    with pytest.raises(verify_gate_mod.VerifyError, match="unknown_verification_capability"):
+        tools["verify_run"].run({"commands": ["custom-ci-driver --suite integration"]})
 
 
 def test_verify_run_rejects_compound_shell_command(

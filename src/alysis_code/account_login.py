@@ -37,7 +37,7 @@ from .config import (
     save_persisted_profile_key,
 )
 from .host_browser import open_url
-from .profile_presets import get_preset, make_profile_from_preset
+from .profile_presets import canonical_model_alias_for_preset, get_preset, make_profile_from_preset
 from .profiles import ProfileSpec, add_profile, get_profile, set_active_profile
 
 # Matches the server-side device-code expiry (15 min) so we poll until the code
@@ -49,7 +49,7 @@ _DEFAULT_POLL_INTERVAL_S = 5.0
 # model picker, so an offline/slow gateway must not stall the menu for long.
 _MODELS_TIMEOUT_S = 6.0
 
-_FRESH_LOGIN_DEFAULT_MODEL = "deepseek-v4-flash"
+_FRESH_LOGIN_DEFAULT_MODEL = "deepseek-flash"
 
 
 class AlysisLoginError(Exception):
@@ -441,10 +441,11 @@ def _format_token_usage(used: int | None, total: int | None) -> str | None:
 def _activate_alysis_profile(cfg: AppConfig, *, email: str | None) -> LoginResult:
     """Create + activate the `alysis` profile, keeping any model the user chose.
 
-    Fresh logins default to the Pro flagship (``deepseek-v4-flash``) so
-    subscribe → login → chat works with zero extra steps. Re-logins preserve
+    Fresh logins default to V4.1 Flash (``deepseek-flash``) so
+    connect → login → chat works with zero extra steps. Re-logins preserve
     whatever model the user selected since, so logging in again never undoes
-    their choice.
+    supported choices. Retired Flash/beta ids are remapped to the current
+    default via the preset's model_aliases, including on re-login.
     """
     preset = get_preset(cloud.PROFILE_KEY)
     if preset is not None:
@@ -455,6 +456,8 @@ def _activate_alysis_profile(cfg: AppConfig, *, email: str | None) -> LoginResul
     existing = get_profile(cfg, cloud.PROFILE_KEY)
     existing_model = str(getattr(existing, "default_model", "") or "").strip() if existing else ""
     chosen_model = existing_model or _FRESH_LOGIN_DEFAULT_MODEL
+    if preset is not None:
+        chosen_model = canonical_model_alias_for_preset(preset, chosen_model)
 
     # Always pin to the live gateway URL (env-overridable for tests); keep the
     # user's chosen model.

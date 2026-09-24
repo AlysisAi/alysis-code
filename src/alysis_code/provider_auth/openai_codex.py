@@ -19,6 +19,11 @@ import httpx
 from ..branding import env_get
 from ..chatgpt_codex_static_provider import resolve_chatgpt_codex_static_model
 from ..host_browser import open_url
+from ..llm.cache_capabilities import (
+    CACHE_STRATEGY_IMPLICIT_PROVIDER,
+    CACHE_USAGE_SCHEMA_OPENAI,
+    CacheCapabilitySpec,
+)
 from .base import (
     ProviderAccountStatus,
     ProviderAuthError,
@@ -41,7 +46,9 @@ _CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _RESPONSES_URL = f"{_CODEX_BASE_URL}/responses"
 _MODELS_URL = f"{_CODEX_BASE_URL}/models"
 _DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-_DEFAULT_CODEX_COMPAT_VERSION = "0.144.6"
+# Matches the reviewed subscription snapshot. Pre-Astra client versions can
+# receive an older model catalog even when the account has access to Astra.
+_DEFAULT_CODEX_COMPAT_VERSION = "0.155.0"
 _CALLBACK_PORTS = (1455, 1457)
 _BROWSER_TIMEOUT_SECONDS = 300.0
 _DEVICE_TIMEOUT_SECONDS = 15.0 * 60.0
@@ -82,8 +89,20 @@ class OpenAICodexSubscriptionAuth:
     base_url = _CODEX_BASE_URL
     protocol = "openai_responses"
     supports_previous_response_id = False
+    supports_input_token_count = False
     supports_temperature = False
     requires_streaming = True
+    cache_capability = CacheCapabilitySpec(
+        strategy=CACHE_STRATEGY_IMPLICIT_PROVIDER,
+        enabled=True,
+        reports_cache_read_tokens=True,
+        usage_schema=CACHE_USAGE_SCHEMA_OPENAI,
+        emits_request_fields=False,
+        notes=(
+            "Subscription responses report cached input without explicit cache request fields.",
+        ),
+        source="auth_adapter",
+    )
 
     def __init__(self, *, transport: httpx.BaseTransport | None = None) -> None:
         self._transport = transport
@@ -261,23 +280,39 @@ class OpenAICodexSubscriptionAuth:
 
     def adapt_responses_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         adapted = copy.deepcopy(dict(payload))
+        reasoning = adapted.get("reasoning")
+        if isinstance(reasoning, dict) and str(reasoning.get("effort") or "").casefold() == "ultra":
+            raise ProviderAuthError(
+                "Ultra is a Codex orchestration mode, not a subscription API reasoning effort. "
+                "Choose Max or another supported effort in /config > Default Model."
+            )
         input_items = adapted.get("input")
         if isinstance(input_items, list):
             instructions: list[str] = []
             retained: list[Any] = []
+            in_instruction_prefix = True
             for item in input_items:
-                if isinstance(item, dict) and str(item.get("role") or "") in {
-                    "system",
-                    "developer",
-                }:
+                host_message = (
+                    isinstance(item, dict)
+                    and item.get("type", "message") == "message"
+                    and item.get("role") in {"system", "developer"}
+                )
+                if in_instruction_prefix and host_message:
                     text = _message_text(item.get("content"))
-                    if text:
-                        instructions.append(text)
-                    continue
+                    if text is not None:
+                        if text:
+                            instructions.append(text)
+                        continue
+                in_instruction_prefix = False
                 if isinstance(item, dict):
                     item = copy.deepcopy(item)
                     item.pop("id", None)
                     item.pop("status", None)
+                    if host_message:
+                        # Native Codex keeps later host context as developer input.
+                        # Hoisting these notices would rewrite the instruction prefix
+                        # and move them ahead of the observations they qualify.
+                        item["role"] = "developer"
                 retained.append(item)
             adapted["input"] = retained
             if instructions:
@@ -359,7 +394,10 @@ class OpenAICodexSubscriptionAuth:
                     if not isinstance(entry, dict):
                         continue
                     effort_id = str(entry.get("effort") or entry.get("id") or "").strip()
-                    if not effort_id:
+                    # Ultra is advertised for the Codex app's orchestration,
+                    # but /responses rejects it as a reasoning.effort value.
+                    # Verified live 2026-09-22; keep the source snapshot intact.
+                    if not effort_id or effort_id.casefold() == "ultra":
                         continue
                     efforts.append(
                         ProviderReasoningEffort(
@@ -377,6 +415,7 @@ class OpenAICodexSubscriptionAuth:
                         description=description,
                     )
                     for effort_id, description in static_model.reasoning_efforts
+                    if effort_id.casefold() != "ultra"
                 ]
             try:
                 priority = int(raw.get("priority") or 9999)
@@ -830,19 +869,25 @@ def _token_expiry(data: Mapping[str, Any], access_token: str) -> float:
     return expiration if expiration > time.time() else time.time() + _DEFAULT_TOKEN_LIFETIME_SECONDS
 
 
-def _message_text(content: Any) -> str:
+def _message_text(content: Any) -> str | None:
+    """Flatten only plain text; retain other content in its ordered input item."""
     if isinstance(content, str):
         return content.strip()
     if not isinstance(content, list):
-        return str(content or "").strip()
+        return None
     parts: list[str] = []
     for item in content:
         if isinstance(item, str):
             parts.append(item)
-        elif isinstance(item, dict):
-            value = item.get("text") or item.get("content")
-            if isinstance(value, str):
-                parts.append(value)
+        elif (
+            isinstance(item, dict)
+            and item.get("type") in {"text", "input_text"}
+            and isinstance(item.get("text"), str)
+            and item.keys() <= {"type", "text"}
+        ):
+            parts.append(item["text"])
+        else:
+            return None
     return "\n".join(part for part in parts if part).strip()
 
 

@@ -139,6 +139,9 @@ def test_provider_failure_with_material_work_salvages_exit_zero(tmp_path: Path) 
     exit_code, events = _run_failing_turn(tmp_path, session_id="salvage-ok", prefix=prefix)
 
     assert exit_code == 0
+    outcome = _payloads(events, "turn_outcome")[-1]
+    assert outcome["outcome"] == "provider_failure"
+    assert outcome["verified_success"] is False
     salvages = _payloads(events, "provider_failure_salvage")
     assert salvages, "expected a provider_failure_salvage event"
     assert salvages[0]["material_work_persisted"] is True

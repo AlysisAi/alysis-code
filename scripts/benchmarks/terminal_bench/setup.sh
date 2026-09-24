@@ -1,4 +1,25 @@
 #!/bin/sh
+#
+# Installs the Alysis Code wheel into a Terminal-Bench task container.
+#
+# Where the artifacts of a run end up
+# -----------------------------------
+# Install logs go to /logs/agent/setup and /logs/artifacts/setup (below).
+# The agent's own session logs go to /logs/artifacts/alysis-session, set by
+# the adapter as `session_log_dir`.
+#
+# The harness harvests a task's artifacts from <workspace>/.alysis -- that is
+# what `--artifact /app/.alysis` collects. Nothing in normal mode ever creates
+# that directory, so two full 89-task trials retained ZERO session logs and
+# every question afterwards had to be answered from console text.
+#
+# The adapter therefore appends a symlink to its run command, created only
+# AFTER the agent exits: <workspace>/.alysis -> /logs/artifacts/alysis-session.
+# Doing it post-run rather than pointing session_log_dir at the workspace is
+# deliberate -- Terminal-Bench grades the workspace, agents routinely run
+# `git add -A`, and a directory that materialises mid-run can be committed
+# into the solution or trip a tree-state verifier. Set
+# ALYSIS_TBENCH_MIRROR_SESSION=0 on the host to suppress it; default is on.
 
 SETUP_LOG_DIR="${ALYSIS_SETUP_LOG_DIR:-/logs/agent/setup}"
 SETUP_ARTIFACT_DIR="${ALYSIS_SETUP_ARTIFACT_DIR:-/logs/artifacts/setup}"
@@ -137,7 +158,7 @@ configure_alysis() {
   alysis config set default_mode fullaccess || true
   alysis config set stream false || true
   python - <<'PY'
-from alysis_code.config import load_config, save_config
+from alysis_code.config import load_config, save_config, set_config_value
 from alysis_code.profiles import ProfileSpec, add_profile, set_active_profile
 from alysis_code.sandbox_settings import apply_sandbox_mode_to_config
 import os

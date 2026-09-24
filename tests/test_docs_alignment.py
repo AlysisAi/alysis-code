@@ -78,7 +78,7 @@ def test_python_runtime_baseline_is_documented_and_ci_aligned() -> None:
     assert pyproject["tool"]["ruff"]["target-version"] == "py311"
     assert '"python-version":"3.11"' in ci
     assert '"python-version":"3.12"' in ci
-    assert "Alysis Code requires **Python 3.11+**" in readme
+    assert "Python 3.11+" in readme
     assert "Python 3.11 or newer" in contributing
     assert "Python 3.11 or newer" in server_doc
 
@@ -88,7 +88,7 @@ def test_readme_keeps_public_launch_surface() -> None:
 
     assert "Alysis Code" in readme
     assert 'src="docs/assets/banner.svg"' in readme
-    assert 'srcset="docs/assets/banner-dark.svg"' in readme
+    assert (_repo_root() / "docs/assets/banner.svg").is_file()
     # The product site. Derived from alysis_cloud so a future move updates this
     # assertion with the constant rather than leaving a stale literal behind.
     from alysis_code.alysis_cloud import site_url
@@ -100,7 +100,7 @@ def test_readme_keeps_public_launch_surface() -> None:
         'href="https://github.com/AlysisAi/alysis-code/blob/main/docs/CHANGELOG.md">Changelog</a>'
         in readme
     )
-    assert "https://github.com/sponsors/AlysisAi" in readme
+    assert 'href="https://github.com/sponsors/AlysisAi"' in readme
     assert "pipx install alysis-code" in readme
     assert "Apache-2.0" in readme
 
@@ -159,7 +159,7 @@ def test_public_docs_cover_core_user_and_contributor_topics() -> None:
     assert "Subagents" in subagents
     for name in (
         "explorer",
-        "implementer",
+        "general",
         "frontend-engineer",
         "debugger",
         "verifier",
@@ -183,7 +183,33 @@ def test_public_docs_cover_core_user_and_contributor_topics() -> None:
     assert "MCP" in security
 
 
-def test_terminal_docs_cover_process_tools() -> None:
+def test_internal_cleanup_artifacts_stay_absent() -> None:
+    repo_root = _repo_root()
+    absent_paths = [
+        "RE" + "FACTOR_NOTES.md",
+        "RE" + "FACTOR_PLAN.md",
+        "qa_" + "reports",
+        "scripts/skills_" + "do" + "gfood_campaign.py",
+        "scripts/skills_" + "do" + "gfood_validation_round.py",
+        "docs/SANDBOX.md",
+        "docs/FORGE.md",
+        "docs/skills_" + "evals.md",
+        "docs/internal",
+        "docs/subagents",
+        "docs/tooling",
+        "docs/forge_plan_phase.md",
+        "docs/forge_execution_phase.md",
+        "docs/forge_swarm.md",
+    ]
+
+    source_paths = set(_checkout_paths(repo_root))
+    for path in absent_paths:
+        path_prefix = f"{path.rstrip('/')}/"
+        assert not any(
+            source_path == path or source_path.startswith(path_prefix)
+            for source_path in source_paths
+        ), path
+
     terminals = _read("docs/terminals.md")
     assert "shell_background" in terminals
     assert "shell_output" in terminals

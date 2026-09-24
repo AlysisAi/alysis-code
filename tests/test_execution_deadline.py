@@ -184,7 +184,30 @@ def test_subagent_deadline_uses_finite_fallback_without_parent() -> None:
     assert child.source == DeadlineSource.SUBAGENT_FALLBACK
     remaining = child.remaining_seconds()
     assert remaining is not None
-    assert 899.0 <= remaining <= 900.0 + 1e-6
+    assert child.deadline_monotonic is not None
+    # Adding the duration to a monotonic timestamp and subtracting that timestamp
+    # can round upward by one representable step (for example 900.0000000000005).
+    # Admit only that numeric precision, not extra wall-clock execution time.
+    assert 899.0 <= remaining <= 900.0 + math.ulp(child.deadline_monotonic)
+
+
+def test_subagent_deadline_is_unlimited_without_parent_or_fallback() -> None:
+    child = derive_subagent_deadline(None, None)
+
+    assert child.enabled is False
+    assert child.configured_duration_seconds is None
+    assert child.source == DeadlineSource.ABSENT
+    assert child.remaining_seconds() is None
+
+
+@pytest.mark.parametrize("duration", [None, 20.0])
+def test_subagent_without_fallback_inherits_parent_exactly(duration: float | None) -> None:
+    clock = _FakeClock(10.0)
+    parent = ExecutionDeadline.from_duration(duration, clock=clock)
+
+    child = derive_subagent_deadline(parent, None)
+
+    assert child is parent
 
 
 def test_subagent_deadline_reuses_exact_earlier_parent_object() -> None:

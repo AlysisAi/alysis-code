@@ -89,18 +89,18 @@ Shell and verification commands default to strict sandboxing. Verification can r
 sandbox only when explicitly configured with `verify_sandbox.mode="off"` or
 `ALYSIS_VERIFY_SANDBOX_MODE=off`.
 
-## Modes & Personas
+## Permissions & Personas
 
 Two layers control what the agent may do — one enforces, one focuses.
 
-**Execution modes** are the enforcement layer. Choose one per command with `--mode`, select the
-next message's permissions with `/permissions` or **Shift+Tab**, or set a default with
-`alysis-code config set default_mode <mode>`. A selection leaves the active turn's permissions
-unchanged until the next message starts:
+**Permissions** are the enforcement layer. Choose one per command with `--mode`, select the next
+message's level in chat with `/permissions` or **Shift+Tab**, or set a default with
+`alysis-code config set default_mode <mode>`. A selection takes effect when the next user message
+starts; it does not change a turn already running:
 
 | Mode | Behavior |
 | --- | --- |
-| `readonly` | Inspection only — no file writes, shell, MCP, or subagent delegation. |
+| `readonly` | Inspection plus top-level read-only delegation — no file writes, shell, MCP, candidate apply/discard, or nested delegation. |
 | `review` | The safe default — previews and asks before every write and shell command. |
 | `auto` | Applies routine edits with fewer prompts; dangerous operations stay blocked. |
 | `fullaccess` | No mode-level prompts for trusted workspaces — the denylist and audit log stay active. |
@@ -120,8 +120,8 @@ never raise it. Define your own in `.alysis_personas/*.md`.
 [Learn more](https://alysiscode.com/docs/concepts/personas)
 
 Use `/persona architect` for planning in chat, or `/forge` for a plan-driven execution workflow.
-The legacy chat Plan Mode and its `/plan` commands have been removed; Forge retains its plan views
-and editor. Persona changes made during a running turn apply after that turn finishes.
+The former chat `/plan` commands have been removed; Forge retains its plan views and editor.
+Persona changes made during a running turn apply after that turn finishes.
 
 ## Project Links
 
@@ -156,4 +156,4 @@ More questions? See the [full FAQ](https://alysiscode.com/docs/faq).
 
 ---
 
-**Join the community** — [X](https://x.com/alysiscode) | [GitHub Issues](../../issues)
+**Join the community** — [X](https://x.com/alysiscode) | [GitHub Issues](https://github.com/AlysisAi/alysis-code/issues)

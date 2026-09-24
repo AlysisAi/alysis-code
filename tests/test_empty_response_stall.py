@@ -70,9 +70,19 @@ class _StallingClient:
         tool_choice: Any | None = None,
         stream: bool = False,
         on_text_delta: Any | None = None,
+        on_reasoning_delta: Any | None = None,
         temperature: float | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
-        _ = on_text_delta, temperature, tools, tool_choice, stream
+        _ = (
+            on_text_delta,
+            on_reasoning_delta,
+            temperature,
+            tools,
+            tool_choice,
+            stream,
+            cancellation_token,
+        )
         self.call_records.append({"messages": [dict(item) for item in messages]})
         index = self.calls
         self.calls += 1
@@ -576,7 +586,7 @@ def test_stall_is_detected_at_the_threshold_during_a_turn(tmp_path: Path) -> Non
 def test_a_slow_endpoint_stalls_on_elapsed_time_before_the_count_threshold(
     tmp_path: Path,
 ) -> None:
-    """The failure that cost hours: few empty responses, each taking minutes.
+    """The failure that cost hours: few empty responses, each taking over ten minutes.
 
     The count threshold alone never bounded wall-clock time. With a slow endpoint
     the streak-duration rule fires first, so the turn stops on the second empty
@@ -604,7 +614,9 @@ def test_a_slow_endpoint_stalls_on_elapsed_time_before_the_count_threshold(
 
     class _SlowStallingClient(_StallingClient):
         def chat(self, **kwargs: Any) -> LLMResponse:
-            clock.advance(301.0)
+            # One real provider attempt consumes the entire handling budget.
+            # This must not rely on compatibility retries replaying the call.
+            clock.advance(601.0)
             return super().chat(**kwargs)
 
     client = _SlowStallingClient(
@@ -669,8 +681,15 @@ def test_one_recovery_is_attempted_then_the_turn_salvages(
     # the recovery still re-issues, and says so honestly.
     assert recoveries[0]["compaction"]["applied"] is False
     assert len(salvages) == 1
-    assert salvages[0]["trigger"]
+    assert salvages[0]["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    assert salvages[0]["material_work_persisted"] is False
     assert exit_code == 0
+    final = _payloads(events, "final")[-1]
+    assert final["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    assert final["degraded"] is True
+    assert final["internal_fallback"] is True
+    assert final["internal_fallback_kind"] == "empty_response_stall_salvage"
+    assert not (tmp_path / "answer.txt").exists()
     # The recovery backed off before re-issuing, and the turn stopped instead of
     # re-asking indefinitely.
     assert _no_real_backoff_sleep == [pytest.approx(2.0)]
@@ -829,7 +848,12 @@ def test_salvage_summary_reports_runtime_outcomes_separately_from_files() -> Non
     assert "Changes left in the working tree" not in summary
 
 
-def test_salvage_clean_stop_exits_zero_when_nothing_was_produced(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "artifact_path", [None, "result.outcome.json", "nested/result.outcome.json"]
+)
+def test_salvage_distinguishes_session_outcomes_from_user_artifacts(
+    tmp_path: Path, artifact_path: str | None
+) -> None:
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
     (repo / "data.txt").write_text("alpha\nbeta\n", encoding="utf-8")
@@ -854,15 +878,45 @@ def test_salvage_clean_stop_exits_zero_when_nothing_was_produced(tmp_path: Path)
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="fs_read", arguments={"path": "data.txt"})],
                 raw={},
-            )
+            ),
+            *(
+                [
+                    LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                id="write",
+                                name="fs_write",
+                                arguments={
+                                    "path": artifact_path,
+                                    "content": '{"observed_lines": 2}\n',
+                                },
+                            )
+                        ],
+                        raw={},
+                    )
+                ]
+                if artifact_path
+                else []
+            ),
         ],
     )
 
     salvages = _payloads(events, "empty_response_stall_salvage")
+    # A bounded self-stop exits cleanly; it must still expose incomplete work.
     assert exit_code == 0
-    assert salvages and salvages[0]["material_work_persisted"] is False
-    assert salvages[0]["salvaged_paths"] == []
-    assert salvages[0]["salvage_evidence_sources"] == ["git_diff"]
+    assert salvages and salvages[0]["material_work_persisted"] is bool(artifact_path)
+    assert salvages[0]["salvaged_paths"] == ([artifact_path] if artifact_path else [])
+    assert salvages[0]["salvage_evidence_sources"] == (
+        ["git_diff", "touched_paths"] if artifact_path else ["git_diff"]
+    )
+    assert salvages[0]["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    final = _payloads(events, "final")[-1]
+    assert final["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    assert final["degraded"] is True
+    assert final["internal_fallback"] is True
+    assert final["internal_fallback_kind"] == "empty_response_stall_salvage"
+    assert not (repo / "answer.txt").exists()
 
 
 def test_salvage_falls_back_to_touched_paths_outside_a_git_repository(
@@ -894,7 +948,7 @@ def test_salvage_falls_back_to_touched_paths_outside_a_git_repository(
     assert "answer.txt" in salvages[0]["salvaged_paths"]
 
 
-def test_kill_switch_restores_the_legacy_terminate_on_empty_behaviour(
+def test_kill_switch_disables_stall_recovery_but_preserves_clean_stop_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -921,16 +975,19 @@ def test_kill_switch_restores_the_legacy_terminate_on_empty_behaviour(
         ],
     )
 
-    # Disabling stall recovery still restores termination at the attempt cap;
-    # the centralized clean-stop contract now reports that termination as zero.
+    # The switch disables shared stall recovery, not the clean-stop exit policy.
     assert exit_code == 0
-    assert (repo / "answer.txt").exists()
+    assert (repo / "answer.txt").read_text(encoding="utf-8") == "2\n"
     event_types = {event.get("type") for event in events}
     assert "empty_response_stall_detected" not in event_types
     assert "empty_response_stall_recovery" not in event_types
     assert "empty_response_stall_salvage" not in event_types
     assert "session_degraded" not in event_types
     assert _payloads(events, "empty_model_response_anomaly_incomplete_after_retries")
+    final = _payloads(events, "final")[-1]
+    assert final["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    assert final["internal_fallback"] is True
+    assert final["internal_fallback_kind"] == "empty_response_anomaly"
 
 
 def test_the_recovery_budget_is_shared_across_turns_in_one_session(tmp_path: Path) -> None:

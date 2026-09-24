@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import subprocess
 from collections import Counter
 from collections.abc import Callable, Collection
@@ -22,15 +23,20 @@ from ..approval_scope import (
     exact_file_set_scope,
     exact_verify_command_set_scope,
 )
+from ..assets.local_tools import LocalAssetViewer
 from ..config import (
     AppConfig,
     ConfigError,
+    resolve_web_fetch_trusted_domains,
     resolve_web_search_policy,
     resolve_web_tools_enabled,
 )
+from ..consumer_verification import run_consumer_profile, validate_consumer_profile
 from ..context.tool_schema_budgeter import (
     CUSTOM_MCP_SCHEMA_FAMILIES,
     DEFAULT_CUSTOM_MCP_DESCRIPTION_MAX_CHARS,
+    JSON_SCHEMA_NAMED_SCHEMA_MAP_KEYS,
+    JSON_SCHEMA_OPAQUE_DATA_KEYS,
     compact_custom_mcp_tool_parameters,
 )
 from ..crash_diagnostics import CrashDiagnosticLogger
@@ -110,7 +116,15 @@ from ..task_scope import (
 )
 from ..terminal_manager import ProcessOutputSnapshot, TerminalLimitError, TerminalManager
 from ..tools.artifacts import SessionArtifactReadError, session_artifact_read
-from ..tools.availability import mark_available, mark_unavailable, register_tool_availability
+from ..tools.availability import (
+    ToolAvailabilitySnapshot,
+    mark_available,
+    mark_unavailable,
+    publish_tool_availability_snapshot,
+    register_tool_availability,
+    tool_availability_snapshot,
+)
+from ..tools.capability_readiness import WebSearchCapabilityProbe
 from ..tools.fs import (
     FsError,
     StaleFileError,
@@ -123,7 +137,7 @@ from ..tools.fs import (
     fs_mkdir,
     fs_move,
     fs_read,
-    fs_read_lines,
+    fs_read_uses_line_range,
     prepare_fs_edit,
     prepare_fs_write,
     write_prepared_fs_edit,
@@ -153,6 +167,7 @@ from ..tools.web_search import WebSearchError, resolve_web_search_runtime_status
 from ..usage_tracker import UsageSummary
 from ..verification_command_analysis import (
     VerificationCommandEvidentiaryCapability,
+    VerificationCommandStatus,
     analyze_verification_command,
     verification_rejection_guidance,
 )
@@ -160,6 +175,7 @@ from ..verify_gate import (
     ResolvedVerifyCommands,
     VerifyError,
     is_authoritative_verify_command_selection,
+    required_verify_commands,
     resolve_verify_commands,
     run_task_verification,
     trusted_shell_expression_command_set,
@@ -169,6 +185,7 @@ from ..verify_gate import (
     verify_run_result_to_payload,
 )
 from ..web_research import (
+    FETCHABLE_PROVENANCE_CLASSIFICATIONS,
     build_web_fetch_recovery_search_query,
     canonicalize_web_url_input,
     normalize_web_url,
@@ -191,6 +208,7 @@ from .prompt_context import (
     resolve_workdir_relpath_within_workspace,
 )
 from .read_ledger import SessionReadLedger
+from .regression_baseline import TestReport, parse_test_report
 from .steering import SteerInbox
 from .subagent_execution import (
     _AUTHORITATIVE_SUBAGENT_FINAL_TEXT_SOURCES as _AUTHORITATIVE_SUBAGENT_FINAL_TEXT_SOURCES,
@@ -210,6 +228,7 @@ from .subagent_execution import (
 from .subagent_execution import (
     ChildRunRegistry,
     ChildScheduler,
+    SubagentCoordinator,
     SubagentLauncher,
 )
 from .subagent_execution import (
@@ -246,7 +265,6 @@ from .subagent_workspace import SubagentWorkspaceProvider
 from .verification_commands import (
     _expand_simple_verify_command_chain,
     _has_disallowed_shell_control_flow,
-    _verify_run_commands_match_effective_contract,
 )
 from .verification_evidence import (
     VerificationEvidence,
@@ -487,6 +505,9 @@ class ToolDef:
     parameters: dict[str, Any]
     run: Callable[[dict[str, Any]], dict[str, Any]]
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Host-only delivery interface, preserved when dispatch guards replace run.
+    # It is deliberately excluded from model schemas and persistence metadata.
+    visual_delivery: LocalAssetViewer | None = field(default=None, repr=False, compare=False)
 
     def as_openai_tool(self) -> dict[str, Any]:
         family = _model_schema_family(self.metadata)
@@ -503,7 +524,9 @@ class ToolDef:
             if family in CUSTOM_MCP_SCHEMA_FAMILIES:
                 parameters = compact_custom_mcp_tool_parameters(self.parameters)
             else:
-                parameters = _drop_model_facing_schema_prose(self.parameters)
+                parameters = _drop_model_facing_schema_prose(
+                    self.parameters, preserve_descriptions=family == "builtin"
+                )
         return {
             "type": "function",
             "function": {
@@ -556,20 +579,51 @@ def _model_facing_tool_description(description: str, *, max_chars: Any) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _drop_model_facing_schema_prose(value: Any) -> Any:
+def _drop_model_facing_schema_prose(
+    value: Any,
+    *,
+    preserve_descriptions: bool = False,
+    _inside_named_schema_map: bool = False,
+) -> Any:
+    """Remove schema annotations without deleting named fields or literal data.
+
+    Built-in parameter descriptions are the concise calling contract. Keep them
+    verbatim, including whitespace in quoted examples, rather than abbreviating
+    their meaning. Custom/MCP schemas use their existing separate budget policy.
+    """
     if isinstance(value, dict):
         reduced: dict[str, Any] = {}
         for key, item in value.items():
             normalized_key = str(key)
-            if normalized_key in _MODEL_FACING_SCHEMA_PROSE_KEYS:
+            if _inside_named_schema_map:
+                reduced[key] = _drop_model_facing_schema_prose(
+                    item, preserve_descriptions=preserve_descriptions
+                )
                 continue
-            if normalized_key in {"const", "default", "enum"}:
+            if normalized_key in _MODEL_FACING_SCHEMA_PROSE_KEYS and not (
+                preserve_descriptions and normalized_key == "description"
+            ):
+                continue
+            if (
+                normalized_key in JSON_SCHEMA_OPAQUE_DATA_KEYS
+                or normalized_key == "dependentRequired"
+            ):
                 reduced[key] = copy.deepcopy(item)
                 continue
-            reduced[key] = _drop_model_facing_schema_prose(item)
+            reduced[key] = _drop_model_facing_schema_prose(
+                item,
+                preserve_descriptions=preserve_descriptions,
+                _inside_named_schema_map=(
+                    normalized_key in JSON_SCHEMA_NAMED_SCHEMA_MAP_KEYS
+                    or normalized_key == "dependencies"
+                ),
+            )
         return reduced
     if isinstance(value, list):
-        return [_drop_model_facing_schema_prose(item) for item in value]
+        return [
+            _drop_model_facing_schema_prose(item, preserve_descriptions=preserve_descriptions)
+            for item in value
+        ]
     return copy.deepcopy(value)
 
 
@@ -579,16 +633,24 @@ def _drop_schema_descriptions(value: Any) -> Any:
 
 _BUILTIN_MODEL_DESCRIPTIONS: dict[str, str] = {
     "report_blocker": "Report a final unresolvable blocker.",
-    "fs_read": "Read a workspace text file.",
-    "fs_read_lines": "Read numbered file lines.",
+    "fs_read": (
+        "Read workspace text. Any line option selects a bounded numbered window; otherwise "
+        "return a raw head. Prefer narrow confirmed ranges. Derived files return a summary "
+        "unless a window or allow_derived is requested."
+    ),
     "fs_edit": "Edit one UTF-8 file.",
     "fs_move": "Move a file.",
     "fs_copy": "Copy a file.",
-    "fs_delete": "Delete a file.",
+    "fs_delete": "Delete a file, or several via paths.",
     "fs_write": "Write a UTF-8 text file.",
     "fs_mkdir": "Create a directory.",
-    "fs_list": "List workspace files.",
+    "fs_list": (
+        "Files only under root_path. Empty/omitted globs: '**/*' recursively; '*': direct files. "
+        "ignore: exact path components. Truncation covers filtered scope."
+    ),
     "web_fetch": "Fetch a supplied/search URL.",
+    "asset_view": "View a local image, crop, or timestamped video frame.",
+    "capability_status": "Inspect configured and observed web/visual readiness.",
     "web_search": (
         "Search current sources for unstable/requested facts; includes UTC retrieved_at. "
         "Fetch URLs with web_fetch."
@@ -598,8 +660,11 @@ _BUILTIN_MODEL_DESCRIPTIONS: dict[str, str] = {
     "repo_map": "Map code and tests.",
     "search_rg": "Search workspace text.",
     "history_search": "Search prior events.",
-    "session_artifact_read": "Read current-session artifact locator.",
-    "verify_run": "Run verification.",
+    "session_artifact_read": "Read or list current-session artifact handles.",
+    "verify_run": (
+        "Run verification. Pass requested commands; otherwise use selected defaults. "
+        "Managed restrictions apply."
+    ),
     "shell_run": "Run a policy-checked shell command.",
     "shell_background": ("Run a session lifetime command; killed when this session ends."),
     "shell_service_start": (
@@ -614,20 +679,31 @@ _BUILTIN_MODEL_DESCRIPTIONS: dict[str, str] = {
     "shell_list": "List background processes.",
     "session_set_workdir": "Set active_workdir.",
     "switch_mode": "Propose a user-approved persona switch.",
-    "subagent_run": "Run child; eligible batches parallelize max4.",
+    "subagent_run": (
+        "Work directly by default; delegate autonomously when the benefit outweighs overhead. "
+        "Run child while parent blocks; spawn for independent overlap. "
+        "Fresh child has no parent conversation; include exact relevant requirements and acceptance criteria."
+    ),
     "subagent_spawn": (
-        "Background: shared read-only, isolated writable. Example: run_id=impl; verifier "
-        "depends_on=[impl], workspace_from_run=impl."
+        "Work directly by default; spawn autonomously when the benefit outweighs overhead. "
+        "Orient first; hand over a bounded result while you advance different work. Shared requires mode=readonly; isolated writable. "
+        "Fresh child has no parent conversation; include exact relevant requirements and acceptance criteria."
     ),
     "subagent_send": "Message a queued/running child.",
-    "subagent_resume": "Resume a terminal child as a linked run.",
+    "subagent_resume": (
+        "Continue terminal context as a new linked background run. Use the returned latest run_id; "
+        "each source continues once. Successful/degraded children need a follow-up task."
+    ),
     "subagent_status": "List children.",
-    "subagent_wait": "Collect children.",
+    "subagent_wait": (
+        "Wait for a needed dependency or retrieve its full result. Bounded completed reports arrive "
+        "automatically; use their full_result locator when more detail is needed."
+    ),
     "subagent_cancel": "Cancel children.",
     "subagent_apply": "Apply patch.",
     "subagent_discard": "Discard worktree.",
     "git_status": "Read Git status.",
-    "git_diff": "Run git diff.",
+    "git_diff": "Read unstaged changes by default; use staged=true to read staged changes.",
     "git_history": "Read Git history.",
     "git_apply_patch": "Apply a unified Git diff.",
     "browser_start": "Start an approval-gated, IDE-owned browser for public websites.",
@@ -696,17 +772,38 @@ _READONLY_MAIN_SESSION_BUILTIN_TOOL_NAMES = frozenset(
 
 _READONLY_TOP_LEVEL_WEB_TOOL_NAMES = frozenset({"web_fetch", "web_search"})
 
+# Delegation is a read-safe control plane at the top level.  Nested children do
+# not receive it (preventing recursive delegation), and workspace apply/discard
+# remain absent because they mutate the parent workspace.
+_READONLY_TOP_LEVEL_SUBAGENT_TOOL_NAMES = frozenset(
+    {
+        "subagent_run",
+        "subagent_spawn",
+        "subagent_send",
+        "subagent_resume",
+        "subagent_status",
+        "subagent_wait",
+        "subagent_cancel",
+    }
+)
 
-# Long builds can wait once instead of forcing repeated model calls. The wait
-# still returns on completion, responds to cancellation, and is clamped to the
-# remaining run budget by _clamp_shell_wait_seconds.
-_MAX_SHELL_WAIT_SECONDS = 900.0
 
 # Out-of-band channel for handing the turn's cancellation token to the shell
 # wait path, mirroring _SUBAGENT_CANCELLATION_TOKEN_ARG. The key is an object()
 # rather than a string so it can never collide with a model-supplied argument,
 # is skipped by the ``isinstance(key, str)`` filters that build public args, and
 # never reaches the schema, the transcript, or the provider.
+# Upper bound for a single ``shell_wait`` call. The wait is completion-driven
+# (it returns the instant the process speaks or exits), cancellation-sliced,
+# and clamped to the remaining run budget by ``_clamp_shell_wait_seconds``, so
+# a larger ceiling never lets a wait outlive the run or block cancellation --
+# it only stops the model from being forced into a poll loop on a genuinely
+# quiet long-running build. The previous 60s ceiling turned every quiet build
+# or test run into a stream of no-op ``shell_wait`` round trips (measured at
+# ~19% of all LLM calls in the TB 2.1 focus-64 campaign); a quiet 15-minute
+# compile now costs one wait, not fifteen.
+_MAX_SHELL_WAIT_SECONDS = 900.0
+
 _SHELL_CANCELLATION_TOKEN_ARG = object()
 
 # Tools whose dispatch can block on a running process, and which therefore need
@@ -726,6 +823,8 @@ def _built_in_tool_exposed_in_mode(
         return True
     normalized_tool_name = str(tool_name or "").strip()
     if normalized_tool_name in _READONLY_MAIN_SESSION_BUILTIN_TOOL_NAMES:
+        return True
+    if subagent_depth == 0 and normalized_tool_name in _READONLY_TOP_LEVEL_SUBAGENT_TOOL_NAMES:
         return True
     if normalized_tool_name not in _READONLY_TOP_LEVEL_WEB_TOOL_NAMES:
         return False
@@ -841,7 +940,10 @@ def build_tools(
     managed_browser_cancel_check: Callable[[], bool] | None = None,
     host_action_handler: HostActionHandler | None = None,
     host_action_capabilities: Collection[str] | None = None,
+    subagent_coordinator: SubagentCoordinator | None = None,
+    subagent_coordinator_sink: Callable[[SubagentCoordinator], None] | None = None,
     child_scheduler_sink: Callable[[ChildScheduler], None] | None = None,
+    tool_availability_sink: Callable[[ToolAvailabilitySnapshot], None] | None = None,
     parent_steer_inbox: SteerInbox | None = None,
     read_ledger_sink: Callable[[SessionReadLedger], None] | None = None,
     readonly_child_web_tool_names: Collection[str] | None = None,
@@ -860,6 +962,7 @@ def build_tools(
     authoritative_verify_commands = _normalized_authoritative_verify_commands(
         authoritative_verification_commands
     )
+    pending_tool_availability: ToolAvailabilitySnapshot = {}
     static_verify_selection = verify_command_selection
     normalized_effective_verification_commands = _normalized_verify_commands(
         effective_verification_commands
@@ -975,31 +1078,36 @@ def build_tools(
         )
         return float(configured_timeout_seconds if timeout is None else timeout)
 
-    def _current_verify_selection() -> ResolvedVerifyCommands | None:
+    def _current_verify_selection() -> tuple[ResolvedVerifyCommands | None, tuple[str, ...] | None]:
         if callable(get_verify_command_selection):
             try:
                 current = get_verify_command_selection()
             except Exception:  # noqa: BLE001
                 current = None
             if isinstance(current, ResolvedVerifyCommands):
-                return current
+                return current, required_verify_commands(current)
         if isinstance(static_verify_selection, ResolvedVerifyCommands):
-            return static_verify_selection
+            return static_verify_selection, required_verify_commands(static_verify_selection)
         if authoritative_verify_commands is not None:
-            return ResolvedVerifyCommands(
+            selection = ResolvedVerifyCommands(
                 commands=tuple(authoritative_verify_commands),
                 source="environment.authoritative_verification_commands",
                 reason="managed runtime injected authoritative verification commands",
                 contract_type="authoritative_override",
             )
+            return selection, required_verify_commands(selection)
         if normalized_effective_verification_commands:
-            return ResolvedVerifyCommands(
+            selection = ResolvedVerifyCommands(
                 commands=tuple(normalized_effective_verification_commands),
                 source="session.effective_verification_commands",
                 reason="session already resolved an effective verification contract",
                 contract_type="selected",
             )
-        return None
+            # A bare legacy command list does not supply requirement metadata.
+            # Keep its previous conservative classification rather than infer
+            # advisory status from this synthesized selection's source label.
+            return selection, None
+        return None, ()
 
     command_mutation_tracking_enabled = bool(
         resolved_runtime_kind == RuntimeKind.SUBAGENT
@@ -1599,6 +1707,7 @@ def build_tools(
         *,
         run: Callable[[dict[str, Any]], dict[str, Any]],
         parameters: dict[str, Any] | None = None,
+        visual_delivery: LocalAssetViewer | None = None,
     ) -> ToolDef:
         metadata = require_builtin_tool_metadata(name)
         return ToolDef(
@@ -1606,6 +1715,7 @@ def build_tools(
             description=metadata.description,
             parameters=parameters if parameters is not None else copied_tool_parameters(name),
             run=run,
+            visual_delivery=visual_delivery,
             metadata={
                 "tool_type": "builtin",
                 "compact_parameters_for_model": True,
@@ -1671,6 +1781,7 @@ def build_tools(
         *,
         run: Callable[[dict[str, Any]], dict[str, Any]],
         parameters: dict[str, Any] | None = None,
+        visual_delivery: LocalAssetViewer | None = None,
     ) -> None:
         if not _built_in_tool_exposed_in_mode(
             tool_name=name,
@@ -1679,7 +1790,26 @@ def build_tools(
             readonly_child_web_tool_names=readonly_child_web_tool_names,
         ):
             return
-        tools.append(_make_tool_def(name, run=run, parameters=parameters))
+        tools.append(
+            _make_tool_def(name, run=run, parameters=parameters, visual_delivery=visual_delivery)
+        )
+
+    local_asset_viewer = LocalAssetViewer(
+        root=root, cfg=cfg or AppConfig(), execution_deadline=execution_deadline
+    )
+
+    def _asset_view(args: dict[str, Any]) -> dict[str, Any]:
+        path = _resolve_workspace_relative_path(
+            tool_name="asset_view",
+            raw_path=args.get("path"),
+            raw_base=args.get("path_base"),
+            field_name="path",
+            base_field_name="path_base",
+        )
+        sensitive = guard_sensitive_read("asset_view", path=path)
+        return _mark_sensitive_result(local_asset_viewer.view({**args, "path": path}), sensitive)
+
+    _append_builtin_tool("asset_view", run=_asset_view, visual_delivery=local_asset_viewer)
 
     def _fs_read(args: dict[str, Any]) -> dict[str, Any]:
         path = _resolve_workspace_relative_path(
@@ -1691,17 +1821,28 @@ def build_tools(
         )
         sensitive = guard_sensitive_read("fs_read", path=path)
         content_hash_before = read_ledger.content_hash(path)
+        line_options = {
+            key: int(args[key])
+            for key in ("start_line", "end_line", "max_lines")
+            if args.get(key) is not None
+        }
+        if args.get("include_line_numbers") is not None:
+            line_options["include_line_numbers"] = bool(args["include_line_numbers"])
         result = _patchable("fs_read", fs_read)(
             root=root,
             path=path,
-            max_bytes=int(args.get("max_bytes") or 20000),
+            max_bytes=int(args["max_bytes"]) if args.get("max_bytes") is not None else 12_000,
             allow_derived=bool(args.get("allow_derived", False)),
+            **line_options,
         )
         result = read_ledger.filter_result(
             path=path,
             result=result,
             content_hash_before=content_hash_before,
             force=args.get("force") is True,
+            include_line_numbers=(
+                fs_read_uses_line_range(args) and args.get("include_line_numbers") is not False
+            ),
         )
         return _mark_sensitive_result(result, sensitive)
 
@@ -1803,35 +1944,6 @@ def build_tools(
             }
 
         _append_builtin_tool("switch_mode", run=_switch_mode)
-
-    def _fs_read_lines(args: dict[str, Any]) -> dict[str, Any]:
-        path = _resolve_workspace_relative_path(
-            tool_name="fs_read_lines",
-            raw_path=args.get("path"),
-            raw_base=args.get("path_base"),
-            field_name="path",
-            base_field_name="path_base",
-        )
-        sensitive = guard_sensitive_read("fs_read_lines", path=path)
-        content_hash_before = read_ledger.content_hash(path)
-        result = _patchable("fs_read_lines", fs_read_lines)(
-            root=root,
-            path=path,
-            start_line=int(args["start_line"]) if args.get("start_line") is not None else 0,
-            end_line=(int(args["end_line"]) if args.get("end_line") is not None else None),
-            max_lines=(int(args["max_lines"]) if args.get("max_lines") is not None else 200),
-            include_line_numbers=bool(args.get("include_line_numbers", True)),
-            max_bytes=(int(args["max_bytes"]) if args.get("max_bytes") is not None else 48_000),
-        )
-        result = read_ledger.filter_result(
-            path=path,
-            result=result,
-            content_hash_before=content_hash_before,
-            force=args.get("force") is True,
-        )
-        return _mark_sensitive_result(result, sensitive)
-
-    _append_builtin_tool("fs_read_lines", run=_fs_read_lines)
 
     def _fs_edit(args: dict[str, Any]) -> dict[str, Any]:
         path = _resolve_workspace_relative_path(
@@ -1986,33 +2098,96 @@ def build_tools(
     _append_builtin_tool("fs_copy", run=_fs_copy)
 
     def _fs_delete(args: dict[str, Any]) -> dict[str, Any]:
-        path = _resolve_workspace_relative_path(
-            tool_name="fs_delete",
-            raw_path=args.get("path"),
-            raw_base=args.get("path_base"),
-            field_name="path",
-            base_field_name="path_base",
-        )
-        try:
-            _guard_write_path(path)
-        except AgentRuntimeError as exc:
-            if (
-                persona_write_scope_active
-                or "outside allowed scope" not in str(exc)
-                or not is_non_material_untracked_path(path)
-            ):
-                raise
-        precondition = capture_file_precondition(root=root, path=path)
-        sensitive = guard_sensitive_files("fs_delete", files=[path])
-        preview = f"Delete file\npath: {path}"
-        if not sensitive:
-            guard_write("fs_delete", preview, files=[path])
-        try:
-            result = fs_delete(root=root, path=path, precondition=precondition)
-        except StaleFileError as error:
-            return _stale_file_result(error)
-        read_ledger.invalidate(path)
-        return _mark_sensitive_result(result, sensitive)
+        # Batch form: ``paths`` deletes several files behind ONE
+        # approval that lists every file, instead of one prompt per file.
+        raw_paths = args.get("paths")
+        raw_single = args.get("path")
+        if raw_paths is not None and raw_single is not None:
+            raise AgentRuntimeError("fs_delete accepts either path or paths, not both.")
+        if raw_paths is None:
+            raw_entries: list[Any] = [raw_single]
+        else:
+            if not isinstance(raw_paths, list) or not raw_paths:
+                raise AgentRuntimeError("fs_delete paths must be a non-empty list of file paths.")
+            if len(raw_paths) > 200:
+                raise AgentRuntimeError("fs_delete paths accepts at most 200 files per call.")
+            raw_entries = list(raw_paths)
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for raw_entry in raw_entries:
+            path = _resolve_workspace_relative_path(
+                tool_name="fs_delete",
+                raw_path=raw_entry,
+                raw_base=args.get("path_base"),
+                field_name="path",
+                base_field_name="path_base",
+            )
+            try:
+                _guard_write_path(path)
+            except AgentRuntimeError as exc:
+                if (
+                    persona_write_scope_active
+                    or "outside allowed scope" not in str(exc)
+                    or not is_non_material_untracked_path(path)
+                ):
+                    raise
+            if path not in seen:
+                seen.add(path)
+                resolved.append(path)
+        preconditions = {path: capture_file_precondition(root=root, path=path) for path in resolved}
+        sensitive = guard_sensitive_files("fs_delete", files=resolved)
+        # Mixed batches (Codex review, PR #26): the sensitive gate above prompts
+        # for the SENSITIVE findings only. Every ordinary file in the batch must
+        # still appear in a write approval of its own - otherwise it would ride
+        # along unapproved. Single-file semantics unchanged: a lone sensitive
+        # file needs no second prompt.
+        sensitive_paths = {str(finding.get("path")) for finding in sensitive or []}
+        ordinary = [path for path in resolved if path not in sensitive_paths]
+
+        def _delete_preview(paths: list[str]) -> str:
+            if len(paths) == 1:
+                return f"Delete file\npath: {paths[0]}"
+            listed = "\n".join(f"- {path}" for path in paths[:40])
+            if len(paths) > 40:
+                listed += f"\n… and {len(paths) - 40} more"
+            return f"Delete {len(paths)} files\n{listed}"
+
+        if ordinary:
+            guard_write("fs_delete", _delete_preview(ordinary), files=ordinary)
+        if raw_paths is None:
+            # Single-file form: identical result shape to the original tool.
+            try:
+                result = fs_delete(
+                    root=root, path=resolved[0], precondition=preconditions[resolved[0]]
+                )
+            except StaleFileError as error:
+                return _stale_file_result(error)
+            read_ledger.invalidate(resolved[0])
+            return _mark_sensitive_result(result, sensitive)
+        entries: list[dict[str, Any]] = []
+        deleted_count = 0
+        for path in resolved:
+            try:
+                result = fs_delete(root=root, path=path, precondition=preconditions[path])
+            except StaleFileError as error:
+                entries.append({"path": path, "ok": False, **_stale_file_result(error)})
+                continue
+            except AgentRuntimeError as error:
+                entries.append({"path": path, "ok": False, "error": str(error)})
+                continue
+            read_ledger.invalidate(path)
+            deleted_count += 1
+            entry: dict[str, Any] = {"path": path, "ok": True}
+            if isinstance(result, dict) and "bytes" in result:
+                entry["bytes"] = result["bytes"]
+            entries.append(entry)
+        batch_result: dict[str, Any] = {
+            "ok": deleted_count == len(resolved),
+            "deleted_count": deleted_count,
+            "requested_count": len(resolved),
+            "results": entries,
+        }
+        return _mark_sensitive_result(batch_result, sensitive)
 
     _append_builtin_tool("fs_delete", run=_fs_delete)
 
@@ -2542,6 +2717,22 @@ def build_tools(
     # them in its tool list. Required for benchmark/offline integrity.
     web_tools_enabled = resolve_web_tools_enabled(cfg)
 
+    # Install the configured trusted-domain allowlist on the session tracker so
+    # the web_fetch provenance gate authorizes package-registry style endpoints
+    # (JSON APIs that web_search never indexes and therefore can never recover).
+    # Runs per build_tools call, so subagent sessions — which start with an
+    # otherwise empty provenance store — inherit it from their (child) config.
+    #
+    # Best-effort: this is session enrichment, not a hard requirement, so a
+    # Store that predates the hook (or a minimal/alternative Store) must degrade
+    # to the pre-hook behaviour — no extra trusted domains — rather than crash
+    # tool assembly for the whole agent. The real SessionStore always has the
+    # method, so this guard is a no-op on every production path.
+    if web_tools_enabled:
+        configure_trusted_domains = getattr(store, "configure_web_fetch_trusted_domains", None)
+        if callable(configure_trusted_domains):
+            configure_trusted_domains(resolve_web_fetch_trusted_domains(cfg))
+
     web_search_exposed_in_mode = (
         web_tools_enabled
         and _built_in_tool_exposed_in_mode(
@@ -2557,6 +2748,29 @@ def build_tools(
         if web_search_exposed_in_mode
         else None
     )
+    web_search_probe = WebSearchCapabilityProbe()
+
+    def _capability_status(_args: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "web_search": web_search_probe.status(
+                cfg=cfg, api_key=api_key, exposed=web_search_exposed_in_mode
+            ),
+            "web_fetch": {
+                "state": "degraded"
+                if web_tools_enabled
+                and _built_in_tool_exposed_in_mode(
+                    tool_name="web_fetch",
+                    mode=mode,
+                    subagent_depth=subagent_depth,
+                    readonly_child_web_tool_names=readonly_child_web_tool_names,
+                )
+                else "unavailable",
+                "basis": "URL provenance and network reachability are checked per request",
+            },
+            "asset_view": local_asset_viewer.status(),
+        }
+
+    _append_builtin_tool("capability_status", run=_capability_status)
 
     def _web_fetch_recovery_is_public_candidate(raw_url: str) -> bool:
         normalized = normalize_web_url(raw_url)
@@ -2644,16 +2858,7 @@ def build_tools(
             ),
             "error_code": "web_fetch_provenance_required",
             "url": display_url,
-            "allowed_provenance": [
-                "user_provided",
-                "returned_by_web_search",
-                "fetched_page_link",
-                "trusted_local_file",
-                "trusted_tool_output",
-                "canonical_redirect",
-                "search_mediated_recovery",
-                "same_origin_derived_search_result",
-            ],
+            "allowed_provenance": list(FETCHABLE_PROVENANCE_CLASSIFICATIONS),
             "provenance_recovery": {
                 "suggested_search_query": query,
                 "web_search_available": bool(
@@ -2706,6 +2911,8 @@ def build_tools(
                 session_id=str(getattr(store, "session_id", "") or "") or None,
             )
         except WebSearchError as exc:
+            if not exc.recoverable:
+                web_search_probe.record(cfg=cfg, api_key=api_key, failed=True)
             return (
                 None,
                 None,
@@ -2717,6 +2924,7 @@ def build_tools(
                     search_error=str(exc),
                 ),
             )
+        web_search_probe.record(cfg=cfg, api_key=api_key, result=search_result)
         matching_source_url = ""
         for source in list(search_result.get("sources") or []):
             if not isinstance(source, dict):
@@ -2819,20 +3027,33 @@ def build_tools(
             store.append("web_search_runtime_unavailable", web_search_status.to_payload())
 
         if web_search_status.registration_ready:
-            _append_builtin_tool(
-                "web_search",
-                run=lambda args: web_search(
-                    query=str(args.get("query", "")),
-                    cfg=cfg,
-                    api_key=api_key,
-                    allowed_domains=args.get("allowed_domains"),
-                    max_sources=(args["max_sources"] if "max_sources" in args else 8),
-                    external_web_access=(
-                        args["external_web_access"] if "external_web_access" in args else True
-                    ),
-                    session_id=str(getattr(store, "session_id", "") or "") or None,
-                ),
-            )
+
+            def _web_search_with_probe(args: dict[str, Any]) -> dict[str, Any]:
+                try:
+                    result = web_search(
+                        query=str(args.get("query", "")),
+                        cfg=cfg,
+                        api_key=api_key,
+                        allowed_domains=args.get("allowed_domains"),
+                        max_sources=(args["max_sources"] if "max_sources" in args else 8),
+                        external_web_access=(
+                            args["external_web_access"] if "external_web_access" in args else True
+                        ),
+                        session_id=str(getattr(store, "session_id", "") or "") or None,
+                    )
+                except WebSearchError as exc:
+                    if not exc.recoverable:
+                        web_search_probe.record(cfg=cfg, api_key=api_key, failed=True)
+                    raise
+                web_search_probe.record(
+                    cfg=cfg, api_key=api_key, result=result, failed=bool(result.get("error"))
+                )
+                result["capability_readiness"] = web_search_probe.status(
+                    cfg=cfg, api_key=api_key, exposed=True
+                )
+                return result
+
+            _append_builtin_tool("web_search", run=_web_search_with_probe)
 
     _append_builtin_tool(
         "symbol_search",
@@ -2923,17 +3144,20 @@ def build_tools(
                 return session_artifact_read(
                     artifact_layout=store.session_artifact_layout,
                     locator=locator,
+                    handle=str(args.get("handle") or ""),
+                    list_handles=args.get("list_handles") is True,
+                    after_handle=str(args.get("after_handle") or ""),
                     max_bytes=args.get("max_bytes"),
                     offset=args.get("offset"),
                 )
             except SessionArtifactReadError as exc:
                 payload = getattr(exc, "result_payload", None)
-                if (
-                    isinstance(payload, dict)
-                    and payload.get("error_code") == "session_artifact_session_mismatch"
-                ):
+                if isinstance(payload, dict) and payload.get("error_code") in {
+                    "session_artifact_not_found",
+                    "session_artifact_handle_not_found",
+                }:
                     store.append(
-                        "session_artifact_read_session_mismatch",
+                        "session_artifact_read_not_found",
                         {
                             "locator": locator,
                             "runtime_kind": resolved_runtime_kind.value,
@@ -3059,9 +3283,60 @@ def build_tools(
                 "verify_run skipped because the run deadline is exhausted or too close."
             )
         effective_cfg = cfg or AppConfig(model="")
+        if args.get("consumer_profile") is not None:
+            if args.get("commands") is not None:
+                raise VerifyError(
+                    "consumer_profile and commands are separate checks; run each explicitly"
+                )
+            try:
+                profile = validate_consumer_profile(args["consumer_profile"])
+            except ValueError as exc:
+                raise VerifyError(str(exc)) from exc
+            guard_commands = [check["command"] for check in profile["checks"]]
+            if profile.get("python_module"):
+                guard_commands.append(
+                    "python -c " + shlex.quote("import " + profile["python_module"])
+                )
+            guard_verify(guard_commands)
+            sensitive_findings: list[dict[str, str]] = []
+
+            def authorize_consumer_artifact(path: str) -> None:
+                sensitive_findings.extend(guard_sensitive_read("consumer_verification", path=path))
+
+            try:
+                payload, touched = _run_with_command_mutation_detection(
+                    root=root,
+                    enabled=command_mutation_tracking_enabled,
+                    ignored_paths=command_mutation_ignored_paths,
+                    operation=lambda: run_consumer_profile(
+                        root=root,
+                        spec=profile,
+                        artifact_path=_next_verify_artifact_path(),
+                        cfg=effective_cfg,
+                        timeout_s=verify_timeout_s,
+                        process_group_registry=process_group_registry,
+                        service_status=durable_service_manager.status
+                        if durable_service_manager is not None
+                        else None,
+                        authorize_artifact_read=authorize_consumer_artifact,
+                    ),
+                )
+            except DeadlineExhausted:
+                return _deadline_error(
+                    "consumer verification exhausted its deadline while staging artifacts."
+                )
+            if touched:
+                payload["touched_repo_paths"] = touched
+            store.append(
+                "consumer_verification",
+                {"profile": profile["profile"], "status": payload["status"], "sensitive": True}
+                if sensitive_findings
+                else payload,
+            )
+            return _mark_sensitive_result(payload, sensitive_findings)
         raw_commands = args.get("commands")
         verify_cmd: list[str] | None = None
-        current_selection = _current_verify_selection()
+        current_selection, current_required_verification_commands = _current_verify_selection()
         current_effective_verification_commands = _normalized_verify_commands(
             list(current_selection.commands) if current_selection is not None else []
         )
@@ -3101,6 +3376,17 @@ def build_tools(
             )
             if analysis.rejection_reason:
                 raise VerifyError(_invalid_command_message(analysis.rejection_reason))
+            if (
+                current_effective_verification_commands
+                and command.strip() not in current_effective_verification_commands
+                and analysis.evidentiary_capability
+                != VerificationCommandEvidentiaryCapability.ASSERTIVE
+            ):
+                raise VerifyError(
+                    _invalid_command_message(
+                        analysis.inconclusive_reason or "unknown_verification_capability"
+                    )
+                )
             if _has_disallowed_shell_control_flow(command) and not trusted:
                 raise VerifyError(_invalid_command_message("disallowed_shell_control_flow"))
 
@@ -3152,20 +3438,11 @@ def build_tools(
                     )
             commands = list(authoritative_verify_commands)
         elif verify_cmd is not None and current_effective_verification_commands:
-            requested_commands = _normalized_verify_commands(verify_cmd)
-            incompatible_commands = _verify_run_commands_match_effective_contract(
-                requested_commands=requested_commands,
-                effective_verification_commands=current_effective_verification_commands,
-            )
-            if incompatible_commands:
-                raise VerifyError(
-                    "verify_run commands must stay within the session's effective verification "
-                    "contract. Omit the `commands` argument to run the resolved contract "
-                    f"({', '.join(current_effective_verification_commands)}), or run your own "
-                    "command with shell_run -- a passing shell_run of the project's test command "
-                    "also counts as verification evidence."
-                )
-            commands = requested_commands
+            # Explicit checks already passed command validation above. A configured
+            # custom command need not belong to a recognized assertive family.
+            # Execution permission does not imply coverage of the resolved check;
+            # classify the observed result against that obligation afterward.
+            commands = _normalized_verify_commands(verify_cmd)
         elif verify_cmd is not None and unavailable_verification_contract:
             requested_commands = _normalized_verify_commands(verify_cmd)
             commands = []
@@ -3239,6 +3516,34 @@ def build_tools(
             ),
         )
         payload = verify_run_result_to_payload(root=root, result=result)
+        # The 400-character output preview is for presentation, not baseline
+        # evidence. Parse each full executed result before discarding its text.
+        for item, command_payload in zip(
+            result.command_results, payload["command_results"], strict=True
+        ):
+            report = (
+                TestReport()
+                if item.real_execution is False or item.status == VerificationCommandStatus.SKIPPED
+                else parse_test_report(item.output)
+            )
+            command_payload["host_test_report"] = report.as_payload()
+        if (
+            payload.get("artifact_saved")
+            and payload.get("artifact_location") == "external_session_store"
+            and "session_artifact_read" in active_tools
+            and result.artifact_path.is_file()
+        ):
+            try:
+                locator = store.session_artifact_layout.locator_for_path(result.artifact_path)
+            except ValueError:
+                # Only this session's artifacts can be addressed by its reader.
+                pass
+            else:
+                payload["artifact_locator"] = locator
+                payload["full_output"] = (
+                    f"Full verification output saved as {locator}; "
+                    "use session_artifact_read with that locator."
+                )
         if workspace_services:
             payload = dict(payload)
             payload["workspace_services"] = workspace_services
@@ -3275,6 +3580,7 @@ def build_tools(
                     classify_verification_evidence(
                         command,
                         known_verification_commands=current_effective_verification_commands,
+                        required_verification_commands=current_required_verification_commands,
                         authoritative=bool(selection_metadata.get("verification_authoritative")),
                         material_touched_paths=verification_relevant_material_touched_paths,
                         exit_code=(exit_code_raw if isinstance(exit_code_raw, int) else None),
@@ -3300,6 +3606,9 @@ def build_tools(
             {
                 "commands": commands,
                 "all_passed": result.all_passed,
+                "status": result.status,
+                "executed_count": result.executed_count,
+                "skipped_count": result.skipped_count,
                 "summary": result.summary,
                 "fallback_used": payload.get("fallback_used"),
                 "fallback_count": payload.get("fallback_count"),
@@ -3309,6 +3618,7 @@ def build_tools(
                 "artifact_saved": payload.get("artifact_saved"),
                 "artifact_readable_via_fs": payload.get("artifact_readable_via_fs"),
                 "artifact_location": payload.get("artifact_location"),
+                "artifact_locator": payload.get("artifact_locator"),
                 "verification_evidence_category": payload.get("verification_evidence_category"),
                 "verification_evidence_reason": payload.get("verification_evidence_reason"),
                 "verification_evidence_allowed": payload.get("verification_evidence_allowed"),
@@ -3418,7 +3728,7 @@ def build_tools(
                     command_was_verification=False,
                 )
             )
-        current_selection = _current_verify_selection()
+        current_selection, current_required_verification_commands = _current_verify_selection()
         current_effective_verification_commands = _normalized_verify_commands(
             list(current_selection.commands) if current_selection is not None else []
         )
@@ -3468,6 +3778,7 @@ def build_tools(
         shell_evidence = classify_verification_evidence(
             shell_effective_cmd,
             known_verification_commands=current_effective_verification_commands,
+            required_verification_commands=current_required_verification_commands,
             authoritative=(
                 is_authoritative_verify_command_selection(current_selection)
                 if current_selection is not None
@@ -3488,7 +3799,9 @@ def build_tools(
             root=root,
             stage_status=stage_status if isinstance(stage_status, list) else None,
             evidence_v2=evidence_v2,
+            working_directory=str(effective_cwd or "."),
         )
+        result["verification_working_directory"] = str(effective_cwd or ".")
         result["verification_evidence_category"] = shell_evidence.category.value
         result["verification_evidence_reason"] = shell_evidence.reason
         result["verification_evidence_allowed"] = shell_evidence.allowed_to_satisfy_contract
@@ -3648,6 +3961,7 @@ def build_tools(
         return payload
 
     shell_empty_poll_counts: dict[tuple[str, int, int, str], int] = {}
+    shell_wait_cursors: dict[str, int] = {}
 
     def _coerce_shell_since(raw_since: Any) -> int:
         try:
@@ -3843,7 +4157,16 @@ def build_tools(
         manager = _require_durable_service_manager()
         readiness = readiness_spec_for_port(probe_port) if probe_port is not None else None
         try:
-            started = manager.start(cmd=cmd, cwd=cwd_path, readiness=readiness)
+            started = manager.start(
+                cmd=cmd,
+                cwd=cwd_path,
+                readiness=readiness,
+                **(
+                    {"execution_deadline": execution_deadline}
+                    if execution_deadline is not None
+                    else {}
+                ),
+            )
         except ValueError as exc:
             raise AgentRuntimeError(f"Invalid durable service request: {exc}") from exc
         except (ConfigError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
@@ -3856,6 +4179,7 @@ def build_tools(
             command=cmd,
             pid=int(payload.get("pid") or 0),
             probe_port=probe_port,
+            status_probe=lambda: manager.status(started.service_id),
         )
         # A start that silently produced nothing is the failure this PR exists
         # for, so say now whether the process is up and the port is answering.
@@ -3882,6 +4206,11 @@ def build_tools(
         )
         deadline_warning = None
         if deadline_decision is not None and not bool(deadline_decision.get("allowed")):
+            if bool(args.get("persist")):
+                return _deadline_error(
+                    "The shared deadline prevents starting a new durable service; existing services are preserved.",
+                    start_decision=deadline_decision,
+                )
             deadline_warning = _deadline_warning_fields(
                 "Deadline policy would normally block background work; start proceeded because "
                 "this is advisory and not safety.",
@@ -3981,7 +4310,7 @@ def build_tools(
         process_id = str(args.get("process_id", "")).strip()
         if not process_id:
             raise AgentRuntimeError("Missing required argument: process_id")
-        since = _coerce_shell_since(args.get("since"))
+        since = _coerce_shell_since(args.get("since", shell_wait_cursors.get(process_id, 0)))
         wait_seconds = _coerce_shell_wait_seconds(args.get("wait_seconds"))
         until = _coerce_shell_wait_until(args.get("until"))
         max_bytes = _coerce_shell_max_bytes(args.get("max_bytes"))
@@ -4029,8 +4358,31 @@ def build_tools(
             snapshot=snapshot,
             max_bytes=max_bytes,
         )
+        # Only advance over complete delivered lines. A byte-limited line can
+        # be requested again, and an explicit since always permits replay.
+        complete_lines = (
+            payload["lines"][:-1]
+            if payload.get("output_truncated_by_max_bytes")
+            else payload["lines"]
+        )
+        delivered_cursor = complete_lines[-1]["seq"] if complete_lines else since
+        if not payload.get("output_truncated_by_max_bytes"):
+            delivered_cursor = snapshot.next_seq
+        shell_wait_cursors[process_id] = delivered_cursor
         payload.update(
             {
+                "since": since,
+                "next_wait_since": delivered_cursor,
+                "wake_reason": "cancelled"
+                if wait_cancelled
+                else "process_exited"
+                if snapshot.status in {"exited", "killed", "failed"}
+                else "output_available"
+                if snapshot.lines
+                else "interval_elapsed",
+                "meaningful_progress": bool(
+                    snapshot.lines or snapshot.status in {"exited", "killed", "failed"}
+                ),
                 "waited": True,
                 "timed_out": timed_out,
                 "wait_seconds_requested": wait_seconds,
@@ -4087,11 +4439,9 @@ def build_tools(
             DeadlineOperation.SHELL_BACKGROUND,
             minimum_remaining_seconds=MINIMUM_TOOL_START_SECONDS,
         )
-        deadline_warning = None
         if deadline_decision is not None and not bool(deadline_decision.get("allowed")):
-            deadline_warning = _deadline_warning_fields(
-                "Deadline policy would normally block service work; start proceeded because "
-                "this is advisory and not safety.",
+            return _deadline_error(
+                "The shared deadline prevents starting a new durable service; existing services are preserved.",
                 start_decision=deadline_decision,
             )
         manager = _require_durable_service_manager()
@@ -4108,15 +4458,23 @@ def build_tools(
         )
         cwd_path = root if not effective_cwd_relpath else (root / effective_cwd_relpath).resolve()
         try:
-            started = manager.start(cmd=cmd, cwd=cwd_path, readiness=readiness)
+            started = manager.start(
+                cmd=cmd,
+                cwd=cwd_path,
+                readiness=readiness,
+                replace_service_id=args.get("replace_service_id"),
+                **(
+                    {"execution_deadline": execution_deadline}
+                    if execution_deadline is not None
+                    else {}
+                ),
+            )
         except ValueError as exc:
             raise AgentRuntimeError(f"Invalid durable service request: {exc}") from exc
         except (ConfigError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
             raise AgentRuntimeError(f"Failed to start durable service: {exc}") from exc
         payload = dict(started.payload)
         payload["lifetime"] = "durable"
-        if deadline_warning is not None:
-            payload.update(deadline_warning)
         store.append(
             "service_start",
             {
@@ -4131,11 +4489,9 @@ def build_tools(
             DeadlineOperation.SHELL_BACKGROUND,
             minimum_remaining_seconds=MINIMUM_TOOL_START_SECONDS,
         )
-        deadline_warning = None
         if deadline_decision is not None and not bool(deadline_decision.get("allowed")):
-            deadline_warning = _deadline_warning_fields(
-                "Deadline policy would normally block preview work; start proceeded because "
-                "this is advisory and not safety.",
+            return _deadline_error(
+                "The shared deadline prevents starting a new preview; existing services are preserved.",
                 start_decision=deadline_decision,
             )
         manager = _require_durable_service_manager()
@@ -4187,6 +4543,11 @@ def build_tools(
                 cwd=cwd_path,
                 access=requested_access,
                 port=port,
+                **(
+                    {"execution_deadline": execution_deadline}
+                    if execution_deadline is not None
+                    else {}
+                ),
             )
         except ValueError as exc:
             raise AgentRuntimeError(f"Invalid workspace preview request: {exc}") from exc
@@ -4194,8 +4555,6 @@ def build_tools(
             raise AgentRuntimeError(f"Failed to start workspace preview: {exc}") from exc
         payload = dict(started.payload)
         payload["lifetime"] = "durable"
-        if deadline_warning is not None:
-            payload.update(deadline_warning)
         store.append(
             "service_start",
             {
@@ -4336,13 +4695,7 @@ def build_tools(
 
     _append_builtin_tool(
         "git_diff",
-        run=lambda args: git_diff(
-            root=root,
-            path=args.get("path"),
-            staged=bool(args.get("staged", False)),
-            offset=args.get("offset", 0),
-            diff_id=args.get("diff_id"),
-        ),
+        run=lambda args: git_diff(root=root, **args),
     )
 
     if git_backed_workspace:
@@ -4401,6 +4754,9 @@ def build_tools(
 
     _append_builtin_tool("git_apply_patch", run=_git_apply)
 
+    pending_subagent_coordinator: SubagentCoordinator | None = None
+    pending_subagent_launcher: SubagentLauncher | None = None
+    pending_subagent_background_cap: int | None = None
     if subagents_enabled and subagent_depth == 0:
         callable_subagent_names = routable_subagent_names(
             registry=subagent_registry,
@@ -4417,14 +4773,19 @@ def build_tools(
         if callable_subagent_names:
             subagent_name_schema["enum"] = callable_subagent_names
 
-        child_run_registry = ChildRunRegistry()
+        child_run_registry = (
+            subagent_coordinator.registry
+            if subagent_coordinator is not None
+            else ChildRunRegistry()
+        )
         workspace_provider = (
-            SubagentWorkspaceProvider(root=root, store=store)
-            if (
-                (cfg is None or cfg.subagent_orchestration.workspace_isolation_enabled)
-                and isinstance(store, SessionStore)
+            subagent_coordinator.workspace_provider
+            if subagent_coordinator is not None
+            else (
+                SubagentWorkspaceProvider(root=root, store=store)
+                if isinstance(store, SessionStore)
+                else None
             )
-            else None
         )
         subagent_launcher = SubagentLauncher(
             root=root,
@@ -4471,15 +4832,21 @@ def build_tools(
             managed_browser_owner_id=managed_browser_owner_id,
             managed_browser_cancel_check=managed_browser_cancel_check,
         )
-        child_scheduler = ChildScheduler(
-            launcher=subagent_launcher,
-            max_background_children=(
-                cfg.subagent_orchestration.max_background_children if cfg is not None else 3
-            ),
-            parent_steer_inbox=parent_steer_inbox,
+        resolved_background_cap = (
+            cfg.subagent_orchestration.max_background_children if cfg is not None else 3
         )
-        if child_scheduler_sink is not None:
-            child_scheduler_sink(child_scheduler)
+        if subagent_coordinator is None:
+            resolved_subagent_coordinator = SubagentCoordinator(
+                launcher=subagent_launcher,
+                max_background_children=resolved_background_cap,
+                parent_steer_inbox=parent_steer_inbox,
+            )
+        else:
+            resolved_subagent_coordinator = subagent_coordinator
+            pending_subagent_launcher = subagent_launcher
+            pending_subagent_background_cap = resolved_background_cap
+        pending_subagent_coordinator = resolved_subagent_coordinator
+        child_scheduler = resolved_subagent_coordinator.scheduler
         _append_builtin_tool(
             "subagent_run",
             parameters=subagent_parameters,
@@ -4643,7 +5010,7 @@ def build_tools(
                 helper_allowed_names=tuple(helper_names),
             )
             helper_description = (
-                "Run one bounded non-editing helper in this workspace and return its "
+                "Run one non-editing, bounded-depth helper in this workspace and return its "
                 "advisory report. Helpers cannot delegate further."
             )
             tools.append(
@@ -4738,9 +5105,13 @@ def build_tools(
             name: _wrap_with_dispatch_guard(tool) for name, tool in active_tools.items()
         }
     for metadata in iter_builtin_tool_metadata():
-        register_tool_availability(metadata.name, optional=metadata.optional)
+        register_tool_availability(
+            metadata.name,
+            optional=metadata.optional,
+            availability=pending_tool_availability,
+        )
         if metadata.name in active_tools:
-            mark_available(metadata.name)
+            mark_available(metadata.name, availability=pending_tool_availability)
         elif metadata.optional:
             if metadata.name == "image_generate" and (
                 cfg is None or not cfg.image_generation.enabled
@@ -4753,5 +5124,39 @@ def build_tools(
                     "not registered in active tool registry "
                     f"for mode={mode} runtime_kind={resolved_runtime_kind.value}"
                 )
-            mark_unavailable(metadata.name, reason)
+            mark_unavailable(
+                metadata.name,
+                reason,
+                availability=pending_tool_availability,
+            )
+    # The caller publishes both ToolDef adapters and their model schemas.  Run
+    # the pure conversion before committing a coordinator rebind so a malformed
+    # custom/MCP/builtin schema cannot leave old session tools attached to a new
+    # launcher context.
+    for tool in active_tools.values():
+        tool.as_openai_tool()
+    if pending_subagent_coordinator is not None:
+        # Publishing and rebinding are the commit point for the stable session
+        # runtime.  All fallible tool/custom/MCP/guard assembly above has
+        # completed, so a failed rebuild cannot leak new permissions or config
+        # into old tool closures.
+        if pending_subagent_launcher is not None:
+            if pending_subagent_background_cap is None:
+                raise AssertionError("Missing background cap for coordinator rebind.")
+            pending_subagent_coordinator.bind_launcher(
+                pending_subagent_launcher,
+                max_background_children=pending_subagent_background_cap,
+                parent_steer_inbox=parent_steer_inbox,
+            )
+        if subagent_coordinator_sink is not None:
+            subagent_coordinator_sink(pending_subagent_coordinator)
+        if child_scheduler_sink is not None:
+            child_scheduler_sink(pending_subagent_coordinator.scheduler)
+    committed_tool_availability = tool_availability_snapshot(pending_tool_availability)
+    if tool_availability_sink is not None:
+        tool_availability_sink(committed_tool_availability)
+    else:
+        # Legacy/direct build_tools callers still publish to the process-global
+        # compatibility registry, but only after the entire build validates.
+        publish_tool_availability_snapshot(committed_tool_availability)
     return active_tools

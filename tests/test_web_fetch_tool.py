@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import socket
+import ssl
+from typing import Any
+
 import httpx
 import pytest
 
@@ -443,7 +447,145 @@ def test_web_fetch_read_timeout_is_explicit(monkeypatch: pytest.MonkeyPatch) -> 
             url="https://docs.example.com/slow",
             transport=httpx.MockTransport(handler),
         )
-    # No response arrived — a genuine connectivity signal stays unrecoverable.
+    # The connection was up (a stalled connect raises ConnectTimeout), so this
+    # host is slow or stalling bots: one such site must not cost web tools for
+    # the rest of the turn.
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.remote_site_reason == "site didn't respond"
+    assert excinfo.value.blocked_by_remote_site is False
+    assert "do not retry this host" in str(excinfo.value)
+
+
+def test_web_fetch_connect_timeout_stays_unrecoverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", fake_resolver)
+    with pytest.raises(web_mod.WebFetchError, match="connection setup") as excinfo:
+        web_mod.web_fetch(
+            url="https://docs.example.com/slow",
+            transport=httpx.MockTransport(handler),
+        )
+    # A connect that never completes looks the same as a network outage.
+    assert excinfo.value.recoverable is False
+    assert excinfo.value.remote_site_reason == ""
+
+
+def _raise_chained(outer: type[httpx.TransportError], message: str, cause: BaseException):
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise cause
+        except BaseException as exc:
+            raise outer(message, request=request) from exc
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("handler", "expected_reason"),
+    [
+        pytest.param(
+            _raise_chained(
+                httpx.ConnectError,
+                "certificate verify failed: unable to get local issuer certificate",
+                ssl.SSLCertVerificationError(1, "certificate verify failed"),
+            ),
+            "site's certificate couldn't be verified",
+            id="untrusted-certificate",
+        ),
+        pytest.param(
+            _raise_chained(
+                httpx.ConnectError,
+                "[SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure",
+                ssl.SSLError(1, "sslv3 alert handshake failure"),
+            ),
+            "secure connection to the site failed",
+            id="tls-handshake-failure",
+        ),
+        pytest.param(
+            _raise_chained(
+                httpx.ReadError,
+                "[Errno 104] Connection reset by peer",
+                ConnectionResetError(104, "Connection reset by peer"),
+            ),
+            "site closed the connection",
+            id="connection-reset",
+        ),
+        pytest.param(
+            _raise_chained(
+                httpx.RemoteProtocolError,
+                "Server disconnected without sending a response.",
+                EOFError(),
+            ),
+            "site closed the connection",
+            id="server-disconnected",
+        ),
+        pytest.param(
+            _raise_chained(
+                httpx.RemoteProtocolError,
+                "illegal status line: bytearray(b'garbage')",
+                ValueError("bad status line"),
+            ),
+            "site sent an invalid response",
+            id="invalid-response",
+        ),
+    ],
+)
+def test_web_fetch_transport_failures_after_reaching_the_host_are_the_sites(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Any,
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", lambda _h, _p: ["93.184.216.34"])
+    with pytest.raises(web_mod.WebFetchError, match="HTTP request failed") as excinfo:
+        web_mod.web_fetch(
+            url="https://legacy.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    # The host was reached and then failed on its own side: recoverable (web
+    # tools stay available), named for the trace, and not a refusal.
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.remote_site_reason == expected_reason
+    assert excinfo.value.blocked_by_remote_site is False
+    assert "use a different source" in str(excinfo.value)
+
+
+def test_web_fetch_connect_failure_stays_unrecoverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 101] Network is unreachable", request=request)
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", lambda _h, _p: ["93.184.216.34"])
+    with pytest.raises(web_mod.WebFetchError, match="Network is unreachable") as excinfo:
+        web_mod.web_fetch(
+            url="https://docs.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is False
+    assert excinfo.value.remote_site_reason == ""
+
+
+def test_web_fetch_nonexistent_host_is_recoverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_such_host(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    monkeypatch.setattr(web_mod.socket, "getaddrinfo", no_such_host)
+    with pytest.raises(web_mod.WebFetchError, match="does not exist") as excinfo:
+        web_mod.web_fetch(url="https://no-such-host.example.com/page")
+    # A bad URL, not a DNS outage: the model can pick another source.
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.remote_site_reason == ""
+
+
+def test_web_fetch_resolver_outage_stays_unrecoverable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def resolver_down(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(web_mod.socket, "getaddrinfo", resolver_down)
+    with pytest.raises(web_mod.WebFetchError, match="Failed to resolve host") as excinfo:
+        web_mod.web_fetch(url="https://docs.example.com/page")
     assert excinfo.value.recoverable is False
 
 
@@ -493,6 +635,196 @@ def test_web_fetch_cloudflare_challenge_status_is_explicit(
             transport=httpx.MockTransport(handler),
         )
     assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is True
+    assert excinfo.value.remote_site_reason == "site doesn't allow automated access"
+
+
+def test_web_fetch_plain_403_marks_remote_site_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A bare 403 without challenge markers still means the server itself refused
+    # the client: surfaces soften it, and the model is told to change source.
+    def fake_resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text="<html><body>Forbidden</body></html>",
+        )
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", fake_resolver)
+    with pytest.raises(web_mod.WebFetchError, match="declined automated access") as excinfo:
+        web_mod.web_fetch(
+            url="https://blocked.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is True
+    assert excinfo.value.remote_site_reason == "site doesn't allow automated access"
+    assert "do not retry this host" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message_clause", "expected_reason"),
+    [
+        (401, "remote site requires sign-in", "site requires sign-in"),
+        (429, "remote site is rate-limiting requests", "site is rate-limiting requests"),
+        (
+            451,
+            "remote site is unavailable for legal reasons",
+            "site is unavailable for legal reasons",
+        ),
+        (999, "remote site declined automated access", "site doesn't allow automated access"),
+    ],
+)
+def test_web_fetch_refusal_statuses_mark_remote_site_block(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    message_clause: str,
+    expected_reason: str,
+) -> None:
+    # Sign-in walls, rate limits, legal blocks, and LinkedIn's 999 are the
+    # server refusing this client, exactly like a 403.
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, headers={"content-type": "text/html"}, text="<p>no</p>")
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", lambda _h, _p: ["93.184.216.34"])
+    with pytest.raises(web_mod.WebFetchError, match=message_clause) as excinfo:
+        web_mod.web_fetch(
+            url="https://refusing.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is True
+    assert excinfo.value.remote_site_reason == expected_reason
+    assert "do not retry this host" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "headers", "body"),
+    [
+        pytest.param(
+            401,
+            {"server": "CloudFront", "x-datadome": "protected"},
+            "<html><title>wsj.com</title><p id='cmsg'>Please enable JS and disable any ad "
+            "blocker</p><script>var dd={'host':'geo.captcha-delivery.com'}</script></html>",
+            id="datadome-401",
+        ),
+        pytest.param(
+            503,
+            {"server": "Server"},
+            "<html><h4>Enter the characters you see below</h4><p>Sorry, we just need to make "
+            "sure you're not a robot.</p><form action='/errors/validateCaptcha'></form></html>",
+            id="amazon-captcha-503",
+        ),
+        pytest.param(
+            405,
+            {"x-amzn-waf-action": "captcha"},
+            "<html><body><div id='captcha-container'></div></body></html>",
+            id="aws-waf-405",
+        ),
+        pytest.param(
+            503,
+            {"server": "cloudflare"},
+            "<html><title>Just a moment...</title><body>Checking your browser</body></html>",
+            id="cloudflare-challenge-503",
+        ),
+    ],
+)
+def test_web_fetch_bot_wall_on_other_statuses_marks_remote_site_block(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    headers: dict[str, str],
+    body: str,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code, headers={"content-type": "text/html", **headers}, text=body
+        )
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", lambda _h, _p: ["93.184.216.34"])
+    with pytest.raises(web_mod.WebFetchError, match="anti-bot/challenge protection") as excinfo:
+        web_mod.web_fetch(
+            url="https://walled.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is True
+    assert excinfo.value.remote_site_reason == "site doesn't allow automated access"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "headers", "body"),
+    [
+        pytest.param(500, {}, "<h1>Internal Server Error</h1>", id="plain-500"),
+        pytest.param(
+            503,
+            {"server": "nginx"},
+            "<h1>Down for maintenance</h1><p>We'll be back in just a moment.</p>",
+            id="maintenance-503",
+        ),
+        pytest.param(
+            522,
+            {"server": "cloudflare"},
+            "<title>Connection timed out | Cloudflare</title><h1>Error 522</h1>",
+            id="cloudflare-origin-down-522",
+        ),
+        pytest.param(
+            404,
+            {},
+            "<h1>Page not found</h1><form class='g-recaptcha'>Search</form><p>Access denied?</p>",
+            id="not-found-page-mentioning-captcha",
+        ),
+    ],
+)
+def test_web_fetch_server_errors_and_missing_pages_are_not_remote_site_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    headers: dict[str, str],
+    body: str,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code, headers={"content-type": "text/html", **headers}, text=body
+        )
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", lambda _h, _p: ["93.184.216.34"])
+    with pytest.raises(web_mod.WebFetchError, match=f"HTTP error {status_code}") as excinfo:
+        web_mod.web_fetch(
+            url="https://broken.example.com/page",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is False
+    assert excinfo.value.remote_site_reason == ""
+
+
+def test_web_fetch_error_block_flag_implies_a_trace_reason() -> None:
+    error = web_mod.WebFetchError("blocked", recoverable=True, blocked_by_remote_site=True)
+    assert error.remote_site_reason == "site doesn't allow automated access"
+    assert web_mod.WebFetchError("plain failure").remote_site_reason == ""
+
+
+def test_web_fetch_http_404_is_not_a_remote_site_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_resolver(_host: str, _port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, headers={"content-type": "text/html"}, text="nope")
+
+    monkeypatch.setattr(web_mod, "_resolve_host_addresses", fake_resolver)
+    with pytest.raises(web_mod.WebFetchError, match="HTTP error 404") as excinfo:
+        web_mod.web_fetch(
+            url="https://docs.example.com/missing",
+            transport=httpx.MockTransport(handler),
+        )
+    assert excinfo.value.recoverable is True
+    assert excinfo.value.blocked_by_remote_site is False
+    assert excinfo.value.remote_site_reason == ""
 
 
 def test_web_fetch_rejects_hostname_with_mixed_safe_and_blocked_dns_answers(

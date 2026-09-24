@@ -122,6 +122,24 @@ class _ScriptedClient:
         return response
 
 
+def _failed_edit_response() -> LLMResponse:
+    """Record a real mutation attempt without producing file changes."""
+    return LLMResponse(
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="attempt-initial-edit",
+                name="fs_edit",
+                arguments={
+                    "path": "missing-edit-target.py",
+                    "edits": [{"op": "replace_exact", "target": "before", "replacement": "after"}],
+                },
+            )
+        ],
+        raw={},
+    )
+
+
 def _event_payloads(path: Path, event_type: str) -> list[dict[str, Any]]:
     return [
         dict(event.get("payload") or {})
@@ -489,8 +507,10 @@ def test_max_steps_fallback_summary_uses_truthful_termination_wording_with_stagn
     assert "controller_interventions" in final_events[-1]
 
 
-def test_post_explore_stagnation_budget_end_emits_generic_forced_summary(
+@pytest.mark.parametrize("one_shot_execution", [False, True])
+def test_child_assisted_exploration_after_edit_attempt_emits_generic_forced_summary(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     (tmp_path / "src" / "mini_notes").mkdir(parents=True, exist_ok=True)
     (tmp_path / "src" / "mini_notes" / "cli.py").write_text("print('x')\n", encoding="utf-8")
@@ -501,10 +521,12 @@ def test_post_explore_stagnation_budget_end_emits_generic_forced_summary(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=12,
+        max_steps=13,
+        chat_turn_fixed_override=13,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         subagents_enabled=True,
         session_log_dir_override=sessions_dir,
         session_id_override="forced-summary-post-explore-max-steps",
@@ -516,6 +538,7 @@ def test_post_explore_stagnation_budget_end_emits_generic_forced_summary(
     )
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -560,23 +583,32 @@ def test_post_explore_stagnation_budget_end_emits_generic_forced_summary(
     finally:
         session.close()
 
-    assert exit_code == 1
-    assert surface.errors
+    # Chat hands control back at its turn budget; one-shot exits the process.
+    assert exit_code == (1 if one_shot_execution else 0)
+    assert bool(surface.errors) is one_shot_execution
     assert len([call for call in client.calls if call["tools"] is not None]) == session.max_steps
     assert client.calls[-1]["tools"] is None
-    assert _event_payloads(log_path, "one_shot_post_explore_stagnation_detected")
+    assert _event_payloads(log_path, "one_shot_post_explore_stagnation_detected") == []
+    assert _event_payloads(log_path, "implementation_bootstrap_nudge") == []
+    assert _event_payloads(log_path, "one_shot_exploration_stagnation_detected")
     assert _event_payloads(log_path, "one_shot_post_explore_incomplete_after_retries") == []
     requested = _event_payloads(log_path, "forced_final_summary_requested")
-    assert requested[-1]["reason"] == "max_steps_exceeded"
+    assert requested[-1]["reason"] == (
+        "max_steps_exceeded" if one_shot_execution else "max_steps_exhausted"
+    )
     assert requested[-1]["termination_cause"] == "the overall step budget is exhausted"
-    errors = _event_payloads(log_path, "error")
-    assert "post_explore" in errors[-1]["stagnation_state"]
+    budget_events = _event_payloads(
+        log_path, "error" if one_shot_execution else "interactive_step_budget_handoff"
+    )
+    assert "exploration" in budget_events[-1]["stagnation_state"]
     summary = _assert_forced_summary_artifacts(log_path=log_path, surface=surface)
     assert "Known issues or risks: the step budget ended" in summary
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_exploration_stagnation_budget_end_emits_generic_forced_summary(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     (tmp_path / "repeat.txt").write_text("x\n", encoding="utf-8")
     sessions_dir = tmp_path / "sessions"
@@ -586,16 +618,19 @@ def test_exploration_stagnation_budget_end_emits_generic_forced_summary(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=10,
+        max_steps=11,
+        chat_turn_fixed_override=11,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="forced-summary-exploration-max-steps",
         surface=surface,
     )
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             *[
                 LLMResponse(
                     content="",
@@ -625,17 +660,22 @@ def test_exploration_stagnation_budget_end_emits_generic_forced_summary(
     finally:
         session.close()
 
-    assert exit_code == 1
-    assert surface.errors
+    # Chat hands control back at its turn budget; one-shot exits the process.
+    assert exit_code == (1 if one_shot_execution else 0)
+    assert bool(surface.errors) is one_shot_execution
     assert len([call for call in client.calls if call["tools"] is not None]) == session.max_steps
     assert client.calls[-1]["tools"] is None
     assert _event_payloads(log_path, "one_shot_exploration_stagnation_detected")
     assert _event_payloads(log_path, "one_shot_exploration_incomplete_after_retries") == []
     requested = _event_payloads(log_path, "forced_final_summary_requested")
-    assert requested[-1]["reason"] == "max_steps_exceeded"
+    assert requested[-1]["reason"] == (
+        "max_steps_exceeded" if one_shot_execution else "max_steps_exhausted"
+    )
     assert requested[-1]["termination_cause"] == "the overall step budget is exhausted"
-    errors = _event_payloads(log_path, "error")
-    assert "exploration" in errors[-1]["stagnation_state"]
+    budget_events = _event_payloads(
+        log_path, "error" if one_shot_execution else "interactive_step_budget_handoff"
+    )
+    assert "exploration" in budget_events[-1]["stagnation_state"]
     summary = _assert_forced_summary_artifacts(log_path=log_path, surface=surface)
     assert "Known issues or risks: the step budget ended" in summary
 
@@ -716,8 +756,10 @@ def test_edit_stagnation_budget_end_emits_generic_forced_summary(tmp_path: Path)
     assert "Known issues or risks: the step budget ended" in summary
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_repeated_non_final_progress_accepts_after_single_nudge(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     surface = _ForcedSummarySurface()
@@ -729,7 +771,8 @@ def test_repeated_non_final_progress_accepts_after_single_nudge(
         max_steps=6,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="forced-summary-repeated-non-final-progress",
         surface=surface,
@@ -737,6 +780,7 @@ def test_repeated_non_final_progress_accepts_after_single_nudge(
     repeated_progress_text = "I will implement search next."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content=repeated_progress_text,
                 tool_calls=[],
@@ -766,10 +810,10 @@ def test_repeated_non_final_progress_accepts_after_single_nudge(
         session.close()
 
     assert exit_code == 0
-    assert len(client.calls) == 2
+    assert len(client.calls) == 3
     assert not surface.errors
-    # Turn-contract v2: a zero-edit execute turn now finalizes with a visible
-    # advisory-completion suffix (apply-don't-advise). The model text is preserved.
+    # The failed edit supplies execution evidence; unresolved work stays visible
+    # after bounded correction, while preserving the model's own summary.
     assert surface.final_messages[-1].startswith(repeated_progress_text)
     assert "No changes made:" in surface.final_messages[-1]
     assert len(_event_payloads(log_path, "continuation_nudge")) == 1
@@ -779,8 +823,10 @@ def test_repeated_non_final_progress_accepts_after_single_nudge(
     assert _event_payloads(log_path, "forced_final_summary_completed") == []
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_non_final_progress_continuation_cap_accepts_second_final(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     surface = _ForcedSummarySurface()
@@ -792,7 +838,8 @@ def test_non_final_progress_continuation_cap_accepts_second_final(
         max_steps=8,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="forced-summary-non-final-progress-cap",
         surface=surface,
@@ -800,6 +847,7 @@ def test_non_final_progress_continuation_cap_accepts_second_final(
     final_progress_text = "I will update the parser next."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="I will inspect the parser next.",
                 tool_calls=[],
@@ -829,10 +877,10 @@ def test_non_final_progress_continuation_cap_accepts_second_final(
         session.close()
 
     assert exit_code == 0
-    assert len(client.calls) == 2
+    assert len(client.calls) == 3
     assert not surface.errors
-    # Turn-contract v2: a zero-edit execute turn now finalizes with a visible
-    # advisory-completion suffix (apply-don't-advise). The model text is preserved.
+    # The failed edit supplies execution evidence; unresolved work stays visible
+    # after bounded correction, while preserving the model's own summary.
     assert surface.final_messages[-1].startswith(final_progress_text)
     assert "No changes made:" in surface.final_messages[-1]
     assert len(_event_payloads(log_path, "continuation_nudge")) == 1
@@ -842,8 +890,10 @@ def test_non_final_progress_continuation_cap_accepts_second_final(
     assert _event_payloads(log_path, "forced_final_summary_completed") == []
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_completion_gate_open_problems_accepts_second_final(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     surface = _ForcedSummarySurface()
@@ -855,7 +905,8 @@ def test_completion_gate_open_problems_accepts_second_final(
         max_steps=8,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="forced-summary-completion-gate-terminal",
         surface=surface,
@@ -863,6 +914,7 @@ def test_completion_gate_open_problems_accepts_second_final(
     latest_final_text = "Implemented the requested code change."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(content=latest_final_text, tool_calls=[], raw={}),
             LLMResponse(content=latest_final_text, tool_calls=[], raw={}),
         ],
@@ -876,10 +928,10 @@ def test_completion_gate_open_problems_accepts_second_final(
         session.close()
 
     assert exit_code == 0
-    assert len(client.calls) == 2
+    assert len(client.calls) == 3
     assert not surface.errors
-    # Turn-contract v2: a zero-edit execute turn now finalizes with a visible
-    # advisory-completion suffix (apply-don't-advise). The model text is preserved.
+    # The failed edit supplies execution evidence; unresolved work stays visible
+    # after bounded correction, while preserving the model's own summary.
     assert surface.final_messages[-1].startswith(latest_final_text)
     assert "No changes made:" in surface.final_messages[-1]
     assert len(_event_payloads(log_path, "completion_gate_nudge")) == 1

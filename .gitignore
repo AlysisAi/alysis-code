@@ -14,6 +14,7 @@ venv/
 
 # Tooling
 .dev/
+.worktrees/
 .pytest_cache/
 .pytest-*/
 .ruff_cache/
@@ -45,6 +46,10 @@ extensions/*/out/
 extensions/*/*.vsix
 
 # Local review/context bundles
+# Retired internal report directories, regardless of artifact format.
+/docs/internal/
+/docs/subagents/
+/docs/tooling/
 *_context_review.zip
 owner-scoping.patch
 alysis_ecs.tar.gz

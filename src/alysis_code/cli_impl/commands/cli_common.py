@@ -1035,6 +1035,7 @@ _CHAT_GLOBAL_VISIBLE_COMMANDS = [
     "/permissions",
     "/persona",
     "/ask",
+    "/objective",
     "/status",
     "/subagents",
     "/terminals",
@@ -1155,6 +1156,8 @@ _CHAT_COMMANDS = _ordered_unique_strings(
         "/images",
         "/clear-images",
         "/clear",
+        "/objective new",
+        "/objective amend",
     ]
 )
 _CHAT_PROMPT_TEXT = "> "

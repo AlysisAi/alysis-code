@@ -1,13 +1,71 @@
 from __future__ import annotations
 
+import json
 import os
+import socket
 from pathlib import Path
+
+import pytest
 
 from alysis_code.execution_shared import (
     copy_workspace_snapshot,
     snapshot_runtime_tree,
     sync_snapshot_changed_files,
 )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".alysis/runs/run1/active_execution.lock.json",
+        ".alysis/workspace_execution/active_execution.lock.json",
+    ],
+)
+def test_snapshot_allows_own_heartbeat_but_detects_lock_tampering(
+    tmp_path: Path, relative: str
+) -> None:
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    lock = {
+        "schema_version": 2,
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "owner_token": "test-owner",
+        "last_heartbeat_at": "2026-09-16T00:00:00Z",
+    }
+    path.write_text(json.dumps(lock))
+    before = snapshot_runtime_tree(tmp_path)
+    lock["last_heartbeat_at"] = "2026-09-16T00:00:30Z"
+    path.write_text(json.dumps(lock))
+    assert snapshot_runtime_tree(tmp_path) == before
+    lock["owner_token"] = "changed-owner"
+    path.write_text(json.dumps(lock))
+    assert snapshot_runtime_tree(tmp_path) != before
+    path.unlink()
+    assert snapshot_runtime_tree(tmp_path) != before
+
+
+@pytest.mark.parametrize("own_pid", [True, False])
+def test_snapshot_does_not_ignore_other_heartbeat_files(tmp_path: Path, own_pid: bool) -> None:
+    relative = (
+        ".alysis/other/active_execution.lock.json"
+        if own_pid
+        else ".alysis/workspace_execution/active_execution.lock.json"
+    )
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    lock = {
+        "schema_version": 2,
+        "pid": os.getpid() if own_pid else -1,
+        "hostname": socket.gethostname(),
+        "owner_token": "test-owner",
+        "last_heartbeat_at": "2026-09-16T00:00:00Z",
+    }
+    path.write_text(json.dumps(lock))
+    before = snapshot_runtime_tree(tmp_path)
+    lock["last_heartbeat_at"] = "2026-09-16T00:00:30Z"
+    path.write_text(json.dumps(lock))
+    assert snapshot_runtime_tree(tmp_path) != before
 
 
 def test_snapshot_large_file_uses_metadata_fingerprint_without_reading_bytes(

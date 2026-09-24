@@ -74,8 +74,10 @@ except ModuleNotFoundError as exc:
 
 from alysis_code.managed_host_deadline import (  # noqa: E402
     DEFAULT_MANAGED_HOST_SHUTDOWN_RESERVE_SECONDS,
+    MANAGED_HOST_DEADLINE_UNIX_ENV,
     ManagedHostDeadline,
     ManagedHostDeadlineError,
+    managed_host_deadline_anchor_unix_seconds,
     resolve_managed_host_deadline,
 )
 from alysis_code.verification_contract import (  # noqa: E402
@@ -262,9 +264,17 @@ class AlysisSimpleAgent(AbstractInstalledAgent):
                 instruction,
             ]
         )
+        anchor = managed_host_deadline_anchor_unix_seconds(
+            deadline.alysis_invocation_deadline_seconds,
+            existing_anchor=os.environ.get(MANAGED_HOST_DEADLINE_UNIX_ENV),
+            now_unix_seconds=time.time(),
+        )
+        # A command-local assignment crosses the terminal transport without
+        # exporting a launch deadline into later commands or saved settings.
+        launch_env = f"{MANAGED_HOST_DEADLINE_UNIX_ENV}={anchor:.6f} "
         return [
             TerminalCommand(
-                command=" ".join(shlex.quote(part) for part in command_parts),
+                command=launch_env + " ".join(shlex.quote(part) for part in command_parts),
                 min_timeout_sec=0.0,
                 max_timeout_sec=(
                     deadline.host_remaining_timeout_seconds

@@ -759,7 +759,10 @@ def test_symbol_search_reports_only_truly_unsupported_files(tmp_path: Path) -> N
 
     assert result["matches"] == []
     assert result["parsed_files"] == 0
-    assert result["notes"] == ["Skipped unsupported file(s): web/app.rb"]
+    assert result["backend"] == "none"
+    assert "Skipped unsupported file(s): web/app.rb" in result["notes"]
+    assert result["coverage"]["unsupported_files"] == 1
+    assert any("lexical fallback" in note for note in result["notes"])
 
 
 def test_symbol_search_rejects_invalid_inputs(tmp_path: Path) -> None:
@@ -790,3 +793,146 @@ def test_build_tools_registers_symbol_search(tmp_path: Path) -> None:
     assert schema["properties"]["include_details"]["default"] is False
     assert schema["properties"]["include_snippet"]["default"] is False
     assert schema["properties"]["include_references"]["default"] is False
+
+
+@pytest.mark.parametrize(
+    "name", ["μετρητής", "计数", "عدد", "गिनती", "cafe\u0301", "$résultat$", "a\u200cb"]
+)
+@pytest.mark.parametrize("suffix", ["js", "ts", "java"])
+def test_symbol_search_keeps_unicode_identifier_spelling(
+    tmp_path: Path, name: str, suffix: str
+) -> None:
+    class_name = f"容器{name}"
+    if suffix == "java":
+        source = (
+            f"public class {class_name} {{\n"
+            f"  public {class_name}() {{}}\n"
+            f"  public int {name}() {{ return 1; }}\n"
+            "}\n"
+        )
+    else:
+        source = (
+            f"function {name}() {{ return 1; }}\n"
+            f"class {class_name} {{\n"
+            f"  {name}() {{ return 2; }}\n"
+            f"  {name}Field = () => 3;\n"
+            "}\n"
+            f"const {name}Arrow = () => 4;\n"
+        )
+    _write(tmp_path / f"fixture.{suffix}", source)
+    result = symbol_search(root=tmp_path, query=name, exact=True, include_details=True)
+    assert [m["name"] for m in result["matches"]] == (
+        [f"{class_name}.{name}"] if suffix == "java" else [name, f"{class_name}.{name}"]
+    )
+    classes = symbol_search(root=tmp_path, query=class_name, kind="class", exact=True)
+    assert [m["name"] for m in classes["matches"]] == [class_name]
+    assert result["coverage"]["heuristic_files"] == 1
+    assert any("not a complete parser" in note for note in result["notes"])
+    if suffix == "java":
+        constructors = symbol_search(root=tmp_path, query=class_name, kind="method", exact=True)
+        assert [m["name"] for m in constructors["matches"]] == [f"{class_name}.{class_name}"]
+    else:
+        for ending, kind in [("Field", "method"), ("Arrow", "function")]:
+            found = symbol_search(root=tmp_path, query=f"{name}{ending}", kind=kind, exact=True)
+            assert len(found["matches"]) == 1
+            assert found["matches"][0]["name"].endswith(f"{name}{ending}")
+
+
+@pytest.mark.parametrize("name", ["3bad", "\u0301bad", "bad—name", "bad⚠"])
+@pytest.mark.parametrize("suffix", ["js", "java"])
+def test_unicode_candidates_do_not_turn_invalid_tokens_into_names(
+    tmp_path: Path, name: str, suffix: str
+) -> None:
+    source = (
+        f"class {name} {{}}\nfunction {name}() {{}}\n"
+        if suffix == "js"
+        else f"class {name} {{}}\nclass Good {{\n  int {name}() {{ return 1; }}\n}}\n"
+    )
+    _write(tmp_path / f"fixture.{suffix}", source)
+    result = symbol_search(root=tmp_path, query="bad")
+    assert result["matches"] == []
+    assert result["truncated"] is False
+    assert result["coverage"]["heuristic_files"] == 1
+
+
+def test_unicode_whitespace_is_a_boundary_not_part_of_the_identifier(tmp_path: Path) -> None:
+    _write(tmp_path / "fixture.js", "class 容器\u00a0{}\nfunction μέτρο\u00a0() {}\n")
+    for name in ("容器", "μέτρο"):
+        result = symbol_search(root=tmp_path, query=name, exact=True)
+        assert [m["name"] for m in result["matches"]] == [name]
+
+
+@pytest.mark.parametrize("suffix", ["js", "java"])
+def test_undecoded_escaped_names_do_not_report_a_partial_identifier(
+    tmp_path: Path, suffix: str
+) -> None:
+    _write(
+        tmp_path / f"fixture.{suffix}",
+        "class Fo\\u006f {}\n" + ("const Fo\\u006fArrow = () => 1;\n" if suffix == "js" else ""),
+    )
+    result = symbol_search(root=tmp_path, query="Fo")
+    assert result["matches"] == []
+    assert result["coverage"]["heuristic_files"] == 1
+    assert any("valid declarations can be missed" in note for note in result["notes"])
+
+
+def test_language_specific_unicode_identifier_punctuation_remains_distinct(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "Fixture.java",
+        "class €値 {\n  int €額() { return 1; }\n  int ℘value() { return 2; }\n}\n",
+    )
+    _write(tmp_path / "fixture.js", "function €額() {}\nfunction ℘value() {}\n")
+    result = symbol_search(root=tmp_path, query="€額", exact=True)
+    assert [m["name"] for m in result["matches"]] == ["€値.€額"]
+    other_identifier = symbol_search(root=tmp_path, query="℘value", exact=True)
+    assert [m["path"] for m in other_identifier["matches"]] == ["fixture.js"]
+
+
+def test_mixed_supported_unsupported_scope_reports_bounded_paths_and_full_counts(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "a.py", "def counter():\n    return 1\n")
+    for index in range(5):
+        _write(tmp_path / f"unsupported{index}.rs", "fn target_rust() {}\n")
+    result = symbol_search(root=tmp_path, query="target_rust", exact=True)
+    assert result["matches"] == []
+    assert result["backend"] == "python_ast"
+    assert result["truncated"] is False
+    assert result["coverage"] == {
+        "candidate_files": 6,
+        "examined_files": 6,
+        "heuristic_files": 0,
+        "unsupported_files": 5,
+        "large_or_unreadable_files": 0,
+        "unparsable_files": 0,
+        "unexamined_files": 0,
+    }
+    skipped = next(note for note in result["notes"] if "Skipped unsupported" in note)
+    assert "unsupported0.rs" in skipped and "unsupported2.rs" in skipped
+    assert "unsupported3.rs" not in skipped
+    assert any("paths are samples" in note for note in result["notes"])
+
+
+def test_result_limit_does_not_claim_unexamined_files_were_supported(tmp_path: Path) -> None:
+    _write(tmp_path / "a.py", "def target_one(): pass\ndef target_two(): pass\n")
+    _write(tmp_path / "z.rs", "fn target_three() {}\n")
+    result = symbol_search(root=tmp_path, query="target", max_results=1)
+    assert result["truncated"] is True
+    assert len(result["matches"]) == 1
+    assert result["coverage"]["examined_files"] == 1
+    assert result["coverage"]["unexamined_files"] == 1
+    assert result["coverage"]["unsupported_files"] == 0
+    assert any("stopped scanning" in note for note in result["notes"])
+
+
+def test_coverage_distinguishes_skipped_source_from_successful_python_parse(tmp_path: Path) -> None:
+    _write(tmp_path / "valid.py", "def target(): pass\n")
+    _write(tmp_path / "broken.py", "def invalid(\n")
+    _write(tmp_path / "large.py", "#" * (512 * 1024 + 1))
+    result = symbol_search(root=tmp_path, query="target", exact=True)
+    assert result["parsed_files"] == 1
+    assert result["coverage"]["unparsable_files"] == 1
+    assert result["coverage"]["large_or_unreadable_files"] == 1
+    assert result["coverage"]["unexamined_files"] == 0
+    assert any("unparsable" in note for note in result["notes"])
+    assert any("large or unreadable" in note for note in result["notes"])

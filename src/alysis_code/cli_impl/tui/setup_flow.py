@@ -1083,7 +1083,7 @@ class SetupFlow:
                 validation_status="skipped",
                 validation_message="Alysis Code account uses browser sign-in — no API key.",
             )
-            self.model_result = _ModelStepResult(model="deepseek-v4-flash")
+            self.model_result = _ModelStepResult(model=preset.suggested_models[0])
             self._goto("workspace")
             self._set_status(
                 "Alysis Code account: no API key needed — you'll sign in after setup.",

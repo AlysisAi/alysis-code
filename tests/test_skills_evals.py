@@ -279,8 +279,7 @@ def test_load_bundled_pack_eval_cases_covers_positive_explicit_and_negative_case
     specific_ci = next(case for case in cases if case.id == "bundled_fix_ci_normal")
     assert specific_ci.expected_skills == ("fix-ci",)
     assert "failing" in specific_ci.task.casefold()
-    assert "ci-output.txt" in specific_ci.task
-    assert (specific_ci.workspace / "ci-output.txt").is_file()
+    assert "ci.log" in specific_ci.task
 
     release_concept = next(
         case for case in cases if case.id == "bundled_negative_release_notes_concept"
@@ -388,7 +387,9 @@ def test_load_skills_eval_cases_rejects_parent_workspace_escape(tmp_path: Path) 
         raise AssertionError("parent workspace escape was accepted")
 
 
-def test_load_skills_eval_cases_rejects_symlink_workspace_escape(tmp_path: Path) -> None:
+def test_load_skills_eval_cases_rejects_symlink_workspace_escape(
+    tmp_path: Path, require_symlinks
+) -> None:
     manifest_root = tmp_path / "manifests"
     manifest_root.mkdir()
     outside = tmp_path / "outside"
@@ -588,7 +589,9 @@ def test_shell_verification_cancellation_terminates_and_reaps_process_group(
         evals_module.os,
         "killpg",
         lambda pid, sig: killed_groups.append((pid, sig)),
+        raising=False,
     )
+    monkeypatch.setattr(evals_module.signal, "SIGKILL", 9, raising=False)
 
     with pytest.raises(KeyboardInterrupt):
         run_shell_verification_command(
@@ -1123,6 +1126,30 @@ def test_automatic_selection_scoring_requires_exact_selection_and_successful_loa
     assert exact.automatic_selection_exact_match() is True
     assert exact.relevant_skill_used() is True
 
+    # Current on-demand runs are scored by successful loading, without inventing
+    # a missing preliminary selection. Failed and extra loads still do not count.
+    on_demand = replace(
+        exact,
+        skill_selection_call_count=0,
+        skill_selection_status=None,
+        skill_selection_selected_names=(),
+    )
+    assert on_demand.automatic_selection_exact_match() is None
+    assert on_demand.selector_available() is None
+    assert on_demand.relevant_skill_used() is True
+    assert not replace(on_demand, successful_skill_read_names=()).relevant_skill_used()
+    assert not replace(
+        on_demand, successful_skill_read_names=("fix-ci", "debug")
+    ).relevant_skill_used()
+    summary = evals_module._skill_selection_summary([on_demand, exact, wrong])
+    assert summary["automatic_selection_runs"] == 2
+    assert summary["automatic_selection_exact_match_count"] == 1
+    assert summary["selector_unavailable_run_count"] == 0
+    unavailable = replace(exact, skill_selection_status="unavailable")
+    mixed = evals_module._skill_selection_summary([on_demand, unavailable])
+    assert mixed["automatic_selection_runs"] == 1
+    assert mixed["selector_unavailable_run_count"] == 1
+
 
 def test_automatic_negative_scoring_requires_none_and_ignores_blocked_read_attempt() -> None:
     common = dict(
@@ -1177,6 +1204,11 @@ def test_automatic_negative_scoring_requires_none_and_ignores_blocked_read_attem
     assert no_match.any_skill_activity() is False
     assert wrong.automatic_selection_exact_match() is False
     assert wrong.any_skill_activity() is True
+
+    on_demand = replace(no_match, skill_selection_call_count=0, skill_selection_status=None)
+    assert on_demand.automatic_selection_exact_match() is None
+    assert not on_demand.any_skill_activity()
+    assert replace(on_demand, successful_skill_read_names=("debug",)).any_skill_activity()
 
 
 def test_extract_skills_eval_metrics_tracks_skill_lifecycle_cli_usage() -> None:
@@ -1826,9 +1858,7 @@ def test_evaluate_skills_launch_readiness_allows_default_auto_invoke_enabled() -
     assert "skills_auto_invoke_default_disabled" not in gates["gates"]
 
 
-def test_evaluate_skills_launch_readiness_requires_auto_selection_coverage_only_for_auto_launch() -> (
-    None
-):
+def test_evaluate_skills_launch_readiness_has_no_selector_gate_for_on_demand_runs() -> None:
     summary = _passing_launch_summary(relevant_skill_usage_count=1)
     summary["modes"]["combined_auto"].update(
         {
@@ -1844,8 +1874,20 @@ def test_evaluate_skills_launch_readiness_requires_auto_selection_coverage_only_
         config_snapshot={"skills_auto_invoke": True},
     )
 
-    assert gates["production_ready"] is False
-    assert "automatic_selection_exact_match_rate" in gates["failing_gates"]
+    assert gates["production_ready"] is True
+    assert gates["failing_gates"] == []
+    for name in ("automatic_selection_exact_match_rate", "selector_unavailable_runs"):
+        assert gates["gates"][name]["status"] == "not_applicable"
+        assert gates["gates"][name]["actual"] is None
+
+    # Removing selector-only gates must not remove behavioral false-positive gates.
+    summary["modes"]["combined_auto"]["false_positive_count"] = 1
+    bad = evaluate_skills_launch_readiness(
+        summary=summary, config_snapshot={"skills_auto_invoke": True}
+    )
+    assert bad["production_ready"] is False
+    assert bad["failing_gates"] == ["false_positive_rate"]
+    summary["modes"]["combined_auto"]["false_positive_count"] = 0
 
     manual_summary = {
         **summary,

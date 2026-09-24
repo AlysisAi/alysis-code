@@ -16,6 +16,7 @@ import pytest
 from alysis_code.agent.acceptance_contract import (
     AcceptanceContract,
     build_acceptance_contract,
+    extract_explicit_acceptance_commands,
 )
 from alysis_code.agent.completion_certificate import (
     CompletionCertificateInput,
@@ -90,6 +91,34 @@ def test_backtick_command_is_not_expected_output(tmp_path: Path) -> None:
     outputs = {e.text for e in contract.expectations if e.kind == ExpectationKind.EXPECTED_OUTPUT}
     assert "pytest -q" not in outputs
     assert "git status" not in outputs
+
+
+@pytest.mark.parametrize("separator", [" and ", ", ", ", and "])
+def test_explicit_quoted_command_list_preserves_each_command(separator):
+    instruction = f"Run `pytest -q`{separator}`git status` and `custom-check --strict`."
+    assert extract_explicit_acceptance_commands(instruction) == [
+        "pytest -q",
+        "git status",
+        "custom-check --strict",
+    ]
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "inspect `result.txt`",
+        "write `out/result.txt`",
+        "inspect `request.path`",
+        "print `DONE OK`",
+        "inspect `request.path` and `git status`",
+    ],
+)
+def test_command_list_does_not_promote_intervening_prose_paths_or_symbols(tail):
+    assert extract_explicit_acceptance_commands(f"Run `pytest -q` and {tail}.") == ["pytest -q"]
+
+
+def test_negated_quoted_command_list_has_no_execution_authority():
+    assert extract_explicit_acceptance_commands("Do not run `pytest -q` and `git status`.") == []
 
 
 def test_bare_identifier_is_not_expected_output(tmp_path: Path) -> None:

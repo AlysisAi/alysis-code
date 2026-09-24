@@ -1,13 +1,126 @@
 {
-  "client_version": "0.144.6",
+  "client_version": "0.155.0",
   "endpoint": "https://chatgpt.com/backend-api/codex/models",
-  "fetched_at_utc": "2026-07-20T03:29:25Z",
-  "input_sha256": "0fd6974d614c0263cceb2525b43e64605441c9dcc259b83d0b8f62aa15d59b63",
+  "fetched_at_utc": "2026-09-22T19:09:18Z",
+  "input_sha256": "f556ca28e151521499ad30bf3343ca781c990b85e9e7ada79355d3a3c006114f",
   "models": [
     {
       "context_window_tokens": 272000,
+      "default_reasoning_effort": "medium",
+      "description": "Our most capable model for complex, demanding work.",
+      "id": "gpt-6-astra",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "label": "GPT-6-Astra",
+      "max_output_tokens": null,
+      "priority": 1,
+      "reasoning_efforts": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "id": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "id": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "id": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "id": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "id": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "id": "ultra"
+        }
+      ]
+    },
+    {
+      "context_window_tokens": 272000,
+      "default_reasoning_effort": "medium",
+      "description": "GPT-6 Sol Codex model.",
+      "id": "gpt-6-sol",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "label": "GPT-6-Sol",
+      "max_output_tokens": null,
+      "priority": 2,
+      "reasoning_efforts": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "id": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "id": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "id": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "id": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "id": "max"
+        },
+        {
+          "description": "Maximum reasoning with automatic task delegation",
+          "id": "ultra"
+        }
+      ]
+    },
+    {
+      "context_window_tokens": 272000,
+      "default_reasoning_effort": "medium",
+      "description": "GPT-6 Luna Codex model.",
+      "id": "gpt-6-luna",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "label": "GPT-6-Luna",
+      "max_output_tokens": null,
+      "priority": 3,
+      "reasoning_efforts": [
+        {
+          "description": "Fast responses with lighter reasoning",
+          "id": "low"
+        },
+        {
+          "description": "Balances speed and reasoning depth for everyday tasks",
+          "id": "medium"
+        },
+        {
+          "description": "Greater reasoning depth for complex problems",
+          "id": "high"
+        },
+        {
+          "description": "Extra high reasoning depth for complex problems",
+          "id": "xhigh"
+        },
+        {
+          "description": "Maximum reasoning depth for the hardest problems",
+          "id": "max"
+        }
+      ]
+    },
+    {
+      "context_window_tokens": 272000,
       "default_reasoning_effort": "low",
-      "description": "Latest frontier agentic coding model.",
+      "description": "Reliable agentic workhorse for everyday tasks.",
       "id": "gpt-5.6-sol",
       "input_modalities": [
         "text",
@@ -15,7 +128,7 @@
       ],
       "label": "GPT-5.6-Sol",
       "max_output_tokens": null,
-      "priority": 1,
+      "priority": 4,
       "reasoning_efforts": [
         {
           "description": "Fast responses with lighter reasoning",
@@ -54,7 +167,7 @@
       ],
       "label": "GPT-5.6-Terra",
       "max_output_tokens": null,
-      "priority": 2,
+      "priority": 7,
       "reasoning_efforts": [
         {
           "description": "Fast responses with lighter reasoning",
@@ -93,7 +206,7 @@
       ],
       "label": "GPT-5.6-Luna",
       "max_output_tokens": null,
-      "priority": 3,
+      "priority": 8,
       "reasoning_efforts": [
         {
           "description": "Fast responses with lighter reasoning",
@@ -120,7 +233,7 @@
     {
       "context_window_tokens": 272000,
       "default_reasoning_effort": "medium",
-      "description": "Frontier model for complex coding, research, and real-world work.",
+      "description": "Proven previous-generation model for coding and general work.",
       "id": "gpt-5.5",
       "input_modalities": [
         "text",
@@ -128,37 +241,7 @@
       ],
       "label": "GPT-5.5",
       "max_output_tokens": null,
-      "priority": 7,
-      "reasoning_efforts": [
-        {
-          "description": "Fast responses with lighter reasoning",
-          "id": "low"
-        },
-        {
-          "description": "Balances speed and reasoning depth for everyday tasks",
-          "id": "medium"
-        },
-        {
-          "description": "Greater reasoning depth for complex problems",
-          "id": "high"
-        },
-        {
-          "description": "Extra high reasoning depth for complex problems",
-          "id": "xhigh"
-        }
-      ]
-    },
-    {
-      "context_window_tokens": 128000,
-      "default_reasoning_effort": "high",
-      "description": "Ultra-fast coding model.",
-      "id": "gpt-5.3-codex-spark",
-      "input_modalities": [
-        "text"
-      ],
-      "label": "GPT-5.3-Codex-Spark",
-      "max_output_tokens": null,
-      "priority": 26,
+      "priority": 12,
       "reasoning_efforts": [
         {
           "description": "Fast responses with lighter reasoning",

@@ -79,7 +79,7 @@ BENCHMARK_CASES = (
     BenchmarkCase(
         case_id="M03",
         prompt=(
-            "Use implementer to update src/a.py and tests/test_a.py, run focused tests, "
+            "Use general to update src/a.py and tests/test_a.py, run focused tests, "
             "and report changed files."
         ),
         node_ids=(
@@ -87,7 +87,7 @@ BENCHMARK_CASES = (
             "test_subagent_benchmark_m03_multi_file_implementation",
         ),
         provider_request_count="7 parent/child requests",
-        child_roles=("implementer",),
+        child_roles=("general",),
         tool_names=("subagent_run", "fs_write", "verify_run"),
         terminal_status="success",
         changed_paths=("src/a.py", "tests/test_a.py"),
@@ -429,7 +429,7 @@ def test_subagent_benchmark_m03_multi_file_implementation(tmp_path: Path) -> Non
             work_dir=tmp_path,
             base_url=server.base_url,
             mode="fullaccess",
-            input_text=f"Use the implementer subagent to complete this task: {task}\n/exit\n",
+            input_text=f"Use the general subagent to complete this task: {task}\n/exit\n",
         )
         requests = list(server.requests)
 
@@ -442,11 +442,9 @@ def test_subagent_benchmark_m03_multi_file_implementation(tmp_path: Path) -> Non
     events = _session_events(tmp_path)
     catalogs = _payloads(events, "subagent_tool_catalog")
     ends = _payloads(events, "subagent_end")
-    implementer_catalog = next(item for item in catalogs if item.get("name") == "implementer")
-    assert {"fs_write", "verify_run"}.issubset(implementer_catalog["tool_names"])
-    assert any(
-        item.get("name") == "implementer" and item.get("status") == "success" for item in ends
-    )
+    general_catalog = next(item for item in catalogs if item.get("name") == "general")
+    assert {"fs_write", "verify_run"}.issubset(general_catalog["tool_names"])
+    assert any(item.get("name") == "general" and item.get("status") == "success" for item in ends)
     assert "src/a.py and tests/test_a.py" in result.stdout
 
 
@@ -473,12 +471,12 @@ def test_subagent_benchmark_m04_parallel_readonly_decomposition(tmp_path: Path) 
 
     _assert_clean_cli_result(result)
     # One parent planning request launches both children. Each child then makes
-    # one planning request and one fs_read_lines request, followed by one parent
+    # one planning request and one fs_read request, followed by one parent
     # synthesis request. Keep this phase count aligned with the router-free
     # runtime; a read-only delegation adds no mutation-gate retry.
     assert len(requests) == 6, json.dumps(_request_summary(requests), indent=2)
     assert rendezvous == {"alpha": True, "beta": True}
-    assert _called_tool_names(requests) == {"subagent_run", "fs_read_lines"}
+    assert _called_tool_names(requests) == {"subagent_run", "fs_read"}
     assert _changed_paths(repo) == ()
     events = _session_events(tmp_path)
     catalogs = _payloads(events, "subagent_tool_catalog")
@@ -486,7 +484,7 @@ def test_subagent_benchmark_m04_parallel_readonly_decomposition(tmp_path: Path) 
     observed_roles = {str(item.get("name") or "") for item in catalogs}
     assert observed_roles == {"explorer", "code-reviewer"}
     for catalog in catalogs:
-        assert "fs_read_lines" in catalog["tool_names"]
+        assert "fs_read" in catalog["tool_names"]
         assert set(catalog["tool_names"]).isdisjoint({"fs_write", "fs_edit", "shell_run"})
     assert sorted(str(item.get("name")) for item in ends if item.get("status") == "success") == [
         "code-reviewer",

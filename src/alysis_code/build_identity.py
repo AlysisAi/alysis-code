@@ -10,12 +10,19 @@ recorded at build time is a fact about the artifact.
 This module owns three things:
 
 *The generated fact.* ``scripts/generate_build_info.py`` writes
-``_build_info.py`` next to this file, stamping the commit, an ISO-8601 UTC
-build timestamp, and whether the working tree carried uncommitted changes. The
-copy committed to the repository is a deliberate *dev default* -- no commit,
-marked dirty -- so that an artifact built without running the generator is
-correctly reported as unidentifiable rather than quietly inheriting a stale
-hash.
+``_build_info.py`` next to this file, stamping the commit, its subject line, an
+ISO-8601 UTC build timestamp, whether the working tree carried uncommitted
+changes, and the SHA ``origin/main`` resolved to at build time. The copy
+committed to the repository is a deliberate *dev default* -- no commit, marked
+dirty -- so that an artifact built without running the generator is correctly
+reported as unidentifiable rather than quietly inheriting a stale hash.
+
+The last two exist because a hash alone did not stop the failure they were
+added for: a campaign was built from the tip of an unmerged fork arm while
+labelled "latest main", and the only tell was a stale version string noticed in
+post-hoc teardown. The subject makes the wrong commit legible to a human; the
+resolved ``origin/main`` makes "this is latest main" a checkable claim rather
+than an assertion.
 
 *The reading.* :func:`load_build_info` tolerates the file being absent,
 truncated or hand-edited, because the failure mode that matters is a build
@@ -46,7 +53,10 @@ from pathlib import Path
 from typing import Any
 
 BUILD_INFO_FILENAME = "_build_info.py"
-BUILD_INFO_SCHEMA_VERSION = 1
+#: Bumped to 2 when the commit subject and the resolved ``origin/main`` joined
+#: the stamp. A schema-1 file still reads: the two new fields fall back to
+#: empty and :data:`UNAVAILABLE`, which is exactly what such a stamp can prove.
+BUILD_INFO_SCHEMA_VERSION = 2
 
 REQUIRE_CLEAN_BUILD_ENV = "ALYSIS_REQUIRE_CLEAN_BUILD"
 
@@ -67,13 +77,21 @@ _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 _BUILD_INFO_ATTRIBUTES = (
     "BUILD_COMMIT",
+    "BUILD_COMMIT_SUBJECT",
     "BUILD_TIMESTAMP",
     "BUILD_DIRTY",
     "BUILD_SOURCE",
+    "BUILD_RESOLVED_ORIGIN_MAIN",
     "BUILD_INFO_SCHEMA_VERSION",
 )
 
 UNKNOWN = "unknown"
+
+#: Recorded for ``origin/main`` when the build host could not resolve it -- no
+#: network, no remote, no such ref. A build that cannot see the remote is a
+#: normal offline build and must still stamp; it simply cannot claim to be
+#: main. Distinct from the empty string, which would read as "not recorded".
+UNAVAILABLE = "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -86,14 +104,42 @@ class BuildInfo:
     """What the artifact can prove about its own provenance."""
 
     commit: str = ""
+    commit_subject: str = ""
     timestamp: str = ""
     dirty: bool = True
     source: str = DEV_DEFAULT_SOURCE
+    resolved_origin_main: str = UNAVAILABLE
     schema_version: int = BUILD_INFO_SCHEMA_VERSION
 
     @property
     def commit_short(self) -> str:
         return self.commit[:12] if self.commit else ""
+
+    @property
+    def resolved_origin_main_short(self) -> str:
+        if not _COMMIT_RE.fullmatch(self.resolved_origin_main.strip().casefold()):
+            return ""
+        return self.resolved_origin_main[:12]
+
+    @property
+    def origin_main_resolved(self) -> bool:
+        """True when the build host actually resolved ``origin/main``.
+
+        False for an offline build, which is not an error: it means the
+        latest-main claim simply cannot be checked against anything.
+        """
+        return bool(self.resolved_origin_main_short)
+
+    @property
+    def is_origin_main(self) -> bool:
+        """True when this build is exactly the commit ``origin/main`` pointed at.
+
+        False when the two differ *and* when the remote was never resolved --
+        a build that cannot see main must not be able to claim it is main.
+        """
+        if not (self.is_identifiable and self.origin_main_resolved):
+            return False
+        return self.commit.strip().casefold() == self.resolved_origin_main.strip().casefold()
 
     @property
     def is_identifiable(self) -> bool:
@@ -123,11 +169,15 @@ class BuildInfo:
             "schema_version": self.schema_version,
             "commit": self.commit,
             "commit_short": self.commit_short,
+            "commit_subject": self.commit_subject,
             "timestamp": self.timestamp,
             "dirty": self.dirty,
             "source": self.source,
             "identifiable": self.is_identifiable,
             "clean": self.is_clean,
+            "resolved_origin_main": self.resolved_origin_main,
+            "origin_main_resolved": self.origin_main_resolved,
+            "is_origin_main": self.is_origin_main,
         }
 
 
@@ -153,8 +203,15 @@ def version_line(version: str, info: BuildInfo | None = None) -> str:
 
 def _coerce_build_info(namespace: Mapping[str, Any]) -> BuildInfo:
     commit = str(namespace.get("BUILD_COMMIT") or "").strip()
+    commit_subject = str(namespace.get("BUILD_COMMIT_SUBJECT") or "").strip()
     timestamp = str(namespace.get("BUILD_TIMESTAMP") or "").strip()
     source = str(namespace.get("BUILD_SOURCE") or "").strip() or DEV_DEFAULT_SOURCE
+    # Absent (schema 1) and empty both mean "the remote was never resolved",
+    # which is what UNAVAILABLE says. Failing closed here matters: the
+    # latest-main guard treats an unresolved remote as "cannot claim main".
+    resolved_origin_main = (
+        str(namespace.get("BUILD_RESOLVED_ORIGIN_MAIN") or "").strip() or UNAVAILABLE
+    )
     raw_dirty = namespace.get("BUILD_DIRTY", True)
     # Anything unparseable resolves to dirty. Provenance failures must fail
     # closed: a build that cannot say whether it was clean is not clean.
@@ -172,9 +229,11 @@ def _coerce_build_info(namespace: Mapping[str, Any]) -> BuildInfo:
         schema_version = BUILD_INFO_SCHEMA_VERSION
     return BuildInfo(
         commit=commit,
+        commit_subject=commit_subject,
         timestamp=timestamp,
         dirty=dirty,
         source=source,
+        resolved_origin_main=resolved_origin_main,
         schema_version=schema_version,
     )
 
@@ -313,18 +372,69 @@ def parse_dirty_status(porcelain_output: str) -> bool:
     return False
 
 
+#: A commit subject is one line by construction, but nothing bounds its length.
+#: The stamp is a generated source file read on every startup, so a pathological
+#: subject is truncated rather than embedded whole.
+COMMIT_SUBJECT_MAX_CHARS = 200
+
+
+def read_commit_subject(runner: GitRunner, commit: str = "HEAD") -> str:
+    """The commit's first message line, or ``""`` when git cannot say.
+
+    Recorded because a hash alone does not tell an operator reading a run
+    manifest *which* commit they are looking at. The subject is what makes a
+    wrong build recognisable at a glance -- a benchmark that ran a merge commit
+    off an unmerged fork arm looked, as a bare hash, exactly as plausible as
+    the right one.
+    """
+    code, out = runner(["log", "-1", "--format=%s", commit])
+    if code != 0 or not out.strip():
+        return ""
+    return out.strip().splitlines()[0].strip()[:COMMIT_SUBJECT_MAX_CHARS]
+
+
+def resolve_origin_main(runner: GitRunner, *, fetch: bool = True) -> str:
+    """The SHA ``origin/main`` resolves to, or :data:`UNAVAILABLE`.
+
+    Fetched first so the answer describes the remote as it is now rather than
+    whenever this checkout last synced -- a stale remote-tracking ref would let
+    a build that is behind main still call itself main.
+
+    Every failure lands on ``UNAVAILABLE`` rather than raising: an offline
+    build, a checkout with no ``origin``, and a repository whose default branch
+    is not ``main`` are all normal, and none should stop a build from stamping.
+    What they cost is the ability to *claim* to be main, which is the honest
+    outcome and is what the latest-main guard enforces.
+    """
+    if fetch:
+        # Best effort by design. A failed or timed-out fetch leaves the
+        # remote-tracking ref where it was; the rev-parse below still answers,
+        # and the guard compares against whatever could actually be resolved.
+        runner(["fetch", "--quiet", "origin"])
+    code, out = runner(["rev-parse", "origin/main"])
+    if code != 0 or not out.strip():
+        return UNAVAILABLE
+    candidate = out.strip().splitlines()[0].strip().casefold()
+    return candidate if _COMMIT_RE.fullmatch(candidate) else UNAVAILABLE
+
+
 def generate_build_info(
     *,
     repo_root: str | os.PathLike[str],
     now: datetime | None = None,
     git_runner: GitRunner | None = None,
     environ: Mapping[str, str] | None = None,
+    fetch: bool = True,
 ) -> BuildInfo:
     """Interrogate git and return the build stamp for the current tree.
 
     A tree with no git available, or no repository, yields the dev default:
     unidentifiable and dirty. That is the honest answer, and it is the answer
     ``--require-clean-build`` is designed to reject.
+
+    ``fetch=False`` skips the network probe for ``origin/main``, which then
+    stamps as :data:`UNAVAILABLE`. Use it for a deliberately hermetic build;
+    the cost is that such a build can never satisfy the latest-main guard.
     """
     root = Path(repo_root)
     runner: GitRunner = git_runner if git_runner is not None else (lambda a: _run_git(a, cwd=root))
@@ -345,9 +455,11 @@ def generate_build_info(
     dirty = True if status_code != 0 else parse_dirty_status(status_out)
     return BuildInfo(
         commit=commit,
+        commit_subject=read_commit_subject(runner, commit),
         timestamp=build_timestamp(now, environ=environ),
         dirty=dirty,
         source=GENERATED_SOURCE,
+        resolved_origin_main=resolve_origin_main(runner, fetch=fetch),
     )
 
 
@@ -369,9 +481,11 @@ def render_build_info_module(info: BuildInfo) -> str:
         '"""\n'
         "\n"
         f"BUILD_COMMIT = {json.dumps(info.commit)}\n"
+        f"BUILD_COMMIT_SUBJECT = {json.dumps(info.commit_subject)}\n"
         f"BUILD_TIMESTAMP = {json.dumps(info.timestamp)}\n"
         f"BUILD_DIRTY = {bool(info.dirty)!r}\n"
         f"BUILD_SOURCE = {json.dumps(info.source)}\n"
+        f"BUILD_RESOLVED_ORIGIN_MAIN = {json.dumps(info.resolved_origin_main)}\n"
         f"BUILD_INFO_SCHEMA_VERSION = {int(info.schema_version)!r}\n"
     )
 

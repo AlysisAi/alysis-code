@@ -195,9 +195,9 @@ def test_setup_wizard_saves_config(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        # Model choice 8 = "type a custom model" (the Responses preset lists
-        # seven suggestions); the typed retired alias canonicalizes.
-        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n{tmp_path}\n",
+        # Model choice 10 = "type a custom model" (the Responses preset lists
+        # nine suggestions); the typed retired alias canonicalizes.
+        input=f"\n1\n1\npersisted-key\n10\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
@@ -216,9 +216,9 @@ def test_setup_wizard_can_persist_api_key(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        # Model choice 8 = "type a custom model" (the Responses preset lists
-        # seven suggestions); the typed retired alias canonicalizes.
-        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n{tmp_path}\n",
+        # Model choice 10 = "type a custom model" (the Responses preset lists
+        # nine suggestions); the typed retired alias canonicalizes.
+        input=f"\n1\n1\npersisted-key\n10\ngpt-5-nano\n1\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0
@@ -595,7 +595,10 @@ def test_chat_help_panel_uses_compact_text_on_narrow_terminal(monkeypatch) -> No
     assert "[bold]Tools & Subagents[/bold]" in panel.renderable
     assert "[bold]Configuration[/bold]" in panel.renderable
     assert "/help  commands & config" in panel.renderable
-    assert "/image [path]  add image (path, clipboard, Ctrl+Alt+V)" in panel.renderable
+    assert (
+        "/image [path]  attach an image or file (drag & drop, or Ctrl+V to paste)"
+        in panel.renderable
+    )
     assert "/toolbar  customize toolbar items" in panel.renderable
     assert "/report [text]  create feedback bundle + issue draft" in panel.renderable
     assert "/feedback [text]  alias for /report" in panel.renderable
@@ -628,6 +631,7 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
         "/permissions",
         "/persona",
         "/ask",
+        "/objective",
         "/status",
         "/subagents",
         "/terminals",
@@ -656,6 +660,8 @@ def test_chat_visible_command_lists_match_curated_surface() -> None:
         [command for command in cli_mod._CHAT_GLOBAL_VISIBLE_COMMANDS if command != "/assets"]
         + [
             "/forge resume",
+            "/objective new",
+            "/objective amend",
             "/usage hud",
             "/usage hud on",
             "/usage hud off",
@@ -1581,7 +1587,7 @@ def test_clear_command_wipes_conversation_but_preserves_session_identity(monkeyp
     assert session.messages[2]["content"].startswith("<workspace_binding_context>")
     assert session.messages[3]["content"].startswith("<environment_context>")
     assert session.conversation_compactor.state.summary == {}
-    assert session.conversation_compactor.state.history_chunk_index == 0
+    assert session.conversation_compactor.state.history_chunk_index == 9
     assert session.conversation_compactor.state.memory_message_index is None
     assert session.conversation_compactor.state.pins == []
     assert session.conversation_compactor.state.pins_message_index is None
@@ -2326,7 +2332,7 @@ def test_setup_wizard_reprompts_invalid_workspace(monkeypatch, tmp_path: Path) -
     result = runner.invoke(
         alysis_app,
         ["setup"],
-        input=f"\n1\n1\npersisted-key\n8\ngpt-5-nano\n1\n/does/not/exist\n{tmp_path}\n",
+        input=f"\n1\n1\npersisted-key\n10\ngpt-5-nano\n1\n/does/not/exist\n{tmp_path}\n",
         env=_env(tmp_path),
     )
     assert result.exit_code == 0

@@ -26,6 +26,7 @@ from .verify_gate import (
     is_generic_fallback_verify_command_selection,
     resolve_verify_command_selection,
     run_task_verification,
+    verify_run_status,
 )
 
 IntegrationVerifyMode = Literal["off", "warn", "strict"]
@@ -69,7 +70,12 @@ class IntegrationGateResult:
 
     @property
     def passed(self) -> bool:
-        return self.verify_result.all_passed
+        # Tri-state: `passed` answers "may the batch proceed". A gate
+        # whose commands all skipped (or where none resolved) verified nothing;
+        # it must not reject the batch as a failure - and it is no longer a
+        # vacuous green either: policy_outcome and verify_result.status carry
+        # the honest "not_run" detail.
+        return verify_run_status(self.verify_result) != "failed"
 
     @property
     def summary(self) -> str:
@@ -77,6 +83,8 @@ class IntegrationGateResult:
 
     @property
     def policy_outcome(self) -> str:
+        if verify_run_status(self.verify_result) == "not_run":
+            return "not_run"
         if self.passed:
             return "passed"
         if self.mode == "warn":
@@ -93,6 +101,7 @@ class IntegrationGateResult:
             "mode": self.mode,
             "phase": self.phase,
             "passed": self.passed,
+            "status": verify_run_status(self.verify_result),
             "policy_outcome": self.policy_outcome,
             "tolerated_failure": self.policy_outcome == "failed_tolerated_by_warn_policy",
             "summary": self.summary,

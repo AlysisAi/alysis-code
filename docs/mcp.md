@@ -29,7 +29,7 @@ MCP tools are exposed only in write-capable top-level runtimes:
 
 MCP tools are not exposed in:
 
-- `readonly` sessions, including the Ask persona
+- `readonly` sessions, including the `ask` persona and `/ask` turns
 - `swarm_worker`
 - `subagent`
 - `conflict_auto_resolve`

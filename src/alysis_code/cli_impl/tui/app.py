@@ -19,13 +19,15 @@ when idle). Without a ``session_builder`` the shell keeps the Phase 1 stub reply
 
 from __future__ import annotations
 
+import os
 import re
 import textwrap
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from prompt_toolkit.application import Application
@@ -33,7 +35,13 @@ from prompt_toolkit.application.current import get_app
 from prompt_toolkit.cursor_shapes import CursorShape
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition, has_focus
-from prompt_toolkit.formatted_text import FormattedText, fragment_list_to_text, to_formatted_text
+from prompt_toolkit.formatted_text import (
+    FormattedText,
+    StyleAndTextTuples,
+    fragment_list_to_text,
+    split_lines,
+    to_formatted_text,
+)
 from prompt_toolkit.input import create_input
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 from prompt_toolkit.keys import Keys
@@ -47,13 +55,15 @@ from prompt_toolkit.layout.containers import (
     VSplit,
     Window,
 )
-from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.layout.processors import BeforeInput, Processor, Transformation
+from prompt_toolkit.layout.processors import Processor, Transformation
+from prompt_toolkit.layout.utils import explode_text_fragments
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style, merge_styles
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
 
 from ...agent.steering import (
@@ -64,7 +74,7 @@ from ...agent.steering import (
 )
 from ...branding import env_get
 from ...cancellation import InteractiveCancellationToken
-from ...clipboard import ClipboardError, copy_text_to_clipboard
+from ...clipboard import ClipboardError, copy_text_to_clipboard, paste_clipboard_image
 from ...host_browser import open_url
 from ...llm.types import LLMError
 from ...llm_error_display import friendly_llm_error_message, is_network_or_model_error
@@ -84,11 +94,30 @@ from ..chat.mid_turn_policy import (
     is_command,
 )
 from . import content as _content
+from .attachments import (
+    ATTACHMENT_TOKEN_RE,
+    Attachment,
+    AttachmentError,
+    AttachmentRegistry,
+    detect_dropped_paths,
+    trailing_drop_run,
+)
+from .attachments import token_after as _attachment_token_after
+from .attachments import token_at as _attachment_token_at
+from .attachments import token_before as _attachment_token_before
+from .composer import COMPOSER_PROMPT, ComposerWrapProcessor, vertical_move
 from .footer import footer_fragments
 from .forge_status import (
     forge_status_bucket,
     forge_status_counts,
     forge_status_glyph,
+)
+from .links import (
+    browser_url,
+    link_at,
+    link_fragments,
+    link_segments,
+    pad_after_trailing_link,
 )
 from .markdown import render_markdown_rows
 from .owl import load_owl_animation
@@ -239,6 +268,10 @@ class _PendingMessage:
     # transcript.  When it is rescued as the next queued turn, keep that
     # original echo instead of rendering the same user message a second time.
     echoed: bool = False
+    # Chips that were in the composer when this message was queued. They ride
+    # with it when it is drained into its own turn, and are re-adopted by the
+    # registry when the message is recalled back into the input box.
+    attachments: tuple[Attachment, ...] = ()
 
 
 class _DispatchOutcome(Enum):
@@ -273,6 +306,33 @@ def _model_access_setup_hint(subscription_provider_id: str | None) -> str:
     if subscription_provider_id:
         return "Set up model access: /login to choose a connection · /config for an API key"
     return "Set up model access in /config"
+
+
+class _SizedRowsControl(UIControl):
+    """Non-focusable rows built for the exact size they are drawn at.
+
+    ``render(width, height)`` returns the rows; ``height`` is ``None`` while the
+    layout is only measuring. A FormattedTextControl builds its text once per
+    render pass, before it knows its height, so content too tall for a small
+    terminal could only be clipped. This lets the welcome landing leave the owl
+    out instead.
+    """
+
+    def __init__(self, render: Callable[[int, int | None], list[StyleAndTextTuples]]) -> None:
+        self._render = render
+
+    def preferred_height(
+        self,
+        width: int,
+        max_available_height: int,
+        wrap_lines: bool,
+        get_line_prefix: Any,
+    ) -> int | None:
+        return len(self._render(width, None))
+
+    def create_content(self, width: int, height: int) -> UIContent:
+        rows = self._render(width, height)
+        return UIContent(get_line=lambda i: rows[i], line_count=len(rows), show_cursor=False)
 
 
 # Single accent colour for the input frame, the "> " prompt, the user band and
@@ -310,6 +370,10 @@ _STYLE = Style.from_dict(
         "tui.placeholder": "#6c6c6c",
         "tui.input": "",
         "tui.prompt": f"bold {_ACCENT}",
+        # Attachment chips ("[Image #1]") in the composer: the same soft band the
+        # selected picker row uses, so a dropped file reads as one object instead
+        # of a wall of path text. Green stays the only accent.
+        "tui.input.attachment": f"bg:{_BAND_BG}",
         # Accent-coloured border highlights the input box.
         "frame.border": _ACCENT,
         "tui.footer.mark": "#56b6c2",
@@ -487,7 +551,10 @@ _STYLE = Style.from_dict(
         "tui.approve.key.no": "bold #e06c75 bg:#0d1117",
         "tui.approve.frame": "bg:#0d1117",
         "tui.approve.frame frame.border": "#d19a66",
-        "tui.modal.scrim": "bg:#0d1117",
+        # Transcript style while a small modal is up - muted gray on the
+        # base background, so context stays readable behind the modal instead
+        # of vanishing under the old space-painting scrim.
+        "tui.dimbehind": "fg:#57606a bg:#0d1117 nobold noitalic nounderline",
     }
 )
 
@@ -591,21 +658,24 @@ def _user_band_rows(text: str, width: int) -> list[list[tuple[str, str]]]:
     """
     width = max(8, int(width))
     inner = max(1, width - 2)  # room for the "› " / "  " prefix
-    wrapped: list[str] = []
+    wrapped: list[tuple[str, list[tuple[str, str | None]]]] = []
     for line in text.split("\n") or [""]:
-        if line:
-            wrapped.extend(textwrap.wrap(line, inner) or [""])
-        else:
-            wrapped.append("")
+        chunks = (textwrap.wrap(line, inner) or [""]) if line else [""]
+        wrapped.extend(zip(chunks, link_segments(line, chunks), strict=True))
     if not wrapped:
-        wrapped = [""]
+        wrapped = [("", [("", None)])]
     band = "class:tui.transcript.userband"
     prompt = "class:tui.transcript.userprompt"
     blank_row: list[tuple[str, str]] = [(band, " " * width)]
     rows: list[list[tuple[str, str]]] = [blank_row]
-    for index, line in enumerate(wrapped):
+    for index, (line, segments) in enumerate(wrapped):
         prefix = "› " if index == 0 else "  "
-        rows.append([(prompt, prefix), (band, line.ljust(width - len(prefix)))])
+        text_width = width - len(prefix)
+        if any(target for _text, target in segments):
+            padding = [(band, " " * (text_width - len(line)))] if len(line) < text_width else []
+            rows.append([(prompt, prefix), *link_fragments(band, segments), *padding])
+        else:
+            rows.append([(prompt, prefix), (band, line.ljust(text_width))])
     rows.append([(band, " " * width)])
     return rows
 
@@ -618,6 +688,11 @@ _DEFAULT_WHEEL_STEP_ROWS = 3
 _MIN_WHEEL_STEP_ROWS = 1
 _MAX_WHEEL_STEP_ROWS = 20
 _COPY_NOTICE_SECONDS = 1.5
+# A link notice names a URL, or a failure the user has to act on, so it stays up
+# longer than the copy acknowledgement.
+_LINK_NOTICE_SECONDS = 3.0
+# A double click is two clicks: the second must not open the page again.
+_LINK_REOPEN_GUARD_SECONDS = 1.0
 _DRAG_SCROLL_INTERVAL_SECONDS = 0.06
 
 
@@ -726,8 +801,20 @@ def _project_mouse_event_to_window(
         nearest = min(visible_rows, key=lambda row: abs(row - relative_y))
         row_col = info.visible_line_to_row_col[nearest]
     row, column = row_col
+    content_x = column + relative_x
+    # Screen columns and content character indices differ for wide/combining
+    # characters. Use the same renderer mapping as Window's mouse handler.
+    screen_y = window_top + relative_y
+    screen_x = window_left + relative_x
+    candidates = [
+        (x, content_row, content_column)
+        for (content_row, content_column), (y, x) in getattr(info, "_rowcol_to_yx", {}).items()
+        if y == screen_y and x <= screen_x
+    ]
+    if candidates:
+        _screen_x, row, content_x = max(candidates)
     projected = MouseEvent(
-        position=Point(x=max(0, column + relative_x), y=max(0, row)),
+        position=Point(x=max(0, content_x), y=max(0, row)),
         event_type=mouse_event.event_type,
         button=mouse_event.button,
         modifiers=mouse_event.modifiers,
@@ -908,6 +995,15 @@ def _copy_selection_notice(selected: str) -> str:
     return f"Copied {len(selected):,} {unit}"
 
 
+def _link_fallback_notice(url: str) -> str:
+    """No browser could be launched (SSH, headless box): hand the link over instead."""
+    try:
+        copy_text_to_clipboard(url)
+    except Exception:  # noqa: BLE001 - runs on a helper thread; must not raise
+        return f"Couldn't open a browser for {_clip_cell(url, 60)}"
+    return "Couldn't open a browser · link copied to the clipboard"
+
+
 def _scroll_target(current_row: int, last_row: int, delta: int) -> tuple[int, bool]:
     """Clamp a scroll move and report whether we landed at the live tail.
 
@@ -938,11 +1034,15 @@ def _wrap_line(line: str, width: int) -> list[str]:
 
 
 def _plain_role_rows(style: str, text: str, width: int) -> list[list[tuple[str, str]]]:
-    """Render a non-streamed line (trace/error/warn/system/info) wrapped to width."""
+    """Render a non-streamed line (trace/error/warn/system/info) wrapped to width.
+
+    URLs become clickable link fragments (see ``links.py``).
+    """
     rows: list[list[tuple[str, str]]] = []
     for sub in text.split("\n") or [""]:
-        for chunk in _wrap_line(sub, width):
-            rows.append([(style, chunk)])
+        chunks = _wrap_line(sub, width)
+        for segments in link_segments(sub, chunks):
+            rows.append(link_fragments(style, segments))
     return rows
 
 
@@ -1003,12 +1103,13 @@ def _assistant_rows(
     rows = []
     first = True
     for line in text.split("\n") or [""]:
-        for chunk in _wrap_line(line, inner):
+        chunks = _wrap_line(line, inner)
+        for segments in link_segments(line, chunks):
             if first:
-                rows.append([(mark, f"{_ASSIST_MARK} "), (body, chunk)])
+                rows.append([(mark, f"{_ASSIST_MARK} "), *link_fragments(body, segments)])
                 first = False
             else:
-                rows.append([(body, f"  {chunk}")])
+                rows.append(link_fragments(body, segments, prefix="  "))
     return rows
 
 
@@ -1053,8 +1154,9 @@ def _reasoning_rows(
         return rows
     inner = max(1, int(width) - 2)  # room for the "│ " rail
     for line in text.split("\n"):
-        for chunk in (textwrap.wrap(line, inner) if line else [""]) or [""]:
-            rows.append([(rail, f"{_THINK_RAIL} "), (body, chunk)])
+        chunks = (textwrap.wrap(line, inner) if line else [""]) or [""]
+        for segments in link_segments(line, chunks):
+            rows.append([(rail, f"{_THINK_RAIL} "), *link_fragments(body, segments)])
     return rows
 
 
@@ -1840,8 +1942,9 @@ def _render_doc_panel_rows(
         out.extend([list(row) for row in md_rows])
     else:
         for line in text.split("\n") or [""]:
-            for chunk in _wrap_line(line, width):
-                out.append([(body_style, chunk)])
+            chunks = _wrap_line(line, width)
+            for segments in link_segments(line, chunks):
+                out.append(link_fragments(body_style, segments))
     if not out:
         out.append([(body_style, "(empty)")])
     out.append([(pad, " " * width)])
@@ -1901,6 +2004,14 @@ def _render_picker_rows(
     desc_col = min(2 + num_w + label_w + gap, max(12, width - 12))
     desc_w = max(6, width - desc_col)
     label_room = max(1, desc_col - 2 - num_w - gap)
+    if not any(
+        row.get("description") or (row.get("tag") if "tag" in row else row.get("current"))
+        for row in items
+    ):
+        # A menu without descriptions needs no reserved description column.
+        # Let action labels use the available width, especially on small TTYs.
+        desc_col = width
+        label_room = max(1, width - 2 - num_w)
 
     out: list[list[tuple[str, str]]] = []
     item_no = 0
@@ -2106,17 +2217,43 @@ def _render_approval_rows(
             _pad([(base, " " * indent), ("class:tui.approve.reason", chunk)], indent + len(chunk))
         )
     out.append([(base, " " * width)])
+    # Folder-wide grant: offered only when the request's files share one
+    # non-root directory and the approval may widen (never sensitive prompts).
+    from ...approval_scope import approval_dir_grant_candidate
+
+    dir_candidate = approval_dir_grant_candidate(request)
     opts: list[tuple[str, str]] = [
         (base, " " * indent),
         ("class:tui.approve.key.yes", "[y]"),
         ("class:tui.approve.optlabel", " yes   "),
         ("class:tui.approve.key.always", "[a]"),
         ("class:tui.approve.optlabel", " always   "),
-        ("class:tui.approve.key.no", "[n]"),
-        ("class:tui.approve.optlabel", " no"),
     ]
-    used = indent + len("[y] yes   [a] always   [n] no")
-    out.append(_pad(opts, used))
+    used_text = "[y] yes   [a] always   "
+    if dir_candidate is not None:
+        opts.extend(
+            [
+                ("class:tui.approve.key.always", "[d]"),
+                ("class:tui.approve.optlabel", " folder   "),
+            ]
+        )
+        used_text += "[d] folder   "
+    opts.extend(
+        [
+            ("class:tui.approve.key.no", "[n]"),
+            ("class:tui.approve.optlabel", " no"),
+        ]
+    )
+    used_text += "[n] no"
+    out.append(_pad(opts, indent + len(used_text)))
+    if dir_candidate is not None:
+        hint = f"d = always allow {kind} under {dir_candidate}"[: max(10, width - indent)]
+        out.append(
+            _pad(
+                [(base, " " * indent), ("class:tui.approve.reason", hint)],
+                indent + len(hint),
+            )
+        )
     out.append([(base, " " * width)])
     return out
 
@@ -2154,6 +2291,42 @@ class _PlaceholderProcessor(Processor):
         if ti.lineno == 0 and not ti.document.text:
             return Transformation([(self._style, self._resolve())])
         return Transformation(ti.fragments)
+
+
+class _AttachmentChipProcessor(Processor):
+    """Tint live attachment chips so a dropped file reads as one object.
+
+    Restyling only — the buffer text is untouched, so cursor motion, selection
+    and every offset the other processors compute stay exactly as they were.
+    ``is_live`` keeps an unregistered look-alike (someone typing ``[Image #9]``
+    by hand) rendering as the plain text it is.
+    """
+
+    def __init__(
+        self,
+        is_live: Callable[[str], bool],
+        style: str = "class:tui.input.attachment",
+    ) -> None:
+        self._is_live = is_live
+        self._style = style
+
+    def apply_transformation(self, ti: Any) -> Transformation:
+        line = fragment_list_to_text(ti.fragments)
+        if "[" not in line:
+            return Transformation(ti.fragments)
+        spans = [
+            match.span()
+            for match in ATTACHMENT_TOKEN_RE.finditer(line)
+            if self._is_live(match.group(0))
+        ]
+        if not spans:
+            return Transformation(ti.fragments)
+        fragments = explode_text_fragments(ti.fragments)
+        for start, end in spans:
+            for index in range(start, min(end, len(fragments))):
+                fragment = fragments[index]
+                fragments[index] = (f"{fragment[0]} {self._style}", *fragment[1:])
+        return Transformation(fragments)
 
 
 def _has_conversation(entries: list[tuple[str, str]]) -> bool:
@@ -2201,14 +2374,20 @@ def _status_line_fragments(
     running: bool,
     notice: str = "",
     paste_hint: str = "",
+    attachment_hint: str = "",
     selection_available: bool = False,
     input_pending: bool = False,
     queued_count: int = 0,
     step_staged_count: int = 0,
     turn_end_staged_count: int = 0,
 ) -> FormattedText:
-    if paste_hint.strip():
-        return FormattedText([("class:tui.status", f"  {paste_hint.strip()}")])
+    composer_hints = [hint.strip() for hint in (attachment_hint, paste_hint) if hint.strip()]
+    if composer_hints:
+        return FormattedText([("class:tui.status", "  " + "  ·  ".join(composer_hints))])
+    # A notice answers something the user just did (copied text, clicked a
+    # link), so it briefly outranks the standing mid-turn reminders.
+    if notice.strip():
+        return FormattedText([("class:tui.status", f"  {notice.strip()}")])
     if running:
         if input_pending:
             return FormattedText(
@@ -2232,8 +2411,6 @@ def _status_line_fragments(
                 ]
             )
         return FormattedText([("class:tui.status", "  Esc or Ctrl+C to interrupt")])
-    if notice.strip():
-        return FormattedText([("class:tui.status", f"  {notice.strip()}")])
     if selection_available:
         return FormattedText([("class:tui.status", "  ctrl+c to copy")])
     return FormattedText([])
@@ -2312,8 +2489,18 @@ def run_tui(
     subscription_provider_id: str | None = None,
     open_config_on_start: bool = False,
     theme: TerminalTheme | None = None,
+    initial_input_text: str = "",
+    workspace_root: Path | None = None,
 ) -> tuple[Any, list[tuple[str, str]]]:
     """Run the full-screen TUI shell, optionally hosting a real agent session.
+
+    ``initial_input_text`` prefills the chat input on startup — the chat loop
+    passes text the user typed at the unpainted workspace-guard steps
+    so it lands in the input box instead of being lost.
+
+    ``workspace_root`` is the session's active workdir. It anchors composer
+    attachments: a relative path given to ``/image`` resolves against it, and a
+    clipboard image is written beneath it. It defaults to the process CWD.
 
     Returns ``(result, transcript)`` where ``result`` is the value passed to
     ``app.exit`` (an exit word, or ``None`` for Ctrl-C/Ctrl-D) and ``transcript``
@@ -2370,6 +2557,8 @@ def run_tui(
     owl = load_owl_animation(color_enabled=owl_color, theme=terminal_theme)
     transcript = TuiTranscript()
     paste_registry = _PasteRegistry()
+    attachment_registry = AttachmentRegistry()
+    attachment_root = Path(workspace_root) if workspace_root is not None else Path.cwd()
     wheel_step_rows = _resolve_wheel_step_rows()
 
     # ---- turn/run state (mutated across the UI and one worker thread) ----
@@ -2386,6 +2575,10 @@ def run_tui(
     spinner: dict[str, int] = {"i": 0}
     tip_state: dict[str, int] = {"turn_index": -1}
     tip_link_press: tuple[str, Point, Point] | None = None
+    # A left press that landed on a transcript/popup link, as ``(url, content
+    # point)``; the matching release opens it, any drag off it cancels.
+    link_press: dict[str, tuple[str, Point] | None] = {"transcript": None, "panel": None}
+    link_opened: dict[str, Any] = {"url": "", "at": 0.0}
     cancel_box: dict[str, _Cancellation | None] = {"token": None}
     turn_cleanup_box: dict[str, Callable[[], None] | None] = {"callback": None}
     approval_box: dict[str, Any] = {"event": None, "decision": None, "request": None}
@@ -2430,7 +2623,8 @@ def run_tui(
         # the default green chrome shared by /help, /status, …
         "accent": None,
     }
-    help_rows: dict[str, int] = {"n": 0}
+    # ``rows`` keeps the last rendered popup rows so a click can find its link.
+    help_rows: dict[str, Any] = {"n": 0, "rows": []}
     # Selectable picker popup (e.g. /permissions): ``on`` toggles the Float, ``index`` is
     # the focused row, ``rows`` the option list, ``on_select`` the apply callback
     # (value -> list[(role, text)] messages to echo). Shares the dark popup chrome.
@@ -2552,11 +2746,13 @@ def run_tui(
         _safe_invalidate()
         return decision
 
-    def _resolve_approval(*, allow: bool, always: bool = False) -> None:
+    def _resolve_approval(*, allow: bool, always: bool = False, always_dir: bool = False) -> None:
         event = approval_box.get("event")
         if event is None:
             return
-        approval_box["decision"] = ApprovalDecision(allow=allow, allow_for_session=always)
+        approval_box["decision"] = ApprovalDecision(
+            allow=allow, allow_for_session=always, allow_for_session_dir=always_dir
+        )
         verdict = "allowed" if allow else "denied"
         transcript.append("trace", f"· approval {verdict}")
         event.set()
@@ -2800,30 +2996,27 @@ def run_tui(
                 pass
 
     # ---- welcome body (owl + wordmark + hint), shown until first message ----
-    def _welcome_text() -> FormattedText:
-        fragments: list[tuple[str, str]] = [("", "\n")]
+    # Laid out for the size it is drawn at, so a window smaller than full
+    # screen reflows the text instead of clipping it.
+    def _welcome_rows(width: int, height: int | None) -> list[StyleAndTextTuples]:
+        setup_hint = (
+            _model_access_setup_hint(subscription_provider_id) if state.connection_status else None
+        )
+        text_rows = _content.welcome_text_rows(width, setup_hint=setup_hint)
+        rows: list[StyleAndTextTuples] = [[]]
         owl_ansi = owl.current_ansi()
         if owl_ansi is not None:
-            fragments.extend(to_formatted_text(owl_ansi))
-            fragments.append(("", "\n\n"))
-        fragments.append(("class:tui.heading", _content.HEADING_TEXT))
-        fragments.append(("class:tui.credit", "  ·  " + _content.CREDIT_TEXT))
-        fragments.append(("", "\n\n"))
-        if state.connection_status:
-            fragments.append(
-                (
-                    "class:tui.footer.mode.warn",
-                    _model_access_setup_hint(subscription_provider_id),
-                )
-            )
-            fragments.append(("", "\n\n"))
-        fragments.append(("class:tui.hint", _content.HINT_TEXT))
-        return FormattedText(fragments)
+            owl_rows = list(split_lines(to_formatted_text(owl_ansi)))
+            # Leave the owl out rather than clip it: in a pane narrower than
+            # the owl, or too short to hold it above the wordmark and hint.
+            needed = len(rows) + len(owl_rows) + 1 + len(text_rows)
+            if owl.width <= width and (height is None or needed <= height):
+                rows.extend(owl_rows)
+                rows.append([])
+        rows.extend(text_rows)
+        return rows
 
-    welcome_window = Window(
-        FormattedTextControl(_welcome_text, focusable=False),
-        align=WindowAlign.CENTER,
-    )
+    welcome_window = Window(_SizedRowsControl(_welcome_rows), align=WindowAlign.CENTER)
 
     # ---- transcript pane (pull-based; the worker only mutates the model) ----
     def _run_elapsed() -> int:
@@ -2841,6 +3034,8 @@ def run_tui(
         "active": None,
         "dragging": False,
         "rows": [],
+        # The same rows as fragments, which is where a clicked link's URL lives.
+        "fragment_rows": [],
         "row_roles": [],
         "width": None,
         # True while a press that began on the plan-meta aside is in flight
@@ -2870,6 +3065,7 @@ def run_tui(
         # a resize and is absent entirely on the first one.
         width = _transcript_content_width_for(_current_width())
         if selection["width"] not in {None, width}:
+            link_press["transcript"] = None
             selection.update({"anchor": None, "active": None, "dragging": False})
         selection["width"] = width
         rendered_rows: list[list[tuple[str, str]]] = []
@@ -2985,8 +3181,10 @@ def run_tui(
             )
             rendered_rows.extend(activity_rows)
             rendered_row_roles.extend(["activity"] * len(activity_rows))
+        rendered_rows = [pad_after_trailing_link(row, width) for row in rendered_rows]
         plain_rows = [fragment_list_to_text(row) for row in rendered_rows]
         selection["rows"] = plain_rows
+        selection["fragment_rows"] = rendered_rows
         selection["row_roles"] = rendered_row_roles
         anchor = selection["anchor"]
         active = selection["active"]
@@ -3002,6 +3200,18 @@ def run_tui(
             )
             fragments.append(("", "\n"))
         _row_count["n"] = len(rendered_rows)
+        # While a small modal (approval / picker / help / editor) is up,
+        # dim the transcript instead of blanking it — the appended class wins
+        # the style merge, muting color while the text stays readable.
+        try:
+            modal_up = _small_modal_open()
+        except Exception:
+            modal_up = False
+        if modal_up:
+            fragments = [
+                (f"{style} class:tui.dimbehind" if style else "class:tui.dimbehind", text)
+                for style, text in fragments
+            ]
         return FormattedText(fragments)
 
     def _last_row() -> int:
@@ -3028,6 +3238,7 @@ def run_tui(
         scroll["offset"], scroll["follow"] = _scroll_target(current, _follow_top(), delta)
 
     def _transcript_drag_scroll(direction: int) -> None:
+        link_press["transcript"] = None
         if drag_capture["target"] != "transcript":
             return
         before = _cursor_row()
@@ -3040,17 +3251,18 @@ def run_tui(
         selection["active"] = Point(x=active.x, y=edge_row)
 
     def _wheel_scroll(direction: int) -> None:
+        link_press["transcript"] = None
         _scroll_move(direction * wheel_step_rows)
         _safe_invalidate()
 
-    def _show_selection_notice(message: str) -> None:
+    def _show_selection_notice(message: str, seconds: float = _COPY_NOTICE_SECONDS) -> None:
         selection_notice["generation"] += 1
         generation = selection_notice["generation"]
         selection_notice["text"] = message
         _safe_invalidate()
 
         def _clear_notice() -> None:
-            time.sleep(_COPY_NOTICE_SECONDS)
+            time.sleep(seconds)
             if selection_notice["generation"] == generation:
                 selection_notice["text"] = ""
                 _safe_invalidate()
@@ -3059,6 +3271,52 @@ def run_tui(
 
     def _copy_transcript_selection(selected: str) -> None:
         _show_selection_notice(_copy_selection_notice(selected))
+
+    def _open_link(url: str) -> None:
+        """Open a clicked link in the user's browser without blocking the UI."""
+        now = time.monotonic()
+        if url == link_opened["url"] and now - link_opened["at"] < _LINK_REOPEN_GUARD_SECONDS:
+            return
+        link_opened.update({"url": url, "at": now})
+        # Name the address the browser actually gets (0.0.0.0 opens as localhost).
+        target = browser_url(url)
+        _show_selection_notice(f"Opening {_clip_cell(target, 72)}", _LINK_NOTICE_SECONDS)
+
+        def _launch() -> None:
+            try:
+                # quiet: a browser helper must never write over the alt-screen.
+                opened = open_url(target, quiet=True)
+            except Exception:  # noqa: BLE001 - a failed launch must not kill the TUI
+                opened = False
+            if not opened:
+                _show_selection_notice(_link_fallback_notice(target), _LINK_NOTICE_SECONDS)
+
+        # Starting a browser can take seconds (powershell.exe from WSL).
+        threading.Thread(target=_launch, daemon=True).start()
+
+    def _transcript_link_at(point: Point) -> str | None:
+        rows = selection.get("fragment_rows") or []
+        if not 0 <= point.y < len(rows):
+            return None
+        try:
+            # Behind a modal the transcript is dimmed and its links lose their
+            # underline; they stop acting as links too.
+            if _small_modal_open() or _config_open():
+                return None
+        except Exception:
+            pass
+        if point == Point(x=0, y=0) and _cursor_row() > 0:
+            # prompt_toolkit reports a click on a blank row as (0, 0). With the
+            # first row scrolled out of view that is the only way to get it.
+            return None
+        return link_at(rows[point.y], point.x)
+
+    def _transcript_link_cell(point: Point) -> tuple[int, int] | None:
+        """Screen cell showing transcript character ``point``, if visible."""
+        info = transcript_window.render_info
+        if info is None:
+            return None
+        return info._rowcol_to_yx.get((point.y, point.x))
 
     def _current_transcript_selection() -> str:
         anchor = selection["anchor"]
@@ -3072,7 +3330,9 @@ def run_tui(
             row_roles=selection["row_roles"],
         )
 
-    def _transcript_mouse_event(mouse_event: Any) -> Any:
+    def _transcript_mouse_event(mouse_event: Any, *, captured: bool = False) -> Any:
+        # ``captured``: projected from the drag-capture overlay's screen event
+        # rather than mapped by the transcript window itself.
         event_type = mouse_event.event_type
         point = Point(x=max(0, mouse_event.position.x), y=max(0, mouse_event.position.y))
         if event_type == MouseEventType.MOUSE_DOWN and mouse_event.button == MouseButton.LEFT:
@@ -3085,15 +3345,30 @@ def run_tui(
             selection["planmeta_press"] = _plan_meta_press_hit(
                 selection.get("row_roles") or [], point.y
             )
+            # A press on a link opens it on release — unless it turns into a
+            # drag, which selects the text like anywhere else.
+            url = _transcript_link_at(point)
+            link_press["transcript"] = (url, point) if url else None
             selection.update({"anchor": point, "active": point, "dragging": True})
             _begin_drag_capture("transcript", _transcript_drag_scroll)
             _safe_invalidate()
             return None
         if event_type == MouseEventType.MOUSE_MOVE and selection["dragging"]:
+            press = link_press["transcript"]
+            if not captured and press is not None and point != press[1]:
+                # A move that beat the overlay's first paint: it is in the
+                # press's own coordinates, and leaving the link cancels it.
+                # Captured moves were settled on screen cells already.
+                link_press["transcript"] = None
             selection["active"] = point
             _safe_invalidate()
             return None
         if event_type == MouseEventType.MOUSE_UP and selection["dragging"]:
+            # Still pending only when the release beat the capture overlay's
+            # first paint (see _captured_drag_mouse_event), so both events came
+            # through this window and their content points compare directly.
+            press = link_press["transcript"]
+            link_press["transcript"] = None
             selection["active"] = point
             selection["dragging"] = False
             _stop_drag_capture()
@@ -3107,6 +3382,8 @@ def run_tui(
                 view["planmeta_expanded"] = not view["planmeta_expanded"]
             if not selected:
                 selection.update({"anchor": None, "active": None})
+                if press is not None and press[1] == point:
+                    _open_link(press[0])
             selection["planmeta_press"] = False
             _safe_invalidate()
             return None
@@ -3158,6 +3435,107 @@ def run_tui(
 
     has_live_paste_tokens = Condition(lambda: bool(_live_paste_matches()))
 
+    def _live_attachment_matches() -> list[re.Match[str]]:
+        return attachment_registry.live_matches(input_area.buffer.text)
+
+    def _attachment_hint_text() -> str:
+        return attachment_registry.hint(input_area.buffer.text)
+
+    has_live_attachments = Condition(lambda: bool(_live_attachment_matches()))
+
+    # Re-entrancy guard: inserting a chip fires on_text_changed, which must not
+    # run the drop scan against the text the scan itself just wrote.
+    attaching = {"on": False}
+
+    def _attach_paths(paths: Sequence[Path | str], *, announce_errors: bool = True) -> int:
+        """Register ``paths`` as chips in the composer; return how many landed.
+
+        Whatever cannot be attached (a missing file, an oversized image) is
+        reported inline and skipped, so one bad path in a multi-file drop never
+        loses the good ones.
+        """
+
+        attached = 0
+        attaching["on"] = True
+        try:
+            attached = _attach_paths_locked(paths, announce_errors=announce_errors)
+        finally:
+            attaching["on"] = False
+        if attached:
+            input_area.buffer.cancel_completion()
+        _safe_invalidate()
+        return attached
+
+    def _attach_paths_locked(paths: Sequence[Path | str], *, announce_errors: bool) -> int:
+        attached = 0
+        for candidate in paths:
+            try:
+                attachment = attachment_registry.add_path(candidate, root=attachment_root)
+            except AttachmentError as exc:
+                if announce_errors:
+                    transcript.append("warn", f"Could not attach: {exc}")
+                continue
+            buff = input_area.buffer
+            before = buff.text[: buff.cursor_position]
+            after = buff.text[buff.cursor_position :]
+            # A chip is one word: never glue it onto what the user was typing,
+            # and leave the cursor a space past it so the next keystroke (or the
+            # next chip in a multi-file drop) starts cleanly.
+            prefix = "" if not before or before[-1].isspace() else " "
+            suffix = "" if after[:1].isspace() else " "
+            buff.insert_text(f"{prefix}{attachment.token}{suffix}")
+            attached += 1
+        return attached
+
+    def _chip_typed_drop() -> bool:
+        """Chip a path a terminal typed in rather than sending as a paste.
+
+        Not every terminal wraps a drag/drop in bracketed-paste markers, so the
+        path can arrive one character at a time and never reach the paste
+        handler. Only the shapes a terminal produces and a person writing a
+        message does not — a fully quoted run, a ``file://`` URI — are taken.
+        """
+
+        if attaching["on"]:
+            return False
+        buff = input_area.buffer
+        cursor = buff.cursor_position
+        run = trailing_drop_run(buff.text[:cursor])
+        if run is None:
+            return False
+        paths = detect_dropped_paths(run)
+        if not paths:
+            return False
+        attaching["on"] = True
+        try:
+            buff.delete_before_cursor(count=len(run))
+            attached = _attach_paths_locked(paths, announce_errors=False)
+        finally:
+            attaching["on"] = False
+        if not attached:
+            # Nothing landed (the file vanished between the scan and the add):
+            # put the text back so the user still sees what they dropped.
+            buff.insert_text(run)
+            return False
+        buff.cancel_completion()
+        _safe_invalidate()
+        return True
+
+    def _attach_clipboard_image() -> None:
+        """Ctrl+V / bare ``/image``: save the clipboard picture and chip it."""
+
+        try:
+            saved = paste_clipboard_image(root=attachment_root, output_path=None)
+        except ClipboardError as exc:
+            transcript.append("warn", f"Clipboard: {exc}")
+            _safe_invalidate()
+            return
+        except Exception as exc:  # noqa: BLE001 - never crash the UI on a clipboard read
+            transcript.append("error", f"Clipboard image failed: {exc}")
+            _safe_invalidate()
+            return
+        _attach_paths([saved])
+
     # ---- status / working line (between transcript and input) ----
     def _status_text() -> FormattedText:
         # All "agent is working" feedback (thinking + running tool, with the one
@@ -3169,6 +3547,7 @@ def run_tui(
             running=bool(running["on"] and not retiring["on"]),
             notice=str(selection_notice["text"] or ""),
             paste_hint=_paste_hint_text(),
+            attachment_hint=_attachment_hint_text(),
             selection_available=bool(_current_transcript_selection()),
             input_pending=bool(input_area.buffer.text.strip()),
             queued_count=len(pending_turns),
@@ -3181,7 +3560,9 @@ def run_tui(
     status_window = Window(FormattedTextControl(_status_text, focusable=False), height=1)
 
     def _working_tip_visible() -> bool:
-        return running["on"] and not _small_modal_open() and not _config_open()
+        return (
+            running["on"] and not retiring["on"] and not _small_modal_open() and not _config_open()
+        )
 
     def _tip_link_mouse_event(event: MouseEvent) -> None:
         """Complete a link click using screen coordinates, including captured drags."""
@@ -3257,6 +3638,13 @@ def run_tui(
     # ---- input box (multiline; Enter submits, Ctrl+J adds a line) ----
     # Grows from one row up to a few as the user adds lines (so a pasted/multi-line
     # prompt stays visible); empty it is one row, keeping the welcome centering.
+    # Long lines word-wrap under a hanging indent (see composer.py).
+    def _composer_width() -> int:
+        # The input frame spans the terminal (its side spacers are 0 wide), so
+        # each row holds the columns between the frame's two borders. Read from
+        # the output size rather than render_info so a resize applies at once.
+        return max(1, _current_width() - 2)
+
     def _placeholder_text() -> str:
         # Inside a Forge session the input is a plan editor — nudge the verbs.
         if getattr(state, "forge_mode", False):
@@ -3266,11 +3654,21 @@ def run_tui(
         # outside the input box — a placeholder suffix wraps on narrow panes.)
         if _conversation_started():
             return " " + _content.INPUT_PLACEHOLDER_FOLLOWUP
-        return " " + _content.INPUT_PLACEHOLDER
+        # The greeting only while it fits on one row (with the cursor's column
+        # to spare). A narrower pane gets the short prompt instead of a
+        # greeting folded over two rows that collapses on the first keystroke.
+        greeting = " " + _content.INPUT_PLACEHOLDER
+        if get_cwidth(COMPOSER_PROMPT + greeting) < _composer_width():
+            return greeting
+        return " " + _content.INPUT_PLACEHOLDER_FOLLOWUP
 
     def _complete_while_typing() -> bool:
         buffer = input_area.buffer
-        return _paste_token_at_cursor(buffer.text, buffer.cursor_position) is None
+        if _paste_token_at_cursor(buffer.text, buffer.cursor_position) is not None:
+            return False
+        # A cursor resting inside "[Image #1]" is editing a chip, not typing a
+        # command, so the slash dropdown stays shut.
+        return _attachment_token_at(buffer.text, buffer.cursor_position) is None
 
     input_area = TextArea(
         height=D(min=1, max=8),
@@ -3281,7 +3679,9 @@ def run_tui(
         complete_while_typing=Condition(_complete_while_typing),
         input_processors=[
             _PlaceholderProcessor(_placeholder_text),
-            BeforeInput("> ", style="class:tui.prompt"),
+            _AttachmentChipProcessor(attachment_registry.is_live_token),
+            # Last: it pads rows to the rendered width (and draws the prompt).
+            ComposerWrapProcessor(COMPOSER_PROMPT, prompt_style="class:tui.prompt"),
         ],
     )
 
@@ -3289,9 +3689,22 @@ def run_tui(
         # Tokens are deliberately plain text. If an internal edit mangles their
         # syntax, the token stops matching, its payload is dropped, and the
         # remaining text is submitted literally instead of being guessed back.
+        # Attachment chips follow the same rule: a half-deleted "[Image #1]"
+        # detaches the file rather than sending a file the user cannot see.
         paste_registry.retain_tokens(input_area.buffer.text)
+        attachment_registry.retain_tokens(input_area.buffer.text)
+        _chip_typed_drop()
 
     input_area.buffer.on_text_changed += _drop_orphaned_paste_entries
+    if initial_input_text:
+        # Startup-picker stash: text the user typed before the
+        # workspace-guard steps painted arrives here, so their words start the
+        # session in the input box instead of vanishing.
+        try:
+            input_area.text = str(initial_input_text)
+            input_area.buffer.cursor_position = len(input_area.text)
+        except Exception:  # noqa: BLE001 - prefill is best-effort
+            pass
     welcome_visible = Condition(
         lambda: not _conversation_started() and input_area.buffer.complete_state is None
     )
@@ -3527,6 +3940,11 @@ def run_tui(
             {},
             notice="Running queued message.",
             user_display_text=None if next_message.echoed else next_message.display_text,
+            image_paths=[
+                os.fspath(attachment.path)
+                for attachment in next_message.attachments
+                if attachment.kind == "image"
+            ],
         ):
             pending_turns.pop(0)
             return True
@@ -3538,6 +3956,7 @@ def run_tui(
         *,
         notice: str = "",
         user_display_text: str | None = None,
+        image_paths: Sequence[str] = (),
     ) -> bool:
         with turn_state_lock:
             turn_retiring = retiring["on"]
@@ -3586,6 +4005,11 @@ def run_tui(
         turn_cleanup_box["callback"] = turn_cleanup
         if turn_cleanup is not None:
             run_kwargs["_alysis_turn_cleanup"] = turn_cleanup
+        # Composer attachments are the user's, not a command's: merge them in
+        # after the command runner has built its own kwargs, and never clobber
+        # images a command already staged.
+        if image_paths and not run_kwargs.get("image_paths"):
+            run_kwargs["image_paths"] = list(image_paths)
         if notice:
             transcript.append("system", notice)
         if user_display_text is not None:
@@ -3694,6 +4118,7 @@ def run_tui(
         allow_run: bool = True,
         deferred: bool = False,
         clear_transcript_before_output: bool = False,
+        image_paths: Sequence[str] = (),
     ) -> _DispatchOutcome:
         """Route ``text`` straight through the chat command runner.
 
@@ -3746,7 +4171,11 @@ def run_tui(
                 )
                 _safe_invalidate()
                 return _DispatchOutcome.CONTINUE
-            _begin_run(instruction if instruction is not None else text, run_kwargs or {})
+            _begin_run(
+                instruction if instruction is not None else text,
+                run_kwargs or {},
+                image_paths=image_paths,
+            )
             return _DispatchOutcome.CONTINUE
         _safe_invalidate()  # "handled" — output already shown
         return _DispatchOutcome.CONTINUE
@@ -3895,7 +4324,11 @@ def run_tui(
         return True
 
     def _deliver_mid_turn_message(
-        text: str, *, display_text: str | None = None, queue: bool
+        text: str,
+        *,
+        display_text: str | None = None,
+        queue: bool,
+        attachments: Sequence[Attachment] = (),
     ) -> bool:
         buff = input_area.buffer
         stripped = text.strip()
@@ -3904,6 +4337,15 @@ def run_tui(
             return False
         scroll["follow"] = True
         inbox = steer_inbox_for(session, create=True) if session is not None else None
+        if attachments and not queue and inbox is not None:
+            # A steer is delivered into the running turn as text; an attached
+            # image can only ride a turn of its own. Queue rather than silently
+            # dropping what the user attached.
+            queue = True
+            transcript.append(
+                "system",
+                "Attachments send with their own turn - queued this message instead of steering.",
+            )
         if queue or inbox is None:
             with pending_messages_lock:
                 if len(pending_turns) >= MAX_PENDING_STEER_MESSAGES:
@@ -3914,7 +4356,13 @@ def run_tui(
                     )
                     _safe_invalidate()
                     return False
-                pending_turns.append(_PendingMessage(text=stripped, display_text=display_stripped))
+                pending_turns.append(
+                    _PendingMessage(
+                        text=stripped,
+                        display_text=display_stripped,
+                        attachments=tuple(attachments),
+                    )
+                )
             buff.reset()
             _safe_invalidate()
             return True
@@ -3957,6 +4405,9 @@ def run_tui(
 
         recalled_pending["queue"] = True
         buff.reset()
+        # Re-adopt before the text lands: on_text_changed sweeps chips that the
+        # registry does not know, which would silently detach them.
+        attachment_registry.restore(message.attachments)
         buff.insert_text(message.display_text)
         buff.cancel_completion()
         _safe_invalidate()
@@ -3964,10 +4415,22 @@ def run_tui(
 
     def _submit(*, queue_instead: bool | None = None) -> None:
         buff = input_area.buffer
-        display_text = buff.text
+        # Trailing composer whitespace (the space a chip leaves behind the
+        # cursor, a stray Ctrl+J newline) is chrome, not message. Trimming it
+        # here — before expansion — never reaches inside a paste payload.
+        display_text = buff.text.rstrip()
         if not display_text.strip():
             return
-        text = paste_registry.expand(display_text)
+        # Composer chips resolve before paste tokens: the chips live in the text
+        # the user sees, while an expanded paste payload is opaque content that
+        # must never be re-scanned for tokens.
+        submitted_attachments = tuple(attachment_registry.attachments_in(display_text))
+        submitted_images = [
+            os.fspath(attachment.path)
+            for attachment in submitted_attachments
+            if attachment.kind == "image"
+        ]
+        text = paste_registry.expand(attachment_registry.expand(display_text))
         stripped = text.strip()
         if approval_box.get("event") is not None:
             return
@@ -3977,6 +4440,17 @@ def run_tui(
             command_token=command_parts[0],
             has_argument=len(command_parts) == 2 and bool(command_parts[1].strip()),
         )
+        # /image is TUI-native: it edits the composer instead of starting a turn,
+        # so it is answered here — before every turn-state branch below — and
+        # works just as well while a turn is running.
+        if command_parts[0].lower() in {"/image", "/paste-image"}:
+            argument = command_parts[1].strip() if len(command_parts) == 2 else ""
+            buff.reset()
+            if argument:
+                _attach_paths([argument])
+            else:
+                _attach_clipboard_image()
+            return
         with turn_state_lock:
             turn_retiring = retiring["on"]
         if turn_retiring:
@@ -3990,6 +4464,7 @@ def run_tui(
                     text,
                     display_text=display_text if display_text != text else None,
                     queue=True,
+                    attachments=submitted_attachments,
                 ):
                     recalled_pending["queue"] = None
             return
@@ -4049,6 +4524,7 @@ def run_tui(
                     text,
                     display_text=display_text if display_text != text else None,
                     queue=effective_queue,
+                    attachments=submitted_attachments,
                 ):
                     recalled_pending["queue"] = None
                 return
@@ -4217,7 +4693,7 @@ def run_tui(
         # Real path with slash-command support: route every submission through
         # the chat command handler (it returns "run" for plain messages).
         if session is not None and command_runner is not None:
-            _dispatch_command(text, display_text=display_text)
+            _dispatch_command(text, display_text=display_text, image_paths=submitted_images)
             return
 
         # No command runner (Phase 2 fake session / tests): exit words + run.
@@ -4227,7 +4703,7 @@ def run_tui(
         if session is not None:
             buff.reset()
             transcript.append_user(display_text)
-            _begin_run(text, {})
+            _begin_run(text, {}, image_paths=submitted_images)
             return
 
         # Shell-only path: keep configuration/help available while model calls are
@@ -4320,7 +4796,10 @@ def run_tui(
             body,
             # Working/status line only appears once a conversation is underway, so
             # the welcome screen keeps its Phase 1 spacing exactly.
-            ConditionalContainer(status_window, filter=has_messages | has_live_paste_tokens),
+            ConditionalContainer(
+                status_window,
+                filter=has_messages | has_live_paste_tokens | has_live_attachments,
+            ),
             subagent_panel_container,
             pending_messages_container,
             ConditionalContainer(
@@ -4361,7 +4840,17 @@ def run_tui(
             rows = _help_rows_for_sections(_resolve_help_sections(), max(20, width))
         else:
             rows = builder(max(20, width))
+        # Links in a doc panel are clickable too. A blank row gets one cell:
+        # prompt_toolkit reports a click on an empty row as (0, 0), which could
+        # land on a link in the first row.
+        rows = [
+            pad_after_trailing_link(row, max(20, width))
+            if fragment_list_to_text(row)
+            else [("", " ")]
+            for row in rows
+        ]
         help_rows["n"] = len(rows)
+        help_rows["rows"] = rows
         fragments: list[tuple[str, str]] = []
         for index, row in enumerate(rows):
             if index:
@@ -4399,6 +4888,27 @@ def run_tui(
         # the screen, so render_info is exact and scrolling can reach the bottom.
         return max(6, rows - 6)
 
+    def _help_mouse_event(mouse_event: MouseEvent) -> Any:
+        """Open a link clicked in the popup (press and release on one cell)."""
+        rows = help_rows.get("rows") or []
+        point = Point(x=max(0, mouse_event.position.x), y=max(0, mouse_event.position.y))
+        url = link_at(rows[point.y], point.x) if point.y < len(rows) else None
+        event_type = mouse_event.event_type
+        if event_type == MouseEventType.MOUSE_DOWN:
+            left = mouse_event.button == MouseButton.LEFT
+            link_press["panel"] = (url, point) if url and left else None
+        elif event_type == MouseEventType.MOUSE_UP:
+            press = link_press["panel"]
+            link_press["panel"] = None
+            if press is not None and press == (url, point):
+                _open_link(press[0])
+                return None
+        elif event_type == MouseEventType.MOUSE_MOVE:
+            press = link_press["panel"]
+            if press is not None and press[1] != point:
+                link_press["panel"] = None
+        return NotImplemented
+
     help_window = Window(
         _ScrollableControl(
             _help_fragments,
@@ -4406,6 +4916,7 @@ def run_tui(
             show_cursor=False,
             get_cursor_position=lambda: Point(x=0, y=_help_cursor_row()),
             on_scroll=lambda direction: _help_scroll(direction * wheel_step_rows),
+            on_mouse_event=_help_mouse_event,
         ),
         # MUST be True: the cursor-pin scroll trick only works on prompt_toolkit's
         # line-wrapping scroll path (_scroll_when_linewrapping). With wrap_lines
@@ -4980,21 +5491,57 @@ def run_tui(
             extra_filter=_completion_allowed,
         ),
     )
-    modal_scrim = Float(
-        content=ConditionalContainer(
-            Window(char=" ", style="class:tui.modal.scrim"),
-            filter=_small_modal_open,
-        ),
-        left=0,
-        right=0,
-        top=0,
-        bottom=0,
-    )
+    # There used to be a full-screen scrim Float here painting spaces over
+    # the transcript whenever a small modal was up. In a terminal that is a
+    # blackout, not a dim — the transcript (and all context) became unreadable
+    # exactly while a modal asked the user to judge it. The
+    # transcript now dims its own text instead (see _transcript_fragments), so
+    # the modal stays dominant while the content behind it remains legible.
+
+    def _settle_transcript_link_press(mouse_event: MouseEvent) -> bool:
+        """Resolve a pending link press from a raw screen event; True once opened.
+
+        Compared as screen cells, as the tip link does: the projection used for
+        selection measures columns in cells, so a wide character earlier in the
+        row would otherwise make a genuine click look like a drag.
+        """
+        press = link_press["transcript"]
+        if press is None or mouse_event.event_type not in {
+            MouseEventType.MOUSE_MOVE,
+            MouseEventType.MOUSE_UP,
+        }:
+            return False
+        url, point = press
+        cell = _transcript_link_cell(point)
+        rows = selection.get("rows") or []
+        cell_width = max(1, get_cwidth(rows[point.y][point.x])) if cell is not None else 1
+        if cell is None or not (
+            mouse_event.position.y == cell[0]
+            and cell[1] <= mouse_event.position.x < cell[1] + cell_width
+        ):
+            # The pointer left the link: from here on this is a selection drag.
+            link_press["transcript"] = None
+            return False
+        if mouse_event.event_type != MouseEventType.MOUSE_UP:
+            return False
+        link_press["transcript"] = None
+        selection.update({"anchor": None, "active": None, "dragging": False})
+        selection["planmeta_press"] = False
+        _stop_drag_capture()
+        _open_link(url)
+        return True
 
     def _captured_drag_mouse_event(mouse_event: MouseEvent) -> Any:
         target = drag_capture.get("target")
         if target == "tip_link":
             return _tip_link_mouse_event(mouse_event)
+        if target == "transcript" and mouse_event.event_type in {
+            MouseEventType.SCROLL_UP,
+            MouseEventType.SCROLL_DOWN,
+        }:
+            link_press["transcript"] = None
+        if target == "transcript" and _settle_transcript_link_press(mouse_event):
+            return None
         if target == "transcript":
             target_window = transcript_window
         elif target == "editor":
@@ -5009,7 +5556,7 @@ def run_tui(
 
         target_event, direction = projected
         if target == "transcript":
-            result = _transcript_mouse_event(target_event)
+            result = _transcript_mouse_event(target_event, captured=True)
         elif target == "editor":
             result = _editor_mouse_handler(target_event)
 
@@ -5042,7 +5589,6 @@ def run_tui(
             completion_float,
             # Opaque backing for the smaller centered modals. /config already owns
             # its full-screen opaque float; these panels need the same masking.
-            modal_scrim,
             help_float,
             picker_float,
             editor_float,
@@ -5080,6 +5626,27 @@ def run_tui(
         if match is None or paste_registry.get(int(match.group("id"))) is None:
             return None
         return match
+
+    def _registered_attachment_match_before_cursor() -> re.Match[str] | None:
+        buff = input_area.buffer
+        match = _attachment_token_before(buff.text, buff.cursor_position)
+        if match is None or not attachment_registry.is_live_token(match.group(0)):
+            return None
+        return match
+
+    def _registered_attachment_match_after_cursor() -> re.Match[str] | None:
+        buff = input_area.buffer
+        match = _attachment_token_after(buff.text, buff.cursor_position)
+        if match is None or not attachment_registry.is_live_token(match.group(0)):
+            return None
+        return match
+
+    _input_attachment_token_before_cursor = _input_focused & Condition(
+        lambda: _registered_attachment_match_before_cursor() is not None
+    )
+    _input_attachment_token_after_cursor = _input_focused & Condition(
+        lambda: _registered_attachment_match_after_cursor() is not None
+    )
 
     _input_paste_token_at_cursor = _input_focused & Condition(
         lambda: _registered_paste_match_at_cursor() is not None
@@ -5253,6 +5820,13 @@ def run_tui(
     )
     def _paste_into_input(event: Any) -> None:
         payload = _normalize_paste_text(event.data)
+        # A file dropped on the terminal arrives as its path, in a paste. When
+        # the payload is nothing but existing paths, it was a drop (or a
+        # deliberate path paste): chip it instead of spilling the path into the
+        # message. Anything mixed with prose stays an ordinary paste.
+        dropped = detect_dropped_paths(payload)
+        if dropped and _attach_paths(dropped):
+            return
         line_count = _paste_line_count(payload)
         if line_count <= _INLINE_PASTE_MAX_LINES and len(payload) <= _INLINE_PASTE_MAX_CHARS:
             input_area.buffer.insert_text(payload)
@@ -5281,6 +5855,37 @@ def run_tui(
         match = _registered_paste_match_after_cursor()
         if match is not None:
             input_area.buffer.delete(count=len(match.group(0)))
+
+    # A chip is one object to the user, so one Backspace removes the whole
+    # "[Image #1]" (and detaches the file) instead of leaving "[Image #".
+    @kb.add(
+        "backspace",
+        filter=_input_attachment_token_before_cursor & ~_input_has_selection,
+        eager=True,
+    )
+    def _remove_attachment_token_before_cursor(event: Any) -> None:
+        match = _registered_attachment_match_before_cursor()
+        if match is not None:
+            input_area.buffer.delete_before_cursor(count=len(match.group(0)))
+
+    @kb.add(
+        Keys.Delete,
+        filter=_input_attachment_token_after_cursor & ~_input_has_selection,
+        eager=True,
+    )
+    def _remove_attachment_token_after_cursor(event: Any) -> None:
+        match = _registered_attachment_match_after_cursor()
+        if match is not None:
+            input_area.buffer.delete(count=len(match.group(0)))
+
+    @kb.add(
+        "c-v",
+        filter=_input_focused & ~_small_modal_open & ~_config_open,
+        eager=True,
+    )
+    def _attach_clipboard_image_key(event: Any) -> None:
+        _record_tui_local_interaction(session=session, action="attach_clipboard_image")
+        _attach_clipboard_image()
 
     @kb.add(
         "c-q",
@@ -5334,6 +5939,47 @@ def run_tui(
     @kb.add("escape", filter=_input_focused & _completing, eager=True)
     def _complete_cancel(event: Any) -> None:
         input_area.buffer.cancel_completion()
+
+    # Up/Down step through the composer's visual rows, so a long wrapped line is
+    # walked like the editor it looks like. From the first/last row they fall
+    # through to prompt_toolkit's default (previous/next line, then history).
+    composer_goal: dict[str, Any] = {"column": None, "cursor": None, "text": None}
+
+    def _composer_vertical(event: Any, delta: int) -> None:
+        buff = input_area.buffer
+        for step in range(max(1, event.arg)):
+            # Keep the column aimed for across consecutive moves, so passing
+            # through a short row doesn't pull the cursor to the left for good.
+            same_spot = (
+                composer_goal["cursor"] == buff.cursor_position
+                and composer_goal["text"] == buff.text
+            )
+            moved = vertical_move(
+                buff.text,
+                buff.cursor_position,
+                _composer_width(),
+                delta,
+                goal=composer_goal["column"] if same_spot else None,
+            )
+            if moved is None:
+                remaining = max(1, event.arg) - step
+                if delta < 0:
+                    buff.auto_up(count=remaining)
+                else:
+                    buff.auto_down(count=remaining)
+                return
+            buff.cursor_position, composer_goal["column"] = moved
+            composer_goal["cursor"], composer_goal["text"] = buff.cursor_position, buff.text
+
+    _composer_keys = _input_focused & ~_completing & ~_small_modal_open & ~_config_open
+
+    @kb.add("up", filter=_composer_keys)
+    def _composer_up(event: Any) -> None:
+        _composer_vertical(event, -1)
+
+    @kb.add("down", filter=_composer_keys)
+    def _composer_down(event: Any) -> None:
+        _composer_vertical(event, 1)
 
     # ---- /help popup keys (only while the popup is open) ----
     @kb.add("escape", filter=_help_open)
@@ -5461,6 +6107,18 @@ def run_tui(
     def _approve_always(event: Any) -> None:
         _resolve_approval(allow=True, always=True)
 
+    @kb.add("d", filter=_approval_pending, eager=True)
+    def _approve_always_dir(event: Any) -> None:
+        # Folder-wide session grant: only meaningful when the pending
+        # request has a coverable directory; otherwise the key is inert so a
+        # stray "d" cannot silently allow anything.
+        from ...approval_scope import approval_dir_grant_candidate
+
+        request = approval_box.get("request")
+        if request is None or approval_dir_grant_candidate(request) is None:
+            return
+        _resolve_approval(allow=True, always_dir=True)
+
     @kb.add("n", filter=_approval_pending, eager=True)
     def _approve_no(event: Any) -> None:
         _resolve_approval(allow=False)
@@ -5526,9 +6184,9 @@ def run_tui(
     # needs the setup wizard's style classes merged in for its panels to render.
     _app_style = _build_tui_style(terminal_theme)
     if config_overlay is not None:
+        config_overlay.register(kb)
         from .setup_app import _build_setup_style
 
-        config_overlay.register(kb)
         _app_style = merge_styles([_app_style, _build_setup_style(terminal_theme)])
 
     tui_input, owned_tui_input = _resolve_tui_input(input)

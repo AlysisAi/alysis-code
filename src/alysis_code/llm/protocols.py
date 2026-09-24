@@ -508,6 +508,7 @@ PROVIDER_PROTOCOL_CAPABILITIES: tuple[ProviderProtocolCapabilities, ...] = (
             adapter="openai_compat_passive",
             supports_streaming=True,
             supports_buffered=True,
+            continuation_state="sensitive",
         ),
         usage_contract=UsageContract(
             response_usage_confidence=UsageConfidence.REPORTED,

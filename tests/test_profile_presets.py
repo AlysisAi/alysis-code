@@ -207,6 +207,8 @@ def test_openai_preset_uses_working_chat_completion_models() -> None:
     assert preset.base_url == "https://api.openai.com/v1"
     assert preset.suggested_models == (
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-terra",
         "gpt-5.6-sol",
         "gpt-5.6-luna",
@@ -220,12 +222,12 @@ def test_openai_preset_uses_working_chat_completion_models() -> None:
 
 def test_openai_presets_lead_with_gpt_6_astra() -> None:
     # GPT-6 Astra (2026-09-03) is OpenAI's flagship and heads both OpenAI
-    # surfaces; Terra follows as the balanced pick at 1/5 the input price.
+    # surfaces; Sol and Luna are the two newer GPT-6 choices.
     for key in ("openai", "openai-responses"):
         preset = get_preset(key)
 
         assert preset is not None
-        assert preset.suggested_models[:2] == ("gpt-6-astra", "gpt-5.6-terra")
+        assert preset.suggested_models[:3] == ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
         assert preset.suggested_model_descriptions["gpt-6-astra"].startswith("default")
         assert make_profile_from_preset(preset).default_model == "gpt-6-astra"
         assert canonical_model_alias_for_preset(preset, "gpt-6") == "gpt-6-astra"
@@ -322,6 +324,7 @@ def test_anthropic_preset_uses_native_messages_endpoint_and_current_models() -> 
     assert preset.extra_headers == {}
     assert preset.suggested_models == (
         "claude-sonnet-5",
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-fable-5-1",
         "claude-haiku-4-5",
@@ -389,10 +392,8 @@ def test_first_party_presets_do_not_default_to_preview_only_models() -> None:
 def test_launch_provider_presets_use_supported_chat_models() -> None:
     expected_models = {
         "deepseek": (
+            "deepseek-flash",
             "deepseek-v4-pro",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4.1-flash-expires-on-0910",
         ),
         "gemini": (
             "gemini-3.8-flash",
@@ -410,6 +411,7 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "mistral-medium-3-5",
             "mistral-large-2512",
             "mistral-small-2603",
+            "zai-glm-5-3",
             "zai-glm-5-2",
             "codestral-2508",
             "ministral-8b-2512",
@@ -463,19 +465,30 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
         "openrouter": (
             "anthropic/claude-sonnet-5",
             "anthropic/claude-opus-5",
+            "anthropic/claude-opus-5.5",
             "anthropic/claude-fable-5.1",
             "openai/gpt-6-astra",
+            "openai/gpt-6-sol",
+            "openai/gpt-6-luna",
             "openai/gpt-5.6-terra",
             "openai/gpt-5.6-luna",
             "google/gemini-3.8-flash",
+            "x-ai/grok-4.7",
             "x-ai/grok-4.6",
             "z-ai/glm-5.3",
+            "z-ai/glm-5.3-flashx",
             "z-ai/glm-5.3-flash",
             "moonshotai/kimi-k3",
             "deepseek/deepseek-v4-pro-0813",
+            "deepseek/deepseek-v4.1-flash",
             "deepseek/deepseek-v4-flash-0731",
             "deepseek/deepseek-v4-flash-vision-exp",
             "qwen/qwen3.8-max",
+            "qwen/qwen3.8-max-0902",
+            "xiaomi/mimo-v2.6-pro",
+            "xiaomi/mimo-v2.6-flash",
+            "xiaomi/mimo-v2.6-pro-ultraspeed",
+            "inception/mercury-2.5",
         ),
         "together": (
             "zai-org/GLM-5.3",
@@ -497,6 +510,7 @@ def test_launch_provider_presets_use_supported_chat_models() -> None:
             "accounts/fireworks/models/qwen3p7-plus",
         ),
         "xai": (
+            "grok-4.7",
             "grok-4.6",
             "grok-4.5",
             "grok-build-0.1",
@@ -868,10 +882,17 @@ def test_xiaomi_mimo_is_a_plain_byok_preset() -> None:
     assert preset.protocol == "openai_compat"
     assert preset.base_url == "https://api.xiaomimimo.com/v1"
     assert preset.api_key_env == "XIAOMI_API_KEY"
-    assert preset.suggested_models == ("mimo-v2.5-pro", "mimo-v2.5")
+    assert preset.suggested_models == (
+        "mimo-v2.6-pro",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro-ultraspeed",
+        "mimo-v2.5-pro",
+        "mimo-v2.5",
+    )
     assert all(model in preset.suggested_model_descriptions for model in preset.suggested_models)
-    assert preset.validation_model == "mimo-v2.5-pro"
-    # The legacy bare "mimo" placeholder migrates to the flagship model; the
+    assert preset.validation_model == "mimo-v2.6-pro"
+    assert make_profile_from_preset(preset).default_model == "mimo-v2.6-pro"
+    # The legacy bare "mimo" placeholder keeps its previous mapping; the
     # retired flash id (shut down 2026-06-30) follows Xiaomi's own routing.
     assert canonical_model_alias_for_preset(preset, "mimo") == "mimo-v2.5-pro"
     assert canonical_model_alias_for_preset(preset, "mimo-v2-flash") == "mimo-v2.5"
@@ -903,7 +924,7 @@ def test_hosted_alysis_preset_stays_intact_behind_the_advanced_picker() -> None:
 
     hosted = get_preset("alysis")
     assert hosted is not None
-    assert preset_selection_label(hosted) == "Alysis Code Pro (hosted models) - requires login"
+    assert preset_selection_label(hosted) == "Alysis Code (free credits) - requires login"
     # The preset itself must keep working for `alysis login` / alysis_cloud.
     assert hosted.api_key_env is None
     # The retired Xiaomi campaign must not redirect hosted model selections.

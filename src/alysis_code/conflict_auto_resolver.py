@@ -63,6 +63,7 @@ from .verify_gate import (
     resolve_verify_command_selection,
     resolve_verify_commands,
     run_task_verification,
+    verify_run_status,
 )
 
 _VERIFY_MODES = {"off", "warn", "strict"}
@@ -84,7 +85,7 @@ Rules
 - Do not modify .alysis/ or other denied prefixes unless explicitly instructed.
 
 Tool usage
-- Prefer search_rg plus fs_read_lines for focused conflict inspection; use fs_read when you need broader file context.
+- Prefer search_rg plus fs_read line ranges for focused conflict inspection; use fs_read when you need broader file context.
 - Prefer fs_edit for deterministic localized edits in one existing conflicted file.
 - Prefer git_apply_patch for broader or context-heavy conflict edits where unified diff context matters.
 - After edits, search for remaining conflict markers.
@@ -540,6 +541,10 @@ def attempt_auto_resolve_conflict(
                     cfg=run_cfg,
                     root=worktree_repo_path,
                     instruction=instruction,
+                    acceptance_instruction=(
+                        "Resolve the merge conflicts without expanding the task scope.\n"
+                        + "\n".join(f"Resolve conflict in `{path}`." for path in unmerged_files)
+                    ),
                     mode="auto",
                     runtime_kind=RuntimeKind.CONFLICT_AUTO_RESOLVE,
                     yes=True,
@@ -665,7 +670,10 @@ def attempt_auto_resolve_conflict(
                 cfg=cfg,
             )
             verify_summary = verify_result.summary
-            if not verify_result.all_passed:
+            if verify_run_status(verify_result) == "not_run":
+                # Tri-state: nothing executed - warn, do not fail the merge.
+                warnings.append(f"Conflict verify did not execute: {verify_result.summary}")
+            elif not verify_result.all_passed:
                 if effective_settings.verify_mode == "strict":
                     raise RuntimeError(f"strict conflict verify failed: {verify_result.summary}")
                 warnings.append(f"Conflict verify warning: {verify_result.summary}")

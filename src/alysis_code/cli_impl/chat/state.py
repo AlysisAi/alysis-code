@@ -113,6 +113,11 @@ class _ChatExecutionRequest:
     mode_override: str | None = None
     restore_mode_after: str | None = None
     chat_only: bool = False
+    # Declared relationship of this request to the session's host-owned task
+    # (``new_task`` / ``continuation`` / ``amendment``). ``None`` keeps the
+    # conservative default: the active objective is preserved and the request
+    # is delivered as this turn's user message.
+    task_relation: str | None = None
 
 
 __all__ = [name for name in globals() if not name.startswith("__") or name == "__version__"]

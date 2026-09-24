@@ -49,12 +49,19 @@ _SHA = "4f3a1c9e2b7d8a605fe1c3b29d47a8e0f1c2d3b4"
 
 
 def _git_runner(responses: dict[str, tuple[int, str]]):
-    """A fake ``git`` that answers by subcommand and records what it was asked."""
+    """A fake ``git`` that answers by subcommand and records what it was asked.
+
+    A key is either the full argv joined by spaces (``"rev-parse origin/main"``)
+    or just the subcommand (``"rev-parse"``). The specific form wins, so a test
+    that cares about one probe need not respell the others -- which matters now
+    that the generator issues two different ``rev-parse`` calls.
+    """
     calls: list[list[str]] = []
 
     def run(args):
-        calls.append(list(args))
-        return responses.get(args[0], (1, ""))
+        argv = list(args)
+        calls.append(argv)
+        return responses.get(" ".join(argv), responses.get(argv[0], (1, "")))
 
     run.calls = calls  # type: ignore[attr-defined]
     return run
@@ -254,7 +261,10 @@ class GenerateTests(unittest.TestCase):
         self.assertFalse(info.dirty)
         self.assertTrue(info.is_clean)
         self.assertEqual(info.source, bi.GENERATED_SOURCE)
-        self.assertEqual([call[0] for call in runner.calls], ["rev-parse", "status"])
+        self.assertEqual(
+            [call[0] for call in runner.calls],
+            ["rev-parse", "status", "log", "fetch", "rev-parse"],
+        )
 
     def test_a_dirty_tree_stamps_a_dirty_build(self) -> None:
         runner = _git_runner({"rev-parse": (0, _SHA), "status": (0, " M cli.py\n")})
@@ -429,6 +439,178 @@ class IdempotenceTests(unittest.TestCase):
             once = path.read_text(encoding="utf-8")
             bi.write_build_info(bi.read_build_info(path), path)
             self.assertEqual(path.read_text(encoding="utf-8"), once)
+
+
+_MAIN_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+
+
+class CommitSubjectTests(unittest.TestCase):
+    def test_the_subject_is_the_first_message_line(self) -> None:
+        runner = _git_runner({"log": (0, "fix(tbench): size the run budget per task\n")})
+        self.assertEqual(
+            bi.read_commit_subject(runner), "fix(tbench): size the run budget per task"
+        )
+
+    def test_only_the_first_line_is_taken(self) -> None:
+        runner = _git_runner({"log": (0, "subject line\n\nbody line\nmore body\n")})
+        self.assertEqual(bi.read_commit_subject(runner), "subject line")
+
+    def test_a_pathological_subject_is_truncated(self) -> None:
+        runner = _git_runner({"log": (0, "x" * 5000)})
+        self.assertEqual(len(bi.read_commit_subject(runner)), bi.COMMIT_SUBJECT_MAX_CHARS)
+
+    def test_a_failed_log_probe_yields_no_subject(self) -> None:
+        self.assertEqual(bi.read_commit_subject(_git_runner({"log": (128, "")})), "")
+
+    def test_an_empty_log_probe_yields_no_subject(self) -> None:
+        self.assertEqual(bi.read_commit_subject(_git_runner({"log": (0, "   \n")})), "")
+
+    def test_the_requested_commit_is_the_one_asked_about(self) -> None:
+        runner = _git_runner({"log": (0, "subject\n")})
+        bi.read_commit_subject(runner, _SHA)
+        self.assertEqual(runner.calls[-1], ["log", "-1", "--format=%s", _SHA])
+
+
+class ResolveOriginMainTests(unittest.TestCase):
+    def test_a_resolved_remote_is_recorded(self) -> None:
+        runner = _git_runner({"rev-parse origin/main": (0, _MAIN_SHA + "\n")})
+        self.assertEqual(bi.resolve_origin_main(runner), _MAIN_SHA)
+
+    def test_the_remote_is_fetched_before_being_read(self) -> None:
+        runner = _git_runner({"rev-parse origin/main": (0, _MAIN_SHA)})
+        bi.resolve_origin_main(runner)
+        self.assertEqual(
+            runner.calls, [["fetch", "--quiet", "origin"], ["rev-parse", "origin/main"]]
+        )
+
+    def test_no_fetch_still_reads_the_tracking_ref(self) -> None:
+        runner = _git_runner({"rev-parse origin/main": (0, _MAIN_SHA)})
+        self.assertEqual(bi.resolve_origin_main(runner, fetch=False), _MAIN_SHA)
+        self.assertEqual(runner.calls, [["rev-parse", "origin/main"]])
+
+    def test_a_failed_fetch_does_not_stop_the_read(self) -> None:
+        # The offline case: the fetch fails, the stale tracking ref still answers.
+        runner = _git_runner({"fetch": (128, ""), "rev-parse origin/main": (0, _MAIN_SHA)})
+        self.assertEqual(bi.resolve_origin_main(runner), _MAIN_SHA)
+
+    def test_no_remote_is_unavailable_rather_than_an_error(self) -> None:
+        self.assertEqual(bi.resolve_origin_main(_git_runner({})), bi.UNAVAILABLE)
+
+    def test_a_nonsense_remote_answer_is_unavailable(self) -> None:
+        runner = _git_runner({"rev-parse origin/main": (0, "origin/main\n")})
+        self.assertEqual(bi.resolve_origin_main(runner), bi.UNAVAILABLE)
+
+
+class OriginMainClaimTests(unittest.TestCase):
+    def _info(self, **kwargs):
+        base = {
+            "commit": _SHA,
+            "timestamp": "2026-08-29T09:14:03Z",
+            "dirty": False,
+            "source": "git",
+        }
+        return bi.BuildInfo(**{**base, **kwargs})
+
+    def test_a_build_at_origin_main_is_origin_main(self) -> None:
+        info = self._info(resolved_origin_main=_SHA)
+        self.assertTrue(info.origin_main_resolved)
+        self.assertTrue(info.is_origin_main)
+
+    def test_a_build_behind_origin_main_is_not(self) -> None:
+        # The exact defect: a fork-arm tip, built and labelled "latest main".
+        info = self._info(resolved_origin_main=_MAIN_SHA)
+        self.assertTrue(info.origin_main_resolved)
+        self.assertFalse(info.is_origin_main)
+
+    def test_an_unresolved_remote_cannot_claim_main(self) -> None:
+        info = self._info(resolved_origin_main=bi.UNAVAILABLE)
+        self.assertFalse(info.origin_main_resolved)
+        self.assertFalse(info.is_origin_main)
+
+    def test_an_unidentifiable_build_cannot_claim_main(self) -> None:
+        self.assertFalse(self._info(commit="", resolved_origin_main=_SHA).is_origin_main)
+
+    def test_case_differences_do_not_break_the_match(self) -> None:
+        self.assertTrue(self._info(commit=_SHA.upper(), resolved_origin_main=_SHA).is_origin_main)
+
+    def test_the_short_form_is_blank_when_unresolved(self) -> None:
+        info = self._info(resolved_origin_main=bi.UNAVAILABLE)
+        self.assertEqual(info.resolved_origin_main_short, "")
+
+
+class ProvenanceStampingTests(unittest.TestCase):
+    def _runner(self, **overrides):
+        responses = {
+            "rev-parse HEAD": (0, _SHA),
+            "status": (0, ""),
+            "log": (0, "release: 0.14.0"),
+            "fetch": (0, ""),
+            "rev-parse origin/main": (0, _MAIN_SHA),
+        }
+        responses.update(overrides)
+        return _git_runner(responses)
+
+    def test_a_stamp_carries_the_subject_and_the_remote(self) -> None:
+        info = bi.generate_build_info(repo_root=".", git_runner=self._runner(), environ={})
+        self.assertEqual(info.commit_subject, "release: 0.14.0")
+        self.assertEqual(info.resolved_origin_main, _MAIN_SHA)
+        self.assertFalse(info.is_origin_main)
+
+    def test_an_offline_build_still_stamps(self) -> None:
+        runner = self._runner(**{"fetch": (1, ""), "rev-parse origin/main": (128, "")})
+        info = bi.generate_build_info(repo_root=".", git_runner=runner, environ={})
+        self.assertTrue(info.is_clean)
+        self.assertEqual(info.resolved_origin_main, bi.UNAVAILABLE)
+        self.assertFalse(info.is_origin_main)
+
+    def test_fetch_false_skips_the_network_probe(self) -> None:
+        runner = self._runner()
+        bi.generate_build_info(repo_root=".", git_runner=runner, environ={}, fetch=False)
+        self.assertNotIn("fetch", [call[0] for call in runner.calls])
+
+    def test_the_new_fields_survive_a_render_read_round_trip(self) -> None:
+        info = bi.generate_build_info(repo_root=".", git_runner=self._runner(), environ={})
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "_build_info.py"
+            bi.write_build_info(info, path)
+            self.assertEqual(bi.read_build_info(path), info)
+
+    def test_a_schema_1_stamp_still_reads(self) -> None:
+        # A stamp written before these fields existed must read as "never
+        # recorded" rather than failing the import.
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "_build_info.py"
+            path.write_text(
+                'BUILD_COMMIT = "' + _SHA + '"\n'
+                'BUILD_TIMESTAMP = "2026-08-26T09:00:00Z"\n'
+                "BUILD_DIRTY = False\n"
+                'BUILD_SOURCE = "git"\n'
+                "BUILD_INFO_SCHEMA_VERSION = 1\n",
+                encoding="utf-8",
+            )
+            info = bi.read_build_info(path)
+            self.assertEqual(info.commit, _SHA)
+            self.assertEqual(info.commit_subject, "")
+            self.assertEqual(info.resolved_origin_main, bi.UNAVAILABLE)
+            self.assertFalse(info.is_origin_main)
+
+    def test_telemetry_carries_the_new_facts(self) -> None:
+        info = bi.generate_build_info(repo_root=".", git_runner=self._runner(), environ={})
+        payload = info.telemetry_payload()
+        self.assertEqual(payload["commit_subject"], "release: 0.14.0")
+        self.assertEqual(payload["resolved_origin_main"], _MAIN_SHA)
+        self.assertIs(payload["origin_main_resolved"], True)
+        self.assertIs(payload["is_origin_main"], False)
+        json.dumps(payload)
+
+    def test_the_version_line_did_not_grow(self) -> None:
+        # describe() is read by setup.sh and the release distribution validator.
+        # New telemetry fields must not change this version line.
+        info = bi.generate_build_info(repo_root=".", git_runner=self._runner(), environ={})
+        self.assertEqual(
+            info.describe(),
+            "commit: " + _SHA[:12] + ", built: " + info.timestamp + ", dirty: no, source: git",
+        )
 
 
 if __name__ == "__main__":

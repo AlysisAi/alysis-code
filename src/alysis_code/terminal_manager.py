@@ -218,20 +218,22 @@ class BackgroundProcess:
         if until not in {"output_available", "process_exited", "either"}:
             raise ValueError(f"unsupported wait condition: {until}")
         deadline = time.perf_counter() + max(0.0, float(timeout_s))
-        while True:
-            snapshot = self.read(since)
-            has_output = bool(snapshot.lines)
-            exited = snapshot.status in _TERMINAL_STATUSES
-            if until == "output_available" and has_output:
-                return snapshot, False
-            if until == "process_exited" and exited:
-                return snapshot, False
-            if until == "either" and (has_output or exited):
-                return snapshot, False
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                return snapshot, True
-            with self._condition:
+        with self._condition:
+            while True:
+                # Check and subscribe under one lock: output/exit published
+                # between the read and wait must not become a lost wakeup.
+                snapshot = self.read(since)
+                has_output = bool(snapshot.lines)
+                exited = snapshot.status in _TERMINAL_STATUSES
+                if until == "output_available" and has_output:
+                    return snapshot, False
+                if until == "process_exited" and exited:
+                    return snapshot, False
+                if until == "either" and (has_output or exited):
+                    return snapshot, False
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    return snapshot, True
                 self._condition.wait(remaining)
 
     def kill(self, timeout_s: float) -> ProcessOutputSnapshot:

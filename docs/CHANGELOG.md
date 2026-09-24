@@ -8,6 +8,40 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 No user-facing changes yet.
 
+## [0.14.0] - 2026-09-24
+
+### Added
+
+- Add GPT-6 Sol and GPT-6 Luna to the OpenAI API and ChatGPT subscription model
+  choices, with pricing, context limits, and reasoning settings. Subscription
+  availability follows the live account catalog.
+- Add Claude Opus 5.5 to Anthropic and OpenRouter, Grok 4.7 to xAI and OpenRouter,
+  Mistral's hosted GLM 5.3, and current OpenRouter model routes.
+- Show DeepSeek V4.1 Flash and GLM 5.3 Flash as hosted account model choices.
+- Add `/objective` commands to inspect, replace, and amend the current task across
+  retries and resumed sessions.
+- Allow a configurable set of public package registries for `web_fetch` while
+  retaining URL and network safety checks.
+
+### Changed
+
+- Show clearer model names in setup and move the request timeout control to
+  Advanced settings.
+- Improve subagent scheduling, task evidence, and verification reporting.
+
+### Fixed
+
+- Suppress unexecuted tool-call markup in replies, retry once with structured
+  tool calls, and report a failure if the model repeats the malformed output.
+- Require AnyIO 4.14.2 or newer in the HTTP runtime dependency set.
+- Keep hosted account credentials on the selected gateway when an unsupported
+  model is chosen, and preserve retired Xiaomi selections without silently
+  redirecting them to a different provider's model.
+- Omit unsupported temperature settings for GPT-6 reasoning requests and reject
+  attempts to disable reasoning for always-thinking OpenRouter models.
+- Improve session recovery and deadline handling for long running work.
+- Verify durable service listener ownership on macOS without requiring root access.
+
 ## [0.13.8] - 2026-09-16
 
 ### Changed
@@ -308,7 +342,8 @@ Public launch and repository-layout refresh.
 Release notes for versions before 0.9.8 remain available in the
 [GitHub Releases archive](https://github.com/AlysisAi/alysis-code/releases).
 
-[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...HEAD
+[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...v0.14.0
 [0.13.8]: https://github.com/AlysisAi/alysis-code/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.2...v0.13.7
 [0.13.6.2]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.1...v0.13.6.2

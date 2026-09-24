@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -25,6 +25,76 @@ def _stable_payload_hash(value: Any) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(serialized.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def _wire_fingerprint(value: Any) -> tuple[str, int]:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8", errors="surrogatepass"
+    )
+    return hashlib.sha256(encoded).hexdigest(), len(encoded)
+
+
+class WireRequestDiagnostics:
+    """Content-free comparison of consecutive prepared requests on one client.
+
+    Fingerprint the final transport payload, after provider adaptation. Lengths
+    refer to canonical UTF-8 JSON, not HTTP bytes or tokens. This observes local
+    prefix stability, not provider cache eligibility, cache hits, or delivery.
+    Only hashes and lengths are retained, including for opaque provider items.
+    A retry compares against the preceding logical request, not its own first
+    attempt. A new client has no comparison, including after process restart.
+    """
+
+    def __init__(self) -> None:
+        self._previous: (
+            tuple[tuple[tuple[str, int], ...], tuple[str, int], tuple[str, int]] | None
+        ) = None
+
+    def begin_request(self) -> Callable[..., dict[str, Any]]:
+        previous = self._previous
+
+        def describe(
+            payload: Mapping[str, Any],
+            *,
+            history_key: str,
+            instructions_key: str | None = None,
+        ) -> dict[str, Any]:
+            history = payload.get(history_key, [])
+            items = tuple(_wire_fingerprint(item) for item in history)
+            instructions = _wire_fingerprint(
+                payload.get(instructions_key) if instructions_key is not None else None
+            )
+            tools = _wire_fingerprint(payload.get("tools"))
+            history_hash, history_bytes = _wire_fingerprint(history)
+            result: dict[str, Any] = {
+                "wire_schema_version": 1,
+                "wire_history_sha256": history_hash,
+                "wire_history_bytes": history_bytes,
+                "wire_history_items": len(items),
+                "wire_instructions_sha256": instructions[0],
+                "wire_instructions_bytes": instructions[1],
+                "wire_tools_sha256": tools[0],
+                "wire_tools_bytes": tools[1],
+            }
+            if previous is not None:
+                old_items, old_instructions, old_tools = previous
+                shared = 0
+                for old_item, item in zip(old_items, items, strict=False):
+                    if old_item != item:
+                        break
+                    shared += 1
+                result.update(
+                    wire_previous_history_items=len(old_items),
+                    wire_shared_prefix_items=shared,
+                    wire_shared_prefix_bytes=sum(size for _, size in items[:shared]),
+                    wire_previous_history_prefix_preserved=(shared == len(old_items)),
+                    wire_previous_instructions_unchanged=(instructions == old_instructions),
+                    wire_previous_tools_unchanged=(tools == old_tools),
+                )
+            self._previous = items, instructions, tools
+            return result
+
+        return describe
 
 
 def _optional_payload_token_estimate(payload: Any) -> int | None:

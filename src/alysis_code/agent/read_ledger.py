@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..tools.fs import _DEFAULT_FS_READ_MAX_BYTES
 
 LineRange = tuple[int, int]
 
@@ -13,18 +17,24 @@ LineRange = tuple[int, int]
 class _FileReads:
     content_sha256: str
     ranges: list[LineRange]
+    numbered_ranges: list[LineRange] = field(default_factory=list)
+    deliveries: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SessionReadLedger:
-    """Suppress unchanged file ranges already returned within one agent session."""
+    """Suppress unchanged ranges already returned in the requested presentation."""
 
     def __init__(self, *, root: Path, enabled: bool = True) -> None:
         self.root = root.resolve()
         self.enabled = bool(enabled)
         self._files: dict[str, _FileReads] = {}
+        self._pending: dict[str, tuple[str, str, str, list[LineRange], bool]] = {}
         self._lock = threading.Lock()
 
     def content_hash(self, path: str) -> str | None:
+        # max_bytes bounds returned content. Optional small-file dedup may read
+        # up to the default read budget per hash, even for a smaller window.
+        max_bytes = _DEFAULT_FS_READ_MAX_BYTES
         if not self.enabled:
             return None
         path_obj = (self.root / path).resolve()
@@ -33,13 +43,17 @@ class SessionReadLedger:
         except ValueError:
             return None
         try:
-            digest = hashlib.sha256()
+            # Deduplication is optional. Do not scan an entire large file just
+            # to support a bounded read, or trust stat metadata as content proof.
+            if path_obj.stat().st_size > max_bytes:
+                return None
             with path_obj.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
+                content = handle.read(max_bytes + 1)
+            if len(content) > max_bytes:
+                return None
         except (FileNotFoundError, IsADirectoryError, OSError):
             return None
-        return digest.hexdigest()
+        return hashlib.sha256(content).hexdigest()
 
     def invalidate(self, *paths: str) -> None:
         if not self.enabled:
@@ -47,6 +61,20 @@ class SessionReadLedger:
         with self._lock:
             for path in paths:
                 self._files.pop(str(path), None)
+                self._pending = {
+                    key: entry for key, entry in self._pending.items() if entry[0] != str(path)
+                }
+
+    def reset(self) -> int:
+        """Forget every delivered range after a model-history boundary."""
+
+        if not self.enabled:
+            return 0
+        with self._lock:
+            cleared = len(self._files)
+            self._files.clear()
+            self._pending.clear()
+        return cleared
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         """Return an immutable-by-convention copy for session continuation."""
@@ -57,15 +85,31 @@ class SessionReadLedger:
                 path: {
                     "content_sha256": entry.content_sha256,
                     "ranges": list(entry.ranges),
+                    "numbered_ranges": list(entry.numbered_ranges),
+                    "deliveries": [dict(delivery) for delivery in entry.deliveries],
                 }
                 for path, entry in self._files.items()
             }
 
-    def seed_from_snapshot(self, snapshot: dict[str, dict[str, Any]]) -> int:
+    def seed_from_snapshot(
+        self,
+        snapshot: dict[str, dict[str, Any]],
+        *,
+        retained_messages: list[dict[str, Any]] | None = None,
+    ) -> int:
         """Import still-valid ranges from an earlier incarnation of this session."""
         if not self.enabled:
             return 0
         imported: dict[str, _FileReads] = {}
+        retained_hashes = (
+            {
+                hashlib.sha256(str(message.get("content") or "").encode("utf-8")).hexdigest()
+                for message in retained_messages
+                if message.get("role") == "tool"
+            }
+            if retained_messages is not None
+            else None
+        )
         for path, raw_entry in snapshot.items():
             if not isinstance(path, str) or not isinstance(raw_entry, dict):
                 continue
@@ -73,22 +117,44 @@ class SessionReadLedger:
             if not expected_hash or self.content_hash(path) != expected_hash:
                 continue
             raw_ranges = raw_entry.get("ranges")
+            deliveries = [
+                delivery
+                for delivery in raw_entry.get("deliveries", [])
+                if isinstance(delivery, dict)
+            ]
+            if retained_hashes is not None:
+                deliveries = [
+                    delivery
+                    for delivery in deliveries
+                    if delivery.get("message_sha256") in retained_hashes
+                ]
+                raw_ranges = [
+                    item
+                    for delivery in deliveries
+                    if not delivery.get("include_line_numbers", False)
+                    for item in delivery.get("ranges", [])
+                ]
             if not isinstance(raw_ranges, list):
                 continue
-            ranges = [
-                (int(item[0]), int(item[1]))
-                for item in raw_ranges
-                if isinstance(item, (list, tuple))
-                and len(item) == 2
-                and isinstance(item[0], int)
-                and isinstance(item[1], int)
-                and item[0] > 0
-                and item[1] >= item[0]
-            ]
-            if ranges:
+            ranges = _snapshot_ranges(raw_ranges)
+            # Older snapshots did not distinguish presentation. Preserve their
+            # content coverage without claiming numbered text was delivered.
+            numbered_ranges = _snapshot_ranges(
+                [
+                    item
+                    for delivery in deliveries
+                    if delivery.get("include_line_numbers")
+                    for item in delivery.get("ranges", [])
+                ]
+                if retained_hashes is not None
+                else raw_entry.get("numbered_ranges")
+            )
+            if ranges or numbered_ranges:
                 imported[path] = _FileReads(
                     content_sha256=expected_hash,
-                    ranges=_merge_ranges(ranges),
+                    ranges=ranges,
+                    numbered_ranges=numbered_ranges,
+                    deliveries=deliveries,
                 )
         with self._lock:
             self._files.update(imported)
@@ -101,15 +167,15 @@ class SessionReadLedger:
         result: dict[str, Any],
         content_hash_before: str | None,
         force: bool,
+        include_line_numbers: bool = False,
     ) -> dict[str, Any]:
         if not self.enabled:
             return result
+        if content_hash_before is None:
+            self.invalidate(path)
+            return result
         content_hash_after = self.content_hash(path)
-        if (
-            content_hash_before is None
-            or content_hash_after is None
-            or content_hash_before != content_hash_after
-        ):
+        if content_hash_after is None or content_hash_before != content_hash_after:
             self.invalidate(path)
             return result
 
@@ -119,18 +185,29 @@ class SessionReadLedger:
 
         with self._lock:
             entry = self._files.get(path)
-            if entry is None or entry.content_sha256 != content_hash_after:
-                entry = _FileReads(content_sha256=content_hash_after, ranges=[])
-                self._files[path] = entry
-            previous_ranges = list(entry.ranges)
+            previous_ranges = (
+                list(entry.numbered_ranges if include_line_numbers else entry.ranges)
+                if entry is not None and entry.content_sha256 == content_hash_after
+                else []
+            )
             if force:
-                entry.ranges = _merge_ranges([*entry.ranges, returned_range])
-                return {**result, "read_ledger_forced": True}
+                return self._stage_result(
+                    path,
+                    content_hash_after,
+                    {**result, "read_ledger_forced": True},
+                    [returned_range],
+                    include_line_numbers=include_line_numbers,
+                )
 
             unread_ranges = _subtract_ranges(returned_range, previous_ranges)
             if unread_ranges == [returned_range]:
-                entry.ranges = _merge_ranges([*entry.ranges, returned_range])
-                return result
+                return self._stage_result(
+                    path,
+                    content_hash_after,
+                    result,
+                    [returned_range],
+                    include_line_numbers=include_line_numbers,
+                )
 
             skipped_ranges = _subtract_ranges(returned_range, unread_ranges)
             notice = _notice(
@@ -138,7 +215,6 @@ class SessionReadLedger:
                 skipped_ranges=skipped_ranges,
                 previous_ranges=previous_ranges,
             )
-            entry.ranges = _merge_ranges([*entry.ranges, returned_range])
 
         if not unread_ranges:
             return {
@@ -156,7 +232,7 @@ class SessionReadLedger:
             unread_ranges=unread_ranges,
         )
         separator = "" if not unread_content or unread_content.endswith("\n") else "\n"
-        return {
+        filtered = {
             **result,
             "content": f"{unread_content}{separator}{notice}",
             "read_ledger_partial": True,
@@ -164,6 +240,127 @@ class SessionReadLedger:
             "returned_ranges": _range_payloads(unread_ranges),
             "skipped_ranges": _range_payloads(skipped_ranges),
         }
+        with self._lock:
+            return self._stage_result(
+                path,
+                content_hash_after,
+                filtered,
+                unread_ranges,
+                include_line_numbers=include_line_numbers,
+            )
+
+    def _stage_result(
+        self,
+        path: str,
+        content_hash: str,
+        result: dict[str, Any],
+        ranges: list[LineRange],
+        *,
+        include_line_numbers: bool = False,
+    ) -> dict[str, Any]:
+        """Prepare a receipt; fetching content is not evidence of model delivery."""
+        identity = json.dumps(
+            [path, content_hash, ranges, result.get("content"), include_line_numbers]
+        )
+        receipt_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        # A cancelled tool batch must not retain source text indefinitely.
+        while len(self._pending) >= 256:
+            self._pending.pop(next(iter(self._pending)))
+        self._pending[receipt_id] = (
+            path,
+            content_hash,
+            str(result.get("content") or ""),
+            ranges,
+            include_line_numbers,
+        )
+        return {**result, "read_receipt_id": receipt_id}
+
+    def record_delivery(
+        self, *, result: dict[str, Any], content_for_message: str
+    ) -> dict[str, Any] | None:
+        """Commit only exact, complete source lines present in the final model message.
+
+        Call after transcript shaping and append. Redaction, clipping, failed appends
+        and offloaded storage cannot manufacture delivered ranges.
+        """
+        if not self.enabled:
+            return None
+        with self._lock:
+            pending = self._pending.pop(str(result.get("read_receipt_id") or ""), None)
+        if pending is None:
+            return None
+        path, expected_hash, original_content, ranges, include_line_numbers = pending
+        if self.content_hash(path) != expected_hash:
+            self.invalidate(path)
+            return None
+        try:
+            message = json.loads(content_for_message)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(message, dict):
+            return None
+        if message.get("preview_format") == "file_content":
+            visible = message.get("preview")
+        else:
+            visible = message.get("content")
+        if not isinstance(visible, str):
+            return None
+        original_lines = list(io.StringIO(original_content, newline=""))
+        visible_lines = list(io.StringIO(visible, newline=""))
+        line_numbers = [number for start, end in ranges for number in range(start, end + 1)]
+        delivered = [
+            (number, number)
+            for number, original, shown in zip(
+                line_numbers, original_lines, visible_lines, strict=False
+            )
+            if original == shown
+        ]
+        delivered = _merge_ranges(delivered)
+        with self._lock:
+            entry = self._files.get(path)
+            if delivered:
+                if entry is None or entry.content_sha256 != expected_hash:
+                    entry = _FileReads(content_sha256=expected_hash, ranges=[])
+                    self._files[path] = entry
+                if include_line_numbers:
+                    entry.numbered_ranges = _merge_ranges([*entry.numbered_ranges, *delivered])
+                else:
+                    entry.ranges = _merge_ranges([*entry.ranges, *delivered])
+                message_hash = hashlib.sha256(content_for_message.encode("utf-8")).hexdigest()
+                delivery = {
+                    "message_sha256": message_hash,
+                    "ranges": delivered,
+                    "include_line_numbers": include_line_numbers,
+                }
+                if delivery not in entry.deliveries:
+                    entry.deliveries.append(delivery)
+        return {
+            "path": path,
+            "content_sha256": expected_hash,
+            "delivered_ranges": _range_payloads(delivered),
+            "visible_chars": len(visible),
+            "visible_utf8_bytes": len(visible.encode("utf-8")),
+            "retrievable_handle": message.get("artifact_handle"),
+            "retrievable_locator": message.get("artifact_locator"),
+            "retention": "active_context",
+        }
+
+
+def _snapshot_ranges(raw_ranges: Any) -> list[LineRange]:
+    if not isinstance(raw_ranges, list):
+        return []
+    return _merge_ranges(
+        [
+            (item[0], item[1])
+            for item in raw_ranges
+            if isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], int)
+            and isinstance(item[1], int)
+            and item[0] > 0
+            and item[1] >= item[0]
+        ]
+    )
 
 
 def _returned_line_range(result: dict[str, Any]) -> LineRange | None:
@@ -176,11 +373,8 @@ def _returned_line_range(result: dict[str, Any]) -> LineRange | None:
         end = result["end_line"]
     else:
         content = str(result.get("content") or "")
-        line_count = content.count("\n")
-        if content and not content.endswith("\n"):
-            line_count += 1
         start = 1
-        end = line_count
+        end = sum(1 for _line in io.StringIO(content, newline=""))
     if not isinstance(start, int) or not isinstance(end, int):
         return None
     if result.get("line_clipped") is True:
@@ -244,7 +438,9 @@ def _slice_content(
     returned_start: int,
     unread_ranges: list[LineRange],
 ) -> str:
-    lines = content.splitlines(keepends=True)
+    # Match the reader's physical CR/LF/CRLF boundaries. Unicode separators
+    # inside a source line must not shift the range offsets or lose later lines.
+    lines = list(io.StringIO(content, newline=""))
     pieces: list[str] = []
     for start, end in unread_ranges:
         first = max(0, start - returned_start)

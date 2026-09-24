@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shlex
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,13 @@ from .llm.provider_limits import (
     DEFAULT_PROVIDER_RETRY_MAX_DELAY_SECONDS,
     DEFAULT_PROVIDER_RETRY_MAX_RETRIES,
 )
+from .prompt_guidance_catalog import (
+    GUIDANCE_PROFILES,
+    ParentPromptGuidanceProfile,
+    PromptGuidanceProfile,
+    get_model_prompt_catalog,
+    subagent_profile,
+)
 from .step_budget import (
     AUTONOMOUS_STEP_BUDGET_POLICY,
     DEFAULT_CHAT_MAX_STEPS,
@@ -31,6 +39,7 @@ from .step_budget import (
     DEFAULT_TASK_MAX_STEPS,
     normalize_step_budget_policy,
 )
+from .web_research import normalize_trusted_domain_entry
 from .web_search_adapters import normalize_web_search_adapter
 from .web_search_policy import normalize_web_search_policy
 
@@ -59,7 +68,33 @@ _VALID_TOOLBAR_ITEMS: set[str] = {
     "forge",
 }
 _DEFAULT_TOOLBAR_ITEMS: tuple[str, ...] = ("mode", "model", "ctx", "subagents")
-DEFAULT_SUBAGENT_TIMEOUT_S = 900.0
+DEFAULT_SUBAGENT_TIMEOUT_S: float | None = None
+
+# Hosts (plus their subdomains) that web_fetch may fetch without prior session
+# provenance. Curated to major public package registries — read-only metadata
+# endpoints that search engines do not index, so the search-mediated provenance
+# recovery path can never authorize them. The safe-HTTP guard (scheme, DNS/IP,
+# redirect, and byte-cap validation) still applies to every fetch.
+DEFAULT_WEB_FETCH_TRUSTED_DOMAINS: tuple[str, ...] = (
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "rubygems.org",
+    "repo.maven.apache.org",
+    "repo1.maven.org",
+    "proxy.golang.org",
+    "sum.golang.org",
+    "pkg.go.dev",
+    "hex.pm",
+    "repo.hex.pm",
+    "packagist.org",
+    "repo.packagist.org",
+    "api.nuget.org",
+)
 DEFAULT_VERIFY_COMMANDS: tuple[str, ...] = ("pytest -q",)
 VERIFY_RUNNER_PREFIXES: frozenset[tuple[str, str]] = frozenset(
     {
@@ -351,8 +386,23 @@ class SubagentOrchestrationConfig(BaseModel):
     parallel_nonwriting_shared: bool = False
     helpers_enabled: bool = True
     helper_max_total_per_child: int = Field(default=2, ge=0)
-    helper_timeout_s: float = Field(default=120.0, gt=0, allow_inf_nan=False)
-    helper_max_steps: int = Field(default=20, ge=1)
+    helper_timeout_s: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Optional wall-clock ceiling for a nested helper. Unset means the helper "
+            "only inherits an active parent deadline."
+        ),
+    )
+    helper_max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional step ceiling for nested helpers. Unset keeps autonomous helpers "
+            "unbounded unless an explicit limit or the limited step policy applies."
+        ),
+    )
     # Match the established exploration-stagnation threshold: three identical
     # outcomes are enough to identify repetition without treating one retry as a loop.
     repetition_signal_threshold: int = Field(default=3, ge=2)
@@ -405,9 +455,59 @@ class CacheConfig(BaseModel):
     keepalive_idle_threshold_s: float = Field(default=240.0, gt=0, allow_inf_nan=False)
 
 
+class PromptGuidanceConfig(BaseModel):
+    """Prompt templates only; model selection and runtime requirements are unchanged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default: ParentPromptGuidanceProfile = "expanded"
+    # Explicit, editable assignments, not model-family or capability inference.
+    # Supplying a mapping replaces this default mapping, including an empty map.
+    model_profiles: dict[str, ParentPromptGuidanceProfile] = Field(
+        default_factory=get_model_prompt_catalog
+    )
+
+    @model_validator(mode="after")
+    def validate_model_ids(self) -> Self:
+        if any(not model or model != model.strip() for model in self.model_profiles):
+            raise ValueError("prompt_guidance.model_profiles requires nonempty, trimmed model IDs")
+        return self
+
+
+def resolve_prompt_guidance_profile(
+    cfg: AppConfig | None,
+    *,
+    model: str | None = None,
+    subagent: bool = False,
+) -> PromptGuidanceProfile:
+    """Resolve the effective model, then select parent density or its child family.
+
+    Scope comes from the session, never from whether delegation tools are enabled.
+    Child roles remain separate from this family-level working guidance.
+    """
+
+    guidance = cfg.prompt_guidance if cfg is not None else PromptGuidanceConfig()
+    effective_model = str(model if model is not None else getattr(cfg, "model", "") or "").strip()
+    profile = guidance.model_profiles.get(effective_model, guidance.default)
+    return subagent_profile(profile) if subagent else profile
+
+
+class AnytimeCheckpointConfig(BaseModel):
+    enabled: bool = True
+    max_files: int = Field(default=2000, ge=1, le=20000)
+    max_total_bytes: int = Field(default=64 * 1024 * 1024, ge=1024, le=512 * 1024 * 1024)
+    max_candidates: int = Field(default=4, ge=1, le=20)
+    # This is host configuration, never inferred from a task name or supplied
+    # by the model. The command must also be an accepted required check.
+    objective_command: str = ""
+    objective_key: str = "score"
+    objective_direction: Literal["minimize", "maximize"] = "minimize"
+
+
 class AppConfig(BaseModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    prompt_guidance: PromptGuidanceConfig = Field(default_factory=PromptGuidanceConfig)
     read_ledger_enabled: bool = True
     agent_runtimes: dict[str, AgentRuntimeSettings] = Field(default_factory=dict)
     base_url: str = "https://api.openai.com/v1"
@@ -537,11 +637,14 @@ class AppConfig(BaseModel):
     step_budget_policy: str = AUTONOMOUS_STEP_BUDGET_POLICY
     task_max_steps: int = DEFAULT_TASK_MAX_STEPS
     subagent_max_steps: int = DEFAULT_SUBAGENT_MAX_STEPS
-    subagent_timeout_s: float = Field(
+    subagent_timeout_s: float | None = Field(
         default=DEFAULT_SUBAGENT_TIMEOUT_S,
         gt=0,
         allow_inf_nan=False,
-        description="Fallback wall-clock ceiling in seconds for each ordinary subagent run.",
+        description=(
+            "Optional wall-clock ceiling in seconds for each ordinary subagent run. "
+            "Unset means the child only inherits an active parent deadline."
+        ),
     )
     subagent_orchestration: SubagentOrchestrationConfig = Field(
         default_factory=SubagentOrchestrationConfig,
@@ -565,6 +668,19 @@ class AppConfig(BaseModel):
             "web tools are never registered in the model's tool list and any runtime "
             "web call hard-errors. Overridable via ALYSIS_WEB_TOOLS env var; used "
             "by benchmark/offline runs to guarantee no network-mediated contamination."
+        ),
+    )
+    web_fetch_trusted_domains: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_WEB_FETCH_TRUSTED_DOMAINS),
+        description=(
+            "Hosts (matched exactly or as a subdomain suffix) that web_fetch may "
+            "fetch without prior session provenance such as a user-provided URL or "
+            "a web_search result. Defaults to major public package registries so "
+            "dependency lookups work in fresh sessions and subagents. The safe-HTTP "
+            "guard still validates scheme, credentials, DNS/IP ranges, redirects, "
+            "and response size on every fetch. Set to [] to require provenance for "
+            "every URL. Overridable via ALYSIS_WEB_FETCH_TRUSTED_DOMAINS "
+            "(comma-separated hosts; 'none' disables the allowlist)."
         ),
     )
     web_search_mode: str = "auto"
@@ -592,6 +708,7 @@ class AppConfig(BaseModel):
     )
     integration_verify_mode: str = "warn"
     integration_verify_commands: list[str] = Field(default_factory=list)
+    anytime_checkpoint: AnytimeCheckpointConfig = Field(default_factory=AnytimeCheckpointConfig)
     replanning_mode: str = "off"
     toolbar_items: list[str] = Field(
         default_factory=lambda: list(_DEFAULT_TOOLBAR_ITEMS),
@@ -1571,7 +1688,31 @@ def _missing_api_key_message(cfg: AppConfig) -> str:
             suggestions.append("set OPENAI_API_KEY")
     suggestions.append("run `alysis config set-api-key`")
     sentences = [suggestion[0].upper() + suggestion[1:] for suggestion in suggestions]
-    return "Missing API key. " + "; or ".join(sentences) + "."
+    # A missing key is almost always a "which store did this process read?" question, so
+    # the error names the exact file and profile this process consulted. Paths and
+    # booleans only — never key material.
+    try:
+        cred_path = credentials_path()
+        stored = load_persisted_profile_keys()
+        # `exists` alone proved ambiguous in the field (a file that exists for one process and
+        # not for another), so say *why*: a raw stat result is unambiguous where Path.exists()
+        # swallows the error, and the process identity explains which environment looked.
+        try:
+            os.stat(cred_path)
+            stat_note = "stat=ok"
+        except OSError as stat_error:
+            stat_note = f"stat={type(stat_error).__name__}:{stat_error.errno}"
+        diag = (
+            f" [looked in: {cred_path} (exists={cred_path.exists()}, {stat_note}); "
+            f"config_dir_override={'set' if env_get('ALYSIS_CONFIG_DIR') else 'unset'}; "
+            f"active_profile={profile.name if profile is not None else '<unresolved>'}; "
+            f"stored_profiles={sorted(stored.keys()) or 'none'}; "
+            f"legacy_key={'yes' if load_persisted_api_key() else 'no'}; "
+            f"pid={os.getpid()}; python={sys.executable}; cwd={os.getcwd()}]"
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must never mask the real error
+        diag = ""
+    return "Missing API key. " + "; or ".join(sentences) + "." + diag
 
 
 _SETTABLE_KEYS: set[str] = {
@@ -1579,6 +1720,8 @@ _SETTABLE_KEYS: set[str] = {
     "execution.runtime",
     "base_url",
     "model",
+    "prompt_guidance.default",
+    "prompt_guidance.model_profiles",
     "llm_timeout_s",
     "llm_stream_no_progress_timeout_s",
     "run_deadline_seconds",
@@ -1648,6 +1791,7 @@ _SETTABLE_KEYS: set[str] = {
     "cache.keepalive_enabled",
     "cache.keepalive_idle_threshold_s",
     "read_ledger_enabled",
+    "web_fetch_trusted_domains",
     "web_search_mode",
     "web_search_policy",
     "web_search_enabled",
@@ -1813,6 +1957,21 @@ def _coerce_optional_positive_float(value: Any, *, key: str) -> float | None:
     return parsed
 
 
+def _coerce_optional_positive_int(value: Any, *, key: str) -> int | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if normalized.lower() in {"", "none", "null", "default", "off", "unlimited", "never"}:
+        return None
+    try:
+        parsed = int(normalized, 10)
+    except (TypeError, ValueError) as e:
+        raise ConfigError(f"{key} must be an integer > 0 or unlimited") from e
+    if parsed <= 0:
+        raise ConfigError(f"{key} must be an integer > 0 or unlimited")
+    return parsed
+
+
 def _coerce_optional_sampling_value(value: Any, *, key: str) -> float | int | None:
     """Validate one sampling determinism control for ``config set``.
 
@@ -1921,6 +2080,16 @@ def _coerce_non_negative_int(value: str, *, key: str) -> int:
     return parsed
 
 
+def _coerce_min_int(value: str, *, key: str, minimum: int) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as e:
+        raise ConfigError(f"{key} must be an integer") from e
+    if parsed < minimum:
+        raise ConfigError(f"{key} must be >= {minimum}")
+    return parsed
+
+
 def _resolve_positive_timeout(raw: Any) -> float | None:
     try:
         parsed = float(raw)
@@ -2005,14 +2174,41 @@ def _apply_legacy_temperature_override(cfg: AppConfig, temperature: float) -> No
     cfg.chat_temperature = temperature
 
 
-def resolve_llm_timeout_s(cfg: AppConfig | None) -> float:
+@dataclass(frozen=True)
+class ResolvedLlmTimeout:
+    """The per-request LLM timeout that will actually be enforced, and why.
+
+    Exists because the config snapshot used to record only the raw
+    ``AppConfig.llm_timeout_s`` field. A campaign that set
+    ``ALYSIS_LLM_TIMEOUT_S=240`` then produced 89 session logs all reporting
+    ``llm_timeout_s: 60.0`` -- the unset field default -- and the teardown
+    concluded the operator's value had been dropped. It had not; the artifact
+    was answering a different question than the one every reader asked of it.
+    A resolved value must carry its source so the snapshot can state what was
+    enforced rather than requiring readers to re-derive the precedence chain.
+    """
+
+    seconds: float
+    source: str
+
+
+def resolve_llm_timeout(cfg: AppConfig | None) -> ResolvedLlmTimeout:
+    """Resolve the enforced LLM timeout: environment, config, then default.
+
+    Source vocabulary matches ``resolve_run_deadline``: ``environment``,
+    ``config``, ``runtime_default``.
+    """
     env_timeout = _resolve_positive_timeout(env_get("ALYSIS_LLM_TIMEOUT_S"))
     if env_timeout is not None:
-        return env_timeout
+        return ResolvedLlmTimeout(seconds=env_timeout, source="environment")
     cfg_timeout = _resolve_positive_timeout(getattr(cfg, "llm_timeout_s", None))
     if cfg_timeout is not None:
-        return cfg_timeout
-    return 60.0
+        return ResolvedLlmTimeout(seconds=cfg_timeout, source="config")
+    return ResolvedLlmTimeout(seconds=60.0, source="runtime_default")
+
+
+def resolve_llm_timeout_s(cfg: AppConfig | None) -> float:
+    return resolve_llm_timeout(cfg).seconds
 
 
 @dataclass(frozen=True)
@@ -2229,6 +2425,60 @@ def resolve_web_tools_enabled(cfg: AppConfig | None) -> bool:
     if cfg is None:
         return True
     return bool(getattr(cfg, "web_tools_enabled", True))
+
+
+_WEB_FETCH_TRUSTED_DOMAINS_DISABLED_ENV_VALUES = frozenset(
+    {"none", "off", "0", "false", "disabled"}
+)
+
+
+def _parse_trusted_domain_list(value: str) -> list[str]:
+    """Parse a ``config set web_fetch_trusted_domains`` value.
+
+    Comma-separated hosts. ``none``/``off``/``[]``/empty clears the allowlist;
+    ``default`` restores the curated registry defaults. Every entry must carry
+    a usable host (validated with the same normalizer the session tracker uses).
+    """
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "off", "[]"}:
+        return []
+    if text.lower() in {"default", "defaults"}:
+        return list(DEFAULT_WEB_FETCH_TRUSTED_DOMAINS)
+    entries: list[str] = []
+    for raw_entry in text.split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            continue
+        if normalize_trusted_domain_entry(entry) is None:
+            raise ConfigError(
+                f"web_fetch_trusted_domains entry {entry!r} has no usable host; "
+                "use bare hosts like registry.npmjs.org (comma-separated)"
+            )
+        entries.append(entry)
+    if not entries:
+        return []
+    return entries
+
+
+def resolve_web_fetch_trusted_domains(cfg: AppConfig | None) -> tuple[str, ...]:
+    """Trusted-domain allowlist for the web_fetch provenance gate.
+
+    Precedence: ALYSIS_WEB_FETCH_TRUSTED_DOMAINS env var (comma-separated hosts;
+    any of none/off/0/false/disabled empties the allowlist) over the
+    ``web_fetch_trusted_domains`` config field, over the curated defaults.
+    Entries are host-normalized downstream by the session tracker.
+    """
+    env_value = str(env_get("ALYSIS_WEB_FETCH_TRUSTED_DOMAINS") or "").strip()
+    if env_value:
+        if env_value.lower() in _WEB_FETCH_TRUSTED_DOMAINS_DISABLED_ENV_VALUES:
+            return ()
+        return tuple(entry.strip() for entry in env_value.split(",") if entry.strip())
+    if cfg is None:
+        return tuple(DEFAULT_WEB_FETCH_TRUSTED_DOMAINS)
+    entries = getattr(cfg, "web_fetch_trusted_domains", None)
+    if entries is None:
+        return tuple(DEFAULT_WEB_FETCH_TRUSTED_DOMAINS)
+    return tuple(str(entry) for entry in entries)
 
 
 def resolve_web_search_enabled(cfg: AppConfig | None) -> bool:
@@ -2638,6 +2888,42 @@ def _ensure_selected_runtime_settings(cfg: AppConfig, runtime_id: str) -> None:
         )
 
 
+def _set_prompt_guidance_config_value(cfg: AppConfig, *, key: str, value: str) -> AppConfig:
+    values = cfg.prompt_guidance.model_dump()
+    if key == "prompt_guidance.default":
+        values["default"] = value.strip().lower()
+    elif key == "prompt_guidance.model_profiles":
+        try:
+            values["model_profiles"] = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("prompt_guidance.model_profiles must be a JSON object") from exc
+    elif key.startswith("prompt_guidance.model_profiles."):
+        model = key.removeprefix("prompt_guidance.model_profiles.")
+        if not model or model != model.strip():
+            raise ConfigError(
+                "prompt_guidance.model_profiles requires a nonempty, trimmed model ID"
+            )
+        profile = value.strip().lower()
+        if profile:
+            values["model_profiles"][model] = profile
+        else:
+            values["model_profiles"].pop(model, None)
+    else:
+        raise ConfigError(
+            "Supported prompt guidance keys: prompt_guidance.default, "
+            "prompt_guidance.model_profiles, prompt_guidance.model_profiles.<model-id>"
+        )
+    try:
+        guidance = PromptGuidanceConfig.model_validate(values)
+    except ValidationError as exc:
+        raise ConfigError(
+            f"Prompt guidance profiles must be one of {', '.join(GUIDANCE_PROFILES)}; "
+            "model_profiles must map exact model IDs to profiles."
+        ) from exc
+    cfg.prompt_guidance = guidance
+    return cfg
+
+
 def set_config_value(
     cfg: AppConfig,
     key: str,
@@ -2647,6 +2933,8 @@ def set_config_value(
 ) -> AppConfig:
     if not allow_subscription_selection or str(key or "").strip().lower() == "base_url":
         ensure_subscription_menu_managed_key(cfg, key)
+    if key.startswith("prompt_guidance."):
+        return _set_prompt_guidance_config_value(cfg, key=key, value=value)
     role_model_parts = _role_model_key_parts(key)
     if role_model_parts is not None:
         namespace, role = role_model_parts
@@ -2680,7 +2968,7 @@ def set_config_value(
             f"Unknown/unsupported key: {key}. Supported keys: "
             f"{', '.join(sorted(_SETTABLE_KEYS))}, role_models.<role>, "
             "forge_role_models.<role>, persona_models.<persona>, "
-            "agent_runtimes.<runtime-id>.<field>"
+            "agent_runtimes.<runtime-id>.<field>, prompt_guidance.model_profiles.<model-id>"
         )
 
     if key == "execution.backend":
@@ -2848,7 +3136,7 @@ def set_config_value(
         return cfg
 
     if key == "subagent_timeout_s":
-        cfg.subagent_timeout_s = _coerce_positive_float(value, key=key)
+        cfg.subagent_timeout_s = _coerce_optional_positive_float(value, key=key)
         return cfg
 
     if key == "subagent_orchestration.max_background_children":
@@ -2885,11 +3173,17 @@ def set_config_value(
         return cfg
 
     if key == "subagent_orchestration.helper_timeout_s":
-        cfg.subagent_orchestration.helper_timeout_s = _coerce_positive_float(value, key=key)
+        cfg.subagent_orchestration.helper_timeout_s = _coerce_optional_positive_float(
+            value,
+            key=key,
+        )
         return cfg
 
     if key == "subagent_orchestration.helper_max_steps":
-        cfg.subagent_orchestration.helper_max_steps = _coerce_positive_int(value, key=key)
+        cfg.subagent_orchestration.helper_max_steps = _coerce_optional_positive_int(
+            value,
+            key=key,
+        )
         return cfg
 
     if key == "subagent_orchestration.repetition_signal_threshold":
@@ -3198,6 +3492,10 @@ def set_config_value(
             cfg.custom_tools_enabled = False
             return cfg
         raise ConfigError("custom_tools_enabled must be true/false")
+
+    if key == "web_fetch_trusted_domains":
+        cfg.web_fetch_trusted_domains = _parse_trusted_domain_list(value)
+        return cfg
 
     if key == "web_search_mode":
         cfg.web_search_mode = _normalize_web_search_mode(value)

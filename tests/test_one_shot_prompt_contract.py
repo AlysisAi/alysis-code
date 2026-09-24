@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
+from alysis_code.agent.prompt_context import (
+    _SYSTEM_PROMPT_WRITE_SECTION,
+    _compose_session_system_prompt,
+)
 from alysis_code.agent.turn_contract import TurnOutcome, TurnSemantics
 from alysis_code.agent_loop import (
     _SYSTEM_PROMPT_ONE_SHOT_SECTION,
@@ -15,16 +21,20 @@ def test_one_shot_prompt_forbids_standalone_text_only_plan() -> None:
     assert "Planning may be internal" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
 
 
-def test_one_shot_visible_plan_must_be_accompanied_by_tool_calls() -> None:
-    assert "same assistant response must also include implementation-oriented tool calls." in (
+def test_one_shot_requested_plan_can_be_the_final_deliverable() -> None:
+    assert "A requested plan or analysis can itself be the final result." in (
         _SYSTEM_PROMPT_ONE_SHOT_SECTION
     )
+    assert "not permission or a request to change files" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
 
 
-def test_one_shot_read_or_explore_only_progress_is_not_final() -> None:
+def test_one_shot_requires_task_appropriate_completion_without_manufactured_work() -> None:
     assert "A progress update is not a final answer." in _SYSTEM_PROMPT_ONE_SHOT_SECTION
-    assert "After read/explore-only tool calls" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
-    assert "run an implementation-producing command" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
+    assert "For implementation requests, proceed from investigation to changes" in (
+        _SYSTEM_PROMPT_ONE_SHOT_SECTION
+    )
+    assert "For inspection requests, gather sufficient evidence" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
+    assert "without manufacturing edits or test runs" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
 
 
 def test_one_shot_prompt_rejects_generic_clarification_bailouts() -> None:
@@ -35,22 +45,47 @@ def test_one_shot_prompt_rejects_generic_clarification_bailouts() -> None:
     assert "never ask a question and wait" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
 
 
-def test_one_shot_prompt_mentions_requirement_review_and_root_fixing() -> None:
-    prompt = _SYSTEM_PROMPT_ONE_SHOT_SECTION.casefold()
+def test_requirement_review_and_root_fixing_are_shared_with_chat() -> None:
+    # These are task-quality requirements, not a consequence of process lifetime.
+    prompt = SYSTEM_PROMPT.casefold()
+    assert "original acceptance criteria" in prompt
+    assert "definition whose behavior is wrong" in prompt and "direct callers" in prompt
 
-    assert "re-read" in prompt and "requirement" in prompt
-    assert "definition" in prompt and "direct call" in prompt
 
-
-def test_one_shot_prompt_protects_existing_tests_and_requires_execution_evidence() -> None:
-    assert "tracked existing tests as immutable acceptance evidence" in (
-        _SYSTEM_PROMPT_ONE_SHOT_SECTION
+def test_test_preservation_guidance_is_shared_with_chat_and_children() -> None:
+    assert "Preserve regression coverage" in _SYSTEM_PROMPT_WRITE_SECTION
+    assert "Extend existing tests or add new tests" in _SYSTEM_PROMPT_WRITE_SECTION
+    assert "update expectations when the requested behavior warrants it" in (
+        _SYSTEM_PROMPT_WRITE_SECTION
     )
-    assert "New test files are allowed" in _SYSTEM_PROMPT_ONE_SHOT_SECTION
-    # The execution-evidence rule lives once, in the base prompt's final
-    # response requirements, and applies to one-shot runs through composition.
+    assert "Never weaken, skip, or delete checks merely" in _SYSTEM_PROMPT_WRITE_SECTION
+    assert "immutable acceptance evidence" not in _SYSTEM_PROMPT_ONE_SHOT_SECTION
+    # The execution-evidence rule remains shared and independent of test placement.
     assert "after your last source edit" in SYSTEM_PROMPT
     assert "observing its output and exit code" in SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("one_shot", [False, True])
+@pytest.mark.parametrize("guidance", ["compact", "balanced", "expanded"])
+@pytest.mark.parametrize("role_append", [None, "Complete the delegated code change."])
+def test_editing_guidance_survives_parent_child_and_density_composition(
+    one_shot: bool, guidance: str, role_append: str | None
+) -> None:
+    prompt = _compose_session_system_prompt(
+        base_prompt=SYSTEM_PROMPT,
+        trusted_prompt_append=role_append,
+        include_write_guidance=True,
+        include_skill_discovery_guidance=False,
+        include_skill_lifecycle_guidance=False,
+        include_subagent_guidance=role_append is None,
+        include_one_shot_guidance=one_shot,
+        guidance_profile=guidance,
+    )
+    assert prompt.count("Preserve regression coverage") == 1
+    assert "Extend existing tests or add new tests" in prompt
+    assert "Never weaken, skip, or delete checks merely" in prompt
+    assert "tracked existing tests as immutable" not in prompt
+    assert "never discard uncommitted work" in prompt.casefold()
 
 
 def test_no_material_edits_nudge_is_implementation_first() -> None:

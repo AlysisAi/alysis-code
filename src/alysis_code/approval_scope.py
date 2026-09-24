@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -34,6 +35,86 @@ _FILE_SCOPE_KINDS = frozenset(
     }
 )
 _COMMAND_SCOPE_KINDS = frozenset({"shell_run", "shell_background"})
+
+# ---- directory-scoped session grants --------------------------------------
+# An exact-file-set "always" can never cover the next file of a batch (every
+# file set hashes differently), so deletes prompted once per file with a
+# useless [a]. A directory grant is the explicit, user-chosen widening: allow
+# THIS operation for files under THIS directory, for this session. Deliberately
+# restricted to fs_delete - review-mode write approvals exist to show each
+# change and stay per-file.
+_DIR_GRANT_KINDS = frozenset({"fs_delete"})
+
+
+def dir_grants_enabled() -> bool:
+    """Kill switch ``ALYSIS_APPROVAL_DIR_GRANTS`` (default on)."""
+    value = os.environ.get("ALYSIS_APPROVAL_DIR_GRANTS", "").strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def _plain_relative_file_path(text: str) -> bool:
+    """A workspace-relative path with no absolute prefix and no dot segments."""
+    if not text or text.startswith("/"):
+        return False
+    return all(segment not in {"", ".", ".."} for segment in text.split("/"))
+
+
+def approval_dir_grant_candidate(request: Any) -> str | None:
+    """Directory a folder-wide session grant would cover for this request.
+
+    Returns the workspace-relative directory (posix, trailing ``/``) when the
+    request is a dir-grantable kind whose files all live in one directory that
+    is not the workspace root; ``None`` otherwise (including for approvals
+    marked ``allow_for_session_disabled`` - sensitive-file prompts never widen).
+    """
+    if not dir_grants_enabled():
+        return None
+    kind = str(getattr(request, "kind", "") or "")
+    if kind not in _DIR_GRANT_KINDS:
+        return None
+    metadata = getattr(request, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allow_for_session_disabled"):
+        return None
+    files = getattr(request, "files", None) or ()
+    normalized = _normalize_files(files if isinstance(files, list | tuple) else ())
+    if not normalized:
+        return None
+    directories: set[str] = set()
+    for text in normalized:
+        if not _plain_relative_file_path(text):
+            return None
+        directories.add(text.rsplit("/", 1)[0] if "/" in text else "")
+    if len(directories) != 1:
+        return None
+    directory = next(iter(directories))
+    if not directory:
+        return None
+    return directory + "/"
+
+
+def request_matches_dir_grants(request: Any, grants: Iterable[tuple[str, str]]) -> bool:
+    """Whether every file of ``request`` falls under a stored (kind, dir) grant."""
+    if not dir_grants_enabled():
+        return False
+    kind = str(getattr(request, "kind", "") or "")
+    if kind not in _DIR_GRANT_KINDS:
+        return False
+    metadata = getattr(request, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allow_for_session_disabled"):
+        return False
+    files = getattr(request, "files", None) or ()
+    normalized = _normalize_files(files if isinstance(files, list | tuple) else ())
+    if not normalized:
+        return False
+    applicable = {directory for grant_kind, directory in grants if grant_kind == kind}
+    if not applicable:
+        return False
+    for text in normalized:
+        if not _plain_relative_file_path(text):
+            return False
+        if not any(text.startswith(directory) for directory in applicable):
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)

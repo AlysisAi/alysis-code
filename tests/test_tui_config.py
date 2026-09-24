@@ -328,7 +328,7 @@ def test_alysis_login_replaces_previous_provider_state_and_preserves_gateway(
     assert flow.stage == "subscription_account"
     assert flow.state.active_profile == "alysis"
     assert flow.state.fields["base_url"] == alysis_cloud.gateway_base_url()
-    assert flow.state.fields["model"] == "deepseek-v4-flash"
+    assert flow.state.fields["model"] == "deepseek-flash"
     assert flow.state.execution_backend == "native"
     assert flow.state.profiles["openai"] == previous_profile
     if finish == "save":
@@ -371,7 +371,7 @@ def test_advanced_submenu_holds_subagent_and_forge():
     flow.choose("advanced")
     assert flow.stage == "advanced" and flow.current_mode() == "list"
     values = [r.value for r in flow.screen().rows]
-    assert values == ["subagents", "forge", "back"]
+    assert values == ["request_timeout", "subagents", "forge", "back"]
     flow.choose("back")
     assert flow.stage == "menu"
 
@@ -422,7 +422,9 @@ def test_sandbox_section_sets_field_and_returns_to_menu():
 
 
 def test_default_model_full_flow():
-    flow = ConfigFlow(cfg=_cfg(model="gpt-4o"))
+    cfg = _cfg(model="gpt-4o")
+    cfg.llm_timeout_s = 95.5
+    flow = ConfigFlow(cfg=cfg)
     flow.choose("default")
     assert flow.stage == "model"
     flow.choose(flow.screen().rows[0].value)  # current model row
@@ -430,10 +432,8 @@ def test_default_model_full_flow():
     flow.submit_input("")  # keep current base_url
     assert flow.stage == "model_thinking"
     flow.choose("high")
-    assert flow.stage == "model_timeout"
-    flow.submit_input("45")
     assert flow.stage == "menu"
-    assert flow.state.fields["llm_timeout_s"] == "45"
+    assert flow.state.fields["llm_timeout_s"] == "95.5"
     assert flow.state.thinking_label == "high"
 
 
@@ -475,31 +475,56 @@ def test_default_model_custom_path():
     assert flow.state.fields["model"] == "my-custom-model"
 
 
-@pytest.mark.parametrize("custom", [False, True])
 @pytest.mark.parametrize("gateway_override", [None, "https://gateway.example.test/v1"])
-def test_alysis_model_flow_skips_managed_endpoint_in_both_directions(
-    tmp_path, monkeypatch, custom, gateway_override
+def test_alysis_model_flow_shows_free_models_and_keeps_managed_endpoint(
+    tmp_path, monkeypatch, gateway_override
 ):
     _config_env(tmp_path, monkeypatch)
     if gateway_override:
         monkeypatch.setenv("ALYSIS_GATEWAY_URL", gateway_override)
-    monkeypatch.setattr(account_login, "list_trial_models", lambda _cfg: [])
     flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
     gateway = flow.state.fields["base_url"]
     flow.choose("default")
-    if custom:
-        flow.choose(flow_mod._CUSTOM_MODEL_VALUE)
-        flow.submit_input("future-hosted-model")
-    else:
-        flow.choose("deepseek-v4-flash")
+    assert [(row.value, row.label) for row in flow.screen().rows] == [
+        ("deepseek-flash", "DeepSeek V4.1 Flash"),
+        ("glm-5.3-flash", "GLM 5.3 Flash"),
+    ]
+    flow.choose_current()
     assert flow.stage == "model_thinking"
+    assert flow.state.fields["model"] == "deepseek-flash"
     flow.back()
     assert flow.stage == "model"
-    flow.choose("deepseek-v4-flash")
+    assert flow.screen().rows[0].current is True
+    flow.choose_current()
+    timeout = flow.state.fields["llm_timeout_s"]
     flow.choose("auto")
-    flow.submit_input("45")
+    assert flow.stage == "menu"
+    assert flow.state.fields["llm_timeout_s"] == timeout
+    assert (
+        next(row for row in flow.screen().rows if row.value == "default").description
+        == "DeepSeek V4.1 Flash"
+    )
+    assert flow.state.fields["base_url"] == gateway
+
+
+def test_alysis_model_flow_selects_glm_with_required_thinking(tmp_path, monkeypatch):
+    _config_env(tmp_path, monkeypatch)
+    flow = ConfigFlow(cfg=_cfg_with_alysis_profile())
+    gateway = flow.state.fields["base_url"]
+    flow.choose("default")
+    flow.choose("glm-5.3-flash")
+    assert flow.state.fields["model"] == "glm-5.3-flash"
+    assert flow.stage == "model_thinking"
+    options = {row.value for row in flow.screen().rows}
+    assert "none" not in options
+    assert "off" not in options
+    flow.choose("high")
     assert flow.stage == "menu"
     assert flow.state.fields["base_url"] == gateway
+    assert (
+        next(row for row in flow.screen().rows if row.value == "default").description
+        == "GLM 5.3 Flash"
+    )
 
 
 def test_alysis_profile_editor_keeps_endpoint_managed(tmp_path, monkeypatch):
@@ -512,18 +537,39 @@ def test_alysis_profile_editor_keeps_endpoint_managed(tmp_path, monkeypatch):
     assert not flow.state.dirty
 
 
-def test_model_timeout_rejects_non_positive():
+@pytest.mark.parametrize("invalid", ["0", "-1", "nan", "inf", "abc"])
+def test_advanced_request_timeout_rejects_invalid_values(invalid):
     flow = ConfigFlow(cfg=_cfg())
-    flow.choose("default")
-    flow.choose(flow.screen().rows[0].value)
-    flow.submit_input("")  # base_url
-    flow.choose("auto")  # thinking
-    flow.submit_input("0")  # invalid timeout
-    assert flow.stage == "model_timeout"  # stayed
+    timeout = flow.state.fields["llm_timeout_s"]
+    flow.choose("advanced")
+    flow.choose("request_timeout")
+    flow.submit_input(invalid)
+    assert flow.stage == "request_timeout"
     assert flow.status_tone == "err"
+    assert flow.state.fields["llm_timeout_s"] == timeout
 
 
-# --------------------------------------------------------------------------- context & cache
+def test_advanced_request_timeout_can_be_changed_or_cancelled():
+    cfg = _cfg()
+    flow = ConfigFlow(cfg=cfg)
+    timeout = flow.state.fields["llm_timeout_s"]
+    flow.choose("advanced")
+    flow.choose("request_timeout")
+    assert flow.screen().input_default == timeout
+    flow.back()
+    assert flow.stage == "advanced"
+    assert flow.state.fields["llm_timeout_s"] == timeout
+    flow.choose("request_timeout")
+    flow.submit_input("95.5")
+    assert flow.stage == "advanced"
+    assert flow.state.fields["llm_timeout_s"] == "95.5"
+    assert (
+        next(row for row in flow.screen().rows if row.value == "request_timeout").description
+        == "95.5 seconds"
+    )
+    result = flow.state.commit_to(cfg)
+    assert result.saved
+    assert cfg.llm_timeout_s == 95.5
 
 
 def test_web_search_flow_and_save(monkeypatch, tmp_path):
@@ -856,6 +902,33 @@ def test_provider_switch_rows_show_model_host_and_what_needs_attention():
     flow.choose("remove")
     remove_rows = {row.value: row for row in flow.screen().rows}
     assert remove_rows["qwen-intl"].description == rows["qwen-intl"].description
+
+
+def test_provider_switch_rows_hide_gateway_host_and_url_credentials():
+    """The hosted gateway's host is a Supabase project ref, and a custom base URL
+    can carry a token as userinfo; neither belongs in the picker."""
+    alysis_url = next(p for p in PROFILE_PRESETS if p.key == "alysis").base_url
+    cfg = AppConfig(model="deepseek-flash", base_url=alysis_url)
+    cfg.extra_fields = {
+        "profiles": {
+            "alysis": {"base_url": alysis_url, "default_model": "deepseek-flash"},
+            "proxy": {
+                "base_url": "https://team:s3cret-token@proxy.example.com:8443/v1",
+                "default_model": "my-model",
+            },
+        },
+        "active_profile": "alysis",
+    }
+    flow = ConfigFlow(cfg=cfg)
+    flow.choose("profile")
+    flow.choose("switch")
+    rows = {row.value: row for row in flow.screen().rows}
+
+    assert rows["alysis"].description == "active · deepseek-flash · Alysis Code gateway"
+    assert rows["proxy"].description == "my-model · proxy.example.com:8443"
+    shown = " ".join(row.description for row in rows.values())
+    assert "supabase" not in shown
+    assert "s3cret-token" not in shown
 
 
 def test_provider_add_preset_with_base_url():
@@ -1456,7 +1529,7 @@ def test_config_input_plain_selection_backspace_cuts_and_enter_accepts(monkeypat
     class InputFlow(ConfigFlow):
         def __init__(self):
             super().__init__(cfg=_cfg())
-            self.stage = "model_timeout"
+            self.stage = "request_timeout"
 
         def submit_input(self, text):
             submitted.append(text)

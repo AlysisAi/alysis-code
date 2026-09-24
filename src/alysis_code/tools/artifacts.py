@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 from typing import Any
 
 from ..ide.protocol import redact_secrets
@@ -16,6 +17,7 @@ class SessionArtifactReadError(RuntimeError):
         *,
         error_code: str = "session_artifact_read_failed",
         guidance: str | None = None,
+        available_handles: list[dict[str, str]] | None = None,
     ) -> None:
         self.result_payload: dict[str, Any] = {
             "error": message,
@@ -25,6 +27,8 @@ class SessionArtifactReadError(RuntimeError):
         }
         if guidance:
             self.result_payload["guidance"] = guidance
+        if available_handles is not None:
+            self.result_payload["available_handles"] = available_handles
         super().__init__(message)
 
 
@@ -66,46 +70,77 @@ def _bounded_offset(value: Any) -> int:
 def session_artifact_read(
     *,
     artifact_layout: SessionArtifactLayout,
-    locator: str,
+    locator: str = "",
+    handle: str = "",
+    list_handles: bool = False,
+    after_handle: str = "",
     max_bytes: Any = DEFAULT_SESSION_ARTIFACT_READ_BYTES,
     offset: Any = 0,
 ) -> dict[str, Any]:
     """Read one bounded artifact addressed only by its current-session locator."""
 
+    if list_handles:
+        references = artifact_layout.available_handles(limit=100, after_handle=after_handle)
+        return {
+            "available_handles": references,
+            "next_handle": references[-1]["handle"] if len(references) == 100 else None,
+        }
+    if handle and locator:
+        raise SessionArtifactReadError("Supply either handle or locator, not both.")
+    if handle:
+        try:
+            locator = artifact_layout.resolve_handle(handle)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
+            raise SessionArtifactReadError(
+                "Artifact handle is not available in the current session.",
+                error_code="session_artifact_handle_not_found",
+                guidance="Select an exact available handle, or use list_handles=true to discover references.",
+                available_handles=artifact_layout.available_handles(),
+            ) from exc
     try:
         artifact_path = artifact_layout.resolve_locator(locator)
     except (OSError, RuntimeError, ValueError) as exc:
-        raise _invalid_locator_error(exc) from exc
+        error = _invalid_locator_error(exc)
+        error.result_payload["available_handles"] = artifact_layout.available_handles()
+        raise error from exc
 
     read_limit = _bounded_max_bytes(max_bytes)
     read_offset = _bounded_offset(offset)
     if not artifact_path.exists() or not artifact_path.is_file():
         guidance = (
-            "The session that produced the locator must read it. Do not retry this "
-            "locator from the current session."
+            "Select an exact available handle, or use list_handles=true. "
+            "References from other sessions are not authorized here."
         )
         raise SessionArtifactReadError(
-            "Session artifact is not present in this session and may belong to a "
-            f"different session. {guidance}",
-            error_code="session_artifact_session_mismatch",
+            f"Session artifact was not found in this session. {guidance}",
+            error_code="session_artifact_not_found",
             guidance=guidance,
+            available_handles=artifact_layout.available_handles(),
         )
     try:
         size = artifact_path.stat().st_size
         if read_offset >= size:
             payload = b""
         else:
-            with artifact_path.open("rb") as handle:
-                handle.seek(read_offset)
-                payload = handle.read(read_limit)
+            with artifact_path.open("rb") as artifact_file:
+                artifact_file.seek(read_offset)
+                payload = artifact_file.read(read_limit)
     except OSError as exc:
         raise SessionArtifactReadError("Session artifact was not readable.") from exc
 
-    bytes_returned = len(payload)
+    if read_offset and payload and 0x80 <= payload[0] <= 0xBF:
+        raise SessionArtifactReadError(
+            "Offset splits a UTF-8 character; use the previous page's next_offset.",
+            error_code="session_artifact_invalid_utf8_offset",
+        )
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    content = decoder.decode(payload, final=read_offset + len(payload) >= size)
+    pending, _ = decoder.getstate()
+    bytes_returned = len(payload) - len(pending)
     has_more = read_offset + bytes_returned < size
-    content = payload.decode("utf-8", errors="replace")
     return {
         "locator": str(locator),
+        **({"handle": handle} if handle else {}),
         "offset": read_offset,
         "bytes_returned": bytes_returned,
         "size": size,
@@ -116,6 +151,7 @@ def session_artifact_read(
         "max_bytes": read_limit,
         "encoding": "utf-8-replace",
         "content": redact_secrets(content),
+        **({"minimum_bytes_to_progress": 4} if payload and not bytes_returned else {}),
     }
 
 

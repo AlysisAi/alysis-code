@@ -74,11 +74,19 @@ A `web_search`/`web_fetch` failure inside a turn is classified before it reaches
   structured rejections that carry retry guidance (for example the `web_fetch` provenance
   rejection with `fetchable_urls`) — are returned to the model as plain errors so it can correct
   its arguments and retry. They do not disable web tools.
+- Site-side `web_fetch` outcomes are recoverable too: the site refused automated clients (an
+  anti-bot or challenge page, or HTTP 401, 403, 429, 451, 999), stalled after accepting the
+  connection, dropped it, or presented a certificate that can't be verified. The result carries
+  `remote_site_reason`, plus `blocked_by_remote_site` for refusals. Transcripts render it as a
+  neutral `◦ Fetch Web Page · <url> · <reason>` trace line instead of a failure, and the model is
+  told to use a different source rather than retry the host. A host that does not exist is also
+  recoverable, as a bad URL.
 - Unrecoverable failures — backend/connectivity errors after the external fallback chain is
-  exhausted — convert to a non-error `tool_unavailable` observation and remove the failing web
-  tool from the tool schema for the remainder of the turn, so the model proceeds from the
-  repository instead of retrying a dead backend. The sanitized error is recorded in the
-  `web_tool_unavailable` session event.
+  exhausted, `web_fetch` connect failures, and DNS outages — convert to a non-error
+  `tool_unavailable` observation and remove the failing web tool from the tool schema for the
+  remainder of the turn, so the model proceeds from the repository instead of retrying a dead
+  backend. The sanitized error is recorded in the `web_tool_unavailable` session event, and
+  transcripts show the withdrawn call as `⚠ … unavailable` with that cause.
 
 ## Configuration
 

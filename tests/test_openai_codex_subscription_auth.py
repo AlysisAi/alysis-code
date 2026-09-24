@@ -28,6 +28,28 @@ from alysis_code.provider_auth.store import (
 )
 
 
+@pytest.mark.parametrize(
+    "live_efforts", [None, [{"effort": "low"}, {"effort": "max"}, {"effort": "ultra"}]]
+)
+def test_codex_filters_app_only_ultra_from_live_and_fallback_efforts(monkeypatch, live_efforts):
+    monkeypatch.setattr(OpenAICodexSubscriptionAuth, "authorization_headers", lambda *a, **k: {})
+    model = {"slug": "gpt-6-sol"}
+    if live_efforts is not None:
+        model["supported_reasoning_levels"] = live_efforts
+    adapter = OpenAICodexSubscriptionAuth(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [model]}))
+    )
+    efforts = [item.id for item in adapter.list_models()[0].reasoning_efforts]
+    assert "ultra" not in efforts
+    assert "max" in efforts and "low" in efforts
+
+
+def test_codex_saved_ultra_setting_reports_actionable_error_before_inference():
+    adapter = OpenAICodexSubscriptionAuth()
+    with pytest.raises(ProviderAuthError, match="Choose Max"):
+        adapter.adapt_responses_payload({"model": "gpt-6-sol", "reasoning": {"effort": "ultra"}})
+
+
 def test_subscription_store_uses_random_filesystem_key_without_tui_stderr_noise(
     tmp_path, monkeypatch, capsys, caplog
 ) -> None:  # type: ignore[no-untyped-def]
@@ -192,7 +214,7 @@ def test_codex_subscription_headers_are_destination_allowlisted(monkeypatch) -> 
     assert headers["Authorization"] == "Bearer access-secret"
     assert headers["ChatGPT-Account-Id"] == "account-123"
     assert headers["originator"] == "codex_cli_rs"
-    assert headers["User-Agent"] == "codex_cli_rs/0.144.6"
+    assert headers["User-Agent"] == "codex_cli_rs/0.155.0"
     assert headers["session-id"] == "session-1"
     with pytest.raises(ProviderAuthError, match="non-Codex destination"):
         adapter.authorization_headers("https://example.com/responses")
@@ -380,7 +402,8 @@ def test_codex_model_catalog_uses_codex_compat_version_and_live_metadata(
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["client_version"] == "0.144.6"
+        assert request.url.params["client_version"] == "0.155.0"
+        assert request.headers["User-Agent"] == "codex_cli_rs/0.155.0"
         return httpx.Response(
             200,
             json={

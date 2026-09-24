@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import shlex
 import shutil
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +17,22 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if _SRC_ROOT.exists() and os.fspath(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(_SRC_ROOT))
 
+from alysis_code.managed_host_deadline import (  # noqa: E402
+    MANAGED_HOST_DEADLINE_UNIX_ENV,
+    managed_host_deadline_anchor_unix_seconds,
+    resolve_managed_host_deadline,
+)
 from alysis_code.run_outcome import (  # noqa: E402
     AGENT_FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
     extract_process_exit_code,
     run_outcome_metadata,
 )
+from scripts.benchmarks.terminal_bench.adapter_outcome import (  # noqa: E402
+    outcome_emit_command,
+    outcome_metadata,
+)
+from scripts.benchmarks.terminal_bench.session_mirror import compose_run_command  # noqa: E402
 
 try:
     from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
@@ -74,7 +87,6 @@ DEFAULT_INSTALL_SPEC = "alysis-code"
 DEFAULT_MAX_STEPS = "1000"
 DEFAULT_TEMPERATURE = "0.2"
 DEFAULT_LLM_TIMEOUT_S = "240"
-DEFAULT_COMMAND_TIMEOUT_SEC = "7200"
 DEFAULT_SHUTDOWN_RESERVE_SEC = "120"
 DEFAULT_SUBAGENTS = True
 SETUP_TIMEOUT_SEC = 1800
@@ -161,7 +173,6 @@ class AlysisHarborAgent(BaseInstalledAgent):
                 self._command_timeout_arg,
                 self._get_env("ALYSIS_TBENCH_COMMAND_TIMEOUT_SEC"),
                 self._get_env("TB_AGENT_TIMEOUT_SEC"),
-                DEFAULT_COMMAND_TIMEOUT_SEC,
             )
         )
         self._shutdown_reserve_sec = _positive_float(
@@ -211,24 +222,55 @@ class AlysisHarborAgent(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        started = time.monotonic()
         command = self._build_run_command(instruction)
         env = self._runtime_env()
+        launch_id = uuid.uuid4().hex
+        outcome_path = f"{AGENT_ARTIFACT_DIR}/host-outcome-{launch_id}.json"
+        outcome_marker = f"ALYSIS_TASK_OUTCOME_{launch_id}="
+        env["ALYSIS_TASK_OUTCOME_PATH"] = outcome_path
+        command = compose_run_command(
+            command,
+            mirror_clause=outcome_emit_command(
+                path=outcome_path,
+                marker=outcome_marker,
+            ),
+        )
         timeout = _ceil_timeout(self._command_timeout_sec)
         run_error: Exception | None = None
+        process_result = None
         try:
             try:
-                await self.exec_as_agent(  # type: ignore[attr-defined]
-                    environment,
-                    command=command,
-                    env=env,
-                    timeout_sec=timeout,
+                deadline_seconds = self._deadline_seconds()
+                if deadline_seconds is not None:
+                    env[MANAGED_HOST_DEADLINE_UNIX_ENV] = _format_seconds(
+                        managed_host_deadline_anchor_unix_seconds(
+                            deadline_seconds,
+                            existing_anchor=self._get_env(MANAGED_HOST_DEADLINE_UNIX_ENV),
+                            now_unix_seconds=time.time(),
+                        )
+                    )
+                process_result = await asyncio.wait_for(
+                    self.exec_as_agent(  # type: ignore[attr-defined]
+                        environment,
+                        command=command,
+                        env=env,
+                        timeout_sec=timeout,
+                    ),
+                    timeout=timeout,
                 )
             except Exception as exc:
                 run_error = exc
                 raise
         finally:
             try:
-                await self._copy_runtime_artifacts(environment)
+                remaining = max(
+                    0.0, float(self._command_timeout_sec or 0) - (time.monotonic() - started)
+                )
+                if remaining > 0:
+                    await asyncio.wait_for(
+                        self._copy_runtime_artifacts(environment), timeout=remaining
+                    )
             finally:
                 exit_code = (
                     extract_process_exit_code(run_error)
@@ -245,6 +287,7 @@ class AlysisHarborAgent(BaseInstalledAgent):
                     **run_outcome_metadata(
                         exit_code if exit_code is not None else AGENT_FAILURE_EXIT_CODE
                     ),
+                    **outcome_metadata(run_error or process_result, marker=outcome_marker),
                 }
 
     def _build_run_command(self, instruction: str) -> str:
@@ -285,16 +328,11 @@ class AlysisHarborAgent(BaseInstalledAgent):
         return " ".join(shlex.quote(str(part)) for part in parts)
 
     def _deadline_seconds(self) -> float | None:
-        if self._command_timeout_sec is None:
-            return None
-        reserve = float(self._shutdown_reserve_sec or 0)
-        deadline = self._command_timeout_sec - reserve
-        if deadline <= 0:
-            raise ValueError(
-                "Alysis Code Harbor deadline configuration error: "
-                "command_timeout_sec must be greater than shutdown_reserve_sec"
-            )
-        return deadline
+        return resolve_managed_host_deadline(
+            final_effective_host_agent_timeout_seconds=self._command_timeout_sec,
+            host_shutdown_reserve_seconds=self._shutdown_reserve_sec or 0,
+            timeout_source="host.command_timeout_sec",
+        ).alysis_invocation_deadline_seconds
 
     def _install_env(self) -> dict[str, str]:
         return self._shared_env()
@@ -364,10 +402,7 @@ def _copy_source_snapshot(snapshot: Path) -> None:
     )
     bench_dir = snapshot / "scripts" / "benchmarks" / "terminal_bench"
     bench_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(
-        _REPO_ROOT / "scripts" / "benchmarks" / "terminal_bench" / "setup.sh",
-        bench_dir / "setup.sh",
-    )
+    shutil.copy2(Path(__file__).with_name("setup.sh"), bench_dir / "setup.sh")
 
 
 def _clean(value: object) -> str:

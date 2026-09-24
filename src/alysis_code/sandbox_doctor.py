@@ -63,6 +63,10 @@ class BubblewrapInstallPlan:
     manager: str
     command: tuple[str, ...]
     display: str
+    # Package-index refresh that runs before ``command``. A fresh WSL or cloud
+    # image can ship empty or stale apt lists, and then a bare ``apt-get install``
+    # fails with "Unable to locate package" or a 404 on a superseded version.
+    refresh_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -72,14 +76,20 @@ class BubblewrapInstallResult:
     detail: str
 
 
-_BWRAP_INSTALL_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("apt-get", ("apt-get", "install", "-y", "bubblewrap")),
-    ("dnf", ("dnf", "install", "-y", "bubblewrap")),
-    ("pacman", ("pacman", "-S", "--noconfirm", "bubblewrap")),
-    ("zypper", ("zypper", "--non-interactive", "install", "bubblewrap")),
-    ("apk", ("apk", "add", "bubblewrap")),
+# (manager, install command, index refresh to run first or None)
+_BWRAP_INSTALL_MANAGERS: tuple[tuple[str, tuple[str, ...], tuple[str, ...] | None], ...] = (
+    ("apt-get", ("apt-get", "install", "-y", "bubblewrap"), ("apt-get", "update")),
+    ("dnf", ("dnf", "install", "-y", "bubblewrap"), None),
+    ("pacman", ("pacman", "-S", "--noconfirm", "bubblewrap"), None),
+    ("zypper", ("zypper", "--non-interactive", "install", "bubblewrap"), None),
+    ("apk", ("apk", "add", "bubblewrap"), None),
 )
 _BWRAP_INSTALL_TIMEOUT_S = 300
+# ``apt-get update`` exits 100 when any configured repository fails to refresh.
+# The distro archive is usually still fine (a stale third-party PPA is the common
+# cause), so the install still runs. Any other failure, typically ``sudo``
+# rejecting the password, stops before a second password prompt.
+_APT_PARTIAL_REFRESH_EXIT = 100
 
 
 def default_sandbox_images(*, include_server: bool = True) -> tuple[str, ...]:
@@ -339,14 +349,18 @@ def detect_bubblewrap_install_plan() -> BubblewrapInstallPlan | None:
     sudo_path = shutil.which("sudo")
     if needs_sudo and not sudo_path:
         return None
-    for manager, base_cmd in _BWRAP_INSTALL_MANAGERS:
+    prefix: tuple[str, ...] = ("sudo",) if needs_sudo else ()
+    for manager, base_cmd, base_refresh in _BWRAP_INSTALL_MANAGERS:
         if not shutil.which(manager):
             continue
-        command = ("sudo", *base_cmd) if needs_sudo else base_cmd
+        command = (*prefix, *base_cmd)
+        refresh = (*prefix, *base_refresh) if base_refresh else None
+        steps = (refresh, command) if refresh else (command,)
         return BubblewrapInstallPlan(
             manager=manager,
             command=command,
-            display=" ".join(command),
+            display=" && ".join(" ".join(step) for step in steps),
+            refresh_command=refresh,
         )
     return None
 
@@ -371,6 +385,28 @@ def install_bubblewrap(
                 "automatically. Install `bubblewrap` manually, or use Docker."
             ),
         )
+    refresh_note = ""
+    if plan.refresh_command:
+        try:
+            refresh = subprocess.run(list(plan.refresh_command), check=False, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            return BubblewrapInstallResult(
+                ok=False,
+                command=plan.display,
+                detail=f"package index refresh timed out after {timeout_s}s",
+            )
+        except OSError as exc:
+            return BubblewrapInstallResult(ok=False, command=plan.display, detail=str(exc))
+        if refresh.returncode == _APT_PARTIAL_REFRESH_EXIT:
+            refresh_note = (
+                f" (the package index refresh also reported errors, exit code {refresh.returncode})"
+            )
+        elif refresh.returncode != 0:
+            return BubblewrapInstallResult(
+                ok=False,
+                command=plan.display,
+                detail=f"package index refresh exited with code {refresh.returncode}",
+            )
     try:
         proc = subprocess.run(list(plan.command), check=False, timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -385,7 +421,7 @@ def install_bubblewrap(
         return BubblewrapInstallResult(
             ok=False,
             command=plan.display,
-            detail=f"package manager exited with code {proc.returncode}",
+            detail=f"package manager exited with code {proc.returncode}{refresh_note}",
         )
     if not shutil.which("bwrap"):
         return BubblewrapInstallResult(

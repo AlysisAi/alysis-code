@@ -37,3 +37,20 @@ output directory. `qa_reports/` is ignored by Git.
 
 Session logs may contain project information. Do not commit them or attach them to public issues
 without reviewing and sanitizing their contents.
+
+## Production reliability qualification
+
+The release qualification script runs focused source reliability and safety tests,
+builds a wheel, and checks the installed package with local fault scenarios. Run
+it from a clean, locked checkout when preparing a release:
+
+```bash
+uv sync --frozen --extra dev
+uv run --frozen --no-sync python scripts/qa/qualify_production_reliability.py --require-clean
+```
+
+It writes logs, JUnit results, a wheel, and an evidence manifest to a new output
+directory. Use `--output-dir` to select that location. This focused gate complements
+the full test suite and distribution validation in the [release process](../../docs/RELEASING.md).
+
+`subagent_quality_cases.py` prepares and checks deterministic local fixtures.

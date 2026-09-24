@@ -1,605 +1,347 @@
+"""Exercise model-led skill loading, not model selection/obedience heuristics."""
+
 from __future__ import annotations
 
+import base64
+import socket
 from collections.abc import Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
-from alysis_code.agent_loop import create_session
-from alysis_code.cancellation import CooperativeCancellationError
+from alysis_code.agent import session as session_mod
 from alysis_code.config import AppConfig
-from alysis_code.execution_deadline import DeadlineExhausted
 from alysis_code.hooks.models import HookDispatchResult
-from alysis_code.llm.types import LLMError, LLMResponse, ToolCall
+from alysis_code.llm.types import LLMResponse, ToolCall
+from alysis_code.skills import build_explicit_skill_context_message
 
 
 class _ScriptedClient:
     model = "test-model"
     temperature = 0.0
+    reasoning_effort = "high"
     supports_tool_calling = True
 
-    def __init__(self, responses: Sequence[LLMResponse | BaseException]) -> None:
-        self._responses = list(responses)
+    def __init__(self, responses: Sequence[LLMResponse]) -> None:
+        self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    def chat(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        stream: bool = False,
-        on_text_delta=None,
-        on_reasoning_delta=None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        cancellation_token=None,
-        tool_choice=None,
-    ) -> LLMResponse:
-        del on_text_delta, on_reasoning_delta, cancellation_token, tool_choice
+    def chat(self, **kwargs: Any) -> LLMResponse:
         self.calls.append(
             {
-                "messages": list(messages),
-                "tools": tools,
-                "stream": stream,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
+                "messages": deepcopy(kwargs["messages"]),
+                "tools": deepcopy(kwargs.get("tools")),
+                "reasoning_effort": self.reasoning_effort,
             }
         )
-        response = self._responses.pop(0)
-        if isinstance(response, BaseException):
-            raise response
-        return response
+        assert self.responses, "Unexpected auxiliary or repeated model call"
+        return self.responses.pop(0)
 
 
-class _MutateFirstSkillReadHook:
-    def __init__(self, modified_input: dict[str, Any]) -> None:
-        self._modified_input = modified_input
-        self._mutated = False
+@pytest.fixture(autouse=True)
+def _offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, folder in (
+        ("ALYSIS_DATA_DIR", "data"),
+        ("ALYSIS_CONFIG_DIR", "config"),
+        ("XDG_CONFIG_HOME", "xdg"),
+    ):
+        monkeypatch.setenv(key, str(tmp_path / folder))
 
-    def fire_user_prompt_submit(self, **payload: Any) -> HookDispatchResult:
-        del payload
-        return HookDispatchResult()
+    def deny(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Network/provider access is forbidden in this test")
 
-    def fire_pre_tool_use(self, **payload: Any) -> HookDispatchResult:
-        if payload.get("tool_name") == "skill_read" and not self._mutated:
-            self._mutated = True
-            return HookDispatchResult(modified_input=dict(self._modified_input))
-        return HookDispatchResult()
-
-    def fire_post_tool_use(self, **payload: Any) -> HookDispatchResult:
-        del payload
-        return HookDispatchResult()
-
-    def fire_turn_complete(self, **payload: Any) -> HookDispatchResult:
-        del payload
-        return HookDispatchResult()
-
-    def fire_session_end(self, **payload: Any) -> HookDispatchResult:
-        del payload
-        return HookDispatchResult()
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny)
+    monkeypatch.setattr(socket, "create_connection", deny)
+    monkeypatch.setattr(httpx.Client, "send", deny)
+    monkeypatch.setattr(httpx.AsyncClient, "send", deny)
+    # Factories are blocked before any real session construction. Individual
+    # tests replace only this boundary with their explicit scripted clients.
+    monkeypatch.setattr(session_mod, "_make_session_llm_client", deny)
 
 
-def _write_skill(root: Path, name: str, description: str, body: str) -> None:
+@pytest.fixture
+def session_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    sessions = []
+    constructed: list[dict[str, Any]] = []
+
+    def create(clients: Sequence[_ScriptedClient], **options: Any):
+        remaining = list(clients)
+
+        def client_factory(**kwargs: Any) -> _ScriptedClient:
+            constructed.append(dict(kwargs))
+            assert remaining, "Unexpected auxiliary client provisioning"
+            client = remaining.pop(0)
+            client.reasoning_effort = kwargs["reasoning_effort"]
+            return client
+
+        monkeypatch.setattr(session_mod, "_make_session_llm_client", client_factory)
+        cfg = AppConfig(
+            model="test-model",
+            llm_reasoning_effort="high",
+            web_search_mode="off",
+            bundled_skills_enabled=False,
+            skills_enabled=options.pop("skills_enabled", True),
+            skills_auto_invoke=options.pop("auto", True),
+            hooks_enabled=False,
+        )
+        session = session_mod.create_session(
+            cfg=cfg,
+            root=tmp_path,
+            mode="readonly",
+            yes=True,
+            max_steps=5,
+            no_log=True,
+            api_key_override="unused-test-value",
+            enable_compaction=False,
+            verification_enabled=False,
+            **options,
+        )
+        sessions.append(session)
+        return session, constructed
+
+    yield create
+    for session in reversed(sessions):
+        session.close()
+
+
+def _write_skill(root: Path, name: str = "maintenance", body: str = "WORKFLOW BODY") -> None:
     bundle = root / ".alysis_skills" / name
     bundle.mkdir(parents=True)
     (bundle / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n",
-        encoding="utf-8",
+        f"---\nname: {name}\ndescription: Inspect repository maintenance evidence.\n---\n\n{body}\n"
     )
 
 
-def _skill_call(call_id: str, name: str) -> LLMResponse:
-    return LLMResponse(
-        content="",
-        tool_calls=[ToolCall(id=call_id, name="skill_read", arguments={"name": name})],
-        raw={},
+def _response(content: str = "Done.", *calls: ToolCall) -> LLMResponse:
+    return LLMResponse(content=content, tool_calls=list(calls), raw={})
+
+
+def _call(tool_name: str, **arguments: Any) -> ToolCall:
+    return ToolCall(id=tool_name + str(arguments), name=tool_name, arguments=arguments)
+
+
+def _events(session: Any, kind: str) -> list[dict[str, Any]]:
+    return [e["payload"] for e in session.store.events_snapshot() if e.get("type") == kind]
+
+
+def _assert_no_selector(session: Any) -> None:
+    assert not any(
+        str(e.get("type", "")).startswith("skill_selection")
+        for e in session.store.events_snapshot()
     )
 
 
-def _tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> LLMResponse:
-    return LLMResponse(
-        content="",
-        tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)],
-        raw={},
-    )
-
-
-def _session(tmp_path: Path, *, max_steps: int = 4):
-    return create_session(
-        cfg=AppConfig(
-            model="test-model",
-            web_search_mode="off",
-            bundled_skills_enabled=False,
-            skills_enabled=True,
-            skills_auto_invoke=True,
-        ),
-        root=tmp_path,
-        mode="readonly",
-        yes=True,
-        max_steps=max_steps,
-        no_log=True,
-        api_key_override="override-key",
-    )
-
-
-def _event_payloads(session: Any, event_type: str) -> list[dict[str, Any]]:
-    return [
-        dict(event.get("payload") or {})
-        for event in session.store.events_snapshot()
-        if event.get("type") == event_type
-    ]
-
-
-def test_semantic_selection_blocks_other_actions_until_selected_skill_is_read(
-    tmp_path: Path,
+@pytest.mark.parametrize("one_shot", [False, True], ids=["chat", "one-shot"])
+@pytest.mark.parametrize("choose_skill", [False, True], ids=["direct", "read-workflow"])
+def test_catalog_allows_model_chosen_read_or_direct_work(
+    tmp_path: Path, session_factory, one_shot: bool, choose_skill: bool
 ) -> None:
-    _write_skill(
-        tmp_path,
-        "broad-workflow",
-        "Handle a broad class of repository maintenance requests.",
-        "BROAD WORKFLOW BODY",
+    _write_skill(tmp_path)
+    (tmp_path / "evidence.txt").write_text("ACTUAL FILE EVIDENCE")
+    chosen = (
+        _call("skill_read", name="maintenance")
+        if choose_skill
+        else _call("fs_read", path="evidence.txt")
     )
-    _write_skill(
-        tmp_path,
-        "narrow-workflow",
-        "Handle this specialized repository maintenance workflow.",
-        "NARROW WORKFLOW BODY",
+    client = _ScriptedClient([_response("", chosen), _response()])
+    session, factories = session_factory([client], one_shot_execution=one_shot)
+    assert session.run_turn("Inspect the maintenance evidence and explain it.") == 0
+    initial = str(client.calls[0]["messages"])
+    catalog = next(
+        m["content"]
+        for m in client.calls[0]["messages"]
+        if str(m.get("content", "")).startswith("<skill_context>")
     )
-    selector = _ScriptedClient([LLMResponse(content="s1", tool_calls=[], raw={})])
-    main = _ScriptedClient(
+    assert "maintenance" in catalog and "Inspect repository maintenance evidence" in catalog
+    assert "Otherwise continue directly" in catalog
+    assert "WORKFLOW BODY" not in initial
+    assert "<semantic_skill_selection>" not in initial
+    assert len(client.calls) == 2 and len(factories) == 1
+    assert all(call["reasoning_effort"] == "high" for call in client.calls)
+    assert ("WORKFLOW BODY" in str(client.calls[-1]["messages"])) is choose_skill
+    assert [p["name"] for p in _events(session, "tool_call")] == [chosen.name]
+    _assert_no_selector(session)
+
+
+@pytest.mark.parametrize("auto", [False, True])
+def test_named_skill_and_independent_read_load_together_without_write_privilege(
+    tmp_path: Path, session_factory, auto: bool
+) -> None:
+    _write_skill(tmp_path)
+    (tmp_path / "evidence.txt").write_text("INDEPENDENT EVIDENCE")
+    client = _ScriptedClient(
         [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="wrong-skill",
-                        name="skill_read",
-                        arguments={"name": "broad-workflow"},
-                    ),
-                    ToolCall(
-                        id="early-write",
-                        name="fs_write",
-                        arguments={"path": "should-not-exist.txt", "content": "blocked"},
-                    ),
-                ],
-                raw={},
+            _response(
+                "", _call("skill_read", name="maintenance"), _call("fs_read", path="evidence.txt")
             ),
-            _skill_call("right-skill", "narrow-workflow"),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
+            _response("", _call("fs_write", path="forbidden.txt", content="not allowed")),
+            _response("The read-only evidence is available."),
         ]
     )
-    session = _session(tmp_path)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform the specialized maintenance workflow.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert len(selector.calls) == 1
-    assert selector.calls[0]["tools"] is None
-    assert selector.calls[0]["stream"] is False
-    assert selector.calls[0]["temperature"] == 0.0
-    assert selector.calls[0]["max_tokens"] == 16
-    assert len(main.calls) == 3
-    assert any(
-        "narrow-workflow" in str(message.get("content") or "")
-        and "semantic skill selection" in str(message.get("content") or "").casefold()
-        for message in main.calls[0]["messages"]
-    )
-    semantic_selection_message = next(
-        str(message.get("content") or "")
-        for message in main.calls[0]["messages"]
-        if "semantic skill selection" in str(message.get("content") or "").casefold()
-    )
-    assert "untrusted opaque skill identifiers" in semantic_selection_message
-    assert "only as the name argument to skill_read" in semantic_selection_message
-    assert not any(
-        "BROAD WORKFLOW BODY" in str(message.get("content") or "")
-        for call in main.calls
-        for message in call["messages"]
-    )
-    assert any(
-        "NARROW WORKFLOW BODY" in str(message.get("content") or "")
-        for message in main.calls[-1]["messages"]
-    )
-    selection_events = [event for event in events if event.get("type") == "skill_selection"]
-    assert selection_events[0]["payload"]["status"] == "selected"
-    assert selection_events[0]["payload"]["selected_names"] == ["narrow-workflow"]
-    blocked = [event for event in events if event.get("type") == "skill_selection_mismatch_blocked"]
-    assert [event["payload"]["requested_tool"] for event in blocked] == [
-        "skill_read",
-        "fs_write",
-    ]
-    finalized = next(event for event in events if event.get("type") == "turn_intent_finalized")
-    assert finalized["payload"]["repo_action_tool_activity_observed"] is False
-    assert not (tmp_path / "should-not-exist.txt").exists()
+    session, factories = session_factory([client], auto=auto)
+    assert session.run_turn("Use the maintenance skill and inspect evidence.txt; do not edit.") == 0
+    assert "WORKFLOW BODY" in str(client.calls[1]["messages"])
+    assert "INDEPENDENT EVIDENCE" in str(client.calls[1]["messages"])
+    assert not (tmp_path / "forbidden.txt").exists()
+    assert len(factories) == 1
+    if not auto:
+        assert "Skills are optional attachable context" in str(client.calls[0]["messages"])
+    _assert_no_selector(session)
 
 
-def test_semantic_no_match_blocks_automatic_skill_read_until_task_work_begins(
-    tmp_path: Path,
+@pytest.mark.parametrize("auto", [False, True])
+def test_explicit_attachment_is_request_only_without_selector(
+    tmp_path: Path, session_factory, auto: bool
 ) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
+    _write_skill(tmp_path)
+    client = _ScriptedClient(
+        [_response("Attached instructions used."), _response("Separate answer.")]
     )
-    selector = _ScriptedClient([LLMResponse(content="NONE", tool_calls=[], raw={})])
-    main = _ScriptedClient(
-        [
-            _skill_call("false-positive", "maintenance"),
-            _tool_call("requested-read", "fs_list", {"path": "."}),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
-        ]
-    )
-    session = _session(tmp_path)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("List the files in this directory.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert not any(
-        "MAINTENANCE BODY" in str(message.get("content") or "")
-        for call in main.calls
-        for message in call["messages"]
-    )
-    selection = next(event for event in events if event.get("type") == "skill_selection")
-    assert selection["payload"]["status"] == "no_match"
-    mismatch = next(
-        event for event in events if event.get("type") == "skill_selection_mismatch_blocked"
-    )
-    assert mismatch["payload"]["reason"] == "no_match"
-
-
-def test_selector_failure_fails_open_to_existing_model_led_skill_read(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([LLMError("selector unavailable")])
-    main = _ScriptedClient(
-        [
-            _skill_call("model-selected", "maintenance"),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
-        ]
-    )
-    session = _session(tmp_path, max_steps=2)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert any(
-        "MAINTENANCE BODY" in str(message.get("content") or "")
-        for message in main.calls[-1]["messages"]
-    )
-    selection = next(event for event in events if event.get("type") == "skill_selection")
-    assert selection["payload"]["status"] == "unavailable"
-    assert selection["payload"]["failure_kind"] == "provider_error"
-    assert not _event_payloads(session, "skill_selection_mismatch_blocked")
-    assert any(
-        "Before the first task tool" in str(message.get("content") or "")
-        for message in main.calls[0]["messages"]
-    )
-
-
-def test_unexpected_selector_failure_is_sanitized_and_fails_open(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    secret = "sk-selector-secret-1234567890"
-    selector = _ScriptedClient([RuntimeError(f"adapter exploded with {secret}")])
-    main = _ScriptedClient([LLMResponse(content="Fallback answer.", tool_calls=[], raw={})])
-    session = _session(tmp_path, max_steps=1)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert len(selector.calls) == 1
-    assert len(main.calls) == 1
-    selection = next(event for event in events if event.get("type") == "skill_selection")
-    assert selection["payload"]["status"] == "unavailable"
-    assert selection["payload"]["failure_kind"] == "unexpected_error"
-    assert secret not in selection["payload"]["error_summary"]
-    assert "[REDACTED]" in selection["payload"]["error_summary"]
-
-
-@pytest.mark.parametrize(
-    "selector_error",
-    [CooperativeCancellationError("stop"), KeyboardInterrupt()],
-)
-def test_selector_cancellation_is_not_converted_to_fail_open(
-    tmp_path: Path,
-    selector_error: BaseException,
-) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([selector_error])
-    main = _ScriptedClient([LLMResponse(content="Must not run.", tool_calls=[], raw={})])
-    session = _session(tmp_path, max_steps=1)
-    session.client = main
-    session.router_client = selector
-    try:
-        with pytest.raises(type(selector_error)):
-            session.run_turn("Perform repository maintenance.")
-    finally:
-        session.close()
-
-    assert len(selector.calls) == 1
-    assert not main.calls
-
-
-def test_selector_deadline_exhaustion_keeps_existing_fail_open_behavior(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([DeadlineExhausted("selector deadline")])
-    main = _ScriptedClient([LLMResponse(content="Fallback answer.", tool_calls=[], raw={})])
-    session = _session(tmp_path, max_steps=1)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert len(main.calls) == 1
-    selection = next(event for event in events if event.get("type") == "skill_selection")
-    assert selection["payload"]["failure_kind"] == "deadline_exhausted"
-
-
-def test_selected_skill_gets_one_bounded_nudge_before_an_early_final(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([LLMResponse(content="s0", tool_calls=[], raw={})])
-    main = _ScriptedClient(
-        [
-            LLMResponse(content="Premature final.", tool_calls=[], raw={}),
-            _skill_call("selected-skill", "maintenance"),
-            LLMResponse(content="Completed after reading the workflow.", tool_calls=[], raw={}),
-        ]
-    )
-    session = _session(tmp_path, max_steps=3)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
+    session, factories = session_factory([client], auto=auto)
+    skill = next(s for s in session.skills_ordered if s.name == "maintenance")
+    attachment = build_explicit_skill_context_message(skill=skill, task_text="Explain it.")
     assert (
-        len([event for event in events if event.get("type") == "skill_selection_required_nudge"])
-        == 1
+        session.run_turn("Explain the supplied skill.", ephemeral_user_messages=[attachment]) == 0
     )
-    assert any(
-        "MAINTENANCE BODY" in str(message.get("content") or "")
-        for message in main.calls[-1]["messages"]
-    )
-    final = next(event for event in reversed(events) if event.get("type") == "final")
-    assert final["payload"]["content"] == "Completed after reading the workflow."
+    assert session.run_turn("Now answer a separate question.") == 0
+    assert "WORKFLOW BODY" in str(client.calls[0]["messages"])
+    assert "<explicit_skill_context>" not in str(client.calls[1]["messages"])
+    assert "WORKFLOW BODY" not in str(session.messages)
+    assert not _events(session, "tool_call")
+    assert len(factories) == 1
+    _assert_no_selector(session)
 
 
-def test_task_tool_batched_with_selected_skill_waits_for_loaded_instructions(
-    tmp_path: Path,
+def test_followup_reuses_loaded_workflow_without_extra_read(
+    tmp_path: Path, session_factory
 ) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([LLMResponse(content="s0", tool_calls=[], raw={})])
-    main = _ScriptedClient(
+    _write_skill(tmp_path)
+    client = _ScriptedClient(
         [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="selected-skill",
-                        name="skill_read",
-                        arguments={"name": "maintenance"},
-                    ),
-                    ToolCall(id="premature-action", name="fs_list", arguments={"path": "."}),
-                ],
-                raw={},
-            ),
-            _tool_call("retried-action", "fs_list", {"path": "."}),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
+            _response("", _call("skill_read", name="maintenance")),
+            _response("Loaded."),
+            _response("Reused."),
         ]
     )
-    session = _session(tmp_path, max_steps=3)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
+    session, factories = session_factory([client])
+    assert session.run_turn("Read the maintenance instructions.") == 0
+    assert session.run_turn("Use those instructions for the next explanation.") == 0
+    assert "WORKFLOW BODY" in str(client.calls[-1]["messages"])
+    assert len(_events(session, "tool_call")) == 1
+    assert len(client.calls) == 3 and len(factories) == 1
+    _assert_no_selector(session)
 
-    assert exit_code == 0
-    blocked = [event for event in events if event.get("type") == "skill_selection_mismatch_blocked"]
-    assert [event["payload"]["tool_call_id"] for event in blocked] == ["premature-action"]
-    retried = next(
-        event
-        for event in events
-        if event.get("type") == "tool_result"
-        and event.get("payload", {}).get("tool_call_id") == "retried-action"
+
+def test_image_reaches_main_unchanged_without_auxiliary_text_call(
+    tmp_path: Path, session_factory
+) -> None:
+    _write_skill(tmp_path)
+    image = tmp_path / "sample.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
     )
-    assert "error" not in retried["payload"]["result"]
+    client = _ScriptedClient([_response("Image received.")])
+    session, factories = session_factory([client])
+    assert session.run_turn("Inspect the image.", image_paths=["sample.png"]) == 0
+    parts = [
+        p
+        for m in client.calls[0]["messages"]
+        if isinstance(m.get("content"), list)
+        for p in m["content"]
+        if p.get("type") == "image_url"
+    ]
+    assert len(parts) == 1
+    assert base64.b64decode(parts[0]["image_url"]["url"].split(",", 1)[1]) == image.read_bytes()
+    assert len(client.calls) == len(factories) == 1
+    assert client.reasoning_effort == "high"
+    _assert_no_selector(session)
+
+
+def test_disabled_skills_do_not_publish_catalog_or_read_tool(
+    tmp_path: Path, session_factory
+) -> None:
+    _write_skill(tmp_path)
+    client = _ScriptedClient([_response()])
+    session, factories = session_factory([client], skills_enabled=False)
+    assert session.run_turn("Explain the repository.") == 0
+    assert "<skill_context>" not in str(client.calls[0]["messages"])
+    assert "skill_read" not in session.tools
+    assert len(factories) == 1
+    _assert_no_selector(session)
+
+
+class _MutateReadHook:
+    def __init__(self, arguments: dict[str, Any], *, blocked: bool = False) -> None:
+        self.arguments, self.blocked = arguments, blocked
+
+    def fire_pre_tool_use(self, **kwargs: Any) -> HookDispatchResult:
+        if kwargs.get("tool_name") == "skill_read":
+            return HookDispatchResult(blocked=self.blocked, modified_input=self.arguments)
+        return HookDispatchResult()
+
+    def __getattr__(self, name: str):
+        if name.startswith("fire_"):
+            return lambda **_kwargs: HookDispatchResult()
+        raise AttributeError(name)
 
 
 @pytest.mark.parametrize(
-    ("modified_input", "expected_reason", "forbidden_body"),
+    "arguments,blocked",
     [
-        (
-            {"name": "broad-workflow"},
-            "selected_skill_mismatch",
-            "BROAD WORKFLOW BODY",
-        ),
-        (
-            {"name": "narrow-workflow", "path": "references/unsafe.md"},
-            "skill_entrypoint_required",
-            "UNSAFE REFERENCE BODY",
-        ),
+        ({"name": "missing"}, False),
+        ({"name": "maintenance", "path": "../../outside.txt"}, False),
+        ({"name": "maintenance"}, True),
     ],
 )
-def test_pre_tool_hook_cannot_swap_selected_skill_read_after_validation(
-    tmp_path: Path,
-    modified_input: dict[str, Any],
-    expected_reason: str,
-    forbidden_body: str,
+def test_model_skill_choice_preserves_registry_bundle_and_hook_guards(
+    tmp_path: Path, session_factory, arguments: dict[str, Any], blocked: bool
 ) -> None:
-    _write_skill(
-        tmp_path,
-        "broad-workflow",
-        "Handle a broad class of repository maintenance requests.",
-        "BROAD WORKFLOW BODY",
+    _write_skill(tmp_path)
+    (tmp_path / "outside.txt").write_text("OUTSIDE BUNDLE")
+    client = _ScriptedClient(
+        [_response("", _call("skill_read", name="maintenance")), _response("Unavailable.")]
     )
-    _write_skill(
-        tmp_path,
-        "narrow-workflow",
-        "Handle this specialized repository maintenance workflow.",
-        "NARROW WORKFLOW BODY",
-    )
-    reference = tmp_path / ".alysis_skills" / "narrow-workflow" / "references" / "unsafe.md"
-    reference.parent.mkdir(parents=True)
-    reference.write_text("UNSAFE REFERENCE BODY\n", encoding="utf-8")
-    selector = _ScriptedClient([LLMResponse(content="s1", tool_calls=[], raw={})])
-    main = _ScriptedClient(
-        [
-            _skill_call("hook-mutated-read", "narrow-workflow"),
-            _skill_call("selected-read", "narrow-workflow"),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
-        ]
-    )
-    session = _session(tmp_path, max_steps=3)
-    session.client = main
-    session.router_client = selector
-    session.hook_dispatcher = _MutateFirstSkillReadHook(modified_input)
-    try:
-        exit_code = session.run_turn("Perform the specialized maintenance workflow.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    blocked = [event for event in events if event.get("type") == "skill_selection_mismatch_blocked"]
-    assert [event["payload"]["tool_call_id"] for event in blocked] == ["hook-mutated-read"]
-    assert blocked[0]["payload"]["reason"] == expected_reason
-    mutated_result = next(
-        event
-        for event in events
-        if event.get("type") == "tool_result"
-        and event.get("payload", {}).get("tool_call_id") == "hook-mutated-read"
-    )
-    assert mutated_result["payload"]["result"]["error_code"] == "skill_selection_mismatch"
-    assert not any(
-        forbidden_body in str(message.get("content") or "")
-        for call in main.calls
-        for message in call["messages"]
-    )
-    assert any(
-        "NARROW WORKFLOW BODY" in str(message.get("content") or "")
-        for message in main.calls[-1]["messages"]
-    )
+    session, _ = session_factory([client])
+    session.hook_dispatcher = _MutateReadHook(arguments, blocked=blocked)
+    assert session.run_turn("Read the maintenance instructions.") == 0
+    assert "error" in _events(session, "tool_result")[0]["result"]
+    assert "WORKFLOW BODY" not in str(client.calls[-1]["messages"])
+    assert "OUTSIDE BUNDLE" not in str(client.calls[-1]["messages"])
+    _assert_no_selector(session)
 
 
-def test_selector_is_not_called_when_main_client_cannot_receive_tools(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
-    )
-    selector = _ScriptedClient([LLMResponse(content="s0", tool_calls=[], raw={})])
-    main = _ScriptedClient([LLMResponse(content="Done.", tool_calls=[], raw={})])
-    main.supports_tool_calling = False
-    session = _session(tmp_path, max_steps=1)
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Perform repository maintenance.")
-        events = session.store.events_snapshot()
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    assert selector.calls == []
-    assert not [event for event in events if event.get("type") == "skill_selection"]
-
-
-def test_selector_receives_bounded_visible_context_for_referential_follow_up(
-    tmp_path: Path,
+def test_real_readonly_child_uses_same_catalog_and_reasoning_without_selector(
+    tmp_path: Path, session_factory
 ) -> None:
-    _write_skill(
-        tmp_path,
-        "maintenance",
-        "Perform repository maintenance workflows.",
-        "MAINTENANCE BODY",
+    _write_skill(tmp_path)
+    parent_client = _ScriptedClient([])
+    child_client = _ScriptedClient(
+        [_response("", _call("skill_read", name="maintenance")), _response("Reviewed.")]
     )
-    selector = _ScriptedClient([LLMResponse(content="s0", tool_calls=[], raw={})])
-    main = _ScriptedClient(
-        [
-            _skill_call("selected-skill", "maintenance"),
-            LLMResponse(content="Done.", tool_calls=[], raw={}),
-        ]
+    parent, factories = session_factory([parent_client, child_client], subagents_enabled=True)
+    parent.messages.append({"role": "user", "content": "UNASSIGNED PARENT HISTORY"})
+    result = parent.tools["subagent_run"].run(
+        {
+            "name": "general",
+            "mode": "readonly",
+            "task": "Inspect the maintenance workflow; no edits.",
+        }
     )
-    session = _session(tmp_path, max_steps=2)
-    session.messages.extend(
-        [
-            {
-                "role": "user",
-                "content": "Please perform the repository maintenance workflow.",
-            },
-            {"role": "assistant", "content": "I can do that next."},
-        ]
-    )
-    session.client = main
-    session.router_client = selector
-    try:
-        exit_code = session.run_turn("Do that now.")
-    finally:
-        session.close()
-
-    assert exit_code == 0
-    selector_task_message = str(selector.calls[0]["messages"][-1]["content"])
-    assert "Please perform the repository maintenance workflow." in selector_task_message
-    assert "I can do that next." in selector_task_message
-    assert "Current request: Do that now." in selector_task_message
+    assert "error" not in result, result
+    assert result["status"] == "success" and result["result"] == "Reviewed.", result
+    assert len(factories) == 2 and not parent_client.calls
+    assert all(item["reasoning_effort"] == "high" for item in factories)
+    assert all(call["reasoning_effort"] == "high" for call in child_client.calls)
+    assert "<skill_context>" in str(child_client.calls[0]["messages"])
+    assert "WORKFLOW BODY" not in str(child_client.calls[0]["messages"])
+    assert "WORKFLOW BODY" in str(child_client.calls[-1]["messages"])
+    assert "UNASSIGNED PARENT HISTORY" not in str(child_client.calls[0]["messages"])
+    names = {t["function"]["name"] for t in child_client.calls[0]["tools"]}
+    assert "skill_read" in names and "fs_write" not in names
+    _assert_no_selector(parent)

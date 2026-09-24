@@ -5960,3 +5960,37 @@ def test_exec_failure_writes_capture_artifacts_without_canonical_promotion(
     )
     assert not list((paths.knowledge_facts_dir / task_id).glob("*.md"))
     assert not list((paths.knowledge_decisions_dir / task_id).glob("*.md"))
+
+
+def test_exec_context_budget_rejection_marks_task_failed_and_releases_lock(tmp_path, monkeypatch):
+    import pytest
+
+    from alysis_code.execution_context import ExecutionContextBudgetError
+
+    runner = CliRunner()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plan_path, plan = _prepare_run_with_tasks(runner, repo, tmp_path)
+    task_id = plan["tasks"][0]["id"]
+
+    def reject(**kwargs):
+        raise ExecutionContextBudgetError(available_tokens=100, required_tokens=900)
+
+    monkeypatch.setattr(cli_mod, "_build_forge_exec_instruction_bundle", reject)
+    monkeypatch.setattr(
+        cli_mod, "run_agent", lambda **_: pytest.fail("No dispatch after budget rejection")
+    )
+    result = runner.invoke(
+        alysis_app,
+        ["forge", "exec", task_id, "--path", os.fspath(repo), "--model", "test-model", "--no-log"],
+        env=_env(tmp_path),
+    )
+    assert result.exit_code == 1
+    assert _load_json(plan_path)["tasks"][0]["status"] == "failed"
+    run_dir = plan_path.parent.parent
+    assert not (run_dir / "active_execution.lock.json").exists()
+    report = run_dir / "execution" / "reports" / f"{task_id}.md"
+    assert "Increase the context allowance" in report.read_text()
+    context = (run_dir / "execution" / "context" / f"{task_id}_context.md").read_text()
+    assert "setup failed before the agent started" in context
+    assert "No shortened execution instruction was produced" in context

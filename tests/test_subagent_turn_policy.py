@@ -4,6 +4,8 @@ import time
 from threading import Event
 from typing import Any
 
+import pytest
+
 from alysis_code import agent_loop
 from alysis_code.agent.steering import SteerInbox
 from alysis_code.agent_loop import ToolDef, create_session
@@ -29,9 +31,11 @@ class _ScriptedClient:
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
         on_text_delta=None,  # type: ignore[no-untyped-def]
+        on_reasoning_delta=None,  # type: ignore[no-untyped-def]
         temperature: float | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
-        _ = on_text_delta, temperature
+        _ = on_text_delta, on_reasoning_delta, temperature, cancellation_token
         self.calls.append(
             {
                 "messages": list(messages),
@@ -90,8 +94,9 @@ class _FakeBackgroundScheduler:
         run_id: str | list[str] | None = "all",
         timeout_s: float | None = None,
         cancellation_token: Any | None = None,
+        consume_delivery: bool = True,
     ) -> dict[str, Any]:
-        _ = timeout_s, cancellation_token
+        _ = timeout_s, cancellation_token, consume_delivery
         selected = (
             list(self.pending)
             if run_id is None or run_id == "all"
@@ -178,11 +183,76 @@ def _replace_subagent_run_with_fake(session: Any) -> list[dict[str, Any]]:
     return calls
 
 
+def _replace_background_subagent_tools_with_fake(session: Any) -> list[str]:
+    calls: list[str] = []
+
+    def _replace(name: str, run) -> None:  # type: ignore[no-untyped-def]
+        original = session.tools[name]
+        session.tools[name] = ToolDef(
+            name=name,
+            description=original.description,
+            parameters=original.parameters,
+            run=run,
+            metadata=original.metadata,
+        )
+
+    def _spawn(args: dict[str, Any]) -> dict[str, Any]:
+        calls.append("subagent_spawn")
+        run_id = str(args.get("label") or "background-child")
+        return {"run_id": run_id, "state": "spawned", "queued": False}
+
+    def _status(_args: dict[str, Any]) -> dict[str, Any]:
+        calls.append("subagent_status")
+        return {
+            "children": [
+                {
+                    "run_id": run_id,
+                    "subagent": "explorer",
+                    "workspace_view": "shared",
+                    "state": "running",
+                    "steps_completed": 1,
+                    "elapsed_ms": 10,
+                }
+                for run_id in ("child-a", "child-b")
+            ],
+            "summary": {"running": 2},
+            "unapplied_isolated_results": [],
+        }
+
+    def _wait(_args: dict[str, Any]) -> dict[str, Any]:
+        calls.append("subagent_wait")
+        return {
+            "results": {
+                run_id: {
+                    "run_id": run_id,
+                    "subagent": "explorer",
+                    "status": "success",
+                    "result": f"report from {run_id}",
+                    "steps_completed": 1,
+                    "elapsed_ms": 20,
+                    "effects": ["delegate", "read_workspace"],
+                    "touched_repo_paths": [],
+                }
+                for run_id in ("child-a", "child-b")
+            },
+            "pending_run_ids": [],
+            "pending_children": [],
+            "wait_pending": False,
+            "summary": {"joined": 2},
+            "message": "All selected background children are joined.",
+        }
+
+    _replace("subagent_spawn", _spawn)
+    _replace("subagent_status", _status)
+    _replace("subagent_wait", _wait)
+    return calls
+
+
 def test_subagent_turn_policy_never_manufactures_delegation(tmp_path) -> None:  # type: ignore[no-untyped-def]
     # Router-free path: no semantic contract exists, so a turn never derives a
     # required_by_user delegation gate (nor a user_opt_out block) from the
-    # instruction text — in any language. Posture alone selects the advisory
-    # level: execute turns get "recommended", advisory turns get "available".
+    # instruction text — in any language. Execution intent must not manufacture
+    # a recommendation either: subagents remain an optional capability.
     registry = built_in_subagents()
     tools = {"subagent_run": object()}  # type: ignore[dict-item]
 
@@ -202,7 +272,7 @@ def test_subagent_turn_policy_never_manufactures_delegation(tmp_path) -> None:  
             repo_turn_execution_intent="advisory_non_execution",
         )
         assert advisory.level == "available", instruction
-        assert advisory.reason == "repo_non_execution_turn", instruction
+        assert advisory.reason == "subagents_available", instruction
 
         execute = agent_loop._resolve_subagent_turn_policy(
             instruction=instruction,
@@ -212,8 +282,8 @@ def test_subagent_turn_policy_never_manufactures_delegation(tmp_path) -> None:  
             turn_tools=tools,  # type: ignore[arg-type]
             repo_turn_execution_intent="execute",
         )
-        assert execute.level == "recommended", instruction
-        assert execute.reason == "repo_execution_turn", instruction
+        assert execute.level == "available", instruction
+        assert execute.reason == "subagents_available", instruction
 
     context = agent_loop._subagent_turn_context_message(
         agent_loop._resolve_subagent_turn_policy(
@@ -223,22 +293,18 @@ def test_subagent_turn_policy_never_manufactures_delegation(tmp_path) -> None:  
             subagent_registry=registry,
             turn_tools=tools,  # type: ignore[arg-type]
             repo_turn_execution_intent="execute",
-        ),
-        unapplied_isolated_run_ids=("impl-run-1",),
+        )
     )
     assert context is not None
-    assert "policy: recommended" in context
-    assert "Make an explicit delegation decision" in context
+    assert "policy: available" in context
+    assert "optional capability metadata" in context
+    assert "Make an explicit delegation decision" not in context
     assert "verifier" in context
     assert "test-strategist" not in context
-    assert "verification work" in context
     assert "test-strategy" not in context
     assert "Call subagent_run before finalizing" not in context
-    assert "Use subagent_spawn for independent readonly investigations" in context
-    assert "call subagent_wait or subagent_cancel before finalizing" in context
-    assert "unapplied_isolated_run_ids: impl-run-1" in context
-    assert "review, fix, then verify" in context
-    assert "do not rerun child-evidenced checks unless the tree changed" in context
+    assert "Use subagent_spawn" not in context
+    assert "unapplied_isolated_run_ids" not in context
 
 
 def test_subagent_turn_policy_reports_disabled_and_missing_tool_as_off(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -269,10 +335,20 @@ def test_subagent_turn_policy_reports_disabled_and_missing_tool_as_off(tmp_path)
     assert tool_missing.reason == "subagent_tool_not_exposed"
 
 
-def test_repo_turn_injects_delegation_decision_context_and_delegation_executes(tmp_path) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "Please use a subagent to read README.md and tell me what it says. Do not modify files.",
+        "Read README.md and tell me what it says. Do not modify files.",
+    ],
+    ids=["explicit-delegation", "model-chosen-delegation"],
+)
+def test_repo_turn_injects_delegation_decision_context_and_delegation_executes(
+    tmp_path, instruction
+) -> None:  # type: ignore[no-untyped-def]
     # Router-free path: no semantic contract forces or forbids delegation. The
-    # turn gets the advisory <subagent_turn_context> (recommended on an
-    # execute-capable turn), and a model-initiated subagent_run simply runs.
+    # turn gets neutral capability metadata, and a model-initiated subagent_run
+    # simply runs.
     (tmp_path / "README.md").write_text("repo notes\n", encoding="utf-8")
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -285,6 +361,11 @@ def test_repo_turn_injects_delegation_decision_context_and_delegation_executes(t
         api_key_override="override-key",
         session_log_dir_override=sessions_dir,
         enable_chat_turn_step_budget=True,
+    )
+    stale_run_id = "already-applied-run"
+    _replace_child_scheduler(
+        session,
+        _FakeBackgroundScheduler([], unapplied_run_ids=(stale_run_id,)),
     )
     subagent_calls = _replace_subagent_run_with_fake(session)
     client = _ScriptedClient(
@@ -309,9 +390,7 @@ def test_repo_turn_injects_delegation_decision_context_and_delegation_executes(t
     session.client = client  # type: ignore[assignment]
 
     try:
-        exit_code = session.run_turn(
-            "Please use a subagent to read README.md and tell me what it says. Do not modify files."
-        )
+        exit_code = session.run_turn(instruction)
         session_path = session.store.path
     finally:
         session.close()
@@ -320,15 +399,313 @@ def test_repo_turn_injects_delegation_decision_context_and_delegation_executes(t
     assert len(subagent_calls) == 1
     assert subagent_calls[0]["name"] == "explorer"
     assert len(client.calls) == 2
-    first_call_messages = "\n".join(
-        str(message.get("content") or "") for message in client.calls[0]["messages"]
-    )
+    first_request = client.calls[0]["messages"]
+    first_call_messages = "\n".join(str(message.get("content") or "") for message in first_request)
     assert "<subagent_turn_context>" in first_call_messages
-    assert "policy: recommended" in first_call_messages
-    assert "Make an explicit delegation decision" in first_call_messages
+    assert "policy: available" in first_call_messages
+    assert "optional capability metadata" in first_call_messages
+    assert "Make an explicit delegation decision" not in first_call_messages
+    assert stale_run_id not in first_call_messages
+    context_messages = [
+        message
+        for message in first_request
+        if "<subagent_turn_context>" in str(message.get("content") or "")
+    ]
+    assert len(context_messages) == 1
+    assert context_messages[0]["role"] == "system"
+    assert all(
+        "<subagent_turn_context>" not in str(message.get("content") or "")
+        for message in first_request
+        if message.get("role") == "user"
+    )
     # No manufactured delegation gate exists on the router-free path.
     assert "Call subagent_run before finalizing" not in first_call_messages
     assert _event_payloads(session_path, "subagent_required_nudge") == []
+
+
+def test_readonly_background_orchestration_finalizes_without_mutation_pressure(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="review",
+        yes=True,
+        max_steps=8,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        enable_chat_turn_step_budget=True,
+    )
+    background_tool_calls = _replace_background_subagent_tools_with_fake(session)
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="Starting both read-only investigations.",
+                tool_calls=[
+                    ToolCall(
+                        id=f"spawn-{run_id}",
+                        name="subagent_spawn",
+                        arguments={
+                            "name": "explorer",
+                            "label": run_id,
+                            "task": f"Inspect the source assigned to {run_id}.",
+                            "mode": "readonly",
+                            "workspace_view": "shared",
+                        },
+                    )
+                    for run_id in ("child-a", "child-b")
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="Checking both children once.",
+                tool_calls=[ToolCall(id="status-all", name="subagent_status", arguments={})],
+                raw={},
+            ),
+            LLMResponse(
+                content="Collecting both reports.",
+                tool_calls=[ToolCall(id="wait-all", name="subagent_wait", arguments={})],
+                raw={},
+            ),
+            LLMResponse(
+                content="Both read-only investigations completed successfully.",
+                tool_calls=[],
+                raw={},
+            ),
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Coordinate two read-only investigations and report.") == 0
+        session_path = session.store.path
+    finally:
+        session.close()
+
+    assert len(client.calls) == 4
+    assert sorted(background_tool_calls[:2]) == ["subagent_spawn", "subagent_spawn"]
+    assert background_tool_calls[2:] == ["subagent_status", "subagent_wait"]
+    injected_context = "\n".join(
+        str(message.get("content") or "")
+        for call in client.calls
+        for message in call["messages"]
+        if message.get("role") == "system"
+    )
+    assert "Use the next step to start implementation" not in injected_context
+    assert "Continue execution now" not in injected_context
+    assert _event_payloads(session_path, "completion_gate_nudge") == []
+    assert _event_payloads(session_path, "continuation_nudge") == []
+    assert _event_payloads(session_path, "implementation_bootstrap_nudge") == []
+    progress = _event_payloads(session_path, "subagent_orchestration_progress")
+    assert [event["tool"] for event in progress] == [
+        "subagent_spawn",
+        "subagent_spawn",
+        "subagent_status",
+        "subagent_wait",
+    ]
+
+
+def test_background_launch_guard_stops_sequential_replay_even_if_parent_state_changes(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="review",
+        yes=True,
+        max_steps=10,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        enable_chat_turn_step_budget=True,
+    )
+    original = session.tools["subagent_spawn"]
+    dispatched: list[dict[str, Any]] = []
+
+    def _spawn(arguments: dict[str, Any]) -> dict[str, Any]:
+        dispatched.append(dict(arguments))
+        return {
+            "run_id": str(arguments["run_id"]),
+            "state": "spawned",
+            "queued": False,
+        }
+
+    session.tools["subagent_spawn"] = ToolDef(
+        name="subagent_spawn",
+        description=original.description,
+        parameters=original.parameters,
+        run=_spawn,
+        metadata=original.metadata,
+    )
+    original_apply = session.tools["subagent_apply"]
+    apply_calls: list[dict[str, Any]] = []
+
+    def _apply(arguments: dict[str, Any]) -> dict[str, Any]:
+        apply_calls.append(dict(arguments))
+        return {
+            "ok": True,
+            "applied_paths": ["candidate.txt"],
+            "semantic_no_progress": False,
+        }
+
+    session.tools["subagent_apply"] = ToolDef(
+        name="subagent_apply",
+        description=original_apply.description,
+        parameters=original_apply.parameters,
+        run=_apply,
+        metadata=original_apply.metadata,
+    )
+    objective = {
+        "name": "explore",
+        "task": "Inspect the same typed objective.  ",
+        "workspace_view": "shared",
+    }
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="Launching two deliberate replicas together.",
+                tool_calls=[
+                    ToolCall(
+                        id="spawn-original",
+                        name="subagent_spawn",
+                        arguments={**objective, "run_id": "child-a"},
+                    ),
+                    ToolCall(
+                        id="spawn-replica",
+                        name="subagent_spawn",
+                        arguments={**objective, "run_id": "child-b"},
+                    ),
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="Relabelling the same objective and changing unrelated parent state.",
+                tool_calls=[
+                    ToolCall(
+                        id="spawn-rotated",
+                        name="subagent_spawn",
+                        arguments={
+                            **objective,
+                            "name": "explorer",
+                            "task": "Inspect the same typed objective.",
+                            "mode": "readonly",
+                            "run_id": "phase-five-child-a",
+                        },
+                    ),
+                    ToolCall(
+                        id="apply-unrelated",
+                        name="subagent_apply",
+                        arguments={"run_id": "some-other-candidate"},
+                    ),
+                ],
+                raw={},
+            ),
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Coordinate the background investigation.") == 1
+        session_path = session.store.path
+    finally:
+        session.close()
+
+    assert len(client.calls) == 2
+    assert [call["run_id"] for call in dispatched] == ["child-a", "child-b"]
+    assert apply_calls == [{"run_id": "some-other-candidate"}]
+    coalesced = _event_payloads(session_path, "root_subagent_launch_coalesced")
+    assert [event["requested_run_id"] for event in coalesced] == ["phase-five-child-a"]
+    assert [event["stop_signal"] for event in coalesced] == [True]
+    backstop = _event_payloads(session_path, "root_subagent_semantic_repetition_backstop")
+    assert len(backstop) == 1
+    assert backstop[0]["source"] == "background_launch_intent"
+    assert backstop[0]["reason"] == "launch_intent_repeated_after_generation"
+
+
+def test_readonly_background_launch_backstop_uses_neutral_fallback(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="review",
+        yes=True,
+        max_steps=8,
+        no_log=False,
+        api_key_override="override-key",
+        session_log_dir_override=tmp_path / "sessions",
+        enable_chat_turn_step_budget=True,
+    )
+    original = session.tools["subagent_spawn"]
+    dispatched: list[dict[str, Any]] = []
+
+    def _spawn(arguments: dict[str, Any]) -> dict[str, Any]:
+        dispatched.append(dict(arguments))
+        return {
+            "run_id": str(arguments["run_id"]),
+            "state": "spawned",
+            "queued": False,
+        }
+
+    session.tools["subagent_spawn"] = ToolDef(
+        name="subagent_spawn",
+        description=original.description,
+        parameters=original.parameters,
+        run=_spawn,
+        metadata=original.metadata,
+    )
+    objective = {
+        "name": "explorer",
+        "task": "Inspect the same typed objective.",
+        "mode": "readonly",
+        "workspace_view": "shared",
+    }
+    client = _ScriptedClient(
+        [
+            LLMResponse(
+                content="Launching two deliberate replicas together.",
+                tool_calls=[
+                    ToolCall(
+                        id="spawn-readonly-a",
+                        name="subagent_spawn",
+                        arguments={**objective, "run_id": "readonly-a"},
+                    ),
+                    ToolCall(
+                        id="spawn-readonly-b",
+                        name="subagent_spawn",
+                        arguments={**objective, "run_id": "readonly-b"},
+                    ),
+                ],
+                raw={},
+            ),
+            LLMResponse(
+                content="Replaying the completed read-only objective.",
+                tool_calls=[
+                    ToolCall(
+                        id="spawn-readonly-c",
+                        name="subagent_spawn",
+                        arguments={**objective, "run_id": "readonly-c"},
+                    )
+                ],
+                raw={},
+            ),
+        ]
+    )
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        assert session.run_turn("Coordinate the read-only background investigation.") == 1
+        session_path = session.store.path
+    finally:
+        session.close()
+
+    assert [call["run_id"] for call in dispatched] == ["readonly-a", "readonly-b"]
+    final_text = str(_event_payloads(session_path, "final")[-1]["content"])
+    assert "Implementation has not started" not in final_text
+    assert "Finish the requested implementation" not in final_text
+    assert "No verification result was recorded" not in final_text
+    assert "Complete the requested result or report a concrete blocker" in final_text
 
 
 def test_turn_proceeds_without_subagent_gate_when_subagents_disabled(tmp_path) -> None:  # type: ignore[no-untyped-def]

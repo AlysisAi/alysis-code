@@ -19,6 +19,11 @@ from ..request_estimation import estimate_provider_payload_tokens
 from ..token_budget import estimate_tokens
 from ..web_search_adapters import AUTO_WEB_SEARCH_ADAPTER, GEMINI_GROUNDING_ADAPTER
 from .cache_policy import merge_cache_policy_metadata
+from .http_cancellation import (
+    cancellable_httpx_request,
+    cancellable_httpx_send,
+    raise_if_cancelled,
+)
 from .metadata import (
     GEMINI_GENERATE_CONTENT_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
@@ -1714,6 +1719,7 @@ class GeminiGenerateContentClient:
         *,
         client: httpx.Client,
         plan: _GeminiCachedContentPlan,
+        cancellation_token: Any | None = None,
     ) -> tuple[str | None, str, dict[str, Any]]:
         lifecycle = self._cached_content_lifecycle_metadata()
         now = self._cached_content_now()
@@ -1727,6 +1733,7 @@ class GeminiGenerateContentClient:
                     signature=plan.signature,
                     reason=refresh_reason,
                     lifecycle=lifecycle,
+                    cancellation_token=cancellation_token,
                 )
             else:
                 entry = replace(entry, last_used_at=now)
@@ -1744,12 +1751,16 @@ class GeminiGenerateContentClient:
             lifecycle["create_disabled_reason"] = self._cached_content_create_disabled_reason
             return None, "create_disabled", lifecycle
         try:
-            response = client.post(
-                f"{self.base_url}/cachedContents",
+            response = cancellable_httpx_send(
+                client=client,
+                cancellation_token=cancellation_token,
+                method="POST",
+                url=f"{self.base_url}/cachedContents",
                 headers=self._headers(),
                 json=plan.create_payload,
             )
         except Exception as e:  # noqa: BLE001
+            raise_if_cancelled(cancellation_token)
             return (
                 None,
                 self._record_cached_content_create_failure(
@@ -1820,6 +1831,7 @@ class GeminiGenerateContentClient:
                 signature=oldest_key,
                 reason="max_entries_exceeded",
                 lifecycle=lifecycle,
+                cancellation_token=cancellation_token,
             )
         ttl_seconds = self.cached_content_ttl_seconds
         refresh_margin_seconds = self.cached_content_refresh_margin_seconds
@@ -1974,6 +1986,7 @@ class GeminiGenerateContentClient:
         client: httpx.Client | None = None,
         reason: str = "cleared",
         lifecycle: dict[str, Any] | None = None,
+        cancellation_token: Any | None = None,
     ) -> None:
         entry = self._cached_content_by_signature.pop(plan.signature, None)
         if entry is None:
@@ -1988,6 +2001,7 @@ class GeminiGenerateContentClient:
                 client=client,
                 entry=entry,
                 lifecycle=target_lifecycle,
+                cancellation_token=cancellation_token,
             )
         if lifecycle is not None:
             lifecycle["entry_count"] = len(self._cached_content_by_signature)
@@ -2057,6 +2071,7 @@ class GeminiGenerateContentClient:
         signature: str,
         reason: str,
         lifecycle: dict[str, Any],
+        cancellation_token: Any | None = None,
     ) -> None:
         entry = self._cached_content_by_signature.pop(signature, None)
         if entry is None:
@@ -2067,6 +2082,7 @@ class GeminiGenerateContentClient:
             client=client,
             entry=entry,
             lifecycle=lifecycle,
+            cancellation_token=cancellation_token,
         )
         lifecycle["entry_count"] = len(self._cached_content_by_signature)
 
@@ -2076,14 +2092,19 @@ class GeminiGenerateContentClient:
         client: httpx.Client,
         entry: _GeminiCachedContentEntry,
         lifecycle: dict[str, Any],
+        cancellation_token: Any | None = None,
     ) -> None:
         lifecycle["delete_attempt_count"] = int(lifecycle.get("delete_attempt_count") or 0) + 1
         try:
-            response = client.delete(
-                _cached_content_resource_url(self.base_url, entry.name),
+            response = cancellable_httpx_send(
+                client=client,
+                cancellation_token=cancellation_token,
+                method="DELETE",
+                url=_cached_content_resource_url(self.base_url, entry.name),
                 headers=self._headers(),
             )
         except Exception:
+            raise_if_cancelled(cancellation_token)
             lifecycle["delete_failure_count"] = int(lifecycle.get("delete_failure_count") or 0) + 1
             lifecycle["delete_status"] = "delete_failed"
             return
@@ -2110,6 +2131,7 @@ class GeminiGenerateContentClient:
         on_reasoning_delta: Callable[[str], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
         if self.prompt_cache_key or self.prompt_cache_retention:
             raise LLMError("Gemini GenerateContent does not support prompt_cache_key settings")
@@ -2382,6 +2404,7 @@ class GeminiGenerateContentClient:
                         ) = self._resolve_cached_content(
                             client=client,
                             plan=cache_plan,
+                            cancellation_token=cancellation_token,
                         )
                         raw_creation_tokens = cache_lifecycle_metadata.get(
                             "cache_creation_input_tokens"
@@ -2471,9 +2494,12 @@ class GeminiGenerateContentClient:
                     telemetry.set_cache_policy(cache_metadata)
                     while True:
                         if stream:
-                            with client.stream(
-                                "POST",
-                                url,
+                            with cancellable_httpx_request(
+                                client=client,
+                                cancellation_token=cancellation_token,
+                                method="POST",
+                                url=url,
+                                stream=True,
                                 headers=self._headers(),
                                 json=request_payload,
                             ) as response:
@@ -2519,6 +2545,7 @@ class GeminiGenerateContentClient:
                                             client=client,
                                             reason=stale_reason,
                                             lifecycle=cache_lifecycle_metadata,
+                                            cancellation_token=cancellation_token,
                                         )
                                         if cache_metadata is not None:
                                             cache_metadata.update(cache_lifecycle_metadata)
@@ -2578,8 +2605,11 @@ class GeminiGenerateContentClient:
                                     active_request_plan_metadata,
                                     cache_creation_input_tokens=cache_creation_input_tokens,
                                 )
-                        response = client.post(
-                            url,
+                        response = cancellable_httpx_send(
+                            client=client,
+                            cancellation_token=cancellation_token,
+                            method="POST",
+                            url=url,
                             headers=self._headers(),
                             json=request_payload,
                         )
@@ -2625,6 +2655,7 @@ class GeminiGenerateContentClient:
                                 client=client,
                                 reason=stale_reason,
                                 lifecycle=cache_lifecycle_metadata,
+                                cancellation_token=cancellation_token,
                             )
                             if cache_metadata is not None:
                                 cache_metadata.update(cache_lifecycle_metadata)
@@ -2657,6 +2688,7 @@ class GeminiGenerateContentClient:
                             continue
                         break
             except httpx.DecodingError as e:
+                raise_if_cancelled(cancellation_token)
                 err = LLMError(
                     "Gemini GenerateContent decompression failed: "
                     f"{sanitize_error_text_for_output(e)}"
@@ -2665,6 +2697,7 @@ class GeminiGenerateContentClient:
                     mark_provider_call_non_retryable(err)
                 raise err from e
             except Exception as e:  # noqa: BLE001
+                raise_if_cancelled(cancellation_token)
                 if isinstance(e, LLMError):
                     if stream and public_output_emitted:
                         mark_provider_call_non_retryable(e)
@@ -2711,6 +2744,7 @@ class GeminiGenerateContentClient:
                         None,
                     ),
                     retry_deadline_allows=getattr(self, "_provider_retry_deadline_allows", None),
+                    cancellation_token=cancellation_token,
                 )
             ),
             self.route_identity,

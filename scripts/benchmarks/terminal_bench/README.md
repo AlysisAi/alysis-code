@@ -135,6 +135,17 @@ The adapter fails closed when `managed_host_agent_timeout_sec` is absent,
 non-finite, non-positive, consumed by reserve, or too small after elapsed time.
 On success, the generated command includes `--deadline-seconds`,
 `--require-deadline`, and a positional `--` before the complete instruction.
+
+All three launch adapters also set `ALYSIS_MANAGED_HOST_DEADLINE_UNIX_SECONDS`
+for that invocation immediately before dispatch, so interpreter and CLI startup
+consume the same managed budget. This absolute anchor only narrows the existing
+relative deadline; an inherited tighter or expired anchor is preserved, and an
+invalid anchor fails clearly. It is passed in the launch environment (a
+command-local assignment for the legacy terminal transport), never saved in
+configuration. The host and execution environment must have synchronized Unix
+clocks. The runtime converts the remaining wall-clock interval to a monotonic
+deadline once; subsequent enforcement does not restart the budget. Existing
+outer host timeouts and shutdown reserves remain unchanged.
 The instruction remains one shell-quoted argument, so dash-leading, quoted,
 multiline, Unicode, and shell-looking text stays data.
 
@@ -146,3 +157,35 @@ deadline, requirement status, validation status, command timeout, host verifier
 status/source/count, and stable verifier command hashes. It does not record raw
 verifier commands, API keys, authorization headers, environment dumps, task
 instructions, prompts, tool arguments, command output, or source contents.
+
+### Box/Harbor launchers
+
+`box_harbor_agent.AlysisAgent` consumes host-owned metadata at `run` entry,
+after installation. Supply `context.metadata["managed_host_deadline"]` with
+`remaining_seconds` (or `timeout_seconds`), and optionally
+`shutdown_reserve_seconds`. A host may instead provide `deadline_unix_seconds`;
+the adapter converts it once to remaining time, then uses monotonic elapsed time.
+The host must pass the final effective allowance after its own multipliers.
+Constructor `managed_host_agent_timeout_sec` and then
+`ALYSIS_MANAGED_HOST_AGENT_TIMEOUT_SEC` are supported explicit fallbacks when
+the host cannot provide context metadata. Missing/invalid authority refuses launch.
+
+The box adapter deducts every prelaunch setup call from that same allowance.
+It preserves the conservative 85% maximum fraction, the 10,800-second ceiling,
+and at least the configured shutdown reserve (default 30 seconds). Legacy
+`ALYSIS_RUN_BUDGET_SECONDS`/`ALYSIS_DEADLINE_SECONDS` may only tighten this bound;
+they cannot supply missing host authority or enlarge a budget. Extra CLI
+arguments cannot override the required deadline. Task names do not supply
+deadline authority.
+
+The alternate `harbor_agent.AlysisHarborAgent` likewise requires an explicit
+host command timeout rather than silently assuming 7,200 seconds. It derives
+the agent deadline using the shared resolver and bounds artifact collection by
+the remaining host allowance.
+
+Both Harbor launchers set a unique `ALYSIS_TASK_OUTCOME_PATH` for each root
+invocation and expose the resulting terminal record as `alysis_task_outcome`,
+independently of the legacy `alysis_outcome`/process status. A missing,
+nonterminal, malformed, or contradictory record is unavailable, never verified
+success. Exit zero alone does not prove completion. Deadline failures retain
+the available artifacts and report the deadline outcome.

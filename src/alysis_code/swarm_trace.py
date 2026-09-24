@@ -32,6 +32,7 @@ from .surface.types import (
     ToolEndEvent,
     ToolOutputEvent,
     ToolStartEvent,
+    remote_site_outcome,
 )
 
 _TRACE_LEVELS = {"off", "compact", "full"}
@@ -398,9 +399,18 @@ class SwarmWorkerTraceSurface:
         if err:
             detail = f": {_truncate_inline(str(err), max_chars=140)}"
         summary = self._tool_output_summary.pop(event.tool_call_id, "").strip()
+        if event.status == "done" and event.meta.get("tool_unavailable"):
+            # Reported "done" to the model, but the withdrawn tool never ran.
+            self._emit("worker.tool", f"{display} unavailable ({elapsed})")
+            return
         if event.status == "done":
             message = f"{display}: {summary} ({elapsed})" if summary else f"{display} ({elapsed})"
             self._emit("worker.tool", message)
+            return
+        site_reason = remote_site_outcome(event.meta)
+        if site_reason:
+            # Refused, stalled, or dropped by the remote site: not a worker failure.
+            self._emit("worker.tool", f"{display} · {site_reason} ({elapsed})")
             return
         self._emit("worker.tool", f"{display} failed ({elapsed}){detail}")
 

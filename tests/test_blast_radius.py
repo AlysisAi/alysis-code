@@ -28,6 +28,7 @@ from alysis_code.agent.blast_radius import (
     DEFAULT_OVER_BROAD_THRESHOLD,
     MIN_SCOPE_FILES,
     BlastRadiusPolicy,
+    BlastRadiusScope,
     BlastRadiusStatus,
     ScopePhase,
     ScopeRun,
@@ -66,6 +67,7 @@ from alysis_code.agent.verification import (
 from alysis_code.agent_loop import create_session
 from alysis_code.config import AppConfig, ConfigError, set_config_value
 from alysis_code.llm.openai_compat import LLMResponse, ToolCall
+from alysis_code.sandbox_runner import HostShellRunner
 from alysis_code.session_store import read_session_events
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,11 @@ def repo(tmp_path: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
     return tmp_path
+
+
+def _pytest_scope_command(scope: BlastRadiusScope) -> str:
+    """The synthetic fixture uses pytest; production suggestions are not its contract."""
+    return "python -m pytest " + " ".join(scope.paths) + " -q"
 
 
 def _pytest_output(*, failed: Sequence[str] = (), passed: int = 8) -> str:
@@ -173,6 +180,7 @@ def _scoped_state(
 
 
 def _scope_run(
+    repo: Path,
     command: str,
     *,
     phase: ScopePhase,
@@ -182,7 +190,7 @@ def _scope_run(
 ) -> ScopeRun:
     return ScopeRun(
         command=command,
-        selectors=command_path_selectors(command),
+        selectors=command_path_selectors(command, workspace_root=repo),
         phase=phase,
         report=parse_test_report(_pytest_output(failed=failed, passed=passed)),
         duration_seconds=duration_seconds,
@@ -215,7 +223,7 @@ def test_scope_picks_mirror_sibling_and_importing_tests(repo: Path) -> None:
     # A flat test that neither mirrors, imports, nor shares a package is out too.
     assert "tests/test_unrelated.py" not in tiers
     assert scope.language is not None and scope.diffable
-    assert "python -m pytest" in scope.suggested_command()
+    assert scope.suggested_command() == "", "Python files alone do not establish pytest"
 
 
 def test_scope_orders_nearest_first(repo: Path) -> None:
@@ -333,14 +341,64 @@ def test_extract_python_import_tokens_covers_both_forms() -> None:
     ("command", "expected"),
     [
         ("python -m pytest tests/test_core.py -q", ("tests/test_core.py",)),
-        ("pytest tests/test_a.py::test_x tests/test_b.py", ("tests/test_a.py", "tests/test_b.py")),
-        ("python -m pytest -q", ()),
-        ("pytest -k widen", ()),
-        ("pytest tests/unit", ("tests/unit",)),
+        ("pytest tests/test_a.py::test_x tests/test_b.py", None),
+        (
+            "python -m pytest -q",
+            tuple(
+                sorted(
+                    path
+                    for path in _REPO_FILES
+                    if path.startswith("tests/") and path.endswith(".py")
+                )
+            ),
+        ),
+        ("pytest -k widen", None),
+        ("pytest tests/helpers", ("tests/helpers/test_fmt.py",)),
+        ("/opt/venv/bin/pytest tests/test_core.py -q", ("tests/test_core.py",)),
+        (
+            '"/opt/Project Tools/python" -m pytest "tests/unit space/test_core.py" -q',
+            ("tests/unit space/test_core.py",),
+        ),
+        ("MODE=test /opt/venv/bin/python -m pytest tests/helpers", ("tests/helpers/test_fmt.py",)),
+        ("env MODE=test /opt/venv/bin/pytest tests/helpers", ("tests/helpers/test_fmt.py",)),
     ],
 )
-def test_command_path_selectors(command: str, expected: tuple[str, ...]) -> None:
-    assert command_path_selectors(command) == expected
+def test_command_path_selectors(repo: Path, command: str, expected: tuple[str, ...] | None) -> None:
+    if expected and "space" in command:
+        for item in expected:
+            path = repo / item
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("def test_ok():\n    assert True\n")
+    selected = command_path_selectors(command, workspace_root=repo)
+    assert (tuple(sorted(selected)) if selected is not None else None) == (
+        tuple(sorted(expected)) if expected is not None else None
+    )
+
+
+def test_executable_path_does_not_broaden_actual_test_operands(repo: Path) -> None:
+    selectors = command_path_selectors(
+        "/opt/venv/bin/python -m pytest tests/helpers -q", workspace_root=repo
+    )
+    assert selection_covers(selectors, "tests/helpers/test_fmt.py") is True
+    assert selection_covers(selectors, "tests/integration/test_core.py") is False
+
+
+def test_unparsed_command_is_inconclusive() -> None:
+    # Unterminated shell quoting cannot earn whole-suite coverage merely because
+    # structured parsing produced no argument vector.
+    assert command_path_selectors('pytest "tests/unit/test_core.py') is None
+
+
+@pytest.mark.parametrize("executable", ["python", "/opt/venv/bin/python"])
+def test_changed_working_directory_does_not_claim_other_test_scopes(
+    repo: Path, executable: str
+) -> None:
+    selectors = command_path_selectors(
+        f"cd tests/helpers && {executable} -m pytest -q", workspace_root=repo
+    )
+    assert selectors == ("tests/helpers/test_fmt.py",)
+    assert selection_covers(selectors, "tests/helpers/test_fmt.py") is True
+    assert selection_covers(selectors, "tests/integration/test_core.py") is False
 
 
 def test_selection_covers_treats_no_selectors_as_whole_suite() -> None:
@@ -376,7 +434,7 @@ def test_scope_phase_ignores_files_the_agent_created() -> None:
 
 def test_pre_existing_failures_are_not_blamed_on_the_change(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     already_broken = "tests/test_other.py::test_other"
 
     _run_tests(state, repo, command, failed=[already_broken])
@@ -401,19 +459,20 @@ def test_a_clean_whole_suite_run_baselines_any_scope(repo: Path) -> None:
     _run_tests(
         state,
         repo,
-        state.blast_radius_scope.suggested_command(),
+        _pytest_scope_command(state.blast_radius_scope),
         failed=[already_broken, "tests/test_core.py::test_widen"],
     )
 
     assessment = state.compute_blast_radius_assessment(enabled=True, turn_intent="execute")
-    assert assessment.baseline_whole_suite is True
+    assert assessment.baseline_whole_suite is False
+    assert state.blast_radius_runs[0].covers(state.blast_radius_scope.paths)
     assert assessment.pre_existing == (already_broken,)
     assert assessment.new_failures == ("tests/test_core.py::test_widen",)
 
 
 def test_a_run_after_the_first_edit_is_never_credited_as_a_baseline(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
 
     # Fix first, then run: the run cannot be a baseline, or it would mask exactly
     # the breakage this step exists to catch.
@@ -434,8 +493,9 @@ def test_failures_outside_the_baseline_coverage_are_unattributed(repo: Path) -> 
     )
     # The clean tree was only partly measured: a failure in a file it covered can be
     # called new, a failure in a file it never ran cannot.
-    baseline = _scope_run("pytest tests/test_core.py", phase=ScopePhase.BASELINE)
+    baseline = _scope_run(repo, "pytest tests/test_core.py", phase=ScopePhase.BASELINE)
     gate = _scope_run(
+        repo,
         "pytest -q",
         phase=ScopePhase.GATE,
         failed=["tests/test_core.py::test_widen", "tests/test_other.py::test_other"],
@@ -453,12 +513,14 @@ def test_several_clean_runs_compose_into_one_baseline(repo: Path) -> None:
     )
     runs = [
         _scope_run(
+            repo,
             "pytest tests/test_core.py",
             phase=ScopePhase.BASELINE,
             failed=["tests/test_core.py::test_widen"],
         ),
-        _scope_run("pytest tests/test_consumer.py", phase=ScopePhase.BASELINE),
+        _scope_run(repo, "pytest tests/test_consumer.py", phase=ScopePhase.BASELINE),
         _scope_run(
+            repo,
             "pytest -q",
             phase=ScopePhase.GATE,
             failed=["tests/test_core.py::test_widen", "tests/test_consumer.py::test_consumer"],
@@ -472,7 +534,7 @@ def test_several_clean_runs_compose_into_one_baseline(repo: Path) -> None:
 
 def test_a_failing_test_the_agent_just_wrote_is_not_a_regression(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
 
     _run_tests(state, repo, command)
     _edit(state, repo, "tests/test_added.py", created=True)
@@ -491,7 +553,7 @@ def test_a_failing_test_the_agent_just_wrote_is_not_a_regression(repo: Path) -> 
 
 def test_regression_is_detected_then_cleared_by_a_repair(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     broken = "tests/test_consumer.py::test_consumer"
 
     _run_tests(state, repo, command)
@@ -533,7 +595,7 @@ def test_regression_is_detected_then_cleared_by_a_repair(repo: Path) -> None:
 
 def test_a_scope_never_re_run_after_the_fix_blocks_as_unverified(repo: Path) -> None:
     state = _scoped_state(repo)
-    _run_tests(state, repo, state.blast_radius_scope.suggested_command())
+    _run_tests(state, repo, _pytest_scope_command(state.blast_radius_scope))
     _edit(state, repo, "src/pkg/core.py")
 
     assessment = state.compute_blast_radius_assessment(enabled=True, turn_intent="execute")
@@ -548,7 +610,7 @@ def test_a_scope_never_re_run_after_the_fix_blocks_as_unverified(repo: Path) -> 
     )
     assert problems == ["blast_radius_unverified"]
     nudge = _completion_gate_nudge_message(problems, blast_radius_assessment=assessment)
-    assert "have not run the tests around what you changed" in nudge
+    assert "Current test coverage has not been established for the selected scope" in nudge
     assert "tests/test_core.py" in nudge
 
 
@@ -572,7 +634,7 @@ def test_the_gate_is_inert_without_material_edits(repo: Path) -> None:
 def test_regressions_already_reported_by_step_three_are_not_double_reported(repo: Path) -> None:
     """One fact, one blocker: the step-3 stage owns same-command regressions."""
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     broken = "tests/test_consumer.py::test_consumer"
 
     _run_tests(state, repo, command)
@@ -612,8 +674,8 @@ def test_over_broad_breakage_switches_to_the_narrow_rewrite_directive(repo: Path
     assessment = assess_blast_radius(
         scope=scope,
         runs=[
-            _scope_run("pytest -q", phase=ScopePhase.BASELINE),
-            _scope_run("pytest -q", phase=ScopePhase.GATE, failed=broken),
+            _scope_run(repo, "pytest -q", phase=ScopePhase.BASELINE),
+            _scope_run(repo, "pytest -q", phase=ScopePhase.GATE, failed=broken),
         ],
         applicable=True,
     )
@@ -641,8 +703,8 @@ def test_breakage_below_the_threshold_asks_for_a_targeted_repair(repo: Path) -> 
     assessment = assess_blast_radius(
         scope=scope,
         runs=[
-            _scope_run("pytest -q", phase=ScopePhase.BASELINE),
-            _scope_run("pytest -q", phase=ScopePhase.GATE, failed=_many_failures(2)),
+            _scope_run(repo, "pytest -q", phase=ScopePhase.BASELINE),
+            _scope_run(repo, "pytest -q", phase=ScopePhase.GATE, failed=_many_failures(2)),
         ],
         applicable=True,
     )
@@ -658,8 +720,8 @@ def test_the_over_broad_threshold_is_configurable(repo: Path) -> None:
         touched_paths=["src/pkg/core.py"], index=build_repo_test_index(repo)
     )
     runs = [
-        _scope_run("pytest -q", phase=ScopePhase.BASELINE),
-        _scope_run("pytest -q", phase=ScopePhase.GATE, failed=_many_failures(3)),
+        _scope_run(repo, "pytest -q", phase=ScopePhase.BASELINE),
+        _scope_run(repo, "pytest -q", phase=ScopePhase.GATE, failed=_many_failures(3)),
     ]
     strict = assess_blast_radius(
         scope=scope, runs=runs, applicable=True, policy=BlastRadiusPolicy(over_broad_threshold=3)
@@ -678,7 +740,7 @@ def test_the_over_broad_threshold_is_configurable(repo: Path) -> None:
 
 def test_summary_lists_uncleared_regressions(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     broken = ["tests/test_consumer.py::test_consumer", "tests/pkg/test_smoke.py::test_smoke"]
 
     _run_tests(state, repo, command)
@@ -697,7 +759,7 @@ def test_summary_lists_uncleared_regressions(repo: Path) -> None:
 def test_summary_reports_a_clean_blast_radius_too(repo: Path) -> None:
     """Success is reported with what else was checked, never silently."""
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
 
     _run_tests(state, repo, command)
     _edit(state, repo, "src/pkg/core.py")
@@ -716,7 +778,7 @@ def test_summary_names_an_unattributed_result_as_unattributed(repo: Path) -> Non
     _run_tests(
         state,
         repo,
-        state.blast_radius_scope.suggested_command(),
+        _pytest_scope_command(state.blast_radius_scope),
         failed=["tests/test_core.py::test_widen"],
     )
 
@@ -731,7 +793,7 @@ def test_summary_names_an_unattributed_result_as_unattributed(repo: Path) -> Non
 def test_summary_handles_unattributed_run_with_no_failures(repo: Path) -> None:
     state = _scoped_state(repo)
     _edit(state, repo, "src/pkg/core.py")
-    _run_tests(state, repo, state.blast_radius_scope.suggested_command())
+    _run_tests(state, repo, _pytest_scope_command(state.blast_radius_scope))
 
     summary = build_blast_radius_status_summary(
         state.compute_blast_radius_assessment(enabled=True, turn_intent="execute")
@@ -867,13 +929,13 @@ def test_a_shrunk_scope_still_gates(repo: Path) -> None:
         scope, observed_seconds=999.0, policy=BlastRadiusPolicy(scope_seconds_cap=1.0)
     )
     assert shrunk is not None
-    command = shrunk.suggested_command()
+    command = _pytest_scope_command(shrunk)
     broken = f"{shrunk.paths[0]}::test_widen"
     assessment = assess_blast_radius(
         scope=shrunk,
         runs=[
-            _scope_run(command, phase=ScopePhase.BASELINE),
-            _scope_run(command, phase=ScopePhase.GATE, failed=[broken]),
+            _scope_run(repo, command, phase=ScopePhase.BASELINE),
+            _scope_run(repo, command, phase=ScopePhase.GATE, failed=[broken]),
         ],
         applicable=True,
     )
@@ -889,12 +951,12 @@ def test_the_summary_admits_a_shrunk_scope(repo: Path) -> None:
         scope, observed_seconds=999.0, policy=BlastRadiusPolicy(scope_seconds_cap=1.0)
     )
     assert shrunk is not None
-    command = shrunk.suggested_command()
+    command = _pytest_scope_command(shrunk)
     assessment = assess_blast_radius(
         scope=shrunk,
         runs=[
-            _scope_run(command, phase=ScopePhase.BASELINE),
-            _scope_run(command, phase=ScopePhase.GATE),
+            _scope_run(repo, command, phase=ScopePhase.BASELINE),
+            _scope_run(repo, command, phase=ScopePhase.GATE),
         ],
         applicable=True,
     )
@@ -937,7 +999,7 @@ def test_applying_zero_shrink_rounds_is_a_no_op(repo: Path) -> None:
 
 def test_an_unreadable_scope_run_is_not_reported_as_never_run(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     _edit(state, repo, "src/pkg/core.py")
     # A runner whose output carries no parseable per-test results.
     _record_tool_effect(
@@ -971,7 +1033,7 @@ def test_an_unreadable_scope_run_is_not_reported_as_never_run(repo: Path) -> Non
 
 def test_structured_verify_pass_overrides_truncated_runner_output(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     _run_tests(state, repo, command)
     _edit(state, repo, "src/pkg/core.py")
     _record_tool_effect(
@@ -1020,8 +1082,8 @@ def test_the_file_cap_records_what_it_dropped(repo: Path) -> None:
         assess_blast_radius(
             scope=scope,
             runs=[
-                _scope_run("pytest -q", phase=ScopePhase.BASELINE),
-                _scope_run("pytest -q", phase=ScopePhase.GATE),
+                _scope_run(repo, "pytest -q", phase=ScopePhase.BASELINE),
+                _scope_run(repo, "pytest -q", phase=ScopePhase.GATE),
             ],
             applicable=True,
         )
@@ -1052,7 +1114,7 @@ def test_kill_switch_env_wins_over_config(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_disabled_gate_still_captures_runs_but_never_blocks(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     _run_tests(state, repo, command)
     _edit(state, repo, "src/pkg/core.py")
     _run_tests(state, repo, command, failed=["tests/test_core.py::test_widen"])
@@ -1122,7 +1184,7 @@ def test_the_scope_advisory_states_whether_a_baseline_exists(repo: Path) -> None
     )
     with_baseline = build_blast_radius_scope_advisory(scope, has_baseline=True)
     without_baseline = build_blast_radius_scope_advisory(scope, has_baseline=False)
-    assert "A clean-tree run already covers this scope" in with_baseline
+    assert "A recorded run before edits to existing files covers this scope" in with_baseline
     assert "cannot yet be told apart" in without_baseline
     for text in (with_baseline, without_baseline):
         assert "tests/test_core.py" in text
@@ -1141,7 +1203,7 @@ def test_has_blast_radius_baseline_tracks_coverage(repo: Path) -> None:
 
 def test_state_payload_carries_the_scope_and_assessment(repo: Path) -> None:
     state = _scoped_state(repo)
-    command = state.blast_radius_scope.suggested_command()
+    command = _pytest_scope_command(state.blast_radius_scope)
     _run_tests(state, repo, command)
     _edit(state, repo, "src/pkg/core.py")
     _run_tests(state, repo, command, failed=["tests/test_core.py::test_widen"])
@@ -1189,7 +1251,7 @@ class _ScriptedClient:
 
 
 def _scripted_session(root: Path, session_id: str) -> Any:
-    return create_session(
+    session = create_session(
         cfg=AppConfig(model="test-model", routing_mode="code_only", verify_commands=["pytest -q"]),
         root=root,
         mode="auto",
@@ -1201,6 +1263,9 @@ def _scripted_session(root: Path, session_id: str) -> Any:
         session_log_dir_override=root / "sessions",
         session_id_override=session_id,
     )
+    # The scripted shell below models host execution in this fixture workspace.
+    session.shell_runner = HostShellRunner()
+    return session
 
 
 def _fake_shell_run_breaking_a_neighbour(root: Path):

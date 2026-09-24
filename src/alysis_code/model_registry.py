@@ -48,7 +48,9 @@ _TRACKED_FIELDS = (
     "reasoning_output_cost_per_token",
 )
 DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 128_000
-DEFAULT_UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 8_192
+# Share the unknown-output allowance with request construction and context
+# reservation. Resolved model capacities and explicit overrides take precedence.
+DEFAULT_UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 32_000
 
 _FALLBACKS: dict[str, Any] = {
     "context_window_tokens": DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
@@ -92,8 +94,8 @@ _CANONICAL_MODEL_SOURCES: dict[str, tuple[str, ...]] = {
     "deepseek-v4-pro": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash": ("https://api-docs.deepseek.com/quick_start/pricing/",),
     "deepseek-v4-flash-vision-exp": ("https://api-docs.deepseek.com/quick_start/pricing/",),
-    "deepseek-v4.1-flash-expires-on-0910": (
-        "https://news.ycombinator.com/item?id=49607094",
+    "deepseek-flash": (
+        "https://api-docs.deepseek.com/updates/",
         "https://api-docs.deepseek.com/quick_start/pricing/",
     ),
     "glm-5.3": (
@@ -155,13 +157,10 @@ _CANONICAL_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "supports_vision": True,
         "supports_reasoning": True,
     },
-    # DeepSeek-V4.1-Flash internal beta (2026-09-08): new architecture with
-    # native multimodal input, served on the same base_url under a temporary
-    # id that expires 2026-09-10. DeepSeek publishes no separate limits, so the
-    # V4 Flash capacity is assumed until the GA id and docs land.
-    "deepseek-v4.1-flash-expires-on-0910": {
-        "context_window_tokens": 1_000_000,
-        "max_output_tokens": 384_000,
+    # DeepSeek-V4.1-Flash GA (2026-09-10), verified against official API docs.
+    "deepseek-flash": {
+        "context_window_tokens": 1_048_576,
+        "max_output_tokens": 393_216,
         "supports_vision": True,
         "supports_reasoning": True,
     },
@@ -200,9 +199,10 @@ _PROVIDER_CANONICAL_MODEL_IDS: dict[str, dict[str, str]] = {
     },
     "deepseek": {
         "deepseek-v4-pro": "deepseek-v4-pro",
-        "deepseek-v4-flash": "deepseek-v4-flash",
-        "deepseek-v4-flash-vision-exp": "deepseek-v4-flash-vision-exp",
-        "deepseek-v4.1-flash-expires-on-0910": "deepseek-v4.1-flash-expires-on-0910",
+        "deepseek-flash": "deepseek-flash",
+        "deepseek-v4-flash": "deepseek-flash",
+        "deepseek-v4-flash-vision-exp": "deepseek-flash",
+        "deepseek-v4.1-flash-expires-on-0910": "deepseek-flash",
     },
     "zhipu": {
         "glm-5.3": "glm-5.3",
@@ -261,6 +261,8 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         )
         for model in (
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
@@ -293,6 +295,7 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
             "https://docs.x.ai/developers/pricing",
         )
         for model in (
+            "grok-4.7",
             "grok-4.6",
             "grok-4.5",
             "grok-build-0.1",
@@ -326,6 +329,7 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
             "https://api-docs.deepseek.com/guides/thinking_mode/",
         )
         for model in (
+            "deepseek-flash",
             "deepseek-v4-pro",
             "deepseek-v4-flash",
             "deepseek-v4-flash-vision-exp",
@@ -337,12 +341,23 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         for model in (
             "anthropic/claude-sonnet-5",
             "openai/gpt-6-astra",
+            "openai/gpt-6-sol",
+            "openai/gpt-6-luna",
+            "anthropic/claude-opus-5.5",
             "openai/gpt-5.6-terra",
             "openai/gpt-5.6-luna",
             "anthropic/claude-opus-5",
             "anthropic/claude-fable-5.1",
             "google/gemini-3.8-flash",
+            "x-ai/grok-4.7",
             "x-ai/grok-4.6",
+            "z-ai/glm-5.3-flashx",
+            "deepseek/deepseek-v4.1-flash",
+            "qwen/qwen3.8-max-0902",
+            "xiaomi/mimo-v2.6-pro",
+            "xiaomi/mimo-v2.6-flash",
+            "xiaomi/mimo-v2.6-pro-ultraspeed",
+            "inception/mercury-2.5",
             "z-ai/glm-5.3",
             "z-ai/glm-5.3-flash",
             "moonshotai/kimi-k3",
@@ -441,6 +456,10 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         "gemma-4-31b": ("https://inference-docs.cerebras.ai/models/gemma-4-31b",),
     },
     "mistral": {
+        "zai-glm-5-3": (
+            "https://docs.mistral.ai/models/zai-glm-5-3",
+            "https://docs.mistral.ai/inference/pricing",
+        ),
         "mistral-small-2603": (
             "https://docs.mistral.ai/models/mistral-small-4-0-26-03",
             "https://docs.mistral.ai/inference/pricing",
@@ -465,6 +484,10 @@ _OFFICIAL_PROVIDER_MODEL_SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
         )
     },
     "anthropic": {
+        "claude-opus-5-5": (
+            "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+            "https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5",
+        ),
         "claude-opus-5": (
             "https://platform.claude.com/docs/en/models/opus-5/overview",
             "https://platform.claude.com/docs/en/about-claude/pricing",
@@ -496,6 +519,30 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_read_input_cost_per_token": 0.000001,
             "cache_creation_input_cost_per_token": 0.0000125,
             "reasoning_output_cost_per_token": 0.00005,
+        },
+        # September 22, 2026 releases. Standard rates at <=272K input;
+        # longer prompts cost 2x input/cache and 1.5x output.
+        "gpt-6-sol": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.00001,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.00001,
+        },
+        "gpt-6-luna": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000001,
+            "output_cost_per_token": 0.0000005,
+            "cache_read_input_cost_per_token": 0.00000001,
+            "cache_creation_input_cost_per_token": 0.000000125,
+            "reasoning_output_cost_per_token": 0.0000005,
         },
         "gpt-5.6-sol": {
             "context_window_tokens": 1_050_000,
@@ -627,13 +674,24 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
     "xai": {
-        # Grok 4.6 postdates the provenance-pinned LiteLLM snapshot. xAI
+        # Grok 4.7/4.6 postdate the provenance-pinned LiteLLM snapshot. xAI
         # publishes a 500K shared context with no separate text-output limit,
         # so use the full window here and let the registry's generic
         # shared-window policy reserve a practical output allowance. These are
         # the base rates for prompts up to 200K tokens; xAI doubles all three
         # rates above that threshold, which this flat-price schema cannot
         # represent yet.
+        # 4.7 verified against xAI's model page and release notes, 2026-09-21.
+        "grok-4.7": {
+            "context_window_tokens": 500_000,
+            "max_output_tokens": 500_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000006,
+            "cache_read_input_cost_per_token": 0.0000005,
+            "reasoning_output_cost_per_token": 0.000006,
+        },
         "grok-4.6": {
             "context_window_tokens": 500_000,
             "max_output_tokens": 500_000,
@@ -766,24 +824,20 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_read_input_cost_per_token": 0.000000044,
             "reasoning_output_cost_per_token": 0.00000396,
         },
-        "deepseek-v4-flash": {
-            "input_cost_per_token": 0.00000044,
-            "output_cost_per_token": 0.00000132,
-            "cache_read_input_cost_per_token": 0.000000014,
-            "reasoning_output_cost_per_token": 0.00000132,
-        },
-        "deepseek-v4-flash-vision-exp": {
-            "input_cost_per_token": 0.00000044,
-            "output_cost_per_token": 0.00000132,
-            "cache_read_input_cost_per_token": 0.000000014,
-            "reasoning_output_cost_per_token": 0.00000132,
-        },
-        # Beta is billed at the deepseek-v4-flash rate (announcement, 2026-09-08).
-        "deepseek-v4.1-flash-expires-on-0910": {
-            "input_cost_per_token": 0.00000044,
-            "output_cost_per_token": 0.00000132,
-            "cache_read_input_cost_per_token": 0.000000014,
-            "reasoning_output_cost_per_token": 0.00000132,
+        # Stable Flash and migrated legacy routes share V4.1 peak prices.
+        **{
+            model: {
+                "input_cost_per_token": 0.0000003,
+                "output_cost_per_token": 0.0000012,
+                "cache_read_input_cost_per_token": 0.000000006,
+                "reasoning_output_cost_per_token": 0.0000012,
+            }
+            for model in (
+                "deepseek-flash",
+                "deepseek-v4-flash",
+                "deepseek-v4-flash-vision-exp",
+                "deepseek-v4.1-flash-expires-on-0910",
+            )
         },
     },
     "openrouter": {
@@ -813,6 +867,42 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "cache_read_input_cost_per_token": 0.000001,
             "cache_creation_input_cost_per_token": 0.0000125,
             "reasoning_output_cost_per_token": 0.00005,
+        },
+        # Verified against OpenRouter's public catalog on 2026-09-22.
+        "openai/gpt-6-sol": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.00001,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.00001,
+        },
+        "openai/gpt-6-luna": {
+            "context_window_tokens": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000001,
+            "output_cost_per_token": 0.0000005,
+            "cache_read_input_cost_per_token": 0.00000001,
+            "cache_creation_input_cost_per_token": 0.000000125,
+            "reasoning_output_cost_per_token": 0.0000005,
+        },
+        "anthropic/claude-opus-5.5": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000004,
+            "output_cost_per_token": 0.00002,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.000005,
+            "cache_creation_5m_input_cost_per_token": 0.000005,
+            "cache_creation_1h_input_cost_per_token": 0.000008,
+            "reasoning_output_cost_per_token": 0.00002,
         },
         "openai/gpt-5.6-terra": {
             "context_window_tokens": 1_050_000,
@@ -867,6 +957,92 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "output_cost_per_token": 0.00000375,
             "cache_read_input_cost_per_token": 0.000000075,
             "reasoning_output_cost_per_token": 0.00000375,
+        },
+        # September additions verified against OpenRouter's /api/v1/models
+        # on 2026-09-22. Limits and prices belong to these gateway routes.
+        # Grok uses base rates through 200K input; longer prompts cost 2x.
+        "x-ai/grok-4.7": {
+            "context_window_tokens": 500_000,
+            "max_output_tokens": 450_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.0000016,
+            "output_cost_per_token": 0.0000048,
+            "cache_read_input_cost_per_token": 0.0000004,
+            "reasoning_output_cost_per_token": 0.0000048,
+        },
+        "z-ai/glm-5.3-flashx": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000037,
+            "output_cost_per_token": 0.00000125,
+            "cache_read_input_cost_per_token": 0.000000075,
+            "reasoning_output_cost_per_token": 0.00000125,
+        },
+        "deepseek/deepseek-v4.1-flash": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 384_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            # Conservative peak rates; off-peak requests cost half as much.
+            "input_cost_per_token": 0.0000003,
+            "output_cost_per_token": 0.0000012,
+            "cache_read_input_cost_per_token": 0.000000006,
+            "reasoning_output_cost_per_token": 0.0000012,
+        },
+        "qwen/qwen3.8-max-0902": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000006,
+            "cache_read_input_cost_per_token": 0.00000025,
+            "cache_creation_input_cost_per_token": 0.0000025,
+            "reasoning_output_cost_per_token": 0.000006,
+        },
+        "xiaomi/mimo-v2.6-pro": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000000435,
+            "output_cost_per_token": 0.00000087,
+            "cache_read_input_cost_per_token": 0.0000000036,
+            "reasoning_output_cost_per_token": 0.00000087,
+        },
+        "xiaomi/mimo-v2.6-flash": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000014,
+            "output_cost_per_token": 0.00000028,
+            "cache_read_input_cost_per_token": 0.0000000028,
+            "reasoning_output_cost_per_token": 0.00000028,
+        },
+        "xiaomi/mimo-v2.6-pro-ultraspeed": {
+            "context_window_tokens": 1_048_576,
+            "max_output_tokens": 131_072,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.00000435,
+            "output_cost_per_token": 0.0000087,
+            "cache_read_input_cost_per_token": 0.000000036,
+            "reasoning_output_cost_per_token": 0.0000087,
+        },
+        "inception/mercury-2.5": {
+            "context_window_tokens": 260_000,
+            "max_output_tokens": 65_536,
+            "supports_vision": False,
+            "supports_reasoning": True,
+            # OpenRouter's current promotional rates, reviewed 2026-09-22.
+            "input_cost_per_token": 0.00000004,
+            "output_cost_per_token": 0.00000015,
+            "cache_read_input_cost_per_token": 0.000000004,
+            "reasoning_output_cost_per_token": 0.00000015,
         },
         "x-ai/grok-4.6": {
             "context_window_tokens": 500_000,
@@ -1206,6 +1382,16 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
             "output_cost_per_token": 0.0000006,
             "reasoning_output_cost_per_token": 0.0000006,
         },
+        # GLM-5.3 joined Mistral's Public Preview on 2026-09-15. Its page
+        # documents tools and text input, but no reasoning control.
+        "zai-glm-5-3": {
+            "context_window_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": False,
+            "input_cost_per_token": 0.0000014,
+            "output_cost_per_token": 0.0000044,
+            "cache_read_input_cost_per_token": 0.00000014,
+        },
         # Third-party GLM-5.2 route hosted by Mistral (Public Preview,
         # 2026-08-06). Reasoning support is not documented on the page.
         "zai-glm-5-2": {
@@ -1316,6 +1502,19 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         # snapshot's provenance. Drop these once a catalog refresh carries them.
         # Anthropic documents "1M context + 128K output"; the window below is
         # the input+output sum so the local reserve does not eat the 1M input.
+        # Opus 5.5 (2026-09-22): $4/$20 per MTok, cache reads $0.20.
+        "claude-opus-5-5": {
+            "context_window_tokens": 1_128_000,
+            "max_output_tokens": 128_000,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "input_cost_per_token": 0.000004,
+            "output_cost_per_token": 0.00002,
+            "cache_read_input_cost_per_token": 0.0000002,
+            "cache_creation_input_cost_per_token": 0.000005,
+            "cache_creation_5m_input_cost_per_token": 0.000005,
+            "cache_creation_1h_input_cost_per_token": 0.000008,
+        },
         "claude-opus-5": {
             "context_window_tokens": 1_128_000,
             "max_output_tokens": 128_000,
@@ -1344,6 +1543,40 @@ _OFFICIAL_PROVIDER_MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
 }
+# Hosted Flash has the same capabilities and token prices as the direct API.
+# Keep legacy IDs resolvable for sessions restored before config migration.
+_HOSTED_FLASH_IDS = (
+    "deepseek-flash",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
+    "deepseek-v4.1-flash-expires-on-0910",
+)
+_PROVIDER_CANONICAL_MODEL_IDS["alysis"] = {model: "deepseek-flash" for model in _HOSTED_FLASH_IDS}
+_OFFICIAL_PROVIDER_MODEL_SOURCES["alysis"] = {
+    model: _OFFICIAL_PROVIDER_MODEL_SOURCES["deepseek"]["deepseek-flash"]
+    for model in _HOSTED_FLASH_IDS
+}
+_OFFICIAL_PROVIDER_MODEL_METADATA["alysis"] = {
+    model: dict(_OFFICIAL_PROVIDER_MODEL_METADATA["deepseek"]["deepseek-flash"])
+    for model in _HOSTED_FLASH_IDS
+}
+_PROVIDER_CANONICAL_MODEL_IDS["alysis"]["glm-5.3-flash"] = "glm-5.3-flash"
+_OFFICIAL_PROVIDER_MODEL_SOURCES["alysis"]["glm-5.3-flash"] = (
+    "https://docs.z.ai/guides/vlm/glm-5.3-flash",
+    "https://docs.z.ai/guides/overview/pricing",
+)
+_OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["glm-5.3-flash"] = {
+    "context_window_tokens": 1_000_000,
+    "max_output_tokens": 131_072,
+    # Hosted vision needs a documented conservative image-token bound before
+    # it can use credit reservations; text and function tools are enabled now.
+    "supports_vision": False,
+    "supports_reasoning": True,
+    "input_cost_per_token": 0.00000015,
+    "cache_read_input_cost_per_token": 0.00000003,
+    "output_cost_per_token": 0.0000005,
+}
+
 _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
     "deepseek-chat": {
         "context_window_tokens": 1_000_000,
@@ -1358,6 +1591,37 @@ _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
         "supports_vision": False,
         "input_cost_per_token": 0.000000435,
         "output_cost_per_token": 0.00000087,
+    },
+    # Xiaomi MiMo V2.6 launch (2026-09-22), overseas USD pay-as-you-go rates.
+    # https://mimo.mi.com/docs/en-US/quick-start/summary/model
+    # https://mimo.mi.com/docs/en-US/api/chat/openai-api
+    # https://mimo.mi.com/docs/en-US/price/pay-as-you-go
+    "mimo-v2.6-pro": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.000000435,
+        "output_cost_per_token": 0.00000087,
+        "cache_read_input_cost_per_token": 0.0000000036,
+    },
+    "mimo-v2.6-flash": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "cache_read_input_cost_per_token": 0.0000000028,
+    },
+    "mimo-v2.6-pro-ultraspeed": {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 131_072,
+        "supports_vision": True,
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.00000435,
+        "output_cost_per_token": 0.0000087,
+        "cache_read_input_cost_per_token": 0.000000036,
     },
     # Xiaomi MiMo pay-as-you-go ids (mimo.mi.com/docs/en-US/price/pay-as-you-go,
     # 2026-09-02). mimo-v2-flash shut down 2026-06-30 and is aliased to

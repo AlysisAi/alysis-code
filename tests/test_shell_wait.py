@@ -5,7 +5,6 @@ import shlex
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -218,6 +217,18 @@ def test_shell_wait_tool_returns_output_and_preserves_cursor(
         assert result["timed_out"] is False
         assert [line["text"] for line in result["lines"]] == ["ready\n"]
         assert result["next_seq"] >= 1
+        quiet = session.tools["shell_wait"].run(
+            {"process_id": started["process_id"], "wait_seconds": 0.02}
+        )
+        assert quiet["lines"] == []
+        assert quiet["timed_out"] is True
+        assert quiet["meaningful_progress"] is False
+        assert quiet["wake_reason"] == "interval_elapsed"
+        assert quiet["since"] == result["next_seq"]
+        replay = session.tools["shell_wait"].run(
+            {"process_id": started["process_id"], "since": 0, "wait_seconds": 0}
+        )
+        assert [line["text"] for line in replay["lines"]] == ["ready\n"]
     finally:
         session.close()
 
@@ -387,13 +398,14 @@ def test_shell_output_existing_callers_remain_immediate(
     try:
         started = session.tools["shell_background"].run({"cmd": "fake"})
         result = session.tools["shell_output"].run({"process_id": started["process_id"]})
-        for _ in range(50):
-            if result["lines"]:
-                break
-            time.sleep(0.01)
-            result = session.tools["shell_output"].run({"process_id": started["process_id"]})
 
         assert "waited" not in result
+        # The immediate snapshot can race the output reader. Wait separately
+        # for the line without changing shell_output's nonblocking behavior.
+        if not result["lines"]:
+            result = session.tools["shell_wait"].run(
+                {"process_id": started["process_id"], "since": 0, "wait_seconds": 1}
+            )
         assert [line["text"] for line in result["lines"]] == ["one\n"]
     finally:
         session.close()

@@ -473,7 +473,8 @@ def test_runtime_timeout_kills_descendant_process(tmp_path: Path, monkeypatch) -
             "    pass"
         ),
         extra_manifest_lines=[
-            '"timeout_s": 0.2,',
+            # Allow worker startup and descendant creation on Windows before timing out.
+            '"timeout_s": 3.0,',
             '"capabilities": {"filesystem": {"write": "workspace"}, '
             '"process_spawn": "unrestricted"},',
         ],

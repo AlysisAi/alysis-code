@@ -29,12 +29,13 @@ def _session_with_scheduler(children: list[dict[str, object]]):
     return session
 
 
-def test_plural_subagents_command_lists_only_active_children_with_state() -> None:
+@pytest.mark.parametrize("role", ["explorer", "general"])
+def test_plural_subagents_command_lists_only_active_children_with_state(role: str) -> None:
     session = _session_with_scheduler(
         [
             {
                 "run_id": "run-live",
-                "subagent": "explorer",
+                "subagent": role,
                 "state": "running",
                 "workspace_view": "shared",
                 "elapsed_ms": 1500,
@@ -66,7 +67,7 @@ def test_plural_subagents_command_lists_only_active_children_with_state() -> Non
     assert result == "handled"
     assert session.child_scheduler.calls == 1
     output = stream.getvalue()
-    assert "explorer" in output
+    assert role in output
     assert "running" in output
     assert "reviewer" not in output
 

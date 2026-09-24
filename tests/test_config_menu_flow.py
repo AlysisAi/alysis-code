@@ -71,6 +71,19 @@ def _seed_config(tmp_path: Path, monkeypatch, *, model: str = "old") -> None:
     save_config(cfg)
 
 
+def _menu_section_choice(section: str) -> str:
+    state = config_menu_mod.ConfigMenuState.from_cfg(load_config())
+    return str(
+        next(
+            index
+            for index, (value, _label, _summary) in enumerate(
+                config_menu_mod._top_level_menu_rows(state), start=1
+            )
+            if value == section
+        )
+    )
+
+
 def _profile_edit_state() -> config_menu_mod.ConfigMenuState:
     cfg = AppConfig(model="old")
     add_profile(
@@ -166,7 +179,7 @@ def test_save_preserves_unexposed_role_model_keys(
     cfg.extra_fields["forge_role_models"] = {"comprehension": "forge-vision-reader-model"}
     save_config(cfg)
     _patch_console(monkeypatch)
-    answers: list[str] = ["6"]
+    answers: list[str] = [_menu_section_choice("subagents")]
     for role in ROLE_ORDER:
         answers.append("anthropic/claude-sonnet-4-6" if role == "coding" else "")
         if role in config_menu_mod._ROLE_TEMPERATURE_FIELDS:
@@ -192,7 +205,7 @@ def test_save_preserves_unexposed_role_model_keys(
 def test_subagent_role_override(monkeypatch, tmp_path: Path) -> None:
     _seed_config(tmp_path, monkeypatch)
     _patch_console(monkeypatch)
-    answers: list[str] = ["6"]
+    answers: list[str] = [_menu_section_choice("subagents")]
     for role in ROLE_ORDER:
         answers.append("anthropic/claude-sonnet-4-6" if role == "coding" else "")
         if role in config_menu_mod._ROLE_TEMPERATURE_FIELDS:
@@ -212,7 +225,7 @@ def test_subagent_role_override(monkeypatch, tmp_path: Path) -> None:
 def test_forge_role_override(monkeypatch, tmp_path: Path) -> None:
     _seed_config(tmp_path, monkeypatch)
     _patch_console(monkeypatch)
-    answers = ["7"]
+    answers = [_menu_section_choice("forge")]
     answers.extend(
         "anthropic/claude-opus-4-7" if role == "planner" else ""
         for role in config_menu_mod.FORGE_ROLE_ORDER

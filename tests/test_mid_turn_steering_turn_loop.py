@@ -62,9 +62,11 @@ class _ScriptedClient:
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
         on_text_delta=None,  # type: ignore[no-untyped-def]
+        on_reasoning_delta=None,  # type: ignore[no-untyped-def]
         temperature: float | None = None,
+        cancellation_token: Any | None = None,
     ) -> LLMResponse:
-        _ = stream, on_text_delta, temperature
+        _ = stream, on_text_delta, on_reasoning_delta, temperature, cancellation_token
         self.calls.append({"messages": list(messages), "tools": tools})
         response = self._responses[self._index]
         self._index += 1
