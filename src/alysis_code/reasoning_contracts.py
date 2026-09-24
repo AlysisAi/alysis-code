@@ -356,6 +356,17 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
     # Hosted models retain their upstream reasoning and replay contracts.
     "alysis": (
         (
+            "gpt-6-luna",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_REASONING_OBJECT,
+                values=("none", "low", "medium", "high", "xhigh", "max"),
+                default="medium",
+                off=OFF_EXPLICIT,
+                notes="hosted Responses with full stateless reasoning and function-tool replay",
+            ),
+        ),
+        (
             "deepseek-",
             _C(
                 mode=OPTIONAL,

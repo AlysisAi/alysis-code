@@ -6,7 +6,11 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 ## [Unreleased]
 
-No user-facing changes yet.
+### Added
+
+- Add GPT-6 Luna to the Alysis Code account model picker, with hosted Responses
+  routing, configurable reasoning, and stateless function-tool continuation.
+  Luna uses the account's shared credit allowance alongside the Flash models.
 
 ## [0.14.0] - 2026-09-24
 

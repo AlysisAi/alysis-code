@@ -384,6 +384,30 @@ PROVIDER_PROTOCOL_CAPABILITIES: tuple[ProviderProtocolCapabilities, ...] = (
         quirks=("Native OpenAI Responses chat supports buffered and SSE streaming responses.",),
     ),
     ProviderProtocolCapabilities(
+        provider_key="alysis",
+        protocol=OPENAI_RESPONSES_PROTOCOL,
+        reasoning_trace=ReasoningTraceCapability(
+            adapter="openai_responses_summary",
+            output_kind=ReasoningOutputKind.SUMMARY,
+            supports_streaming=True,
+            supports_buffered=True,
+            requestable=True,
+            continuation_state="opaque",
+        ),
+        usage_contract=UsageContract(
+            response_usage_confidence=UsageConfidence.AUTHORITATIVE,
+            input_token_count_strategy="none",
+        ),
+        supports_streaming=True,
+        supports_tool_calling=True,
+        supports_structured_outputs=True,
+        supports_provider_hosted_web_search_adapter=False,
+        default_web_search_adapter="none",
+        reports_cache_read_tokens=True,
+        reports_cache_write_tokens=True,
+        quirks=("Hosted Luna supports stateless text and function tools with shared credits.",),
+    ),
+    ProviderProtocolCapabilities(
         provider_key="anthropic",
         protocol=OPENAI_COMPAT_PROTOCOL,
         reasoning_trace=ReasoningTraceCapability(

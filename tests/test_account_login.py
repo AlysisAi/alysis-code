@@ -107,13 +107,13 @@ def _noop_browser(opened: list[str]):
     return _open
 
 
-def test_alysis_preset_offers_both_flash_models_for_free_credits() -> None:
+def test_alysis_preset_offers_flash_and_luna_models_for_free_credits() -> None:
     preset = get_preset("alysis")
     assert preset is not None
     assert preset.api_key_env is None
     assert preset.suggested_models[0] == "deepseek-flash"
     # Offline fallback matches the free-credit offering; paid models are discovered.
-    assert preset.suggested_models == ("deepseek-flash", "glm-5.3-flash")
+    assert preset.suggested_models == ("deepseek-flash", "glm-5.3-flash", "gpt-6-luna")
     assert set(preset.suggested_model_descriptions) == set(preset.suggested_models)
     profile = make_profile_from_preset(preset, name="alysis")
     assert profile.default_model == "deepseek-flash"

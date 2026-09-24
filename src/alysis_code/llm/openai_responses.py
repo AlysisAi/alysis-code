@@ -2106,6 +2106,10 @@ class OpenAIResponsesClient:
         supports_previous_response_id = self.provider_auth is None or bool(
             getattr(self.provider_auth, "supports_previous_response_id", True)
         )
+        if self.provider_key == "alysis":
+            # Hosted credits meter the complete request. Shared upstream storage
+            # must never be addressable by another Alysis account.
+            supports_previous_response_id = False
         if continuation is not None and supports_previous_response_id:
             # With previous_response_id the API appends the sent input items to the
             # stored thread; system/developer messages from turn 1 are already
@@ -2175,6 +2179,10 @@ class OpenAIResponsesClient:
                 payload["stream"] = True
             if self.provider_auth is not None:
                 payload = self.provider_auth.adapt_responses_payload(payload)
+            if self.provider_key == "alysis":
+                payload["store"] = False
+                payload["include"] = ["reasoning.encrypted_content"]
+                payload.pop("temperature", None)
             if self._reasoning_summary_support_by_model.get(reasoning_summary_support_key) is False:
                 _without_responses_reasoning_summary(payload)
             return payload

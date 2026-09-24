@@ -1577,6 +1577,22 @@ _OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["glm-5.3-flash"] = {
     "output_cost_per_token": 0.0000005,
 }
 
+_PROVIDER_CANONICAL_MODEL_IDS["alysis"]["gpt-6-luna"] = "gpt-6-luna"
+_OFFICIAL_PROVIDER_MODEL_SOURCES["alysis"]["gpt-6-luna"] = (
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://developers.openai.com/api/docs/pricing",
+)
+_OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["gpt-6-luna"] = {
+    "context_window_tokens": 1_050_000,
+    "max_output_tokens": 128_000,
+    "supports_vision": False,
+    "supports_reasoning": True,
+    "input_cost_per_token": 0.0000001,
+    "cache_read_input_cost_per_token": 0.00000001,
+    "cache_creation_input_cost_per_token": 0.000000125,
+    "output_cost_per_token": 0.0000005,
+}
+
 _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
     "deepseek-chat": {
         "context_window_tokens": 1_000_000,
