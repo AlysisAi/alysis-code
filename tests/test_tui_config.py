@@ -488,6 +488,7 @@ def test_alysis_model_flow_shows_free_models_and_keeps_managed_endpoint(
     assert [(row.value, row.label) for row in flow.screen().rows] == [
         ("deepseek-flash", "DeepSeek V4.1 Flash"),
         ("glm-5.3-flash", "GLM 5.3 Flash"),
+        ("gpt-6-luna", "GPT-6 Luna"),
     ]
     flow.choose_current()
     assert flow.stage == "model_thinking"

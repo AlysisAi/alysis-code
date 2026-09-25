@@ -6,6 +6,8 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-09-25
+
 ### Added
 
 - Add GPT-6 Luna to the Alysis Code account model picker, with hosted Responses
@@ -354,7 +356,8 @@ Public launch and repository-layout refresh.
 Release notes for versions before 0.9.8 remain available in the
 [GitHub Releases archive](https://github.com/AlysisAi/alysis-code/releases).
 
-[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/AlysisAi/alysis-code/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...v0.14.0
 [0.13.8]: https://github.com/AlysisAi/alysis-code/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.2...v0.13.7
