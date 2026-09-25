@@ -1329,8 +1329,9 @@ _ALYSIS_PROXY_ERROR_MESSAGES: dict[str, str] = {
         "You're sending requests too quickly. Please wait a moment and try again."
     ),
     "hosted_capacity_exceeded": (
-        "Hosted model capacity is full. Please retry in a few seconds. "
-        "No generation was started and your reserved credits were released."
+        "The Alysis hosted model is unavailable or at capacity. "
+        "If this persists, its server route needs checking. "
+        "No generation was started and no credits were charged."
     ),
     "hosted_routing_unavailable": (
         "Hosted model routing is temporarily unavailable. Please retry shortly. "
@@ -1369,7 +1370,9 @@ def alysis_trial_error_message(err: LLMError) -> str | None:
                 "5-hour fair-use limit reached (",
                 "Weekly fair-use limit reached (",
                 "Four hosted requests are already running for your account.",
+                "Your account has reached its hosted request limit.",
                 "Available credits cannot cover this request while other usage or reservations apply.",
+                "Your available credit allowance is exhausted.",
             )
         )
     ):

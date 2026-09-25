@@ -12,6 +12,14 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
   routing, configurable reasoning, and stateless function-tool continuation.
   Luna uses the account's shared credit allowance alongside the Flash models.
 
+### Fixed
+
+- Rebuild the correct chat and compactor transports when switching between hosted
+  Luna and Flash models during a conversation, while preserving the session on a
+  failed switch.
+- Keep hosted web search as a function tool and show the gateway's capacity,
+  request, and credit-limit reasons instead of a generic rate-limit message.
+
 ## [0.14.0] - 2026-09-24
 
 ### Added

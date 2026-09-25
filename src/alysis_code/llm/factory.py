@@ -126,10 +126,7 @@ def make_llm_client(
             base_url=base_url,
             profile_name=resolved_profile.name,
         )
-    # Hosted Luna needs Responses to combine reasoning with function tools.
-    # Keep the managed endpoint and Alysis device credential on this route.
-    if provider_key == "alysis" and model == "gpt-6-luna":
-        protocol = OPENAI_RESPONSES_PROTOCOL
+    protocol = resolve_model_protocol(provider_key=provider_key, model=model, protocol=protocol)
     capabilities = get_provider_protocol_capabilities(
         provider_key=provider_key,
         protocol=protocol,
@@ -378,6 +375,13 @@ def make_llm_client(
         ),
         reasoning_trace_capability,
     )
+
+
+def resolve_model_protocol(*, provider_key: str | None, model: str, protocol: str) -> str:
+    """Resolve model-specific transports for initial connections and live switches."""
+    if provider_key == "alysis" and model == "gpt-6-luna":
+        return OPENAI_RESPONSES_PROTOCOL
+    return protocol
 
 
 def _attach_reasoning_trace_capability(client: ChatClient, capability: object) -> ChatClient:

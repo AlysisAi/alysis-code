@@ -35,6 +35,7 @@ from .metadata import (
     merge_canonical_headers,
     stamp_response_for_route,
 )
+from .protocols import OPENAI_RESPONSES_PROTOCOL, get_provider_protocol_capabilities
 from .provider_limits import (
     DEFAULT_PROVIDER_CONCURRENCY_CAPS,
     ProviderRetrySettings,
@@ -867,6 +868,7 @@ def _responses_tools(
     *,
     mode: str,
     adapter: str,
+    provider_key: str | None = None,
 ) -> _ResponsesToolMapping:
     normalized_mode = str(mode or "off").strip().lower()
     normalized_adapter = (
@@ -874,8 +876,26 @@ def _responses_tools(
     )
     raw_tools = [tool for tool in tools or [] if isinstance(tool, dict)]
     alysis_web_search_present = any(_is_alysis_web_search_function(tool) for tool in raw_tools)
+    capabilities = get_provider_protocol_capabilities(
+        provider_key=provider_key or "", protocol=OPENAI_RESPONSES_PROTOCOL
+    )
+    builtin_web_search_allowed = (
+        capabilities is None or capabilities.supports_provider_hosted_web_search_adapter
+    )
+    hosted_web_search_present = any(
+        _is_responses_hosted_web_search_tool(tool) for tool in raw_tools
+    )
+    if not builtin_web_search_allowed and (
+        (normalized_mode == "native" and alysis_web_search_present)
+        or (normalized_mode in {"auto", "native"} and hosted_web_search_present)
+    ):
+        raise LLMError(
+            f"Provider {provider_key!r} does not support built-in web search. "
+            "Use web_search_mode='auto' or 'external' with the Alysis web_search function."
+        )
     use_openai_builtin_web_search = (
-        alysis_web_search_present
+        builtin_web_search_allowed
+        and alysis_web_search_present
         and _openai_builtin_web_search_allowed(
             mode=normalized_mode,
             adapter=normalized_adapter,
@@ -1916,12 +1936,16 @@ class OpenAIResponsesClient:
             )
         error_message = _extract_error_message(data)
         if error_message:
-            return LLMError(
+            err = LLMError(
                 sanitize_error_text_for_output(f"LLM error {response.status_code}: {error_message}")
             )
-        return LLMError(
-            sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
-        )
+        else:
+            err = LLMError(
+                sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
+            )
+        err.provider_status_code = response.status_code
+        err.provider_error_body = sanitize_error_text_for_output(json.dumps(data))
+        return err
 
     def count_input_tokens(
         self,
@@ -1940,6 +1964,7 @@ class OpenAIResponsesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         payload: dict[str, Any] = {
             "model": self.model,
@@ -2080,6 +2105,7 @@ class OpenAIResponsesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         mapped_tools = tool_mapping.tools
         temp_omit_key = _responses_temperature_omit_key(self.base_url, self.model)

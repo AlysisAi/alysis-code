@@ -947,6 +947,8 @@ def _reset_route_local_client_capabilities(client: Any, *, route_changed: bool) 
 
 _RELOAD_SESSION_FIELDS = (
     "cfg",
+    "client",
+    "conversation_compactor",
     "routing_mode",
     "max_steps",
     "api_key",
@@ -1093,7 +1095,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     )
     from ...llm.cache_capabilities import resolve_effective_cache_capability
     from ...llm.cache_policy import build_prompt_cache_namespace, resolve_prompt_cache_policy
-    from ...llm.factory import _session_routing_headers
+    from ...llm.factory import _session_routing_headers, make_llm_client, resolve_model_protocol
     from ...llm.metadata import (
         build_provider_route_identity,
         credential_scope_fingerprint,
@@ -1125,7 +1127,7 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
     )
     active_profile = get_active_profile(session.cfg)
     effective_base_url = resolve_effective_base_url(cfg=session.cfg, profile=active_profile)
-    protocol = str(active_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+    profile_protocol = str(active_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
     resolved_key = resolve_api_key(session.cfg)
     session.api_key = str(resolved_key.key or "")
     session.api_key_source = (
@@ -1166,8 +1168,41 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         model: str,
         role: str,
         temperature: float | None = None,
-    ) -> None:
+    ) -> Any:
         existing_route_identity = getattr(client, "route_identity", None)
+        preset = find_preset_for_profile(active_profile)
+        provider_key = str(preset.provider_key or "").strip() if preset is not None else ""
+        if not provider_key:
+            provider_key = resolve_model_provider_key(
+                cfg=session.cfg,
+                model_name=model,
+                base_url=effective_base_url,
+                profile_name=active_profile.name,
+            )
+        protocol = resolve_model_protocol(
+            provider_key=provider_key, model=model, protocol=profile_protocol
+        )
+        existing_protocol = str(getattr(existing_route_identity, "protocol", "") or "")
+        if existing_protocol and existing_protocol != protocol:
+            return make_llm_client(
+                cfg=session.cfg,
+                api_key=session.api_key,
+                model=model,
+                timeout_s=timeout_s,
+                temperature=temperature if temperature is not None else client.temperature,
+                prompt_cache_key=prompt_cache_key,
+                prompt_cache_retention=prompt_cache_retention,
+                prompt_cache_namespace=build_prompt_cache_namespace(
+                    workspace_root=getattr(session, "root", None),
+                    role=role,
+                    profile_name=active_profile.name,
+                ),
+                enable_thinking=enable_thinking,
+                reasoning_effort=reasoning_effort,
+                transport=getattr(client, "_transport", None),
+                profile=active_profile,
+                session_id=provider_session_id,
+            )
         client.base_url = effective_base_url
         if hasattr(client, "provider_auth"):
             client.provider_auth = provider_auth
@@ -1178,17 +1213,10 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
         client.timeout_s = timeout_s
         if temperature is not None:
             client.temperature = temperature
-        provider_key = resolve_model_provider_key(
-            cfg=session.cfg,
-            model_name=model,
-            base_url=effective_base_url,
-            profile_name=active_profile.name,
-        )
         capabilities = get_provider_protocol_capabilities(
             provider_key=provider_key,
             protocol=protocol,
         )
-        preset = find_preset_for_profile(active_profile)
         cache_capability = resolve_effective_cache_capability(
             provider_key=provider_key,
             protocol=protocol,
@@ -1331,10 +1359,11 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             client.provider_concurrency_caps = dict(session.cfg.provider_concurrency_caps)
         if hasattr(client, "provider_retry_settings"):
             client.provider_retry_settings = provider_retry_settings
+        return client
 
     client = getattr(session, "client", None)
     if client is not None:
-        _apply_client_config(
+        session.client = _apply_client_config(
             client,
             model=str(session.cfg.model or ""),
             role=ROLE_CODING,
@@ -1353,12 +1382,15 @@ def _apply_config_menu_changes_to_session_mutating(*, session: Any, cfg: AppConf
             )
         except ConfigError:
             compactor_model = str(session.cfg.model or "")
-        _apply_client_config(
+        refreshed_compactor_client = _apply_client_config(
             compactor_client,
             model=compactor_model,
             role=ROLE_COMPACTOR,
             temperature=resolve_role_temperature(session.cfg, role=ROLE_COMPACTOR),
         )
+        if refreshed_compactor_client is not compactor_client:
+            session.conversation_compactor = copy.copy(compactor)
+            session.conversation_compactor.compactor_client = refreshed_compactor_client
 
     _rebuild_session_tools_for_mode(
         session=session,
