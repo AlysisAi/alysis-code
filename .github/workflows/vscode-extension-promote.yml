@@ -1,0 +1,902 @@
+name: vscode-extension-promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Extension release channel; beta publishes a Marketplace pre-release.
+        type: choice
+        options: [stable, beta]
+        default: stable
+        required: true
+      release_tag:
+        description: Existing immutable vX.Y.Z source tag used by the candidate workflow.
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful managed-cli-vsix-release workflow run containing all six candidates.
+        required: true
+        type: string
+      evidence_run_id:
+        description: Successful protected vscode-extension-evidence run for the same tag and candidate.
+        required: true
+        type: string
+      installed_live_provider_run_id:
+        description: Successful six-target installed live-provider QA run bound into the evidence bundle.
+        required: true
+        type: string
+      untrusted_workspace_run_id:
+        description: Successful installed-VSIX untrusted-workspace run bound into evidence.
+        required: true
+        type: string
+      remote_acceptance_run_id:
+        description: Successful real WSL and Remote-SSH acceptance run bound into evidence.
+        required: true
+        type: string
+      workflow_run_attempts:
+        description: 'Exact positive attempts as JSON: {"evidence":N,"installed_live_provider":N,"untrusted_workspace":N,"remote_acceptance_wsl":N,"remote_acceptance_remote_ssh":N}.'
+        required: true
+        type: string
+      publish_confirmation:
+        description: Type publish-beta or publish-stable to match the selected channel.
+        required: true
+        type: string
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-promote-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate-promotion:
+    name: Validate exact candidate and human evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate official immutable source and explicit confirmation
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          PUBLISH_CONFIRMATION: ${{ inputs.publish_confirmation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+          WORKFLOW_RUN_ATTEMPTS_JSON: ${{ inputs.workflow_run_attempts }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$REPOSITORY_PRIVATE" = "false"
+          test "$REPOSITORY_VISIBILITY" = "public"
+          case "$RELEASE_CHANNEL" in
+            stable|beta) ;;
+            *) exit 1 ;;
+          esac
+          test "$PUBLISH_CONFIRMATION" = "publish-$RELEASE_CHANNEL"
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EVIDENCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INSTALLED_LIVE_PROVIDER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UNTRUSTED_WORKSPACE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          jq -e '
+            type == "object" and
+            (keys == ["evidence", "installed_live_provider", "remote_acceptance_remote_ssh", "remote_acceptance_wsl", "untrusted_workspace"]) and
+            all(.[]; type == "number" and . >= 1 and floor == .)
+          ' <<< "$WORKFLOW_RUN_ATTEMPTS_JSON" > /dev/null
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          test "$RELEASE_TAG" = "v$version"
+
+      - name: Require protected exact-tag release environments
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for environment in \
+            vscode-release-evidence \
+            vscode-installed-live-provider-qa \
+            vscode-real-wsl-acceptance \
+            vscode-real-remote-ssh-acceptance \
+            managed-cli-release-assets \
+            "vscode-marketplace-$RELEASE_CHANNEL"
+          do
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+              > "${environment}.json"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+              > "${environment}-branch-policies.json"
+            python scripts/release/validate_github_environment_policy.py \
+              "${environment}.json" "${environment}-branch-policies.json" \
+              --environment "$environment" \
+              --required-pattern 'v*'
+          done
+
+      - name: Validate candidate and protected evidence workflow identity and source
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > candidate-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .run_attempt == 1 and .path == ".github/workflows/managed-cli-vsix-release.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            candidate-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}" > evidence-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson run_attempt "$EVIDENCE_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-extension-evidence.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt == $run_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            evidence-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${INSTALLED_LIVE_PROVIDER_RUN_ID}" \
+            > installed-live-provider-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson run_attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-installed-live-provider-qa.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt == $run_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            installed-live-provider-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${UNTRUSTED_WORKSPACE_RUN_ID}" \
+            > untrusted-workspace-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson run_attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-extension-untrusted-workspace.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt == $run_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            untrusted-workspace-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${REMOTE_ACCEPTANCE_RUN_ID}" \
+            > remote-acceptance-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson wsl_attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" \
+            --argjson remote_ssh_attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-remote-acceptance.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt >= $wsl_attempt and .run_attempt >= $remote_ssh_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            remote-acceptance-run.json > /dev/null
+
+      - name: Download all six target candidates from the exact run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: vscode-alysis-*
+          path: candidates
+          merge-multiple: true
+
+      - name: Download the exact signed managed-runtime release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: signed-managed-cli-release
+          path: managed-runtime
+
+      - name: Download exact protected attested evidence bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+          name: vscode-release-evidence-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ inputs.evidence_run_id }}-attempt-${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          path: attested-evidence
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Install frozen validation dependencies
+        run: uv sync --frozen --no-editable
+
+      - name: Verify protected evidence attestations and candidate-bound receipt
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: |
+          set -euo pipefail
+          mapfile -t evidence_files < <(find attested-evidence/evidence -maxdepth 1 -type f -print | sort)
+          mapfile -t evidence_receipts < <(find attested-evidence/receipt -maxdepth 1 -type f -print | sort)
+          mapfile -t installed_live_provider_files < <(find attested-evidence/installed-live-provider -maxdepth 1 -type f -print | sort)
+          mapfile -t untrusted_workspace_files < <(find attested-evidence/untrusted-workspace -maxdepth 1 -type f -print | sort)
+          mapfile -t remote_acceptance_files < <(find attested-evidence/remote-acceptance -maxdepth 1 -type f -print | sort)
+          test "${#evidence_files[@]}" -eq 9
+          test "${#evidence_receipts[@]}" -eq 2
+          test "${#installed_live_provider_files[@]}" -eq 6
+          test "${#untrusted_workspace_files[@]}" -eq 1
+          test "${#remote_acceptance_files[@]}" -eq 2
+          test -f attested-evidence/receipt/evidence-validation-receipt.json
+          test -f attested-evidence/receipt/evidence-inventory.json
+          for evidence_file in \
+            "${evidence_files[@]}" \
+            "${installed_live_provider_files[@]}" \
+            "${untrusted_workspace_files[@]}" \
+            "${remote_acceptance_files[@]}" \
+            "${evidence_receipts[@]}"
+          do
+            gh attestation verify "$evidence_file" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/vscode-extension-evidence.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 > /dev/null
+          done
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_promotion_bundle.py --channel "$RELEASE_CHANNEL" \
+            candidates attested-evidence/evidence managed-runtime \
+            attested-evidence/installed-live-provider \
+            attested-evidence/untrusted-workspace attested-evidence/remote-acceptance \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$GITHUB_SHA" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --candidate-run-attempt 1 \
+            --installed-live-provider-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID" \
+            --installed-live-provider-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+            --untrusted-workspace-run-id "$UNTRUSTED_WORKSPACE_RUN_ID" \
+            --untrusted-workspace-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            --remote-acceptance-run-id "$REMOTE_ACCEPTANCE_RUN_ID" \
+            --remote-acceptance-wsl-run-attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" \
+            --remote-acceptance-remote-ssh-run-attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT" \
+            --verify-receipt attested-evidence/receipt/evidence-validation-receipt.json
+
+      - name: Bind every attested report and automated gate to exact package bytes
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: >-
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_promotion_bundle.py --channel "$RELEASE_CHANNEL"
+          candidates attested-evidence/evidence managed-runtime
+          attested-evidence/installed-live-provider
+          attested-evidence/untrusted-workspace attested-evidence/remote-acceptance
+          --release-tag "$RELEASE_TAG"
+          --source-sha "$GITHUB_SHA"
+          --candidate-run-id "$CANDIDATE_RUN_ID"
+          --candidate-run-attempt 1
+          --installed-live-provider-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID"
+          --installed-live-provider-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT"
+          --untrusted-workspace-run-id "$UNTRUSTED_WORKSPACE_RUN_ID"
+          --untrusted-workspace-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT"
+          --remote-acceptance-run-id "$REMOTE_ACCEPTANCE_RUN_ID"
+          --remote-acceptance-wsl-run-attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT"
+          --remote-acceptance-remote-ssh-run-attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT"
+          --evidence-run-id "$EVIDENCE_RUN_ID"
+          --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT"
+          --promotion-run-id "$GITHUB_RUN_ID"
+          --promotion-run-attempt "$GITHUB_RUN_ATTEMPT"
+          --write-receipt promotion-validation-receipt.json
+
+      - name: Verify provenance and SBOM attestations for every package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find candidates -maxdepth 1 -type f -name '*.vsix' -print | sort)
+          test "${#packages[@]}" -eq 6
+          for package in "${packages[@]}"; do
+            sbom="${package%.vsix}.cdx.json"
+            provenance_receipt="$(mktemp)"
+            gh attestation verify "$package" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --format json > "$provenance_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$provenance_receipt" "$package" \
+              --predicate-type https://slsa.dev/provenance/v1
+            sbom_receipt="$(mktemp)"
+            gh attestation verify "$package" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://cyclonedx.org/bom \
+              --format json > "$sbom_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$sbom_receipt" "$package" \
+              --predicate-type https://cyclonedx.org/bom \
+              --expected-predicate "$sbom"
+            rm -f "$provenance_receipt" "$sbom_receipt"
+          done
+
+      - name: Upload immutable validated-input receipt for protected jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-promotion-validation-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: promotion-validation-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-managed-runtime-assets:
+    name: Publish protected managed-runtime release assets
+    needs: validate-promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: managed-cli-release-assets
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download exact candidates again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: vscode-alysis-*
+          path: candidates
+          merge-multiple: true
+
+      - name: Download exact signed managed-runtime bundle again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: signed-managed-cli-release
+          path: managed-runtime
+
+      - name: Download exact attested evidence again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+          name: vscode-release-evidence-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ inputs.evidence_run_id }}-attempt-${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          path: attested-evidence
+
+      - name: Download validated-input receipt from this promotion run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: vscode-promotion-validation-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: validation-receipt
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Install frozen validators
+        run: uv sync --frozen --no-editable
+
+      - name: Revalidate protected managed-runtime environment after approval
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment=managed-cli-release-assets
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+            > "${environment}.json"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            > "${environment}-branch-policies.json"
+          uv run --frozen --no-sync python scripts/release/validate_github_environment_policy.py \
+            "${environment}.json" "${environment}-branch-policies.json" \
+            --environment "$environment" --required-pattern 'v*'
+
+      - name: Revalidate immutable input receipt and managed-runtime attestations
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: |
+          set -euo pipefail
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_promotion_bundle.py --channel "$RELEASE_CHANNEL" \
+            candidates attested-evidence/evidence managed-runtime \
+            attested-evidence/installed-live-provider \
+            attested-evidence/untrusted-workspace attested-evidence/remote-acceptance \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$GITHUB_SHA" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --candidate-run-attempt 1 \
+            --installed-live-provider-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID" \
+            --installed-live-provider-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+            --untrusted-workspace-run-id "$UNTRUSTED_WORKSPACE_RUN_ID" \
+            --untrusted-workspace-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            --remote-acceptance-run-id "$REMOTE_ACCEPTANCE_RUN_ID" \
+            --remote-acceptance-wsl-run-attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" \
+            --remote-acceptance-remote-ssh-run-attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT" \
+            --promotion-run-id "$GITHUB_RUN_ID" \
+            --promotion-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --verify-receipt validation-receipt/promotion-validation-receipt.json
+          for executable in managed-runtime/alysis-*; do
+            target="$(uv run --frozen --no-sync python scripts/release/resolve_managed_cli_target.py "$executable")"
+            sbom="managed-runtime/${target}.cdx.json"
+            provenance_receipt="$(mktemp)"
+            gh attestation verify "$executable" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --format json > "$provenance_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$provenance_receipt" "$executable" \
+              --predicate-type https://slsa.dev/provenance/v1
+            sbom_receipt="$(mktemp)"
+            gh attestation verify "$executable" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://cyclonedx.org/bom \
+              --format json > "$sbom_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$sbom_receipt" "$executable" \
+              --predicate-type https://cyclonedx.org/bom \
+              --expected-predicate "$sbom"
+            rm -f "$provenance_receipt" "$sbom_receipt"
+          done
+
+      - name: Reconcile managed-runtime assets without overwriting conflicts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir existing-release-assets published-release-assets
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > release-assets.json
+          while IFS= read -r name; do
+            if jq -e --arg name "$name" '.assets[] | select(.name == $name)' release-assets.json > /dev/null; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern "$name" --dir existing-release-assets
+            fi
+          done < <(find managed-runtime -maxdepth 1 -type f -printf '%f\n' | sort)
+          uv run --frozen --no-sync python scripts/release/reconcile_github_release_assets.py \
+            managed-runtime existing-release-assets --write-missing missing-release-assets.txt
+          while IFS= read -r name; do
+            test -n "$name"
+            gh release upload "$RELEASE_TAG" "managed-runtime/$name" --repo "$GITHUB_REPOSITORY"
+          done < missing-release-assets.txt
+          while IFS= read -r name; do
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$name" --dir published-release-assets
+          done < <(find managed-runtime -maxdepth 1 -type f -printf '%f\n' | sort)
+          uv run --frozen --no-sync python scripts/release/reconcile_github_release_assets.py \
+            managed-runtime published-release-assets --require-complete
+
+      - name: Upload managed-runtime publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-runtime-publication-${{ github.sha }}
+          path: published-release-assets/*
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-marketplace:
+    name: Publish protected Marketplace release
+    needs:
+      - validate-promotion
+      - publish-managed-runtime-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.channel == 'beta' && 'vscode-marketplace-beta' || 'vscode-marketplace-stable' }}
+    permissions:
+      actions: read
+      attestations: write
+      artifact-metadata: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download exact candidates again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: vscode-alysis-*
+          path: candidates
+          merge-multiple: true
+
+      - name: Download exact signed managed-runtime bundle again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: signed-managed-cli-release
+          path: managed-runtime
+
+      - name: Download exact attested evidence again after approval
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+          name: vscode-release-evidence-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ inputs.evidence_run_id }}-attempt-${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          path: attested-evidence
+
+      - name: Download validated-input receipt from this promotion run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: vscode-promotion-validation-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: validation-receipt
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+
+      - name: Install frozen validators and publisher
+        run: |
+          uv sync --frozen --no-editable
+          npm ci --prefix extensions/vscode-alysis
+          npm audit --prefix extensions/vscode-alysis --audit-level=high
+
+      - name: Revalidate Marketplace policy and bind recorded approvers
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment="vscode-marketplace-$RELEASE_CHANNEL"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+            > "${environment}.json"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            > "${environment}-branch-policies.json"
+          uv run --frozen --no-sync python scripts/release/validate_github_environment_policy.py \
+            "${environment}.json" "${environment}-branch-policies.json" \
+            --environment "$environment" --required-pattern 'v*'
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/approvals" \
+            > candidate-approvals.json
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}/approvals" \
+            > evidence-approvals.json
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            > promotion-approvals.json
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_release_approvals.py --channel "$RELEASE_CHANNEL" \
+            attested-evidence/evidence/vscode-alysis-production-signoff.json \
+            candidate-approvals.json evidence-approvals.json promotion-approvals.json \
+            vscode-release-approval-binding.json \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --candidate-run-attempt 1 \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT" \
+            --promotion-run-id "$GITHUB_RUN_ID" \
+            --promotion-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Revalidate package, evidence, and attestations immediately before publish
+        shell: bash
+        env:
+          EVIDENCE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).evidence }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: |
+          set -euo pipefail
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_promotion_bundle.py --channel "$RELEASE_CHANNEL" \
+            candidates attested-evidence/evidence managed-runtime \
+            attested-evidence/installed-live-provider \
+            attested-evidence/untrusted-workspace attested-evidence/remote-acceptance \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$GITHUB_SHA" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --candidate-run-attempt 1 \
+            --installed-live-provider-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID" \
+            --installed-live-provider-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+            --untrusted-workspace-run-id "$UNTRUSTED_WORKSPACE_RUN_ID" \
+            --untrusted-workspace-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            --remote-acceptance-run-id "$REMOTE_ACCEPTANCE_RUN_ID" \
+            --remote-acceptance-wsl-run-attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" \
+            --remote-acceptance-remote-ssh-run-attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --evidence-run-attempt "$EVIDENCE_RUN_ATTEMPT" \
+            --promotion-run-id "$GITHUB_RUN_ID" \
+            --promotion-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --verify-receipt validation-receipt/promotion-validation-receipt.json
+          mapfile -t packages < <(find candidates -maxdepth 1 -type f -name '*.vsix' -print | sort)
+          test "${#packages[@]}" -eq 6
+          for package in "${packages[@]}"; do
+            sbom="${package%.vsix}.cdx.json"
+            provenance_receipt="$(mktemp)"
+            gh attestation verify "$package" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --format json > "$provenance_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$provenance_receipt" "$package" \
+              --predicate-type https://slsa.dev/provenance/v1
+            sbom_receipt="$(mktemp)"
+            gh attestation verify "$package" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://cyclonedx.org/bom \
+              --format json > "$sbom_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$sbom_receipt" "$package" \
+              --predicate-type https://cyclonedx.org/bom \
+              --expected-predicate "$sbom"
+            rm -f "$provenance_receipt" "$sbom_receipt"
+          done
+
+      - name: Plan idempotent Marketplace publication from observed public state
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./extensions/vscode-alysis/package.json").version')"
+          cat > marketplace-query.json <<'JSON'
+          {"filters":[{"pageNumber":1,"pageSize":1,"criteria":[{"filterType":7,"value":"alysisai.vscode-alysis"}]}],"assetTypes":["Microsoft.VisualStudio.Services.VSIXPackage"],"flags":147}
+          JSON
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            --header 'Accept: application/json;api-version=3.0-preview.1' \
+            --header 'Content-Type: application/json' \
+            --data-binary @marketplace-query.json \
+            https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery \
+            > marketplace-before.json
+          uv run --frozen --no-sync python scripts/release/reconcile_vscode_marketplace.py plan --channel "$RELEASE_CHANNEL" \
+            candidates marketplace-before.json --version "$version" --output marketplace-plan.json
+          mkdir marketplace-existing-before
+          while IFS=$'\t' read -r name url; do
+            test -n "$name"
+            curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+              --output "marketplace-existing-before/$name" "$url"
+          done < <(jq -r '.existing | to_entries[] | [.value.candidate, .value.download_url] | @tsv' marketplace-plan.json)
+          uv run --frozen --no-sync python scripts/release/reconcile_vscode_marketplace.py verify --channel "$RELEASE_CHANNEL" \
+            marketplace-plan.json marketplace-existing-before
+
+      - name: Publish only missing exact target packages
+        shell: bash
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "$VSCE_PAT"
+          flags=()
+          case "$RELEASE_CHANNEL" in
+            beta) flags+=(--pre-release) ;;
+            stable) ;;
+            *) exit 1 ;;
+          esac
+          while IFS= read -r name; do
+            test -n "$name"
+            extensions/vscode-alysis/node_modules/.bin/vsce publish \
+              --packagePath "candidates/$name" "${flags[@]}"
+          done < <(jq -r '.missing[].candidate' marketplace-plan.json)
+
+      - name: Poll and verify all six published Marketplace package bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./extensions/vscode-alysis/package.json").version')"
+          complete=false
+          for attempt in $(seq 1 12); do
+            curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+              --header 'Accept: application/json;api-version=3.0-preview.1' \
+              --header 'Content-Type: application/json' \
+              --data-binary @marketplace-query.json \
+              https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery \
+              > marketplace-after.json
+            uv run --frozen --no-sync python scripts/release/reconcile_vscode_marketplace.py plan --channel "$RELEASE_CHANNEL" \
+              candidates marketplace-after.json --version "$version" --output marketplace-observed-plan.json
+            if test "$(jq '.missing | length' marketplace-observed-plan.json)" -eq 0; then
+              complete=true
+              break
+            fi
+            sleep 10
+          done
+          test "$complete" = true
+          mkdir marketplace-published
+          while IFS=$'\t' read -r name url; do
+            test -n "$name"
+            curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+              --output "marketplace-published/$name" "$url"
+          done < <(jq -r '.existing | to_entries[] | [.value.candidate, .value.download_url] | @tsv' marketplace-observed-plan.json)
+          uv run --frozen --no-sync python scripts/release/reconcile_vscode_marketplace.py verify --channel "$RELEASE_CHANNEL" \
+            marketplace-observed-plan.json marketplace-published --require-complete
+
+      - name: Record published package identities
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          uv run --frozen --no-sync python \
+            scripts/release/build_vscode_marketplace_verification.py --channel "$RELEASE_CHANNEL" \
+            candidates \
+            marketplace-published \
+            marketplace-before.json \
+            marketplace-after.json \
+            marketplace-plan.json \
+            marketplace-observed-plan.json \
+            validation-receipt/promotion-validation-receipt.json \
+            vscode-release-approval-binding.json \
+            vscode-marketplace-publication.json \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$GITHUB_SHA" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --promotion-run-id "$GITHUB_RUN_ID" \
+            --promotion-run-attempt "$GITHUB_RUN_ATTEMPT"
+          mkdir vscode-marketplace-verification
+          cp \
+            marketplace-query.json \
+            marketplace-before.json \
+            marketplace-after.json \
+            marketplace-plan.json \
+            marketplace-observed-plan.json \
+            vscode-marketplace-publication.json \
+            vscode-release-approval-binding.json \
+            candidate-approvals.json \
+            evidence-approvals.json \
+            promotion-approvals.json \
+            validation-receipt/promotion-validation-receipt.json \
+            vscode-marketplace-verification/
+          cp -R marketplace-published vscode-marketplace-verification/public-packages
+
+      - name: Attest public Marketplace verification bundle
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: vscode-marketplace-verification/**/*
+
+      - name: Upload public Marketplace verification bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-marketplace-publication-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: vscode-marketplace-verification
+          if-no-files-found: error
+          retention-days: 90

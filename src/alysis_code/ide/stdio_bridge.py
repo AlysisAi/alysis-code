@@ -43,7 +43,13 @@ from ..code_review import (
     InvalidReviewRequest,
     ReviewRequest,
 )
-from ..config import ConfigError, _apply_legacy_temperature_override, clone_cfg, load_config
+from ..config import (
+    ConfigError,
+    _apply_legacy_temperature_override,
+    clone_cfg,
+    load_config,
+    save_config,
+)
 from ..host_actions import (
     HOST_ACTION_MAX_ARGUMENT_BYTES,
     HOST_ACTION_MAX_RESULT_BYTES,
@@ -419,6 +425,7 @@ class BridgeSession:
     managed_browser: ManagedBrowserService | None = None
     active_job: BridgeJob | None = None
     last_job: BridgeJob | None = None
+    forked_from_session_id: str | None = None
     # How the session's current persona was chosen ("config" until the IDE
     # sets one via session.persona.set, then "user"), mirroring the source
     # vocabulary of the persona_changed event.
@@ -757,6 +764,8 @@ class StdioBridge:
                 str(result["session_id"]), request_id=request.id
             )
             return result, lambda: self._resume_prompt_queue(resumed_session)
+        if method == "session.fork":
+            return self._session_fork(request), None
         if method == "session.images.list":
             return self._session_images_list(request), None
         if method == "session.images.add":
@@ -767,6 +776,8 @@ class StdioBridge:
             return self._session_set_mode(request), None
         if method == "session.setModel":
             return self._session_set_model(request), None
+        if method == "session.setProfile":
+            return self._session_set_profile(request), None
         if method == "session.setStream":
             return self._session_set_stream(request), None
         if method == "session.setActiveWorkdir":
@@ -2874,6 +2885,131 @@ class StdioBridge:
             "pins_after": pins_after,
         }
 
+    def _session_fork(self, request: ProtocolRequest) -> dict[str, Any]:
+        """Copy dialogue to a fresh sibling worktree, never approvals, tools or checkpoints."""
+        import subprocess
+
+        source = self._require_session(
+            _required_str(request.params, "source_session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        target = self._require_session(
+            _required_str(request.params, "session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        if source is target or not source.workspace_trusted or not target.workspace_trusted:
+            raise ProtocolError(
+                "invalid_fork", "Fork requires two trusted sessions.", request_id=request.id
+            )
+
+        def common_dir(root: Path) -> Path:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key
+                not in {
+                    "GIT_DIR",
+                    "GIT_COMMON_DIR",
+                    "GIT_WORK_TREE",
+                    "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                }
+            }
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+                env=env,
+            )
+            return (root / result.stdout.strip()).resolve(strict=True)
+
+        try:
+            related = common_dir(source.root) == common_dir(target.root)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProtocolError(
+                "invalid_fork", "Cannot verify worktree ownership.", request_id=request.id
+            ) from exc
+        if not related or source.root == target.root:
+            raise ProtocolError(
+                "invalid_fork",
+                "Sessions must belong to different worktrees of the same repository.",
+                request_id=request.id,
+            )
+        with self._state_lock:
+            for session in (source, target):
+                _reconcile_session_job_state(session)
+                if _job_is_active(session.active_job):
+                    raise ProtocolError(
+                        "session_busy",
+                        "Finish or stop the active task before moving it.",
+                        request_id=request.id,
+                    )
+            messages = getattr(target.agent_session, "messages", None)
+            startup = getattr(target.agent_session, "startup_messages", None)
+            fresh = (
+                messages == startup
+                if isinstance(startup, list)
+                else not any(
+                    m.get("role") in {"user", "assistant", "tool"}
+                    for m in messages or []
+                    if isinstance(m, dict)
+                )
+            )
+            if (
+                not isinstance(messages, list)
+                or not fresh
+                or target.last_job is not None
+                or target.forked_from_session_id
+            ):
+                raise ProtocolError(
+                    "invalid_fork",
+                    "The destination must be a new conversation.",
+                    request_id=request.id,
+                )
+            history = []
+            size = 0
+            source_messages = getattr(source.agent_session, "messages", [])
+            source_startup = getattr(source.agent_session, "startup_messages", [])
+            if source_startup and source_messages[: len(source_startup)] == source_startup:
+                source_messages = source_messages[len(source_startup) :]
+            for message in reversed(source_messages):
+                if not isinstance(message, dict) or message.get("role") not in {
+                    "user",
+                    "assistant",
+                }:
+                    continue
+                content = message.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                content = str(redact_secrets(content))
+                size += len(content.encode("utf-8"))
+                if len(history) >= 200 or size > 256_000:
+                    break
+                history.append({"role": message["role"], "content": content})
+            history.reverse()
+            store = getattr(target.agent_session, "store", None)
+            if store is None or not callable(getattr(store, "append", None)):
+                raise ProtocolError(
+                    "invalid_fork",
+                    "Conversation persistence is unavailable.",
+                    request_id=request.id,
+                )
+            for message in history:
+                store.append(f"{message['role']}_message", {"content": message["content"]})
+            messages.extend(history)
+            target.forked_from_session_id = source.session_id
+            for message in history:
+                target.surface.emit_message_end(message["content"], role=message["role"])
+            return {
+                "session_id": target.session_id,
+                "source_session_id": source.session_id,
+                "history_count": len(history),
+            }
+
     def _session_resume(self, request: ProtocolRequest) -> dict[str, Any]:
         params = request.params
         session = self._require_session(
@@ -2884,6 +3020,7 @@ class StdioBridge:
         from ..cli_impl.commands.chat_resume_helpers import (
             _build_chat_resume_context_message,
             _insert_chat_resume_context_message,
+            _is_chat_resume_context_message,
             _load_chat_resume_messages,
             _normalize_chat_resume_session_id,
             _resolve_chat_resume_session_path,
@@ -2961,6 +3098,21 @@ class StdioBridge:
             )
         target_messages.extend(replay_messages)
         after_count = len(target_messages)
+        store = getattr(session.agent_session, "store", None)
+        if store is not None and callable(getattr(store, "append", None)):
+            startup = getattr(session.agent_session, "startup_messages", [])
+            retained_messages = [message for message in target_messages if message not in startup]
+            store.append(
+                "conversation_summary_updated", {"active_conversation_messages": retained_messages}
+            )
+        if _optional_bool(params, "emit_history", default=False, request_id=request.id):
+            for message in replay_messages:
+                if _is_chat_resume_context_message(message):
+                    continue
+                if message.get("role") in {"user", "assistant"} and isinstance(
+                    message.get("content"), str
+                ):
+                    session.surface.emit_message_end(message["content"], role=message["role"])
         try:
             queue_recovery = self._prompt_queue.rebind_recoverable(
                 source_session_id=normalized_target,
@@ -3075,6 +3227,54 @@ class StdioBridge:
             _apply_config_overrides(cfg, {"base_url": base_url}, request_id=request.id)
         _refresh_agent_session_config(session.agent_session, cfg)
         session.surface.emit_status_update(mode=session.mode, model=model)
+        return _session_status_payload(session)
+
+    def _session_set_profile(self, request: ProtocolRequest) -> dict[str, Any]:
+        from ..profiles import get_profile
+        from .provider_switch import switch_session_provider
+
+        self._require_workspace_trusted(request)
+        session = self._require_session(
+            _required_str(request.params, "session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        if not session.workspace_trusted:
+            raise ProtocolError(
+                "workspace_trust_required",
+                "Provider switching requires a trusted session.",
+                request_id=request.id,
+            )
+        name = _required_str(request.params, "name", request_id=request.id)
+        model = _optional_str(request.params, "model", request_id=request.id)
+        with self._state_lock:
+            _reconcile_session_job_state(session)
+            if _job_is_active(session.active_job):
+                raise ProtocolError(
+                    "session_busy",
+                    "Finish or stop the current task before switching providers.",
+                    request_id=request.id,
+                )
+            saved_cfg = clone_cfg(load_config())
+            profile = get_profile(saved_cfg, name)
+            if profile is None:
+                raise ProtocolError(
+                    "config_error", f"Unknown provider profile: {name}", request_id=request.id
+                )
+            if model:
+                profile = replace(profile, default_model=model)
+                add_profile(saved_cfg, profile, allow_auth_profile_update=True)
+            set_active_profile(saved_cfg, name)
+            # Keep this conversation's permissions, budgets, and workspace settings.
+            cfg = clone_cfg(session.agent_session.cfg)
+            add_profile(cfg, profile, allow_auth_profile_update=True)
+            set_active_profile(cfg, name)
+            switch_session_provider(
+                session.agent_session,
+                cfg,
+                refresh=_refresh_agent_session_config,
+                persist=lambda: save_config(saved_cfg),
+            )
+        session.surface.emit_status_update(mode=session.mode, model=cfg.model)
         return _session_status_payload(session)
 
     def _session_set_stream(self, request: ProtocolRequest) -> dict[str, Any]:

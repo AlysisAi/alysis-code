@@ -1,0 +1,67 @@
+name: vscode-extension-activation-performance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/vscode-extension-activation-performance.yml"
+      - "extensions/vscode-alysis/package-lock.json"
+      - "extensions/vscode-alysis/package.json"
+      - "extensions/vscode-alysis/src/**"
+      - "extensions/vscode-alysis/test/integration/perf-activation/**"
+      - "extensions/vscode-alysis/test/perfActivation*.test.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/vscode-extension-activation-performance.yml"
+      - "extensions/vscode-alysis/package-lock.json"
+      - "extensions/vscode-alysis/package.json"
+      - "extensions/vscode-alysis/src/**"
+      - "extensions/vscode-alysis/test/integration/perf-activation/**"
+      - "extensions/vscode-alysis/test/perfActivation*.test.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-activation-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  committed-default-gate:
+    name: Cold/warm activation and Extension Host resource budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+
+      - name: Install frozen extension dependencies
+        working-directory: extensions/vscode-alysis
+        run: npm ci
+
+      - name: Enforce committed activation performance budgets
+        working-directory: extensions/vscode-alysis
+        env:
+          CI: "true"
+          ALYSIS_PERF_ACTIVATION_EVIDENCE: ${{ runner.temp }}/alysis-perf/activation.jsonl
+        run: xvfb-run -a npm run test:perf-activation
+
+      - name: Retain structured activation performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-activation-performance-${{ github.sha }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/alysis-perf/activation.jsonl
+          if-no-files-found: error
+          retention-days: 30

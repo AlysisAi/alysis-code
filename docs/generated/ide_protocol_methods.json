@@ -451,7 +451,8 @@
         "target_session_id"
       ],
       "optional_params": [
-        "max_messages"
+        "max_messages",
+        "emit_history"
       ],
       "result_redaction": {
         "redacted": true,
@@ -636,6 +637,11 @@
       "optional_params": [
         "base_url"
       ],
+      "mutates": true
+    },
+    "session.setProfile": {
+      "required_params": ["session_id", "name", "workspace_trusted"],
+      "optional_params": ["model"],
       "mutates": true
     },
     "session.setStream": {
@@ -2330,6 +2336,21 @@
         "persona"
       ],
       "mutates": true
+    },
+    "session.fork": {
+      "required_params": [
+        "session_id",
+        "source_session_id"
+      ],
+      "optional_params": [],
+      "mutates": true,
+      "workspace_trust_required": true,
+      "workspace_required": true,
+      "result_redaction": {
+        "redacted": true,
+        "bounded": true,
+        "secret_values_included": false
+      }
     }
   }
 }

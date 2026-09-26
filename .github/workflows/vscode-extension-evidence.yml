@@ -1,0 +1,451 @@
+name: vscode-extension-evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Extension release channel; beta publishes a Marketplace pre-release.
+        type: choice
+        options: [stable, beta]
+        default: stable
+        required: true
+      release_tag:
+        description: Immutable vX.Y.Z source tag used by the managed candidate run.
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful managed-cli-vsix-release run containing all six candidates.
+        required: true
+        type: string
+      installed_live_provider_run_id:
+        description: Successful six-target installed live-provider QA run for the same candidate.
+        required: true
+        type: string
+      untrusted_workspace_run_id:
+        description: Successful installed-VSIX untrusted-workspace run for the same candidate.
+        required: true
+        type: string
+      remote_acceptance_run_id:
+        description: Successful real WSL and Remote-SSH acceptance run for the same candidate.
+        required: true
+        type: string
+      workflow_run_attempts:
+        description: 'Exact positive attempts as JSON: {"installed_live_provider":N,"untrusted_workspace":N,"remote_acceptance_wsl":N,"remote_acceptance_remote_ssh":N}.'
+        required: true
+        type: string
+      evidence_confirmation:
+        description: Type attest-release-evidence after reviewing the completed reports.
+        required: true
+        type: string
+      evidence_inventory_sha256:
+        description: Canonical SHA-256 printed by hash_vscode_release_evidence.py for the reviewed nine files.
+        required: true
+        type: string
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-evidence-${{ inputs.release_tag }}-${{ inputs.candidate_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate-environment-policy:
+    name: Validate protected evidence environment policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Require independent review and exact release tags
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for environment in \
+            vscode-installed-live-provider-qa \
+            vscode-real-wsl-acceptance \
+            vscode-real-remote-ssh-acceptance \
+            vscode-release-evidence
+          do
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+              > "${environment}.json"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+              > "${environment}-branch-policies.json"
+            python scripts/release/validate_github_environment_policy.py \
+              "${environment}.json" "${environment}-branch-policies.json" \
+              --environment "$environment" \
+              --required-pattern 'v*'
+          done
+
+  attest-evidence:
+    name: Validate and attest release evidence
+    needs: validate-environment-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: vscode-release-evidence
+    permissions:
+      actions: read
+      attestations: write
+      artifact-metadata: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate evidence policy after approval
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment=vscode-release-evidence
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            > "${environment}-branch-policies.json"
+          python scripts/release/validate_github_environment_policy.py \
+            "${environment}.json" "${environment}-branch-policies.json" \
+            --environment "$environment" --required-pattern 'v*'
+
+      - name: Validate official immutable source, candidate run, and confirmation
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EVIDENCE_CONFIRMATION: ${{ inputs.evidence_confirmation }}
+          EVIDENCE_INVENTORY_SHA256: ${{ inputs.evidence_inventory_sha256 }}
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+          WORKFLOW_RUN_ATTEMPTS_JSON: ${{ inputs.workflow_run_attempts }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$EVIDENCE_CONFIRMATION" = "attest-release-evidence"
+          [[ "$EVIDENCE_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INSTALLED_LIVE_PROVIDER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UNTRUSTED_WORKSPACE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          jq -e '
+            type == "object" and
+            (keys == ["installed_live_provider", "remote_acceptance_remote_ssh", "remote_acceptance_wsl", "untrusted_workspace"]) and
+            all(.[]; type == "number" and . >= 1 and floor == .)
+          ' <<< "$WORKFLOW_RUN_ATTEMPTS_JSON" > /dev/null
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          test "$RELEASE_TAG" = "v$version"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > candidate-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .run_attempt == 1 and .path == ".github/workflows/managed-cli-vsix-release.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            candidate-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${INSTALLED_LIVE_PROVIDER_RUN_ID}" \
+            > installed-live-provider-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson run_attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-installed-live-provider-qa.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt == $run_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            installed-live-provider-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${UNTRUSTED_WORKSPACE_RUN_ID}" \
+            > untrusted-workspace-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson run_attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-extension-untrusted-workspace.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .run_attempt == $run_attempt and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            untrusted-workspace-run.json > /dev/null
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${REMOTE_ACCEPTANCE_RUN_ID}" \
+            > remote-acceptance-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            --argjson wsl_attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT" \
+            --argjson remote_ssh_attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .path == ".github/workflows/vscode-remote-acceptance.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .repository.full_name == $repository and .head_repository.full_name == $repository and (.run_attempt | type == "number" and . >= $wsl_attempt and . >= $remote_ssh_attempt)' \
+            remote-acceptance-run.json > /dev/null
+
+      - name: Download exact candidate packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          pattern: vscode-alysis-*
+          path: candidates
+          merge-multiple: true
+
+      - name: Download exact signed managed-runtime bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: signed-managed-cli-release
+          path: managed-runtime
+
+      - name: Download all six installed live-provider reports from the exact run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.installed_live_provider_run_id }}
+          pattern: vscode-alysis-*-installed-live-provider-${{ inputs.installed_live_provider_run_id }}-attempt-${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          path: installed-live-provider
+          merge-multiple: true
+
+      - name: Download exact untrusted-workspace report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.untrusted_workspace_run_id }}
+          name: vscode-untrusted-workspace-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ inputs.untrusted_workspace_run_id }}-attempt-${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+          path: untrusted-workspace
+
+      - name: Download real WSL and Remote-SSH reports from the exact run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.remote_acceptance_run_id }}
+          name: vscode-remote-acceptance-attested-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ inputs.remote_acceptance_run_id }}-wsl-${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}-remote-ssh-${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          path: remote-acceptance
+
+      - name: Download reviewed reports from the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vscode-alysis-*.manual-provider.json' --dir evidence
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vscode-alysis-environment-acceptance.json' --dir evidence
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vscode-alysis-human-check-artifacts.zip' --dir evidence
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vscode-alysis-production-signoff.json' --dir evidence
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Install frozen validation dependencies
+        run: uv sync --frozen --no-editable
+
+      - name: Verify and validate all six installed live-provider reports
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find installed-live-provider -maxdepth 1 -type f -name '*.installed-live-provider.json' -print | sort)
+          test "${#reports[@]}" -eq 6
+          for report in "${reports[@]}"; do
+            target="$(basename "$report" | sed -E 's/^vscode-alysis-(.+)\.installed-live-provider\.json$/\1/')"
+            case "$target" in
+              win32-x64|win32-arm64|darwin-x64|darwin-arm64|linux-x64|linux-arm64) ;;
+              *) echo "Unexpected installed live-provider target: $target" >&2; exit 1 ;;
+            esac
+            gh attestation verify "$report" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/vscode-installed-live-provider-qa.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 > /dev/null
+            uv run --frozen --no-sync python scripts/qa/validate_vscode_installed_live_provider.py --channel "$RELEASE_CHANNEL" \
+              "$report" \
+              "candidates/vscode-alysis-$target.vsix" \
+              "candidates/production-dogfood-$target.json" \
+              --target "$target" \
+              --release-tag "$RELEASE_TAG" \
+              --source-sha "$GITHUB_SHA" \
+              --candidate-run-id "$CANDIDATE_RUN_ID" \
+              --workflow-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID" \
+              --workflow-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT" \
+              --provider-origin-policy \
+                "$GITHUB_WORKSPACE/.github/release-policy/vscode-live-provider-origins.json"
+          done
+
+      - name: Verify original untrusted and real-remote evidence attestations
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+        run: |
+          set -euo pipefail
+          untrusted_report=untrusted-workspace/vscode-alysis-linux-x64.untrusted-workspace.json
+          test -f "$untrusted_report"
+          gh attestation verify "$untrusted_report" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/vscode-extension-untrusted-workspace.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1 > /dev/null
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_untrusted_workspace_report.py --channel "$RELEASE_CHANNEL" \
+            "$untrusted_report" candidates/vscode-alysis-linux-x64.vsix \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$GITHUB_SHA" \
+            --candidate-run-id "$CANDIDATE_RUN_ID" \
+            --workflow-run-id "$UNTRUSTED_WORKSPACE_RUN_ID" \
+            --workflow-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT" \
+            --target linux-x64
+          mapfile -t remote_reports < <(find remote-acceptance -maxdepth 1 -type f -name 'vscode-remote-acceptance-*.json' -print | sort)
+          test "${#remote_reports[@]}" -eq 2
+          for report in "${remote_reports[@]}"; do
+            gh attestation verify "$report" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/vscode-remote-acceptance.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 > /dev/null
+          done
+
+      - name: Match downloaded reports to the reviewer-approved inventory digest
+        env:
+          EVIDENCE_INVENTORY_SHA256: ${{ inputs.evidence_inventory_sha256 }}
+        run: >-
+          uv run --frozen --no-sync python scripts/qa/hash_vscode_release_evidence.py
+          evidence --expect "$EVIDENCE_INVENTORY_SHA256"
+          --output evidence-inventory.json
+
+      - name: Validate exact reports and write candidate-bound receipt
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ID: ${{ inputs.installed_live_provider_run_id }}
+          INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).installed_live_provider }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_remote_ssh }}
+          REMOTE_ACCEPTANCE_RUN_ID: ${{ inputs.remote_acceptance_run_id }}
+          REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).remote_acceptance_wsl }}
+          UNTRUSTED_WORKSPACE_RUN_ID: ${{ inputs.untrusted_workspace_run_id }}
+          UNTRUSTED_WORKSPACE_RUN_ATTEMPT: ${{ fromJSON(inputs.workflow_run_attempts).untrusted_workspace }}
+        run: >-
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_promotion_bundle.py --channel "$RELEASE_CHANNEL"
+          candidates evidence managed-runtime installed-live-provider
+          untrusted-workspace remote-acceptance
+          --release-tag "$RELEASE_TAG"
+          --source-sha "$GITHUB_SHA"
+          --candidate-run-id "$CANDIDATE_RUN_ID"
+          --candidate-run-attempt 1
+          --installed-live-provider-run-id "$INSTALLED_LIVE_PROVIDER_RUN_ID"
+          --installed-live-provider-run-attempt "$INSTALLED_LIVE_PROVIDER_RUN_ATTEMPT"
+          --untrusted-workspace-run-id "$UNTRUSTED_WORKSPACE_RUN_ID"
+          --untrusted-workspace-run-attempt "$UNTRUSTED_WORKSPACE_RUN_ATTEMPT"
+          --remote-acceptance-run-id "$REMOTE_ACCEPTANCE_RUN_ID"
+          --remote-acceptance-wsl-run-attempt "$REMOTE_ACCEPTANCE_WSL_RUN_ATTEMPT"
+          --remote-acceptance-remote-ssh-run-attempt "$REMOTE_ACCEPTANCE_REMOTE_SSH_RUN_ATTEMPT"
+          --evidence-run-id "$GITHUB_RUN_ID"
+          --evidence-run-attempt "$GITHUB_RUN_ATTEMPT"
+          --write-receipt evidence-validation-receipt.json
+
+      - name: Assemble exact evidence artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            attested-evidence/evidence \
+            attested-evidence/installed-live-provider \
+            attested-evidence/untrusted-workspace \
+            attested-evidence/remote-acceptance \
+            attested-evidence/receipt
+          cp evidence/* attested-evidence/evidence/
+          cp installed-live-provider/* attested-evidence/installed-live-provider/
+          cp untrusted-workspace/* attested-evidence/untrusted-workspace/
+          cp remote-acceptance/* attested-evidence/remote-acceptance/
+          cp evidence-validation-receipt.json attested-evidence/receipt/
+          cp evidence-inventory.json attested-evidence/receipt/
+          test "$(find attested-evidence/evidence -maxdepth 1 -type f | wc -l)" -eq 9
+          test "$(find attested-evidence/installed-live-provider -maxdepth 1 -type f | wc -l)" -eq 6
+          test "$(find attested-evidence/untrusted-workspace -maxdepth 1 -type f | wc -l)" -eq 1
+          test "$(find attested-evidence/remote-acceptance -maxdepth 1 -type f | wc -l)" -eq 2
+
+      - name: Attest every validated evidence file
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: attested-evidence/evidence/*
+
+      - name: Attest candidate-bound evidence receipt
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: attested-evidence/receipt/*
+
+      - name: Re-attest validated installed live-provider evidence
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: attested-evidence/installed-live-provider/*
+
+      - name: Re-attest validated untrusted-workspace evidence
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: attested-evidence/untrusted-workspace/*
+
+      - name: Re-attest validated real-remote evidence
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: attested-evidence/remote-acceptance/*
+
+      - name: Upload immutable attested evidence bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-release-evidence-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: attested-evidence
+          if-no-files-found: error
+          retention-days: 90

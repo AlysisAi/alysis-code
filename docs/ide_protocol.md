@@ -595,6 +595,10 @@ capped by the bridge. The result reports `bounded`, `history_count`, `history_co
 the auxiliary resume-context summary so it cannot reintroduce unbounded history into model context.
 Clients must not replay terminal output to simulate a resume.
 
+Set `emit_history: true` to replay retained user and assistant text as `message_end` events for
+the IDE transcript. Recovery-context messages stay internal. The adopted conversation is saved
+into the live session log so another reload retains it.
+
 ```json
 {"protocol_version":"1","id":"resume-1","method":"session.resume","params":{"session_id":"20260519T100000Z_abcd1234","target_session_id":"20260518T090000Z_deadbeef"}}
 ```
@@ -667,6 +671,22 @@ the already-active persona returns `changed:false` and emits nothing.
 ```json
 {"protocol_version":"1","id":"persona-1","method":"session.persona.set","params":{"session_id":"20260519T100000Z_abcd1234","persona":"architect"}}
 ```
+
+### session.fork
+
+Copies user and assistant dialogue from `source_session_id` into the fresh target
+`session_id`. Both sessions must be trusted, idle, and in different worktrees of
+the same repository. Approvals, tool state, and checkpoints are not copied.
+
+### session.setProfile
+
+Switches an idle, trusted live session to the saved provider profile named by
+`name`, with an optional `model` override. The request requires `session_id` and
+`workspace_trusted: true`.
+It preserves the conversation, workspace, permissions, and budgets, rebuilds the
+provider clients, persists the active profile, and returns session status. An
+unknown profile or active task is rejected; a failed configuration update restores
+the previous live clients.
 
 ### session.setStream
 

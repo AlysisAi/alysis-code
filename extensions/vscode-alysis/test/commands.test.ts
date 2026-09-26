@@ -761,7 +761,7 @@ test("component candidate workflow cannot be mistaken for production or Marketpl
   assert.match(workflow, /npm run package:dev-vsix -- --pre-release/);
   assert.match(workflow, /Verify pre-release VSIX marker and contents/);
   assert.match(workflow, /Microsoft\.VisualStudio\.Code\.PreRelease/);
-  assert.match(workflow, /extension\/out\/src\/extension\.js/);
+  assert.match(workflow, /extension\/dist\/extension\.js/);
   assert.match(workflow, /forbidden_prefixes/);
   assert.doesNotMatch(workflow, /^\s*run: npm run package\s*$/m);
   assert.match(workflow, /Test extension host \(minimum supported VS Code\)/);
@@ -789,7 +789,7 @@ test("component candidate workflow cannot be mistaken for production or Marketpl
   assert.match(localScript, /\bnpm audit --audit-level=high\b/);
   assert.match(localScript, /package:pre-release/);
   assert.match(localScript, /Verify pre-release VSIX marker and contents/);
-  assert.match(localScript, /extension\/out\/src\/extension\.js/);
+  assert.match(localScript, /extension\/dist\/extension\.js/);
   assert.match(localScript, /forbidden_prefixes/);
   assert.match(localScript, /no LLM\/provider credentials are required/);
 });

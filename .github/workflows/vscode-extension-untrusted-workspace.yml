@@ -1,0 +1,227 @@
+name: vscode-extension-untrusted-workspace
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Extension release channel; beta publishes a Marketplace pre-release.
+        type: choice
+        options: [stable, beta]
+        default: stable
+        required: true
+      release_tag:
+        description: Existing immutable vX.Y.Z source tag used by the managed candidate run.
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful managed-cli-vsix-release run containing the linux-x64 candidate.
+        required: true
+        type: string
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-untrusted-workspace-${{ inputs.release_tag }}-${{ inputs.candidate_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  linux-x64-untrusted-workspace:
+    name: Installed VSIX in a real untrusted workspace (linux-x64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      artifact-metadata: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate official immutable source and exact candidate run
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$REPOSITORY_PRIVATE" = "false"
+          test "$REPOSITORY_VISIBILITY" = "public"
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          test "$RELEASE_TAG" = "v$version"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > candidate-run.json
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg source_sha "$GITHUB_SHA" \
+            '.event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and .run_attempt == 1 and .path == ".github/workflows/managed-cli-vsix-release.yml" and .head_sha == $source_sha and .head_branch == $release_tag and .repository.full_name == $repository and .head_repository.full_name == $repository' \
+            candidate-run.json > /dev/null
+
+      - name: Download exact linux-x64 candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: vscode-alysis-linux-x64
+          path: candidate
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Install frozen gate dependencies
+        run: |
+          uv sync --frozen --no-editable
+          npm ci --prefix extensions/vscode-alysis
+
+      - name: Verify exact candidate artifact inventory and installed-production evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find candidate -maxdepth 1 -type f -printf '%f\n' | sort)
+          expected=(
+            production-dogfood-linux-x64.json
+            vscode-alysis-linux-x64.cdx.json
+            vscode-alysis-linux-x64.vsix
+          )
+          test "${#files[@]}" -eq "${#expected[@]}"
+          test "${files[*]}" = "${expected[*]}"
+          uv run --frozen --no-sync python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.qa.vscode_extension_dogfood import (
+              validate_production_dogfood_candidate_binding,
+          )
+
+          candidate = Path("candidate/vscode-alysis-linux-x64.vsix")
+          evidence = json.loads(
+              Path("candidate/production-dogfood-linux-x64.json").read_text(encoding="utf-8")
+          )
+          validate_production_dogfood_candidate_binding(
+              evidence,
+              candidate,
+              require_vscode_compatibility=True,
+              channel=os.environ["RELEASE_CHANNEL"],
+          )
+          PY
+
+      - name: Verify exact candidate provenance and SBOM attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          vsix="candidate/vscode-alysis-linux-x64.vsix"
+          sbom="candidate/vscode-alysis-linux-x64.cdx.json"
+          provenance_receipt="$(mktemp)"
+          sbom_receipt="$(mktemp)"
+          gh attestation verify "$vsix" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --format json > "$provenance_receipt"
+          uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+            "$provenance_receipt" "$vsix" \
+            --predicate-type https://slsa.dev/provenance/v1
+          gh attestation verify "$vsix" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://cyclonedx.org/bom \
+            --format json > "$sbom_receipt"
+          uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+            "$sbom_receipt" "$vsix" \
+            --predicate-type https://cyclonedx.org/bom \
+            --expected-predicate "$sbom"
+          echo "VSIX_SHA256=$(sha256sum "$vsix" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          rm -f "$provenance_receipt" "$sbom_receipt"
+
+      - name: Compile the isolated untrusted-workspace driver
+        working-directory: extensions/vscode-alysis
+        run: npm run compile
+
+      - name: Run installed VSIX in an actually untrusted workspace
+        env:
+          ALYSIS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          ALYSIS_WORKFLOW_RUN_ID: ${{ github.run_id }}
+          ALYSIS_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ALYSIS_EXPECTED_PLATFORM_TARGET: linux-x64
+          ALYSIS_EXPECTED_VSIX_SHA256: ${{ env.VSIX_SHA256 }}
+          ALYSIS_NATIVE_SIGNATURE_CHECK: passed
+          ALYSIS_PRODUCTION_VSIX_PATH: ${{ github.workspace }}/candidate/vscode-alysis-linux-x64.vsix
+          ALYSIS_RELEASE_SIGNATURE_CHECK: passed
+          ALYSIS_RELEASE_TAG: ${{ inputs.release_tag }}
+          ALYSIS_SOURCE_SHA: ${{ github.sha }}
+          ALYSIS_UNTRUSTED_PRODUCTION_OUTPUT: ${{ github.workspace }}/untrusted-evidence/vscode-alysis-linux-x64.untrusted-workspace.json
+          VSCODE_TEST_VERSION: "1.90.0"
+        run: |
+          mkdir -p untrusted-evidence
+          xvfb-run -a npm --prefix extensions/vscode-alysis run test:untrusted-production
+
+      - name: Validate retained safe machine evidence against the exact candidate
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: >-
+          uv run --frozen --no-sync python scripts/qa/validate_vscode_untrusted_workspace_report.py --channel "$RELEASE_CHANNEL"
+          untrusted-evidence/vscode-alysis-linux-x64.untrusted-workspace.json
+          candidate/vscode-alysis-linux-x64.vsix
+          --release-tag "$RELEASE_TAG"
+          --source-sha "$GITHUB_SHA"
+          --candidate-run-id "$CANDIDATE_RUN_ID"
+          --workflow-run-id "$GITHUB_RUN_ID"
+          --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+          --target linux-x64
+
+      - name: Attest candidate-bound untrusted-workspace evidence
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: untrusted-evidence/vscode-alysis-linux-x64.untrusted-workspace.json
+
+      - name: Upload candidate-bound untrusted-workspace evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-untrusted-workspace-${{ github.sha }}-${{ inputs.candidate_run_id }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: untrusted-evidence/vscode-alysis-linux-x64.untrusted-workspace.json
+          if-no-files-found: error
+          retention-days: 90

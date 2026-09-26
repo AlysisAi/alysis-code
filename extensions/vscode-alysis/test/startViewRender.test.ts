@@ -7,10 +7,11 @@ import { JSDOM, VirtualConsole } from "jsdom";
 
 const ROOT = resolve(__dirname, "../..");
 
-/** Every mounted window is closed after the run so webview timers cannot keep the process alive. */
+/** Release each test's DOM and timers before the next test, including the render benchmark. */
 const mountedWindows: any[] = [];
-test.after(() => {
-  for (const window of mountedWindows) {
+test.afterEach(() => {
+  while (mountedWindows.length) {
+    const window = mountedWindows.pop();
     try {
       window.close();
     } catch {

@@ -1,0 +1,1055 @@
+name: managed-cli-vsix-release
+
+# This workflow deliberately produces short-lived, natively signed candidate
+# artifacts only and must not publish release assets. Missing Authenticode or
+# Developer ID/notarization credentials fail before the production manifest key
+# can bless any executable.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Extension release channel; beta publishes a Marketplace pre-release.
+        type: choice
+        options: [stable, beta]
+        default: stable
+        required: true
+      release_tag:
+        description: "Existing immutable release tag; dispatch must run from refs/tags/vX.Y.Z."
+        required: true
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-cli-vsix-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release-source:
+    name: Validate immutable public release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify official repository, exact tag, source SHA, and version
+        shell: bash
+        env:
+          EXPECTED_REPOSITORY: AlysisAi/alysis-code
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$REPOSITORY_PRIVATE" = "false"
+          test "$REPOSITORY_VISIBILITY" = "public"
+          test "$GITHUB_REF" = "refs/tags/$REQUESTED_TAG"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$REQUESTED_TAG"
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          source_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "$REQUESTED_TAG")"
+          test "$source_commit" = "$GITHUB_SHA"
+          test "$tag_commit" = "$GITHUB_SHA"
+          version="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          test "$REQUESTED_TAG" = "v$version"
+
+      - name: Validate extension version and channel before signing
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.release.vscode_release_channel import validate_release_version
+          package = json.loads(Path("extensions/vscode-alysis/package.json").read_text(encoding="utf-8"))
+          validate_release_version(package["version"], channel=os.environ["RELEASE_CHANNEL"])
+          PY
+
+      - name: Require protected exact-tag signing environments
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for environment in managed-cli-native-signing managed-cli-signing
+          do
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+              > "${environment}.json"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+              "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+              > "${environment}-branch-policies.json"
+            python scripts/release/validate_github_environment_policy.py \
+              "${environment}.json" "${environment}-branch-policies.json" \
+              --environment "$environment" \
+              --required-pattern 'v*'
+          done
+
+  activation-performance:
+    name: Enforce committed VS Code activation budgets
+    needs: validate-release-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+      - name: Install frozen extension dependencies
+        working-directory: extensions/vscode-alysis
+        run: npm ci
+      - name: Measure cold and warm activation against committed budgets
+        working-directory: extensions/vscode-alysis
+        env:
+          CI: "true"
+          ALYSIS_PERF_ACTIVATION_EVIDENCE: ${{ runner.temp }}/alysis-perf/activation.jsonl
+        run: xvfb-run -a npm run test:perf-activation
+      - name: Retain release activation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vscode-release-activation-performance-${{ github.sha }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/alysis-perf/activation.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+  build-managed-cli:
+    name: Build managed CLI (${{ matrix.target }})
+    needs: validate-release-source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+            executable: alysis-win32-x64.exe
+          - target: win32-arm64
+            runner: windows-11-arm
+            executable: alysis-win32-arm64.exe
+          - target: darwin-x64
+            runner: macos-15-intel
+            executable: alysis-darwin-x64
+          - target: darwin-arm64
+            runner: macos-14
+            executable: alysis-darwin-arm64
+          - target: linux-x64
+            runner: ubuntu-22.04
+            executable: alysis-linux-x64
+            manylinux_image: quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+            executable: alysis-linux-arm64
+            manylinux_image: quay.io/pypa/manylinux_2_28_aarch64@sha256:e7035406e58d96b7407246af1f6514a3cbd753a0025b42b9adfbeadd3b29ba80
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    environment: managed-cli-native-signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+      - name: Install frozen-build dependencies from the committed lock
+        run: uv sync --frozen --no-editable --extra managed-build
+      - name: Revalidate native-signing policy after approval
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment=managed-cli-native-signing
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            > "${environment}-branch-policies.json"
+          python scripts/release/validate_github_environment_policy.py \
+            "${environment}.json" "${environment}-branch-policies.json" \
+            --environment "$environment" --required-pattern 'v*'
+      - name: Reject vulnerabilities and unapproved adverse dependency statuses
+        run: uv run --frozen --no-sync python scripts/release/audit_locked_dependencies.py
+      - name: Build one-file CLI on native host
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          uv run --frozen --no-sync python -m PyInstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --name alysis \
+            --collect-all alysis_code \
+            scripts/release/managed_cli_entry.py
+          mkdir -p managed-cli-out
+          source_path="dist/alysis"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            source_path="dist/alysis.exe"
+          fi
+          mv "$source_path" "managed-cli-out/${{ matrix.executable }}"
+      - name: Build Linux one-file CLI against the glibc 2.28 baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          MANYLINUX_IMAGE: ${{ matrix.manylinux_image }}
+          OUTPUT_NAME: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          uv_executable="$(command -v uv)"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env UV_CACHE_DIR=/tmp/uv-cache \
+            --env UV_PROJECT_ENVIRONMENT=/tmp/alysis-venv \
+            --env UV_PYTHON=/opt/python/cp311-cp311/bin/python \
+            --env UV_PYTHON_DOWNLOADS=never \
+            --env OUTPUT_NAME="$OUTPUT_NAME" \
+            --volume "$PWD:/workspace" \
+            --volume "$uv_executable:/usr/local/bin/uv:ro" \
+            --workdir /workspace \
+            "$MANYLINUX_IMAGE" \
+            bash -euxo pipefail -c '
+              uv sync --frozen --no-editable --extra managed-build
+              uv run --frozen --no-sync python -m PyInstaller \
+                --noconfirm \
+                --clean \
+                --onefile \
+                --name alysis \
+                --collect-all alysis_code \
+                scripts/release/managed_cli_entry.py
+              mkdir -p managed-cli-out
+              mv dist/alysis "managed-cli-out/${OUTPUT_NAME}"
+            '
+      - name: Export locked managed CLI dependency SBOM
+        shell: bash
+        run: |
+          mkdir -p managed-cli-out
+          uv export \
+            --quiet \
+            --frozen \
+            --extra managed-build \
+            --format cyclonedx1.5 \
+            --output-file "managed-cli-out/${{ matrix.target }}.cdx.json"
+      - name: Validate protected Azure signing configuration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ vars.ALYSIS_AZURE_SIGNING_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.ALYSIS_AZURE_SIGNING_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.ALYSIS_AZURE_SIGNING_SUBSCRIPTION_ID }}
+          SIGNING_ENDPOINT: ${{ vars.ALYSIS_AZURE_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.ALYSIS_AZURE_SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.ALYSIS_AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          EXPECTED_SUBJECT: ${{ vars.ALYSIS_WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($value in @($env:AZURE_CLIENT_ID, $env:AZURE_TENANT_ID, $env:AZURE_SUBSCRIPTION_ID)) {
+            if ($value -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') {
+              throw 'Protected Azure signing identity configuration is missing or invalid.'
+            }
+          }
+          if ($env:SIGNING_ENDPOINT -cne 'https://weu.codesigning.azure.net/' -or
+              $env:SIGNING_ACCOUNT -cne 'alysis-code-signing' -or
+              $env:SIGNING_PROFILE -notmatch '^[A-Za-z0-9-]{1,100}$' -or
+              [string]::IsNullOrWhiteSpace($env:EXPECTED_SUBJECT) -or $env:EXPECTED_SUBJECT -match '[\r\n]') {
+            throw 'Protected Azure signing account, profile, or approved publisher subject is missing or invalid.'
+          }
+      - name: Authenticate to Azure with the protected GitHub OIDC identity
+        if: runner.os == 'Windows'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.ALYSIS_AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.ALYSIS_AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.ALYSIS_AZURE_SIGNING_SUBSCRIPTION_ID }}
+      - name: Sign Windows runtime with Azure Artifact Signing
+        if: runner.os == 'Windows'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.ALYSIS_AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ALYSIS_AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ALYSIS_AZURE_SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}/managed-cli-out/${{ matrix.executable }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          cache-dependencies: false
+      - name: Verify approved Windows publisher and record native signature evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          EXPECTED_SUBJECT: ${{ vars.ALYSIS_WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          ./scripts/release/verify_windows_runtime.ps1 `
+            -Executable 'managed-cli-out/${{ matrix.executable }}' `
+            -Target '${{ matrix.target }}' `
+            -ExpectedSubject $env:EXPECTED_SUBJECT `
+            -OutputPath 'managed-cli-out/${{ matrix.target }}.native-signature.json'
+      - name: Developer ID sign, notarize, and verify macOS runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.ALYSIS_APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.ALYSIS_APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_DEVELOPER_IDENTITY: ${{ vars.ALYSIS_APPLE_DEVELOPER_IDENTITY }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.ALYSIS_APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.ALYSIS_APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.ALYSIS_APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          keychain="$RUNNER_TEMP/alysis-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          p12="$RUNNER_TEMP/alysis-developer-id.p12"
+          notary_key="$RUNNER_TEMP/alysis-notary.p8"
+          notary_result="$RUNNER_TEMP/notary-result.json"
+          archive="$RUNNER_TEMP/${{ matrix.target }}.zip"
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -f "$p12" "$notary_key" "$notary_result" "$archive"
+          }
+          trap cleanup EXIT
+          test -n "$APPLE_DEVELOPER_ID_P12_BASE64"
+          test -n "$APPLE_DEVELOPER_ID_P12_PASSWORD"
+          test -n "$APPLE_DEVELOPER_IDENTITY"
+          test -n "$APPLE_NOTARY_KEY_P8_BASE64"
+          [[ "$APPLE_DEVELOPER_IDENTITY" =~ ^Developer\ ID\ Application:\ [^[:cntrl:]]{1,384}\ \([A-Z0-9]{10}\)$ ]]
+          [[ "$APPLE_NOTARY_KEY_ID" =~ ^[A-Z0-9]{10}$ ]]
+          [[ "$APPLE_NOTARY_ISSUER_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          (root / "alysis-developer-id.p12").write_bytes(
+              base64.b64decode(os.environ["APPLE_DEVELOPER_ID_P12_BASE64"], validate=True)
+          )
+          (root / "alysis-notary.p8").write_bytes(
+              base64.b64decode(os.environ["APPLE_NOTARY_KEY_P8_BASE64"], validate=True)
+          )
+          p12 = (root / "alysis-developer-id.p12").read_bytes()
+          notary_key = (root / "alysis-notary.p8").read_bytes()
+          if not 1 <= len(p12) <= 1024 * 1024:
+              raise SystemExit("Apple signing certificate payload size is invalid")
+          if not 1 <= len(notary_key) <= 64 * 1024 or b"BEGIN PRIVATE KEY" not in notary_key:
+              raise SystemExit("Apple notary private key payload is invalid")
+          PY
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          executable="managed-cli-out/${{ matrix.executable }}"
+          codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_IDENTITY" "$executable"
+          codesign --verify --strict --verbose=2 "$executable"
+          actual_authority="$(codesign -dvv "$executable" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)"
+          test "$actual_authority" = "$APPLE_DEVELOPER_IDENTITY"
+          ditto -c -k --keepParent "$executable" "$archive"
+          xcrun notarytool submit "$archive" \
+            --key "$notary_key" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait \
+            --output-format json > "$notary_result"
+          python - <<'PY'
+          import json
+          import hashlib
+          import os
+          import re
+          from pathlib import Path
+
+          result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "notary-result.json").read_text())
+          if result.get("status") != "Accepted":
+              raise SystemExit(f"Apple notarization failed: {result.get('status')}")
+          submission_id = result.get("id")
+          if not isinstance(submission_id, str) or re.fullmatch(
+              r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
+              submission_id,
+          ) is None:
+              raise SystemExit("Apple notarization response has an invalid submission ID")
+          evidence = {
+              "schemaVersion": 2,
+              "target": "${{ matrix.target }}",
+              "executable": "${{ matrix.executable }}",
+              "executableSha256": hashlib.sha256(
+                  Path("managed-cli-out/${{ matrix.executable }}").read_bytes()
+              ).hexdigest(),
+              "kind": "developer-id-notarization",
+              "status": "verified",
+              "signerIdentity": os.environ["APPLE_DEVELOPER_IDENTITY"],
+              "submissionId": submission_id,
+          }
+          Path("managed-cli-out/${{ matrix.target }}.native-signature.json").write_text(
+              json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+          # Apple issues online tickets for standalone Mach-O executables but does not support
+          # stapling them directly. `spctl` verifies the accepted ticket through Gatekeeper.
+          spctl --assess --type execute --verbose=4 "$executable"
+      - name: Record Linux native policy evidence
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          executable="managed-cli-out/${{ matrix.executable }}"
+          executable_sha256="$(sha256sum "$executable" | awk '{print $1}')"
+          printf '%s\n' \
+            '{"executable":"${{ matrix.executable }}","executableSha256":"'"$executable_sha256"'","kind":"linux-hash-and-provenance","schemaVersion":2,"signerIdentity":"not-applicable","status":"verified","target":"${{ matrix.target }}"}' \
+            > "managed-cli-out/${{ matrix.target }}.native-signature.json"
+      - name: Smoke managed CLI executable
+        shell: bash
+        run: |
+          executable="managed-cli-out/${{ matrix.executable }}"
+          uv run --frozen --no-sync python scripts/release/smoke_managed_cli.py "$executable"
+      - name: Prove Linux runtime on the glibc 2.28 baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          MANYLINUX_IMAGE: ${{ matrix.manylinux_image }}
+          EXECUTABLE: managed-cli-out/${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env EXECUTABLE="$EXECUTABLE" \
+            --volume "$PWD:/workspace:ro" \
+            --workdir /workspace \
+            "$MANYLINUX_IMAGE" \
+            /opt/python/cp311-cp311/bin/python scripts/release/smoke_managed_cli.py "$EXECUTABLE"
+      - name: Attest managed CLI build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: managed-cli-out/${{ matrix.executable }}
+      - name: Attest managed CLI SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: managed-cli-out/${{ matrix.executable }}
+          sbom-path: managed-cli-out/${{ matrix.target }}.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: managed-cli-${{ matrix.target }}
+          path: managed-cli-out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-assemble:
+    name: Attest and assemble managed CLI manifest
+    needs:
+      - validate-release-source
+      - build-managed-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: managed-cli-signing
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+      - name: Install frozen signing dependencies from the committed lock
+        run: uv sync --frozen --no-editable
+      - name: Revalidate manifest-signing policy after approval
+        shell: bash
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment=managed-cli-signing
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
+          gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
+            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            > "${environment}-branch-policies.json"
+          python scripts/release/validate_github_environment_policy.py \
+            "${environment}.json" "${environment}-branch-policies.json" \
+            --environment "$environment" --required-pattern 'v*'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: managed-cli-*
+          path: managed-cli-artifacts
+          merge-multiple: true
+      - name: Verify exact tag source and build attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/tags/$REQUESTED_TAG"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$REQUESTED_TAG")"
+          for executable in managed-cli-artifacts/alysis-*; do
+            case "$executable" in
+              *.cdx.json|*.native-signature.json) continue ;;
+            esac
+            target="$(uv run --frozen --no-sync python scripts/release/resolve_managed_cli_target.py "$executable")"
+            sbom="managed-cli-artifacts/${target}.cdx.json"
+            provenance_receipt="$(mktemp)"
+            gh attestation verify "$executable" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$REQUESTED_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --format json > "$provenance_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$provenance_receipt" "$executable" \
+              --predicate-type https://slsa.dev/provenance/v1
+            sbom_receipt="$(mktemp)"
+            gh attestation verify "$executable" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+              --source-ref "refs/tags/$REQUESTED_TAG" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://cyclonedx.org/bom \
+              --format json > "$sbom_receipt"
+            uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+              "$sbom_receipt" "$executable" \
+              --predicate-type https://cyclonedx.org/bom \
+              --expected-predicate "$sbom"
+            rm -f "$provenance_receipt" "$sbom_receipt"
+          done
+          uv run --frozen --no-sync python - <<'PY'
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+
+          evidence = sorted(Path("managed-cli-artifacts").glob("*.native-signature.json"))
+          if len(evidence) != 6:
+              raise SystemExit(f"expected six native-signature records, found {len(evidence)}")
+          expected_targets = {
+              "win32-x64", "win32-arm64", "darwin-x64", "darwin-arm64",
+              "linux-x64", "linux-arm64",
+          }
+          identities = {}
+          for path in evidence:
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              target = payload.get("target")
+              if target not in expected_targets or target in identities:
+                  raise SystemExit(f"native signature evidence target is invalid: {path}")
+              executable_name = f"alysis-{target}" + (".exe" if target.startswith("win32-") else "")
+              executable = Path("managed-cli-artifacts") / executable_name
+              executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+              expected_kind = (
+                  "authenticode" if target.startswith("win32-")
+                  else "developer-id-notarization" if target.startswith("darwin-")
+                  else "linux-hash-and-provenance"
+              )
+              common_keys = {
+                  "schemaVersion", "target", "executable", "executableSha256",
+                  "kind", "status", "signerIdentity",
+              }
+              expected_keys = (
+                  common_keys | {"signerThumbprint", "timestampSignerIdentity"}
+                  if target.startswith("win32-")
+                  else common_keys | {"submissionId"}
+                  if target.startswith("darwin-")
+                  else common_keys
+              )
+              if set(payload) != expected_keys:
+                  raise SystemExit(f"native signature evidence schema is invalid: {path}")
+              if (
+                  payload.get("schemaVersion") != 2
+                  or payload.get("status") != "verified"
+                  or payload.get("kind") != expected_kind
+                  or payload.get("executable") != executable_name
+                  or payload.get("executableSha256") != executable_sha256
+              ):
+                  raise SystemExit(f"native signature evidence does not bind the executable: {path}")
+              identity = payload.get("signerIdentity")
+              if not isinstance(identity, str):
+                  raise SystemExit(f"native signature evidence identity is invalid: {path}")
+              if target.startswith("win32-"):
+                  if re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+                      raise SystemExit(f"Authenticode identity is invalid: {path}")
+                  if re.fullmatch(r"[0-9a-f]{40}", str(payload["signerThumbprint"])) is None:
+                      raise SystemExit(f"Authenticode thumbprint is invalid: {path}")
+                  if re.fullmatch(
+                      r"sha256:[0-9a-f]{64}", str(payload["timestampSignerIdentity"])
+                  ) is None:
+                      raise SystemExit(f"Authenticode timestamp identity is invalid: {path}")
+              elif target.startswith("darwin-"):
+                  if re.fullmatch(
+                      r"Developer ID Application: [^\r\n]{1,384} \([A-Z0-9]{10}\)", identity
+                  ) is None:
+                      raise SystemExit(f"Developer ID identity is invalid: {path}")
+                  if re.fullmatch(
+                      r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}",
+                      str(payload["submissionId"]),
+                  ) is None:
+                      raise SystemExit(f"notarization submission ID is invalid: {path}")
+              elif identity != "not-applicable":
+                  raise SystemExit(f"Linux native identity must be not-applicable: {path}")
+              identities[target] = identity
+          if set(identities) != expected_targets:
+              raise SystemExit("native signature evidence does not cover all targets")
+          # Azure leaf certificates may rotate between target builds. Each build
+          # verifies the protected publisher subject; each manifest record pins its
+          # own certificate digest and the attested native evidence bytes.
+          if identities["darwin-x64"] != identities["darwin-arm64"]:
+              raise SystemExit("macOS targets were not signed by the same approved identity")
+          PY
+      - name: Validate release tag and protected signing key
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          MANAGED_CLI_SIGNING_KEY: ${{ secrets.ALYSIS_MANAGED_CLI_SIGNING_KEY }}
+          APPROVED_PUBLIC_KEY_SHA256: ${{ vars.ALYSIS_MANAGED_CLI_PUBLIC_KEY_SHA256 }}
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          expected = f"v{version}"
+          if os.environ.get("REQUESTED_TAG") != expected:
+              raise SystemExit(f"release tag must be {expected}")
+          key = os.environ.get("MANAGED_CLI_SIGNING_KEY", "")
+          if "BEGIN EC PRIVATE KEY" not in key:
+              raise SystemExit("ALYSIS_MANAGED_CLI_SIGNING_KEY is missing or is not an ECDSA PEM key")
+          key_path = Path(os.environ["RUNNER_TEMP"]) / "managed-cli-release.pem"
+          key_path.write_text(key, encoding="utf-8")
+          key_path.chmod(0o600)
+          PY
+          openssl ec \
+            -in "$RUNNER_TEMP/managed-cli-release.pem" \
+            -pubout \
+            -out "$RUNNER_TEMP/managed-cli-release-public.pem"
+          diff -u \
+            extensions/vscode-alysis/resources/managed-cli-release-public.pem \
+            "$RUNNER_TEMP/managed-cli-release-public.pem"
+          actual_fingerprint="$(openssl pkey -pubin -in "$RUNNER_TEMP/managed-cli-release-public.pem" -outform DER | openssl dgst -sha256 -r | awk '{print $1}')"
+          if ! printf '%s' "$APPROVED_PUBLIC_KEY_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "Protected environment variable ALYSIS_MANAGED_CLI_PUBLIC_KEY_SHA256 is missing or invalid." >&2
+            exit 1
+          fi
+          test "$actual_fingerprint" = "$APPROVED_PUBLIC_KEY_SHA256"
+      - name: Build ECDSA-attested six-target manifest
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          uv run --frozen --no-sync python scripts/release/build_managed_cli_manifest.py \
+            --signing-key "$RUNNER_TEMP/managed-cli-release.pem" \
+            --signing-key-id alysis-release-2026-01 \
+            --release-tag "$RELEASE_TAG" \
+            --source-commit "$GITHUB_SHA" \
+            --provenance-builder-id "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/managed-cli-vsix-release.yml@refs/tags/${RELEASE_TAG}" \
+            --artifact "win32-x64=managed-cli-artifacts/alysis-win32-x64.exe=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-win32-x64.exe" \
+            --artifact "win32-arm64=managed-cli-artifacts/alysis-win32-arm64.exe=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-win32-arm64.exe" \
+            --artifact "darwin-x64=managed-cli-artifacts/alysis-darwin-x64=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-darwin-x64" \
+            --artifact "darwin-arm64=managed-cli-artifacts/alysis-darwin-arm64=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-darwin-arm64" \
+            --artifact "linux-x64=managed-cli-artifacts/alysis-linux-x64=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-linux-x64" \
+            --artifact "linux-arm64=managed-cli-artifacts/alysis-linux-arm64=https://github.com/AlysisAi/alysis-code/releases/download/${RELEASE_TAG}/alysis-linux-arm64" \
+            --sbom "win32-x64=managed-cli-artifacts/win32-x64.cdx.json" \
+            --sbom "win32-arm64=managed-cli-artifacts/win32-arm64.cdx.json" \
+            --sbom "darwin-x64=managed-cli-artifacts/darwin-x64.cdx.json" \
+            --sbom "darwin-arm64=managed-cli-artifacts/darwin-arm64.cdx.json" \
+            --sbom "linux-x64=managed-cli-artifacts/linux-x64.cdx.json" \
+            --sbom "linux-arm64=managed-cli-artifacts/linux-arm64.cdx.json" \
+            --native-evidence "win32-x64=managed-cli-artifacts/win32-x64.native-signature.json" \
+            --native-evidence "win32-arm64=managed-cli-artifacts/win32-arm64.native-signature.json" \
+            --native-evidence "darwin-x64=managed-cli-artifacts/darwin-x64.native-signature.json" \
+            --native-evidence "darwin-arm64=managed-cli-artifacts/darwin-arm64.native-signature.json" \
+            --native-evidence "linux-x64=managed-cli-artifacts/linux-x64.native-signature.json" \
+            --native-evidence "linux-arm64=managed-cli-artifacts/linux-arm64.native-signature.json" \
+            --output managed-cli-artifacts/manifest.json
+      - name: Remove manifest signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/managed-cli-release.pem" "$RUNNER_TEMP/managed-cli-release-public.pem"
+      - name: Validate manifest without exposing signing material
+        run: |
+          uv run --frozen --no-sync python -m json.tool managed-cli-artifacts/manifest.json >/dev/null
+          test "$(find managed-cli-artifacts -maxdepth 1 -type f | wc -l)" -eq 19
+          test "$(find managed-cli-artifacts -maxdepth 1 -name '*.cdx.json' -type f | wc -l)" -eq 6
+          test "$(find managed-cli-artifacts -maxdepth 1 -name '*.native-signature.json' -type f | wc -l)" -eq 6
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-managed-cli-release
+          path: managed-cli-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+  package-platform-vsix:
+    name: Package VSIX (${{ matrix.target }})
+    needs:
+      - activation-performance
+      - sign-and-assemble
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            runner: windows-latest
+          - target: win32-arm64
+            runner: windows-11-arm
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-14
+          - target: linux-x64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+      - name: Install frozen release-verification dependencies
+        run: uv sync --frozen --no-editable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signed-managed-cli-release
+          path: managed-cli-release
+      - name: Re-verify downloaded Windows Authenticode signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw "managed-cli-release/manifest.json" | ConvertFrom-Json
+          $artifacts = @($manifest.artifacts | Where-Object { $_.target -eq "${{ matrix.target }}" })
+          if ($artifacts.Count -ne 1) {
+            throw "Signed manifest does not contain exactly one matching Windows runtime."
+          }
+          $expectedIdentity = $artifacts[0].nativeSignature.signerIdentity
+          if ($expectedIdentity -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Signed manifest has an invalid Windows signer identity."
+          }
+          $signature = Get-AuthenticodeSignature "managed-cli-release/alysis-${{ matrix.target }}.exe"
+          $actualIdentity = "sha256:" + $signature.SignerCertificate.GetCertHashString(
+            [Security.Cryptography.HashAlgorithmName]::SHA256
+          ).ToLowerInvariant()
+          if ($signature.Status -ne "Valid" -or
+              $actualIdentity -ne $expectedIdentity) {
+            throw "Downloaded managed runtime failed Authenticode verification."
+          }
+      - name: Re-verify downloaded macOS Developer ID and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          executable="managed-cli-release/alysis-${{ matrix.target }}"
+          codesign --verify --strict --verbose=2 "$executable"
+          spctl --assess --type execute --verbose=4 "$executable"
+      - name: Install extension dependencies and run release unit gates
+        working-directory: extensions/vscode-alysis
+        run: npm ci && npm run compile && npm run lint && npm test && npm audit --audit-level=high
+      - name: Stage only the matching signed platform bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          bundle="extensions/vscode-alysis/resources/managed-cli"
+          mkdir -p "$bundle"
+          cp managed-cli-release/manifest.json "$bundle/manifest.json"
+          executable="alysis-${TARGET}"
+          if [[ "$TARGET" == win32-* ]]; then executable="${executable}.exe"; fi
+          cp "managed-cli-release/${executable}" "$bundle/${executable}"
+      - name: Package target-specific VSIX
+        working-directory: extensions/vscode-alysis
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          flags=()
+          case "$RELEASE_CHANNEL" in
+            beta) flags+=(--pre-release) ;;
+            stable) ;;
+            *) exit 1 ;;
+          esac
+          node scripts/package-release.js --target "$TARGET" "${flags[@]}" --out "vscode-alysis-${TARGET}.vsix"
+      - name: Verify VSIX contains one attested managed runtime
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          from scripts.release.vscode_release_channel import validate_vsix_channel
+
+          target = os.environ["TARGET"]
+          vsix = Path("extensions/vscode-alysis") / f"vscode-alysis-{target}.vsix"
+          executable = f"alysis-{target}" + (".exe" if target.startswith("win32-") else "")
+          with ZipFile(vsix) as archive:
+              names = set(archive.namelist())
+              vsix_manifest = archive.read("extension.vsixmanifest").decode("utf-8")
+              package = json.loads(archive.read("extension/package.json"))
+          validate_vsix_channel(vsix_manifest, package, channel=os.environ["RELEASE_CHANNEL"])
+          required = {
+              "extension/dist/extension.js",
+              "extension/resources/managed-cli/manifest.json",
+              f"extension/resources/managed-cli/{executable}",
+              "extension/resources/managed-cli-release-public.pem",
+          }
+          if not required <= names:
+              raise SystemExit(f"VSIX missing required runtime entries: {sorted(required - names)}")
+          bundled = [name for name in names if name.startswith("extension/resources/managed-cli/alysis-")]
+          if bundled != [f"extension/resources/managed-cli/{executable}"]:
+              raise SystemExit(f"VSIX contains wrong or multiple platform runtimes: {bundled}")
+          forbidden_prefixes = (
+              "extension/node_modules/",
+              "extension/out/",
+              "extension/src/",
+              "extension/test/",
+          )
+          forbidden = sorted(
+              name
+              for name in names
+              if name.startswith(forbidden_prefixes) or name.endswith(".map")
+          )
+          if forbidden:
+              raise SystemExit(f"VSIX contains development-only files: {forbidden}")
+          PY
+      - name: Generate final target VSIX SBOM from verified package bytes
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          uv run --frozen --no-sync python scripts/release/build_vscode_vsix_sbom.py \
+            --vsix "extensions/vscode-alysis/vscode-alysis-${TARGET}.vsix" \
+            --target "$TARGET" \
+            --manifest managed-cli-release/manifest.json \
+            --public-key extensions/vscode-alysis/resources/managed-cli-release-public.pem \
+            --dependency-sbom "managed-cli-release/${TARGET}.cdx.json" \
+            --output "extensions/vscode-alysis/vscode-alysis-${TARGET}.cdx.json"
+      - name: Attest final target VSIX provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+      - name: Attest final target VSIX SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+          sbom-path: extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.cdx.json
+      - name: Verify final VSIX attestations against immutable release identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          vsix="extensions/vscode-alysis/vscode-alysis-${TARGET}.vsix"
+          sbom="extensions/vscode-alysis/vscode-alysis-${TARGET}.cdx.json"
+          provenance_receipt="$(mktemp)"
+          gh attestation verify "$vsix" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+            --source-ref "refs/tags/$REQUESTED_TAG" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --format json > "$provenance_receipt"
+          uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+            "$provenance_receipt" "$vsix" \
+            --predicate-type https://slsa.dev/provenance/v1
+          sbom_receipt="$(mktemp)"
+          gh attestation verify "$vsix" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/managed-cli-vsix-release.yml" \
+            --source-ref "refs/tags/$REQUESTED_TAG" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://cyclonedx.org/bom \
+            --format json > "$sbom_receipt"
+          uv run --frozen --no-sync python scripts/release/validate_github_attestation_receipt.py \
+            "$sbom_receipt" "$vsix" \
+            --predicate-type https://cyclonedx.org/bom \
+            --expected-predicate "$sbom"
+          rm -f "$provenance_receipt" "$sbom_receipt"
+      - name: Clean-install production VSIX on minimum VS Code (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ALYSIS_PRODUCTION_VSIX_PATH: ${{ github.workspace }}/extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+          ALYSIS_EXPECTED_PLATFORM_TARGET: ${{ matrix.target }}
+          ALYSIS_NATIVE_SIGNATURE_CHECK: passed
+          ALYSIS_RELEASE_SIGNATURE_CHECK: passed
+          ALYSIS_PRODUCTION_DOGFOOD_OUTPUT: ${{ github.workspace }}/extensions/vscode-alysis/production-dogfood-minimum-${{ matrix.target }}.json
+          VSCODE_TEST_VERSION: 1.90.0
+        run: xvfb-run -a npm --prefix extensions/vscode-alysis run test:production-install
+      - name: Clean-install production VSIX on minimum VS Code (Windows/macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          ALYSIS_PRODUCTION_VSIX_PATH: ${{ github.workspace }}/extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+          ALYSIS_EXPECTED_PLATFORM_TARGET: ${{ matrix.target }}
+          ALYSIS_NATIVE_SIGNATURE_CHECK: passed
+          ALYSIS_RELEASE_SIGNATURE_CHECK: passed
+          ALYSIS_PRODUCTION_DOGFOOD_OUTPUT: ${{ github.workspace }}/extensions/vscode-alysis/production-dogfood-minimum-${{ matrix.target }}.json
+          VSCODE_TEST_VERSION: 1.90.0
+        run: npm --prefix extensions/vscode-alysis run test:production-install
+      - name: Clean-install production VSIX on current Stable (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ALYSIS_PRODUCTION_VSIX_PATH: ${{ github.workspace }}/extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+          ALYSIS_EXPECTED_PLATFORM_TARGET: ${{ matrix.target }}
+          ALYSIS_NATIVE_SIGNATURE_CHECK: passed
+          ALYSIS_RELEASE_SIGNATURE_CHECK: passed
+          ALYSIS_PRODUCTION_DOGFOOD_OUTPUT: ${{ github.workspace }}/extensions/vscode-alysis/production-dogfood-current-stable-${{ matrix.target }}.json
+          VSCODE_TEST_VERSION: stable
+        run: xvfb-run -a npm --prefix extensions/vscode-alysis run test:production-install
+      - name: Clean-install production VSIX on current Stable (Windows/macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          ALYSIS_PRODUCTION_VSIX_PATH: ${{ github.workspace }}/extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+          ALYSIS_EXPECTED_PLATFORM_TARGET: ${{ matrix.target }}
+          ALYSIS_NATIVE_SIGNATURE_CHECK: passed
+          ALYSIS_RELEASE_SIGNATURE_CHECK: passed
+          ALYSIS_PRODUCTION_DOGFOOD_OUTPUT: ${{ github.workspace }}/extensions/vscode-alysis/production-dogfood-current-stable-${{ matrix.target }}.json
+          VSCODE_TEST_VERSION: stable
+        run: npm --prefix extensions/vscode-alysis run test:production-install
+      - name: Validate and bind minimum/current-Stable production evidence
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.qa.vscode_extension_dogfood import (
+              validate_production_dogfood_candidate_binding,
+          )
+
+          target = os.environ["TARGET"]
+          root = Path("extensions/vscode-alysis")
+          candidate = Path("extensions/vscode-alysis") / f"vscode-alysis-{target}.vsix"
+          reports = {}
+          for label in ("minimum", "current-stable"):
+              path = root / f"production-dogfood-{label}-{target}.json"
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              validate_production_dogfood_candidate_binding(
+                  payload, candidate, channel=os.environ["RELEASE_CHANNEL"]
+              )
+              reports[label] = payload
+          minimum = reports["minimum"]
+          current = reports["current-stable"]
+          immutable = (
+              "extension_version",
+              "managed_artifact_version",
+              "managed_cli_version",
+              "managed_protocol_version",
+              "managed_cli_sha256",
+              "release_tag",
+              "source_repository",
+              "source_sha",
+              "platform_target",
+              "vsix_sha256",
+          )
+          for field in immutable:
+              if minimum.get(field) != current.get(field):
+                  raise SystemExit(f"VS Code compatibility runs disagree on {field}")
+          minimum_vscode = minimum.get("vscode")
+          current_vscode = current.get("vscode")
+          if not isinstance(minimum_vscode, dict) or not isinstance(current_vscode, dict):
+              raise SystemExit("Production reports are missing VS Code executable identity")
+          if minimum_vscode.get("requested_version") != "1.90.0":
+              raise SystemExit("Minimum production report did not exercise VS Code 1.90.0")
+          if current_vscode.get("requested_version") != "stable":
+              raise SystemExit("Current production report did not resolve VS Code Stable")
+          parse_version = lambda value: tuple(int(part) for part in str(value).split("."))
+          if parse_version(current_vscode.get("version")) < parse_version("1.90.0"):
+              raise SystemExit("Resolved current Stable is older than the declared minimum")
+          combined = dict(minimum)
+          combined["schema_version"] = 3
+          combined["completed_at"] = current.get("completed_at")
+          combined["release_valid_reason"] = (
+              "The exact signed target VSIX passed isolated two-phase installed production "
+              "checks on minimum VS Code 1.90.0 and the resolved current Stable."
+          )
+          combined["vscode_compatibility"] = {
+              "minimum": minimum_vscode,
+              "current_stable": current_vscode,
+          }
+          output = root / f"production-dogfood-{target}.json"
+          output.write_text(json.dumps(combined, indent=2) + "\n", encoding="utf-8")
+          validate_production_dogfood_candidate_binding(
+              combined, candidate, require_vscode_compatibility=True,
+              channel=os.environ["RELEASE_CHANNEL"],
+          )
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vscode-alysis-${{ matrix.target }}
+          path: |
+            extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.vsix
+            extensions/vscode-alysis/vscode-alysis-${{ matrix.target }}.cdx.json
+            extensions/vscode-alysis/production-dogfood-${{ matrix.target }}.json
+          if-no-files-found: error
+          retention-days: 30
