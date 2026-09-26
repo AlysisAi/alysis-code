@@ -825,6 +825,7 @@ jobs:
           version="$(node -p 'require("./extensions/vscode-alysis/package.json").version')"
           complete=false
           for attempt in $(seq 1 12); do
+            echo "Marketplace package verification attempt ${attempt}/12"
             curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
               --header 'Accept: application/json;api-version=3.0-preview.1' \
               --header 'Content-Type: application/json' \

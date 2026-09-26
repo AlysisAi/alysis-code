@@ -224,7 +224,6 @@ jobs:
           set -euo pipefail
           vsix="candidate/vscode-alysis-$TARGET.vsix"
           sbom="candidate/vscode-alysis-$TARGET.cdx.json"
-          dogfood="candidate/production-dogfood-$TARGET.json"
           provenance_receipt="$(mktemp)"
           sbom_receipt="$(mktemp)"
           gh attestation verify "$vsix" \

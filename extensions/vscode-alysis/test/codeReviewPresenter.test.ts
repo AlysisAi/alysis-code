@@ -399,7 +399,7 @@ async function withWorkspace(
     output: { lines: string[]; appendLine(value: string): void };
   }) => Promise<void>
 ): Promise<void> {
-  const root = await mkdtemp(path.join(tmpdir(), "alysis-code-review-"));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "alysis-code-review-")));
   const source = reviewSource(root);
   const collection = new FakeDiagnosticCollection();
   const output = {

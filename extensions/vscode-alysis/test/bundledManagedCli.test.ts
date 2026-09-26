@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -133,7 +133,7 @@ function hasCode(code: string): (error: unknown) => boolean {
 }
 
 async function temporaryDirectory(t: { after(callback: () => Promise<void>): void }): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "alysis-bundle-test-"));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "alysis-bundle-test-")));
   await mkdir(root, { recursive: true });
   t.after(async () => rm(root, { recursive: true, force: true }));
   return root;

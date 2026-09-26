@@ -806,7 +806,9 @@ function fileUri(fsPath: string): ContextUri {
 }
 
 async function workspace(t: TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "alysis-context-"));
+  // macOS exposes /var through /private/var; mocks must key their data by the
+  // same physical paths returned by the production containment checks.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "alysis-context-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }

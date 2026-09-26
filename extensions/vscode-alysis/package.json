@@ -45,7 +45,7 @@
     "watch": "tsc -watch -p ./",
     "watch:bundle": "node scripts/bundle.js --watch",
     "lint": "node scripts/sync-shared-ui.js --check && tsc -p ./ --noEmit && tsc -p ./tsconfig.webview.json && eslint .",
-    "test": "npm run compile && node --test out/test/*.test.js && node --test ../shared-ui/test/*.test.cjs",
+    "test": "npm run compile && node scripts/run-unit-tests.js",
     "test:integration": "npm run compile && node ./out/test/integration/runTest.js",
     "test:cursor": "npm run compile && node scripts/test-cursor.js",
     "test:perf-activation": "npm run compile && node ./out/test/integration/perf-activation/runTest.js",
