@@ -512,9 +512,10 @@ export class IdeContextCollector {
         severity: diagnostic.severity,
         message,
         // Host-local correlation only. ChatController strips this before the
-        // context crosses JSONL to the bridge.
+        // context crosses JSONL to the bridge. Verification reads the editor's
+        // original URI; the context itself still uses the checked physical URI.
         verification_id: diagnosticVerificationFingerprint({
-          uri,
+          uri: diagnostic.uri.toString(),
           range: diagnostic.range,
           severity: diagnostic.severity,
           message: diagnostic.message,

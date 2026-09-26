@@ -277,17 +277,27 @@ export function createVsCodeContextSource(
         // not return untracked ignored files, so a missing path is not rejected.
         return false;
       }
-      const relative = path.relative(folder.uri.fsPath, uri.fsPath).split(path.sep).join("/");
+      // The collector supplies a physical path, while VS Code can retain an
+      // alias such as macOS /var or a Windows short-name workspace root.
+      const [physicalRoot, physicalCandidate] = await Promise.all([
+        realpath(folder.uri.fsPath), realpath(uri.fsPath)
+      ]);
+      const relativePath = path.relative(physicalRoot, physicalCandidate);
+      if (relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        throw new Error("Ignore policy candidate must be inside its workspace root.");
+      }
+      const relative = relativePath.split(path.sep).join("/");
       if (!relative || relative === ".") {
         return false;
       }
       const pattern = new vscodeApi.RelativePattern(vscodeApi.Uri.file(folder.uri.fsPath), escapeGlob(relative));
       const matches = await vscodeApi.workspace.findFiles(pattern, undefined, 1);
-      const wanted = normalizedPath(uri.fsPath);
-      if (!matches.some((match) => normalizedPath(match.fsPath) === wanted)) {
+      const wanted = normalizedPath(physicalCandidate);
+      const physicalMatches = await Promise.all(matches.map((match) => realpath(match.fsPath)));
+      if (!physicalMatches.some((match) => normalizedPath(match) === wanted)) {
         return true;
       }
-      return ignoreProbe.isIgnored(folder.uri.fsPath, uri.fsPath);
+      return ignoreProbe.isIgnored(physicalRoot, physicalCandidate);
     },
 
     realpath,

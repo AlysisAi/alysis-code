@@ -1,10 +1,77 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import type * as vscode from "vscode";
 
 import { createVsCodeContextSource } from "../src/context/VsCodeContextSource";
+import { IdeContextCollector } from "../src/context/IdeContextCollector";
 import { ContextDocument, ContextRange } from "../src/context/IdeContextTypes";
+import { diagnosticVerificationFingerprint } from "../src/verification/diagnosticFingerprint";
+
+test("workspace aliases preserve ignore policy and the editor's diagnostic identity", async (t) => {
+  const temporary = await realpath(await mkdtemp(path.join(tmpdir(), "alysis-context-alias-")));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const physicalRoot = path.join(temporary, "physical");
+  const aliasRoot = path.join(temporary, "alias");
+  await mkdir(physicalRoot);
+  await writeFile(path.join(physicalRoot, "main.ts"), "export const value = 1;\n");
+  await symlink(physicalRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+  const fileUri = (fsPath: string) => ({
+    scheme: "file", authority: "", fsPath, toString: () => pathToFileURL(fsPath).toString()
+  });
+  const editorUri = fileUri(path.join(aliasRoot, "main.ts"));
+  const diagnostic = { range: range(0, 0, 0, 5), severity: 0, message: "Must be cleared", code: "attached" };
+  const probeCalls: Array<[string, string]> = [];
+  let excludedByEditor = false;
+  let excludedByGit = false;
+  const api = {
+    DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+    Uri: { file: fileUri },
+    RelativePattern: class {
+      constructor(public readonly baseUri: unknown, public readonly pattern: string) {}
+    },
+    window: { activeTextEditor: undefined },
+    workspace: {
+      isTrusted: true,
+      workspaceFolders: [{ name: "alias", index: 0, uri: fileUri(aliasRoot) }],
+      fs: { stat: (candidate: { fsPath: string }) => stat(candidate.fsPath) },
+      findFiles: async (pattern: { baseUri: { fsPath: string }; pattern: string }) => {
+        assert.equal(pattern.baseUri.fsPath, aliasRoot);
+        assert.equal(pattern.pattern, "main.ts");
+        return excludedByEditor ? [] : [editorUri];
+      }
+    },
+    languages: { getDiagnostics: () => [[editorUri, [diagnostic]]] }
+  } as unknown as typeof vscode;
+  const source = createVsCodeContextSource(api, {
+    ignoreProbe: { isIgnored: async (root, candidate) => {
+      probeCalls.push([root, candidate]);
+      return excludedByGit;
+    } }
+  });
+  const collector = new IdeContextCollector(source);
+  const collect = () => collector.collect({ includeSelection: false, includeOpenEditors: false });
+  const result = await collect();
+  assert.deepEqual(result.skipped, []);
+  const items = result.blocks[0]?.items as Array<Record<string, unknown>>;
+  assert.equal(items?.length, 1);
+  assert.equal(items[0].uri, fileUri(path.join(physicalRoot, "main.ts")).toString());
+  assert.equal(items[0].verification_id, diagnosticVerificationFingerprint({
+    ...diagnostic, uri: editorUri.toString(), severity: "error"
+  }));
+  assert.deepEqual(probeCalls, [[physicalRoot, path.join(physicalRoot, "main.ts")]]);
+
+  excludedByEditor = true;
+  assert.deepEqual((await collect()).blocks, []);
+  assert.equal(probeCalls.length, 1, "editor exclusions must not be overridden by Git");
+  excludedByEditor = false;
+  excludedByGit = true;
+  assert.deepEqual((await collect()).blocks, []);
+});
 
 test("VS Code language-service adapter uses public commands and normalizes bounded results", async () => {
   const mainUri = uri("C:\\workspace\\main.ts");
