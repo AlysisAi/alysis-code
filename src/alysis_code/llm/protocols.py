@@ -364,10 +364,9 @@ PROVIDER_PROTOCOL_CAPABILITIES: tuple[ProviderProtocolCapabilities, ...] = (
             supports_streaming=True,
             supports_buffered=True,
         ),
-        usage_contract=UsageContract(
-            response_usage_confidence=UsageConfidence.AUTHORITATIVE,
-            input_token_count_strategy="none",
-        ),
+        # Declaring cache support must retain the existing local payload
+        # estimator and conservative response-usage confidence for this route.
+        usage_contract=default_usage_contract_for_protocol(OPENAI_COMPAT_PROTOCOL),
         supports_streaming=True,
         supports_tool_calling=True,
         supports_structured_outputs=True,
