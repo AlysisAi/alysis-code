@@ -1593,6 +1593,23 @@ _OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["gpt-6-luna"] = {
     "output_cost_per_token": 0.0000005,
 }
 
+# Anthropic's launch specifications and standard five-minute cache pricing.
+_PROVIDER_CANONICAL_MODEL_IDS["alysis"]["claude-sonnet-5-5"] = "claude-sonnet-5-5"
+_OFFICIAL_PROVIDER_MODEL_SOURCES["alysis"]["claude-sonnet-5-5"] = (
+    "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+)
+_OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["claude-sonnet-5-5"] = {
+    "context_window_tokens": 1_000_000,
+    "max_output_tokens": 128_000,
+    # The hosted route initially meters text/tools; image accounting is separate.
+    "supports_vision": False,
+    "supports_reasoning": True,
+    "input_cost_per_token": 0.000002,
+    "cache_read_input_cost_per_token": 0.0000002,
+    "cache_creation_input_cost_per_token": 0.0000025,
+    "output_cost_per_token": 0.00001,
+}
+
 _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
     "deepseek-chat": {
         "context_window_tokens": 1_000_000,

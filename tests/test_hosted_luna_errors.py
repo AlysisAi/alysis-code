@@ -5,12 +5,17 @@ import json
 import httpx
 import pytest
 
+from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
 from alysis_code.llm.openai_responses import OpenAIResponsesClient
 from alysis_code.llm.provider_limits import ProviderRetrySettings
 from alysis_code.llm.types import LLMError
 from alysis_code.llm_error_display import friendly_llm_error_message
 
 
+@pytest.mark.parametrize(
+    "client_type, model",
+    [(OpenAIResponsesClient, "gpt-6-luna"), (AnthropicMessagesClient, "claude-sonnet-5-5")],
+)
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
     "code, message, expected",
@@ -57,7 +62,9 @@ from alysis_code.llm_error_display import friendly_llm_error_message
         ),
     ],
 )
-def test_luna_displays_gateway_capacity_and_credit_reason(stream, code, message, expected):
+def test_hosted_clients_display_gateway_capacity_and_credit_reason(
+    client_type, model, stream, code, message, expected
+):
     payload = {"error": {"code": code, "message": message, "type": code}}
     requests = []
 
@@ -65,10 +72,10 @@ def test_luna_displays_gateway_capacity_and_credit_reason(stream, code, message,
         requests.append(request)
         return httpx.Response(429, json=payload, headers={"Retry-After": "5"})
 
-    client = OpenAIResponsesClient(
+    client = client_type(
         base_url="https://gateway.example.test/v1",
         api_key="slk_test",
-        model="gpt-6-luna",
+        model=model,
         provider_key="alysis",
         provider_retry_settings=ProviderRetrySettings(max_retries=0),
         transport=httpx.MockTransport(handle),
@@ -81,3 +88,5 @@ def test_luna_displays_gateway_capacity_and_credit_reason(stream, code, message,
     displayed = friendly_llm_error_message(raised.value)
     assert displayed.startswith(expected)
     assert "rate-limiting this session" not in displayed
+    if client_type is AnthropicMessagesClient:
+        assert friendly_llm_error_message(str(raised.value)) == displayed

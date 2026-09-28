@@ -129,6 +129,14 @@ Allowed project override fields are:
 - `resources_mode`
 - `prompts_mode`
 
+For HTTP servers, `startup_timeout_s` applies to both the `initialize` request and
+the HTTP acknowledgement of `notifications/initialized`. Each uses the configured
+timeout; `call_timeout_s` governs subsequent requests. Stdio servers retain a short
+post-notification observation window.
+
+An MCP startup failure is reported as an MCP error. Chat exits cleanly instead of
+retrying the same failing connection through the classic chat fallback.
+
 ## Tool Policy
 
 Use `allowed_tools` and `denied_tools` to keep the MCP surface narrow:

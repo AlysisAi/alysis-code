@@ -162,6 +162,9 @@ def build_provider_diagnostics(cfg: AppConfig) -> ProviderDiagnostics:
     )
     api_key = _resolve_active_profile_api_key(cfg, profile.name)
     protocol = str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+    from .llm.factory import resolve_model_protocol
+
+    protocol = resolve_model_protocol(provider_key=provider_key, model=model, protocol=protocol)
     capabilities = get_provider_protocol_capabilities(
         provider_key=provider_key,
         protocol=protocol,

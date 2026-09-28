@@ -8,6 +8,7 @@ configuration, operation, extension points, and security in more detail.
 - [Quickstart](quickstart.md): configure a provider and run your first task.
 - [Credentials](credentials.md): understand API-key precedence and storage.
 - [AI subscription connections](account-runtimes.md): sign in through a supported provider.
+- [Hosted prompt caching](hosted-prompt-caching.md): automatic caching, migration, and controls.
 - [Reference](reference.md): commands, modes, configuration, sessions, and troubleshooting.
 - [Migration from Sylliptor](migration-alysis-code.md): update commands and configuration after
   the project rename.

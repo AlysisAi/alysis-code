@@ -155,6 +155,10 @@ def resolve_prompt_cache_policy(
 ) -> ResolvedPromptCachePolicy:
     mode = resolve_prompt_cache_mode(cfg)
     ttl = resolve_anthropic_prompt_cache_ttl(cfg)
+    hosted_ttl_warning: tuple[str, ...] = ()
+    if provider_key == "alysis" and protocol == "anthropic_messages" and ttl != "5m":
+        ttl = "5m"
+        hosted_ttl_warning = ("Hosted Sonnet supports only five-minute prompt caching.",)
     effective_capability = cache_capability or resolve_effective_cache_capability(
         provider_key=provider_key,
         protocol=protocol,
@@ -172,7 +176,7 @@ def resolve_prompt_cache_policy(
             trusted_usage_fields=effective_capability.trusted_usage_fields,
             usage_schema=effective_capability.usage_schema,
             min_cacheable_tokens=effective_capability.min_cacheable_tokens,
-            warnings=effective_capability.warnings,
+            warnings=(*effective_capability.warnings, *hosted_ttl_warning),
         )
 
     strategy = effective_capability.strategy
@@ -207,7 +211,7 @@ def resolve_prompt_cache_policy(
     gemini_explicit_enabled = (
         effective_capability.supports_explicit_cached_content and mode == "auto"
     )
-    warnings = effective_capability.warnings
+    warnings = (*effective_capability.warnings, *hosted_ttl_warning)
     gemini_ttl: str | None = None
     if gemini_explicit_enabled:
         gemini_ttl, gemini_ttl_fallback = _google_duration_from_retention(explicit_retention)

@@ -63,6 +63,7 @@ from ..profile_presets import (
 from ..profiles import (
     SUBSCRIPTION_SELECTION_REQUIRED_KEY,
     ProfileSpec,
+    apply_hosted_prompt_cache_defaults,
     get_active_profile,
     list_profiles,
     set_active_profile,
@@ -226,6 +227,10 @@ class ConfigMenuState:
     subscription_selection_required: bool = False
     default_workspace_path: str = ""
     thinking_label_explicitly_set: bool = field(default=False, repr=False)
+    hosted_prompt_cache_defaults_applied: bool = False
+    prompt_cache_mode_explicitly_set: bool = field(default=False, repr=False)
+    cache_prompt_key_enabled: bool = True
+    cache_keepalive_enabled: bool = False
     _subscription_models_cache: tuple[Any, ...] = field(default=(), repr=False)
     _subscription_models_loaded: bool = field(default=False, repr=False)
     _provider_models_cache_identity: tuple[str, ...] | None = field(default=None, repr=False)
@@ -236,6 +241,7 @@ class ConfigMenuState:
 
     @classmethod
     def from_cfg(cls, cfg: AppConfig) -> ConfigMenuState:
+        apply_hosted_prompt_cache_defaults(cfg, get_active_profile(cfg))
         warnings: list[str] = []
         try:
             resolved_key = resolve_api_key(cfg)
@@ -363,6 +369,9 @@ class ConfigMenuState:
             default_workspace_path=default_workspace_path,
         )
         state._normalize_provider_thinking_label()
+        state.hosted_prompt_cache_defaults_applied = cfg.hosted_prompt_cache_defaults_applied
+        state.cache_prompt_key_enabled = cfg.cache.prompt_cache_key_enabled
+        state.cache_keepalive_enabled = cfg.cache.keepalive_enabled
         state._original = state.snapshot()
         return state
 
@@ -394,6 +403,8 @@ class ConfigMenuState:
             "clear_stored_key_confirmed": self.clear_stored_key_confirmed,
             "clear_stored_key_profile": self.clear_stored_key_profile,
             "thinking_label_explicitly_set": self.thinking_label_explicitly_set,
+            "hosted_prompt_cache_defaults_applied": self.hosted_prompt_cache_defaults_applied,
+            "prompt_cache_mode_explicitly_set": self.prompt_cache_mode_explicitly_set,
             "subscription_selection_required": self.subscription_selection_required,
         }
 
@@ -439,6 +450,12 @@ class ConfigMenuState:
         self.thinking_label_explicitly_set = bool(
             self._original.get("thinking_label_explicitly_set", False)
         )
+        self.hosted_prompt_cache_defaults_applied = bool(
+            self._original.get("hosted_prompt_cache_defaults_applied", False)
+        )
+        self.prompt_cache_mode_explicitly_set = bool(
+            self._original.get("prompt_cache_mode_explicitly_set", False)
+        )
         self.refresh_api_key_status()
 
     def set_field(self, name: str, value: str) -> None:
@@ -473,6 +490,16 @@ class ConfigMenuState:
         }:
             raise KeyError(f"Unknown config menu field: {name}")
         self.fields[key] = str(value)
+        if key in {
+            "prompt_cache_mode",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "anthropic_prompt_cache_enabled",
+            "anthropic_prompt_cache_ttl",
+        }:
+            self.hosted_prompt_cache_defaults_applied = True
+        if key == "prompt_cache_mode":
+            self.prompt_cache_mode_explicitly_set = True
         if key == "model":
             profile = _active_subscription_profile(self)
             if profile is not None and str(value).strip() != profile.default_model:
@@ -646,6 +673,10 @@ class ConfigMenuState:
         self._provider_models_cache = ()
         self._provider_model_catalog_warning = ""
         profile = ProfileSpec.from_dict(profile_name, self.profiles[profile_name])
+        cache_cfg = self._resolution_cfg()
+        if apply_hosted_prompt_cache_defaults(cache_cfg, profile):
+            self.fields["prompt_cache_mode"] = cache_cfg.prompt_cache_mode
+            self.hosted_prompt_cache_defaults_applied = True
         if profile.base_url:
             self.fields["base_url"] = profile.base_url
         if profile.auth_provider:
@@ -763,6 +794,11 @@ class ConfigMenuState:
             prompt_cache_mode=_normalize_prompt_cache_mode(
                 self.fields.get("prompt_cache_mode", "manual")
             ),
+            hosted_prompt_cache_defaults_applied=self.hosted_prompt_cache_defaults_applied,
+            cache={
+                "prompt_cache_key_enabled": self.cache_prompt_key_enabled,
+                "keepalive_enabled": self.cache_keepalive_enabled,
+            },
             prompt_cache_key=str(self.fields.get("prompt_cache_key", "") or ""),
             prompt_cache_retention=str(self.fields.get("prompt_cache_retention", "") or ""),
             anthropic_prompt_cache_enabled=_normalize_bool_text(
@@ -813,6 +849,7 @@ class ConfigMenuState:
             )
 
         changes: dict[str, Any] = {}
+        cfg.hosted_prompt_cache_defaults_applied = self.hosted_prompt_cache_defaults_applied
 
         execution = getattr(cfg, "execution", None)
         if execution is None:
@@ -930,7 +967,10 @@ class ConfigMenuState:
         desired_cache_mode = _normalize_prompt_cache_mode(
             self.fields.get("prompt_cache_mode", "manual")
         )
-        if str(getattr(cfg, "prompt_cache_mode", "") or "manual") != desired_cache_mode:
+        if (
+            str(getattr(cfg, "prompt_cache_mode", "") or "manual") != desired_cache_mode
+            or self.prompt_cache_mode_explicitly_set
+        ):
             set_config_value(cfg, "prompt_cache_mode", desired_cache_mode)
             changes["prompt_cache_mode"] = desired_cache_mode
 
@@ -1415,8 +1455,12 @@ def _cache_summary_text(state: ConfigMenuState) -> str:
     if mode == "off":
         return f"cache off · {policy_summary} · {compaction}"
     if mode == "auto":
-        ttl = _normalize_anthropic_prompt_cache_ttl(
-            state.fields.get("anthropic_prompt_cache_ttl", "5m")
+        ttl = (
+            policy.anthropic_cache_control_ttl
+            if policy is not None
+            else _normalize_anthropic_prompt_cache_ttl(
+                state.fields.get("anthropic_prompt_cache_ttl", "5m")
+            )
         )
         return f"auto · {policy_summary} · Anthropic TTL {ttl} · {compaction}"
 
@@ -1474,7 +1518,13 @@ def _effective_cache_capability_for_state(
             )
             or preview_profile.name
         )
-        protocol = str(preview_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+        from ..llm.factory import resolve_model_protocol
+
+        protocol = resolve_model_protocol(
+            provider_key=provider_key,
+            model=model,
+            protocol=str(preview_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip(),
+        )
         capabilities = get_provider_protocol_capabilities(
             provider_key=provider_key,
             protocol=protocol,
@@ -1532,7 +1582,13 @@ def _resolved_cache_policy_with_error_for_state(
             )
             or profile.name
         )
-        protocol = str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+        from ..llm.factory import resolve_model_protocol
+
+        protocol = resolve_model_protocol(
+            provider_key=provider_key,
+            model=model,
+            protocol=str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip(),
+        )
         capabilities = get_provider_protocol_capabilities(
             provider_key=provider_key,
             protocol=protocol,

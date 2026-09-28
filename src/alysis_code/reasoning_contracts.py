@@ -357,6 +357,18 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
     # Hosted models retain their upstream reasoning and replay contracts.
     "alysis": (
         (
+            "claude-sonnet-5-5",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_THINKING_ADAPTIVE,
+                values=("low", "medium", "high", "xhigh", "max"),
+                default="medium",
+                off=OFF_EXPLICIT,
+                accepts_tool_choice_while_reasoning=False,
+                notes="native Messages; off means between_tools at high effort; forced tools unsupported",
+            ),
+        ),
+        (
             "gpt-6-luna",
             _C(
                 mode=OPTIONAL,

@@ -381,6 +381,8 @@ def resolve_model_protocol(*, provider_key: str | None, model: str, protocol: st
     """Resolve model-specific transports for initial connections and live switches."""
     if provider_key == "alysis" and model == "gpt-6-luna":
         return OPENAI_RESPONSES_PROTOCOL
+    if provider_key == "alysis" and model == "claude-sonnet-5-5":
+        return ANTHROPIC_MESSAGES_PROTOCOL
     return protocol
 
 

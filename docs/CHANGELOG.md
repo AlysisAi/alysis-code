@@ -6,6 +6,31 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-09-29
+
+### Added
+
+- Add Claude Sonnet 5.5 to the Alysis account model picker, using native Messages
+  transport, streaming, signed reasoning and tool continuation, and the shared
+  hosted credit allowance.
+
+### Changed
+
+- Default hosted accounts to automatic prompt caching. Migrate legacy Manual
+  settings only when their other cache settings match the old defaults; preserve
+  Off, customized settings, and subsequent explicit choices.
+- Use five-minute cache controls for hosted Sonnet and provider-managed caching
+  for hosted DeepSeek, GLM, and Luna. See the
+  [caching guide](hosted-prompt-caching.md) for migration details and controls.
+
+### Fixed
+
+- Resolve cache previews and diagnostics using each model's actual protocol,
+  preserve hosted credit-limit error details, and report Sonnet reasoning usage
+  without counting it twice.
+- Honor the configured HTTP MCP startup timeout for initialization acknowledgements.
+  Report MCP startup errors once and exit cleanly without retrying through classic chat.
+
 ## [0.14.2] - 2026-09-28
 
 ### Fixed

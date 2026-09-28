@@ -18,6 +18,7 @@ from ...cancellation import InteractiveCancellationToken
 from ...compaction.conversation_compactor import CompactionState
 from ...error_text import sanitize_error_text_for_output
 from ...failure_category import exit_code_for_failure
+from ...mcp.errors import McpError
 from ...personas import (
     DEFAULT_PERSONA,
     get_persona,
@@ -3738,6 +3739,10 @@ def chat(
                             )
                         except Exception:
                             pass
+                    if isinstance(_tui_exc, McpError):
+                        # Rebuilding the same MCP session in classic chat cannot
+                        # repair a server startup failure. Report it once below.
+                        raise
                     console.print(
                         f"[yellow]TUI unavailable ({_tui_exc}); using classic chat.[/yellow]"
                     )
@@ -3865,6 +3870,9 @@ def chat(
     except ConfigError as e:
         console.print(f"[red]Config error:[/red] {e}")
         raise typer.Exit(code=2) from e
+    except McpError as e:
+        console.print(f"MCP error: {sanitize_error_text_for_output(e)}", style="red", markup=False)
+        raise typer.Exit(code=1) from e
     except WorkspaceBindingError as e:
         console.print(f"[red]Workspace error:[/red] {e}")
         raise typer.Exit(code=1) from e

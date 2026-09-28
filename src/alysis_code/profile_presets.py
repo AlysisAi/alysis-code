@@ -1768,8 +1768,10 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             ReviewedModel("deepseek-flash", "deepseek-expanded"),
             ReviewedModel("glm-5.3-flash", "glm-normal"),
             ReviewedModel("gpt-6-luna", "gpt-expanded"),
+            ReviewedModel("claude-sonnet-5-5", "claude-normal"),
         ),
         suggested_model_descriptions={
+            "claude-sonnet-5-5": "Claude Sonnet 5.5 - coding and reasoning, included with free credits",
             "gpt-6-luna": "GPT-6 Luna - efficient coding and reasoning, included with free credits",
             "deepseek-flash": (
                 "DeepSeek V4.1 Flash - vision and reasoning, 1M context, included with free credits"
@@ -1787,7 +1789,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "deepseek-v4.1-flash-expires-on-0910": "deepseek-flash",
         },
         setup_warning="Run `alysis login` to connect your Alysis account and use free credits.",
-        notes="DeepSeek V4.1 Flash, GLM 5.3 Flash, and GPT-6 Luna with free credits. Authenticate with `alysis login`.",
+        notes="DeepSeek V4.1 Flash, GLM 5.3 Flash, GPT-6 Luna, and Claude Sonnet 5.5 with free credits. Authenticate with `alysis login`.",
     ),
     ProfilePreset(
         key="ollama",
@@ -1842,6 +1844,7 @@ def model_display_name(model: str) -> str:
         "deepseek-flash": "DeepSeek V4.1 Flash",
         "glm-5.3-flash": "GLM 5.3 Flash",
         "gpt-6-luna": "GPT-6 Luna",
+        "claude-sonnet-5-5": "Claude Sonnet 5.5",
         "grok-4.7": "Grok 4.7",
     }.get(model.casefold(), model)
 

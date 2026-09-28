@@ -461,6 +461,87 @@ def _oauth_record(
     )
 
 
+@pytest.mark.parametrize("use_manager", [False, True])
+def test_http_initialized_notification_waits_for_slow_acknowledgement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_manager: bool
+) -> None:
+    def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
+        payload = request.json()
+        method = str(payload.get("method") or "")
+        if method == "initialize":
+            return _json_response(_jsonrpc_response(request, _initialize_result()))
+        if method == "notifications/initialized":
+            time.sleep(0.8)
+            return _empty_response()
+        if method == "tools/list":
+            return _json_response(_jsonrpc_response(request, {"tools": _tools_payload()}))
+        raise AssertionError(f"unexpected method: {method}")
+
+    server = _ThreadedMcpHttpServer(handler=handler)
+    resolved_server = _resolved_http_server(
+        tmp_path,
+        monkeypatch,
+        server.base_url,
+        server_overrides={"startup_timeout_s": 2.0, "call_timeout_s": 0.2},
+    )
+    runtime: McpManager | McpHttpClient
+    if use_manager:
+        runtime = McpManager(
+            resolved_config=load_resolved_mcp_config(workspace_root=tmp_path),
+            workspace_root=tmp_path,
+            runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+        )
+    else:
+        runtime = McpHttpClient(server=resolved_server, workspace_root=tmp_path)
+    try:
+        if isinstance(runtime, McpManager):
+            assert len(runtime.tool_bindings) == 1
+        else:
+            assert [tool.name for tool in runtime.list_tools()] == ["alpha-tool"]
+        assert [request.json()["method"] for request in server.requests] == [
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+        ]
+    finally:
+        runtime.close()
+        server.close()
+
+
+def test_http_initialized_notification_respects_short_startup_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(_server: _ThreadedMcpHttpServer, request: _RecordedRequest) -> _ResponseSpec:
+        payload = request.json()
+        method = str(payload.get("method") or "")
+        if method == "initialize":
+            return _json_response(_jsonrpc_response(request, _initialize_result()))
+        if method == "notifications/initialized":
+            time.sleep(0.8)
+            return _empty_response(headers={"Connection": "close"})
+        raise AssertionError(f"unexpected method: {method}")
+
+    server = _ThreadedMcpHttpServer(handler=handler)
+    client = _client(
+        tmp_path,
+        monkeypatch,
+        server,
+        server_overrides={"startup_timeout_s": 0.2, "call_timeout_s": 2.0},
+    )
+    try:
+        with pytest.raises(McpHttpTransportTimeoutError) as exc_info:
+            client.ensure_initialized()
+        assert "'notifications/initialized' timed out after 0.200s" in str(exc_info.value)
+        assert client.transport.closed
+        assert [request.json()["method"] for request in server.requests] == [
+            "initialize",
+            "notifications/initialized",
+        ]
+    finally:
+        client.close()
+        server.close()
+
+
 @pytest.mark.parametrize(
     ("roots_mode", "runtime_kind", "expected_capabilities"),
     [

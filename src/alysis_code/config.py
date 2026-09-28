@@ -699,6 +699,9 @@ class AppConfig(BaseModel):
     session_log_dir: str | None = None
     crash_diagnostic_log_path: str | None = None
     prompt_cache_mode: str = "manual"
+    # Hosted defaults are applied once when an Alysis profile is selected/loaded.
+    # Explicit cache choices also set this marker, including reselecting Manual.
+    hosted_prompt_cache_defaults_applied: bool = False
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
     anthropic_prompt_cache_enabled: bool = False
@@ -3624,22 +3627,27 @@ def set_config_value(
 
     if key == "prompt_cache_mode":
         cfg.prompt_cache_mode = _normalize_prompt_cache_mode(value, key=key)
+        cfg.hosted_prompt_cache_defaults_applied = True
         return cfg
 
     if key == "prompt_cache_key":
         cfg.prompt_cache_key = value.strip() or None
+        cfg.hosted_prompt_cache_defaults_applied = True
         return cfg
 
     if key == "prompt_cache_retention":
         cfg.prompt_cache_retention = value.strip() or None
+        cfg.hosted_prompt_cache_defaults_applied = True
         return cfg
 
     if key == "anthropic_prompt_cache_enabled":
         cfg.anthropic_prompt_cache_enabled = _coerce_bool(value, key=key)
+        cfg.hosted_prompt_cache_defaults_applied = True
         return cfg
 
     if key == "anthropic_prompt_cache_ttl":
         cfg.anthropic_prompt_cache_ttl = _normalize_anthropic_prompt_cache_ttl(value, key=key)
+        cfg.hosted_prompt_cache_defaults_applied = True
         return cfg
 
     if key == "verify_commands":

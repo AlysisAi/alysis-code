@@ -237,6 +237,12 @@ def _anthropic_thinking_plan(
         raise LLMError(f"Anthropic Messages reasoning_effort is not supported: {effort}")
 
     if enable_thinking is False or effort == "none":
+        if _claude_model_version(model) == _ClaudeModelVersion("sonnet", 5, 5):
+            # Sonnet 5.5 replaces disabled with between_tools. This mode still
+            # produces signed progress blocks and never accepts forced tools.
+            return _AnthropicThinkingPlan(
+                config={"type": "between_tools"}, output_effort="high", active=True
+            )
         if not _supports_disabled_thinking(model):
             raise LLMError(f"Anthropic model {model!r} does not support disabling thinking")
         # output_effort stays None on purpose: Opus 5 accepts disabled thinking
@@ -494,12 +500,22 @@ def _anthropic_tools(
     *,
     mode: str,
     adapter: str,
+    provider_key: str | None = None,
 ) -> _AnthropicToolMapping:
     normalized_mode = str(mode or "off").strip().lower()
     normalized_adapter = (
         str(adapter or AUTO_WEB_SEARCH_ADAPTER).strip().lower() or AUTO_WEB_SEARCH_ADAPTER
     )
     raw_tools = [tool for tool in tools or [] if isinstance(tool, dict)]
+    if provider_key == "alysis":
+        if normalized_mode == "native" or any(
+            _is_anthropic_hosted_web_search_tool(tool) for tool in raw_tools
+        ):
+            raise LLMError(
+                "Hosted Sonnet does not support built-in web search; use external search"
+            )
+        if normalized_mode == "auto":
+            normalized_mode = "external"
     alysis_web_search_present = any(_is_alysis_web_search_function(tool) for tool in raw_tools)
     use_builtin_web_search = alysis_web_search_present and _anthropic_builtin_web_search_allowed(
         mode=normalized_mode,
@@ -970,6 +986,12 @@ def _parse_usage(raw: Any) -> LLMUsage | None:
 
     input_tokens = _as_non_negative_int(raw.get("input_tokens"))
     output_tokens = _as_non_negative_int(raw.get("output_tokens"))
+    output_details = raw.get("output_tokens_details")
+    reasoning_tokens = (
+        _as_non_negative_int(output_details.get("thinking_tokens"))
+        if isinstance(output_details, dict)
+        else None
+    )
     cache_read_input_tokens = _as_non_negative_int(raw.get("cache_read_input_tokens"))
     cache_creation = raw.get("cache_creation")
     cache_creation_5m_input_tokens: int | None = None
@@ -1013,6 +1035,8 @@ def _parse_usage(raw: Any) -> LLMUsage | None:
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_creation_5m_input_tokens=cache_creation_5m_input_tokens,
         cache_creation_1h_input_tokens=cache_creation_1h_input_tokens,
+        # Anthropic output_tokens already includes thinking; this is a subset.
+        reasoning_tokens=reasoning_tokens,
         raw_provider_usage=copy.deepcopy(raw),
     )
 
@@ -1472,6 +1496,9 @@ class AnthropicMessagesClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.supports_forced_tool_choice = _claude_model_version(model) != _ClaudeModelVersion(
+            "sonnet", 5, 5
+        )
         self.timeout_s = timeout_s
         self.temperature = temperature
         self.prompt_cache_key = str(prompt_cache_key or "").strip() or None
@@ -1523,7 +1550,11 @@ class AnthropicMessagesClient:
     def _headers(self) -> dict[str, str]:
         headers = merge_canonical_headers(
             {
-                "x-api-key": self.api_key,
+                **(
+                    {"Authorization": "Bearer " + self.api_key}
+                    if self.provider_key == "alysis"
+                    else {"x-api-key": self.api_key}
+                ),
                 "anthropic-version": _DEFAULT_ANTHROPIC_VERSION,
                 "Content-Type": "application/json",
                 "User-Agent": "alysis-code/0.1.0",
@@ -1534,23 +1565,29 @@ class AnthropicMessagesClient:
 
     @staticmethod
     def _llm_error_from_response(response: httpx.Response) -> LLMError:
+        # Keep the structured envelope for shared error presentation. Extracting
+        # only the message loses hosted credit/RPM codes and mislabels all 429s
+        # as provider throttling. Preserve the existing readable exception text.
+        safe_body = sanitize_error_text_for_output(response.text)
         try:
             data = response.json()
         except Exception:
-            body = response.text
+            body = safe_body
             if len(body) > 1000:
                 body = body[:1000] + "...(truncated)"
-            return LLMError(
-                sanitize_error_text_for_output(f"LLM error {response.status_code}: {body}")
-            )
-        error_message = _extract_error_message(data)
-        if error_message:
-            return LLMError(
-                sanitize_error_text_for_output(f"LLM error {response.status_code}: {error_message}")
-            )
-        return LLMError(
-            sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
+        else:
+            body = _extract_error_message(data) or repr(data)
+            raw_error = data.get("error") if isinstance(data, dict) else None
+            if isinstance(raw_error, dict) and isinstance(raw_error.get("code"), str):
+                # Surfaces and persisted errors can receive only str(error).
+                # Retain coded envelopes there as well as on the exception.
+                body = safe_body
+        error = LLMError(
+            sanitize_error_text_for_output(f"LLM error {response.status_code}: {body}")
         )
+        error.provider_status_code = response.status_code
+        error.provider_error_body = safe_body
+        return error
 
     def count_input_tokens(
         self,
@@ -1567,6 +1604,7 @@ class AnthropicMessagesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         payload: dict[str, Any] = {
             "model": self.model,
@@ -1703,6 +1741,7 @@ class AnthropicMessagesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         effective_max_tokens = (
             int(max_tokens) if max_tokens is not None else self.default_max_tokens

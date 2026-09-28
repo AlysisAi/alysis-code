@@ -406,9 +406,9 @@ _THINKING_DESCRIPTIONS = {
     "auto": "let the provider decide",
 }
 _CACHE_MODE_DESCRIPTIONS = {
-    "auto": "derive provider-aware cache settings when supported",
+    "auto": "use supported provider caching; default for Alysis hosted models",
     "manual": "use the manual key/retention below when supported",
-    "off": "disable prompt caching",
+    "off": "disable optional client cache controls",
 }
 _CACHE_TTL_DESCRIPTIONS = {
     "5m": "lower lifetime; safest default",
