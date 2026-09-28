@@ -492,7 +492,7 @@ class ConfigMenuState:
         """Drop a stale effort inherited from another provider/model surface."""
 
         preset = _active_preset(self)
-        if preset is None or preset.key not in {"nvidia", "zai-coding-plan"}:
+        if preset is None or preset.key not in {"alysis", "nvidia", "zai-coding-plan"}:
             return
         allowed = _thinking_labels_for_state(
             self,
@@ -3674,7 +3674,7 @@ def _thinking_labels_for_state(
         if preset_key == "nvidia" and contract is UNKNOWN_CONTRACT:
             return ("auto",)
         current = _normalize_thinking_label(state.thinking_label)
-        if preset_key in {"nvidia", "zai-coding-plan"}:
+        if preset_key in {"alysis", "nvidia", "zai-coding-plan"}:
             # A global effort may have been saved for the previously active
             # provider. Do not preserve an invalid value merely because it is
             # current; these controls are exact per hosted model and surface.

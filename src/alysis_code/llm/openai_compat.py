@@ -1363,6 +1363,12 @@ def alysis_trial_error_message(err: LLMError) -> str | None:
     # Preserve that explanation instead of mislabeling every limit as excess RPM.
     message = error.get("message")
     if (
+        code == "hosted_capacity_exceeded"
+        and isinstance(message, str)
+        and message.startswith("Hosted model capacity is busy. Retry in ")
+    ):
+        return message[:2048]
+    if (
         code == "rate_limit_exceeded"
         and isinstance(message, str)
         and message.startswith(
@@ -1371,6 +1377,7 @@ def alysis_trial_error_message(err: LLMError) -> str | None:
                 "Weekly fair-use limit reached (",
                 "Four hosted requests are already running for your account.",
                 "Your account has reached its hosted request limit.",
+                "Your account has reached the 20 requests per minute limit.",
                 "Available credits cannot cover this request while other usage or reservations apply.",
                 "Your available credit allowance is exhausted.",
             )

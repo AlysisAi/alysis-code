@@ -88,6 +88,7 @@ def reasoning_labels_allowed_by_contract(
         return list(labels)
     effort_wires = {
         WIRE_REASONING_EFFORT,
+        WIRE_REASONING_OBJECT,
         WIRE_THINKING_LEVEL,
         WIRE_THINKING_ADAPTIVE,
     }

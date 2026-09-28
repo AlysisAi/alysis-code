@@ -6,6 +6,19 @@ Notable user-facing changes to Alysis Code are recorded here. This project follo
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-09-28
+
+### Fixed
+
+- Show only supported reasoning efforts for hosted Luna and clear incompatible
+  settings inherited from another model. Map saved or environment-provided
+  `minimal` and `ultra` settings to `low` and `max`, preventing invalid-effort
+  errors during the free-credit campaign.
+- Preserve the hosted gateway's capacity retry guidance and account request-limit
+  messages so users can distinguish temporary capacity from exhausted credits.
+- Cancel working-tip link clicks when a fast mouse drag arrives before the next
+  screen repaint.
+
 ## [0.14.1] - 2026-09-25
 
 ### Added

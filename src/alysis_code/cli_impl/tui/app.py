@@ -59,6 +59,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UICo
 from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.layout.mouse_handlers import MouseHandlers
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.layout.utils import explode_text_fragments
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
@@ -2646,6 +2647,7 @@ def run_tui(
         "step": None,
         "generation": 0,
         "worker_generation": None,
+        "early_mouse_handlers": None,
     }
 
     def _safe_invalidate() -> None:
@@ -2660,11 +2662,30 @@ def run_tui(
             tip_link_press = None
         drag_capture["generation"] += 1
         drag_capture.update({"target": target, "direction": 0, "step": step})
+        if target == "tip_link":
+            # A whole press/drag/release can arrive in one input batch, before
+            # the capture float repaints. Capture those events immediately too.
+            application = get_app()
+            renderer = application.renderer
+            previous = renderer.mouse_handlers
+            captured = MouseHandlers()
+            size = application.output.get_size()
+            captured.set_mouse_handler_for_range(
+                0, size.columns, 0, size.rows, _tip_link_mouse_event
+            )
+            renderer.mouse_handlers = captured
+            drag_capture["early_mouse_handlers"] = (renderer, previous, captured)
         _safe_invalidate()
 
     def _stop_drag_capture() -> None:
         nonlocal tip_link_press
         tip_link_press = None
+        early_handlers = drag_capture.pop("early_mouse_handlers", None)
+        if early_handlers is not None:
+            renderer, previous, captured = early_handlers
+            # A repaint installs its own capture map; never restore over it.
+            if renderer.mouse_handlers is captured:
+                renderer.mouse_handlers = previous
         if drag_capture["target"] is None:
             return
         drag_capture["generation"] += 1

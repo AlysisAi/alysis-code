@@ -32,7 +32,15 @@ def test_luna_free_picker_and_metadata():
     assert "gpt-6-luna" in [r.value for r in flow.screen().rows]
     flow.choose("gpt-6-luna")
     flow.submit_input("")
-    assert "max" in [r.value for r in flow.screen().rows]
+    assert [r.value for r in flow.screen().rows] == [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "auto",
+    ]
     flow.choose("medium")
     assert flow.state.commit_to(cfg).saved
     meta = ModelRegistry(cfg=cfg).get("gpt-6-luna")
@@ -41,6 +49,69 @@ def test_luna_free_picker_and_metadata():
     assert meta.context_window_tokens == 1_050_000
     assert meta.max_output_tokens == 128_000
     assert meta.cache_creation_input_cost_per_token == 0.000000125
+
+
+@pytest.mark.parametrize("effort", ["minimal", "ultra"])
+def test_luna_picker_clears_unsupported_saved_effort(effort):
+    cfg = hosted_config()
+    cfg.llm_reasoning_effort = effort
+    flow = ConfigFlow(cfg=cfg)
+    flow.choose("default")
+    flow.choose("gpt-6-luna")
+    flow.submit_input("")
+    assert [r.value for r in flow.screen().rows] == [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "auto",
+    ]
+    assert flow.state.thinking_label == "auto"
+    assert flow.state.commit_to(cfg).saved
+    assert cfg.llm_reasoning_effort is None
+
+
+@pytest.mark.parametrize("source", ["config", "env"])
+@pytest.mark.parametrize("effort, expected", [("minimal", "low"), ("ultra", "max")])
+@pytest.mark.parametrize("stream", [False, True])
+def test_luna_normalizes_legacy_efforts_at_request_boundary(
+    monkeypatch, source, effort, expected, stream
+):
+    cfg = hosted_config()
+    if source == "env":
+        monkeypatch.setenv("ALYSIS_LLM_REASONING_EFFORT", effort)
+    else:
+        cfg.llm_reasoning_effort = effort
+
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["reasoning"]["effort"] == expected
+        result = {"id": "resp_effort", "status": "completed", "output": []}
+        if stream:
+            return httpx.Response(
+                200,
+                text="event: response.completed\ndata: "
+                + json.dumps({"type": "response.completed", "response": result})
+                + "\n\n",
+            )
+        return httpx.Response(200, json=result)
+
+    client = make_llm_client(
+        cfg=cfg, api_key="slk_test", model=cfg.model, transport=httpx.MockTransport(handle)
+    )
+    client.chat(messages=[{"role": "user", "content": "hi"}], stream=stream)
+
+
+@pytest.mark.parametrize("effort", ["minimal", "ultra"])
+def test_luna_legacy_effort_compatibility_does_not_change_other_responses_providers(effort):
+    from alysis_code.llm.openai_responses import _responses_reasoning
+
+    for provider, model in [("openai", "gpt-6-luna"), ("alysis", "other-model")]:
+        assert _responses_reasoning(
+            enable_thinking=True, reasoning_effort=effort, provider_key=provider, model=model
+        ) == {"effort": effort}
 
 
 @pytest.mark.parametrize("stream", [False, True])

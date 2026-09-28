@@ -16,6 +16,16 @@ from alysis_code.llm_error_display import friendly_llm_error_message
     "code, message, expected",
     [
         (
+            "rate_limit_exceeded",
+            "Your account has reached the 20 requests per minute limit. Retry in 42 seconds. No generation was started or credits charged.",
+            "Your account has reached the 20 requests per minute limit. Retry in 42 seconds.",
+        ),
+        (
+            "hosted_capacity_exceeded",
+            "Hosted model capacity is busy. Retry in 43 seconds. No generation was started or credits charged.",
+            "Hosted model capacity is busy. Retry in 43 seconds.",
+        ),
+        (
             "hosted_capacity_exceeded",
             "Hosted models are at capacity. Please retry in a few seconds.",
             "The Alysis hosted model is unavailable or at capacity.",

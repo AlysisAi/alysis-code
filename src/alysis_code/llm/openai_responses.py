@@ -1024,9 +1024,15 @@ def _responses_reasoning(
     enable_thinking: bool | None,
     reasoning_effort: str | None,
     request_summary: bool = False,
+    provider_key: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     reasoning: dict[str, Any] = {}
     effort = str(reasoning_effort or "").strip().lower()
+    if provider_key == "alysis" and model == "gpt-6-luna":
+        # Older hosted pickers exposed the generic Responses efforts. Preserve
+        # saved configs and environment overrides at Luna's supported bounds.
+        effort = {"minimal": "low", "ultra": "max"}.get(effort, effort)
     if effort:
         if effort not in _RESPONSES_REASONING_EFFORTS:
             raise LLMError(f"OpenAI Responses reasoning_effort is not supported: {effort}")
@@ -2115,6 +2121,8 @@ class OpenAIResponsesClient:
             enable_thinking=self.enable_thinking,
             reasoning_effort=self.reasoning_effort,
             request_summary=self._should_request_reasoning_summary(),
+            provider_key=self.provider_key,
+            model=self.model,
         )
         documented_temperature_reason = documented_temperature_omit_reason(
             self.model,
