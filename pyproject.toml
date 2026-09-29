@@ -103,7 +103,6 @@ include = [
   "/LICENSE",
   "/NOTICE",
   "/README.md",
-  "/extensions/vscode-alysis/resources/managed-cli-release-public.pem",
   "/pyproject.toml",
   "/src/alysis_code",
 ]
