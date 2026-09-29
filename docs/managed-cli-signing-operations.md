@@ -88,7 +88,14 @@ Create a dedicated Entra application/service principal with a federated credenti
 
 - Issuer: `https://token.actions.githubusercontent.com`
 - Audience: `api://AzureADTokenExchange`
-- Subject: `repo:AlysisAi/alysis-code:environment:managed-cli-native-signing`
+- Subject: `repo:AlysisAi@252910184/alysis-code@1233295735:environment:managed-cli-native-signing`
+
+The public repository uses GitHub's immutable subject format, verified on 29 September 2026
+through `GET /repos/AlysisAi/alysis-code/actions/oidc/customization/sub` (`use_default: true`,
+`use_immutable_subject: true`). Its returned `sub_claim_prefix` includes the owner and repository
+IDs shown above. Use that exact prefix with the environment context; the older name-only subject
+does not match this repository's tokens. Recheck the endpoint before provisioning or changing
+the trust. See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims).
 
 Grant **Artifact Signing Certificate Profile Signer** only on that certificate profile. Do not
 grant subscription Contributor or Owner. Have the authorized maintainer approve this new access

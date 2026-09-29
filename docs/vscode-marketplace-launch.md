@@ -17,8 +17,11 @@ JetBrains preview setup and limitations are documented in
 
 ## Production gates still required
 
-1. Configure and verify the dedicated Azure OIDC signing identity, certificate-profile role,
-   protected Windows signing variables, Apple credentials, and managed-runtime manifest key.
+1. Verify the configured signing credentials in production. As of 29 September 2026, the
+   dedicated Azure OIDC identity, profile-scoped signer role, seven protected Windows variables,
+   and matching managed-runtime manifest key/fingerprint are configured. Apple credential names
+   are present. An independent encrypted manifest-key recovery copy and custody procedure still
+   need confirmation. Configuration and secret presence do not prove successful signing.
 2. Build and scan the pinned sandbox images for both architectures; source dependency updates
    alone are not security scan evidence.
 3. Build six signed runtime/VSIX candidates from an immutable public source tag. Verify Windows

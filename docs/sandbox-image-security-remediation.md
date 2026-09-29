@@ -47,7 +47,18 @@ The follow-up removes the redundant Debian `python3`/`python3-venv` installation
 The official Python base already provides the interpreter, pip, and venv; a new
 build-time check creates a virtual environment and verifies its pip. This avoids
 shipping an unused second interpreter and bundled setuptools wheel. Its impact
-must be confirmed by another image scan.
+was checked in [follow-up run 36562492600](https://github.com/AlysisAi/alysis-code/actions/runs/36562492600)
+on source `1dec6c2dd8e8e8478ff6ac5178a888d9cc4cba74`. The dev amd64 image built,
+but its scan reported 151 HIGH and 1 CRITICAL package findings, covering 105
+distinct CVEs. The scan recorded no fixed versions, and runtime smoke was skipped
+after the scan failed. The change did not close the security gate.
+
+The critical finding is [CVE-2026-43185](https://security-tracker.debian.org/tracker/CVE-2026-43185),
+reported against `linux-libc-dev` 6.12.107-1. Debian describes a kernel ksmbd buffer
+overflow. This needs package-content and vulnerable-code applicability review:
+the header-package finding alone neither proves the vulnerable kernel code ships
+in the image nor establishes an exemption. The host kernel must be assessed
+separately. No finding has been suppressed.
 
 Vendor review identifies real blockers, not merely stale package indexes:
 
@@ -68,6 +79,13 @@ blocking HIGH/CRITICAL policy. Neither switching severity feeds nor mixing
 unstable binary packages into the stable base establishes remediation. The 89
 kernel-header findings and source-package findings on libraries still require
 individual applicability evidence; none has been exempted.
+
+A September 29 check of an Ubuntu LTS alternative found that it is not a complete
+drop-in remedy: [Ubuntu's ACL advisory](https://ubuntu.com/security/CVE-2026-54369)
+also declines the intrusive backport, although its
+[Expat advisory](https://ubuntu.com/security/CVE-2026-66046) records fixed LTS
+packages. Changing the base requires a package-by-package review and fresh builds;
+a different vendor severity classification is not evidence that a defect is fixed.
 
 ## Verification still required
 
