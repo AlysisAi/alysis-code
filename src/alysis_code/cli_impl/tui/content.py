@@ -7,12 +7,18 @@ prompt_toolkit application.
 from __future__ import annotations
 
 import re
+import textwrap
 
 from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.utils import get_cwidth
 
 HEADING_TEXT = "Alysis Code"  # plain wordmark fallback (narrow terminals)
 CREDIT_TEXT = "crafted by AlysisAI"
-HINT_TEXT = "/forge for an autonomous run  ·  tab to switch persona  ·  /help for everything"
+# The landing's separator: rows reflow at these seams on a narrow pane.
+WELCOME_SEPARATOR = "  ·  "
+HINT_TEXT = WELCOME_SEPARATOR.join(
+    ("/forge for an autonomous run", "tab to switch persona", "/help for everything")
+)
 # Welcome screen: full greeting. Once the conversation is underway the input
 # switches to the shorter follow-up placeholder below.
 INPUT_PLACEHOLDER = "I'm Alysis Code, your coding buddy — how can I help you?"
@@ -61,6 +67,8 @@ def pretty_model_label(model: str | None) -> str:
     if not raw:
         return "model"
     name = _EXPIRY_SUFFIX.sub("", raw.rsplit("/", 1)[-1])
+    if name.casefold() == "deepseek-flash":
+        return "DeepSeek-V4.1-Flash"
     tokens = [t for t in re.split(r"[-_\s]+", name) if t]
     out: list[str] = []
     for token in tokens:
@@ -95,13 +103,71 @@ def hint_fragments() -> FormattedText:
     return FormattedText([("class:tui.hint", HINT_TEXT)])
 
 
+def _pack(items: list[str], width: int, separator: str) -> list[str]:
+    """Join ``items`` with ``separator`` into lines no wider than ``width``.
+
+    Lines break only between items, so a phrase is never split; an item wider
+    than a whole line is word-wrapped on its own.
+    """
+    width = max(1, width)
+    lines: list[str] = []
+    current = ""
+    for item in items:
+        joined = f"{current}{separator}{item}" if current else item
+        if get_cwidth(joined) <= width:
+            current = joined
+            continue
+        if current:
+            lines.append(current)
+        pieces = textwrap.wrap(item, width, break_on_hyphens=False) or [""]
+        lines.extend(pieces[:-1])
+        current = pieces[-1]
+    if current:
+        lines.append(current)
+    return lines
+
+
+def welcome_text_rows(width: int, *, setup_hint: str | None = None) -> list[list[tuple[str, str]]]:
+    """The landing's text under the owl, reflowed to ``width`` columns.
+
+    The wordmark and its credit share a row while they fit. The hint rows break
+    only between its "·"-separated items, so a narrow pane stacks whole
+    phrases instead of clipping the last one. Blank rows separate the blocks.
+    """
+    rows: list[list[tuple[str, str]]] = []
+    if get_cwidth(HEADING_TEXT + WELCOME_SEPARATOR + CREDIT_TEXT) <= width:
+        rows.append(
+            [
+                ("class:tui.heading", HEADING_TEXT),
+                ("class:tui.credit", WELCOME_SEPARATOR + CREDIT_TEXT),
+            ]
+        )
+    else:
+        rows.extend([("class:tui.heading", line)] for line in _pack([HEADING_TEXT], width, ""))
+        rows.extend([("class:tui.credit", line)] for line in _pack([CREDIT_TEXT], width, ""))
+    rows.append([])
+    if setup_hint:
+        rows.extend(
+            [("class:tui.footer.mode.warn", line)]
+            for line in _pack(setup_hint.split(" · "), width, " · ")
+        )
+        rows.append([])
+    rows.extend(
+        [("class:tui.hint", line)]
+        for line in _pack(HINT_TEXT.split(WELCOME_SEPARATOR), width, WELCOME_SEPARATOR)
+    )
+    return rows
+
+
 __all__ = [
     "HEADING_TEXT",
     "HINT_TEXT",
     "INPUT_PLACEHOLDER",
     "INPUT_PLACEHOLDER_FOLLOWUP",
     "INPUT_PLACEHOLDER_FORGE",
+    "WELCOME_SEPARATOR",
     "heading_fragments",
     "hint_fragments",
     "pretty_model_label",
+    "welcome_text_rows",
 ]

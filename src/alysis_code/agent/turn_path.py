@@ -45,6 +45,81 @@ def unified_turn_path_enabled(cfg: Any | None) -> bool:
     return bool(getattr(cfg, "unified_turn_path_enabled", True))
 
 
+def _flag_enabled(env_name: str, cfg: Any | None, attr: str, *, default: bool = True) -> bool:
+    """Kill-switch idiom shared by the zero-activity gate flags: env wins."""
+    env_value = env_get(env_name)
+    if env_value is not None:
+        normalized = str(env_value).strip().lower()
+        if normalized in {"on", "1", "true", "yes", "enabled"}:
+            return True
+        if normalized in {"off", "0", "false", "no", "disabled"}:
+            return False
+    return bool(getattr(cfg, attr, default))
+
+
+def zero_activity_gate_downgrade_enabled(cfg: Any | None) -> bool:
+    """Zero-activity guard: gate posture downgrades for turns with zero observed tool activity.
+
+    A turn that ran no tools produced no work the completion gate could verify;
+    holding its reply to execute-turn enforcement is what displaced correct
+    answers. ``ALYSIS_ZERO_ACTIVITY_GATE_DOWNGRADE`` (on/off)
+    wins over the config value; the default is on.
+    """
+    return _flag_enabled(
+        "ALYSIS_ZERO_ACTIVITY_GATE_DOWNGRADE",
+        cfg,
+        "zero_activity_gate_downgrade_enabled",
+    )
+
+
+def zero_activity_disposition_check_enabled(cfg: Any | None) -> bool:
+    """LLM disposition check guarding the zero-activity downgrade.
+
+    Model-based on purpose: it must hold in every reply language, which
+    deterministic English pattern matching cannot. When off, zero-activity
+    turns downgrade unconditionally with no extra model call.
+    ``ALYSIS_ZERO_ACTIVITY_DISPOSITION_CHECK`` (on/off) wins over config;
+    the default is on.
+    """
+    return _flag_enabled(
+        "ALYSIS_ZERO_ACTIVITY_DISPOSITION_CHECK",
+        cfg,
+        "zero_activity_disposition_check_enabled",
+    )
+
+
+def greenfield_verification_bootstrap_enabled(cfg: Any | None) -> bool:
+    """Greenfield bootstrap: a passing agent-authored suite bootstraps the verification contract.
+
+    A brand-new project can never have the "trustworthy pre-existing test
+    surface" the contract selection demands, so greenfield work ran without
+    completion-gate governance (the greenfield governance gap) and shipped defects behind
+    vacuous self-checks. With this on, the first observed passing test
+    execution in an unavailable-contract session is adopted as a best-effort
+    contract, arming the gate for every later edit.
+    ``ALYSIS_GREENFIELD_VERIFY_BOOTSTRAP`` (on/off) wins over config; default on.
+    """
+    return _flag_enabled(
+        "ALYSIS_GREENFIELD_VERIFY_BOOTSTRAP",
+        cfg,
+        "greenfield_verification_bootstrap_enabled",
+    )
+
+
+def zero_coverage_advisory_enabled(cfg: Any | None) -> bool:
+    """Zero-coverage guard: flag newly created modules that no test references.
+
+    Appended as a visible advisory at finalization (append-only, never
+    blocking). ``ALYSIS_ZERO_COVERAGE_ADVISORY`` (on/off) wins over config;
+    default on.
+    """
+    return _flag_enabled(
+        "ALYSIS_ZERO_COVERAGE_ADVISORY",
+        cfg,
+        "zero_coverage_advisory_enabled",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Turn execution intent and reply-language directives (router-independent)
 # ---------------------------------------------------------------------------

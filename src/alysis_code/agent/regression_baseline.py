@@ -141,6 +141,35 @@ class TestReport:
             "ids_complete": self.ids_complete,
         }
 
+    @classmethod
+    def from_payload(cls, payload: Any) -> TestReport | None:
+        """Restore host-parsed facts, recomputing completeness rather than trusting it."""
+        if not isinstance(payload, dict):
+            return None
+        runner = payload.get("runner")
+        counts_known = payload.get("counts_known")
+        if not isinstance(runner, str) or not runner or type(counts_known) is not bool:
+            return None
+        identifiers = {}
+        for key in ("failed_ids", "error_ids"):
+            value = payload.get(key)
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) and item for item in value
+            ):
+                return None
+            identifiers[key] = tuple(value)
+        counts = {}
+        for key in ("passed", "failed", "skipped", "errors"):
+            value = payload.get(key)
+            if value is not None and (type(value) is not int or value < 0):
+                return None
+            counts[key] = value
+        if counts_known and (
+            runner == "unknown" or counts["failed"] is None or counts["errors"] is None
+        ):
+            return None
+        return cls(runner=runner, counts_known=counts_known, **identifiers, **counts)
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", str(text or ""))
@@ -268,8 +297,15 @@ def parse_unittest_report(output: str) -> TestReport | None:
     text = _strip_ansi(output)
     lines = text.splitlines()
 
-    ran_seen = any(_UNITTEST_RAN_RE.match(line.strip()) for line in lines)
-    if not ran_seen:
+    ran_at = next(
+        (
+            index
+            for index in range(len(lines) - 1, -1, -1)
+            if _UNITTEST_RAN_RE.match(lines[index].strip())
+        ),
+        None,
+    )
+    if ran_at is None:
         return None
 
     failed_ids: list[str] = []
@@ -287,9 +323,11 @@ def parse_unittest_report(output: str) -> TestReport | None:
             error_ids.append(identifier)
 
     failures = errors = skipped = 0
-    for line in lines:
+    terminal_seen = False
+    for line in lines[ran_at + 1 :]:
         stripped = line.strip()
         if _UNITTEST_OK_RE.match(stripped):
+            terminal_seen = True
             for word, value in _UNITTEST_COUNT_TOKEN_RE.findall(stripped):
                 if word == "skipped":
                     skipped = int(value)
@@ -297,6 +335,7 @@ def parse_unittest_report(output: str) -> TestReport | None:
         header = _UNITTEST_FAILED_HEADER_RE.match(stripped)
         if header is None:
             continue
+        terminal_seen = True
         for word, value in _UNITTEST_COUNT_TOKEN_RE.findall(header.group("body")):
             amount = int(value)
             if word == "failures":
@@ -311,10 +350,10 @@ def parse_unittest_report(output: str) -> TestReport | None:
         failed_ids=tuple(dict.fromkeys(failed_ids)),
         error_ids=tuple(dict.fromkeys(error_ids)),
         passed=None,
-        failed=failures,
-        skipped=skipped,
-        errors=errors,
-        counts_known=True,
+        failed=failures if terminal_seen else None,
+        skipped=skipped if terminal_seen else None,
+        errors=errors if terminal_seen else None,
+        counts_known=terminal_seen,
     )
 
 

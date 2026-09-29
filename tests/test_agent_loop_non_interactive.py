@@ -270,7 +270,7 @@ def test_fs_delete_still_blocks_material_files_outside_strict_scope(tmp_path: Pa
         tools["fs_delete"].run({"path": "README.md"})
 
 
-def test_build_tools_registers_fs_read_lines(tmp_path: Path) -> None:
+def test_build_tools_registers_one_reader_with_optional_line_window(tmp_path: Path) -> None:
     tools = build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
@@ -280,8 +280,9 @@ def test_build_tools_registers_fs_read_lines(tmp_path: Path) -> None:
         non_interactive=True,
     )
 
-    assert "fs_read_lines" in tools
-    schema = tools["fs_read_lines"].as_openai_tool()["function"]["parameters"]
-    assert schema["required"] == ["path", "start_line"]
-    assert schema["properties"]["max_lines"]["default"] == 200
-    assert schema["properties"]["include_line_numbers"]["default"] is True
+    assert "fs_read_lines" not in tools
+    assert "fs_read" in tools
+    schema = tools["fs_read"].as_openai_tool()["function"]["parameters"]
+    assert schema["required"] == ["path"]
+    assert schema["properties"]["max_lines"]["minimum"] == 1
+    assert schema["properties"]["include_line_numbers"]["type"] == "boolean"

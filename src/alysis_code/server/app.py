@@ -345,6 +345,7 @@ def create_app(settings: ServerSettings):  # type: ignore[no-untyped-def]
             "exit_code": status_obj.exit_code,
             "error": status_obj.error,
             "terminal_event": status_obj.terminal_event,
+            "task_outcome": status_obj.task_outcome,
         }
 
     @app.get("/v1/jobs/{job_id}/logs", dependencies=[Depends(auth_dep)])

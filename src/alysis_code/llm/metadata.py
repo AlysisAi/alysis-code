@@ -13,6 +13,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from ..internal_artifacts import INTERNAL_ARTIFACT_MESSAGE_KEY
 
 PROVIDER_METADATA_KEY = "_alysis_provider_metadata"
+# Host-authored recovery context stays in model history but is not a visible user turn.
+# Like artifact metadata, preserve it in durable history and strip it from provider wire input.
+RESUME_CONTEXT_MESSAGE_KEY = "_alysis_resume_context"
 ROUTE_IDENTITY_PROVIDER_METADATA_KEY = "_route_identity"
 OPENAI_RESPONSES_PROVIDER_METADATA_KEY = "openai_responses"
 ANTHROPIC_MESSAGES_PROVIDER_METADATA_KEY = "anthropic_messages"
@@ -21,6 +24,7 @@ GEMINI_INTERACTIONS_PROVIDER_METADATA_KEY = "gemini_interactions"
 MISTRAL_PROVIDER_METADATA_KEY = "mistral"
 MOONSHOT_PROVIDER_METADATA_KEY = "moonshot"
 QWEN_PROVIDER_METADATA_KEY = "qwen"
+OPENAI_COMPAT_REASONING_METADATA_KEY = "openai_compat_reasoning"
 MISTRAL_CONTENT_CHUNKS_KEY = "content_chunks"
 TOOL_CALL_PROVIDER_METADATA_KEY = "_tool_calls"
 DEEPSEEK_REASONING_CONTENT_KEY = "reasoning_content"
@@ -46,6 +50,9 @@ STATEFUL_PROVIDER_METADATA_KEYS = frozenset(
         # Qwen reasoning is retained privately so model contracts that require
         # preserved thinking can replay it on later same-route assistant turns.
         QWEN_PROVIDER_METADATA_KEY,
+        # Protocol-owned state, distinct from openai_compat request diagnostics.
+        # Capture/replay requires the effective route's reasoning contract.
+        OPENAI_COMPAT_REASONING_METADATA_KEY,
     }
 )
 _HIERARCHICAL_URL_RE = re.compile(
@@ -330,6 +337,8 @@ def provider_metadata_matches_route(
 def gate_messages_for_provider_route(
     messages: list[dict[str, Any]],
     route_identity: ProviderRouteIdentity,
+    *,
+    preserve_internal_artifacts: bool = False,
 ) -> list[dict[str, Any]]:
     """Keep provider state only when its exact route stamp matches.
 
@@ -342,7 +351,10 @@ def gate_messages_for_provider_route(
         if not isinstance(message, dict):
             continue
         metadata = message.get(PROVIDER_METADATA_KEY)
-        copied = strip_provider_metadata_from_message(copy.deepcopy(message))
+        copied = strip_provider_metadata_from_message(
+            copy.deepcopy(message),
+            preserve_internal_artifact=preserve_internal_artifacts,
+        )
         if provider_metadata_matches_route(metadata, route_identity):
             copied[PROVIDER_METADATA_KEY] = copy.deepcopy(metadata)
         gated.append(copied)
@@ -351,9 +363,14 @@ def gate_messages_for_provider_route(
 
 def strip_provider_metadata_from_messages(
     messages: list[dict[str, Any]],
+    *,
+    preserve_internal_artifacts: bool = False,
 ) -> list[dict[str, Any]]:
     return [
-        strip_provider_metadata_from_message(copy.deepcopy(message))
+        strip_provider_metadata_from_message(
+            copy.deepcopy(message),
+            preserve_internal_artifact=preserve_internal_artifacts,
+        )
         for message in messages
         if isinstance(message, dict)
     ]
@@ -391,10 +408,16 @@ def tool_call_metadata_entries(response: Any) -> list[dict[str, Any]]:
     return entries
 
 
-def strip_provider_metadata_from_message(message: dict[str, Any]) -> dict[str, Any]:
+def strip_provider_metadata_from_message(
+    message: dict[str, Any],
+    *,
+    preserve_internal_artifact: bool = False,
+) -> dict[str, Any]:
     copied = dict(message)
     copied.pop(PROVIDER_METADATA_KEY, None)
-    copied.pop(INTERNAL_ARTIFACT_MESSAGE_KEY, None)
+    if not preserve_internal_artifact:
+        copied.pop(INTERNAL_ARTIFACT_MESSAGE_KEY, None)
+        copied.pop(RESUME_CONTEXT_MESSAGE_KEY, None)
     copied.pop(DEEPSEEK_REASONING_CONTENT_KEY, None)
     copied.pop(OPENROUTER_REASONING_KEY, None)
     copied.pop(OPENROUTER_REASONING_DETAILS_KEY, None)

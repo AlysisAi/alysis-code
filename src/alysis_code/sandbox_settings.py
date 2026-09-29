@@ -30,6 +30,7 @@ class ShellSandboxSettings:
     docker_cpus: str | None = None
     docker_read_only: bool = False
     protect_repo_meta: bool = True
+    safe_git_writes: bool = True
     docker_env_allowlist: tuple[str, ...] = ()
     background_max_concurrent: int = 4
     background_output_max_lines: int = 2000
@@ -168,6 +169,7 @@ def resolve_shell_sandbox_settings(cfg: AppConfig) -> ShellSandboxSettings:
     docker_cpus: str | None = None
     docker_read_only = False
     protect_repo_meta = True
+    safe_git_writes = True
     docker_env_allowlist: tuple[str, ...] = ()
     background_max_concurrent = 4
     background_output_max_lines = 2000
@@ -243,6 +245,11 @@ def resolve_shell_sandbox_settings(cfg: AppConfig) -> ShellSandboxSettings:
         cfg_map.get("protect_repo_meta"),
         field_name="shell_sandbox.protect_repo_meta",
         default=protect_repo_meta,
+    )
+    safe_git_writes = _parse_bool(
+        cfg_map.get("safe_git_writes"),
+        field_name="shell_sandbox.safe_git_writes",
+        default=safe_git_writes,
     )
     docker_env_allowlist = _parse_env_allowlist(
         cfg_map.get("docker_env_allowlist"),
@@ -335,6 +342,11 @@ def resolve_shell_sandbox_settings(cfg: AppConfig) -> ShellSandboxSettings:
         field_name="ALYSIS_SHELL_SANDBOX_PROTECT_REPO_META",
         default=protect_repo_meta,
     )
+    safe_git_writes = _parse_bool(
+        env_get("ALYSIS_SHELL_SANDBOX_SAFE_GIT_WRITES"),
+        field_name="ALYSIS_SHELL_SANDBOX_SAFE_GIT_WRITES",
+        default=safe_git_writes,
+    )
     docker_env_allowlist = _parse_env_allowlist(
         env_get("ALYSIS_SHELL_SANDBOX_DOCKER_ENV_ALLOWLIST"),
         field_name="ALYSIS_SHELL_SANDBOX_DOCKER_ENV_ALLOWLIST",
@@ -374,6 +386,7 @@ def resolve_shell_sandbox_settings(cfg: AppConfig) -> ShellSandboxSettings:
         docker_cpus=docker_cpus,
         docker_read_only=docker_read_only,
         protect_repo_meta=protect_repo_meta,
+        safe_git_writes=safe_git_writes,
         docker_env_allowlist=docker_env_allowlist,
         background_max_concurrent=background_max_concurrent,
         background_output_max_lines=background_output_max_lines,

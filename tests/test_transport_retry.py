@@ -32,7 +32,7 @@ def _load_module():
 tr = _load_module()
 
 
-# A representative production failure string for an incomplete response body.
+# The exact string both trials died on, from the regex-chess run artifacts.
 PRODUCTION_FAILURE = (
     "LLM request failed: peer closed connection without sending complete "
     "message body (incomplete chunked read)"

@@ -4,12 +4,14 @@ import errno
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import platform
 import secrets
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -21,14 +23,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import psutil
+
 from .background_runner import _apply_env_overrides
 from .branding import default_sandbox_docker_image
 from .error_text import sanitize_optional_error_summary
+from .execution_deadline import (
+    MINIMUM_TOOL_START_SECONDS,
+    DeadlineExhausted,
+    DeadlineOperation,
+    ExecutionDeadline,
+    deadline_timeout_or_raise,
+)
 from .sandbox_runner import (
     _SENSITIVE_ENV_KEYS,
     _build_bwrap_argv,
     _build_docker_argv,
-    _docker_cleanup_container,
     _supports_bwrap_unshare_cgroup,
 )
 from .sandbox_settings import ShellSandboxSettings
@@ -90,6 +100,8 @@ class DurableServiceManager:
         cmd: str,
         cwd: Path,
         readiness: dict[str, Any] | None = None,
+        replace_service_id: str | None = None,
+        execution_deadline: ExecutionDeadline | None = None,
     ) -> DurableServiceStart:
         cleaned_cmd = str(cmd or "").strip()
         if not cleaned_cmd:
@@ -101,10 +113,18 @@ class DurableServiceManager:
             raise ValueError(f"cwd escapes root: {cwd}") from exc
 
         readiness_spec = normalize_readiness_spec(readiness)
-        return self._start_prepared(
+        previous = None
+        if replace_service_id is not None:
+            previous = self._read_metadata(replace_service_id)
+            if previous is None or not all(self._metadata_process_alive(previous)):
+                raise ValueError("replacement requires a live service with verified ownership")
+            if readiness_spec["type"] not in {"tcp", "unix_socket"}:
+                raise ValueError("replacement requires launch-owned endpoint readiness")
+        started = self._start_prepared(
             cleaned_cmd=cleaned_cmd,
             cwd_abs=cwd_abs,
             readiness_spec=readiness_spec,
+            execution_deadline=execution_deadline,
             launch_builder=lambda service_id: self._build_launch(
                 cmd=cleaned_cmd,
                 cwd=cwd_abs,
@@ -112,6 +132,69 @@ class DurableServiceManager:
                 readiness=readiness_spec,
             ),
         )
+        if previous is None:
+            return started
+        # Prepare and prove the candidate while preserving the previous instance.
+        # Same-port swaps need an application-specific socket/proxy handoff; never
+        # stop the working listener just to make room for an unproven candidate.
+        payload = dict(started.payload)
+        if payload.get("failure_category") or not payload["readiness"].get("endpoint_owned"):
+            payload["handoff"] = {
+                "status": "rolled_back",
+                "previous_service_id": replace_service_id,
+            }
+            return DurableServiceStart(started.service_id, payload)
+        if execution_deadline is not None:
+            remaining = execution_deadline.remaining_seconds()
+            if remaining is not None and remaining <= _STOP_TIMEOUT_S + _KILL_TIMEOUT_S:
+                self.stop(started.service_id)
+                payload = self.status(started.service_id, timeout_s=0)
+                payload["failure_category"] = "deadline"
+                payload["handoff"] = {
+                    "status": "rolled_back",
+                    "previous_service_id": replace_service_id,
+                    "reason": "insufficient_time_to_commit_handoff",
+                }
+                return DurableServiceStart(started.service_id, payload)
+        try:
+            candidate_metadata = self._read_metadata(started.service_id)
+            if candidate_metadata is None:
+                raise RuntimeError("replacement metadata disappeared before handoff")
+            candidate_metadata["replaces_service_id"] = replace_service_id
+            self._write_metadata(candidate_metadata)
+        except BaseException:
+            self.stop(started.service_id)
+            raise
+        if execution_deadline is not None:
+            remaining = execution_deadline.remaining_seconds()
+            if remaining is not None and remaining <= _STOP_TIMEOUT_S + _KILL_TIMEOUT_S:
+                self.stop(started.service_id)
+                payload = self.status(started.service_id, timeout_s=0)
+                payload["failure_category"] = "deadline"
+                payload["handoff"] = {
+                    "status": "rolled_back",
+                    "previous_service_id": replace_service_id,
+                    "reason": "deadline_consumed_during_handoff_persistence",
+                }
+                return DurableServiceStart(started.service_id, payload)
+        try:
+            stopped = self.stop(str(replace_service_id))
+        except Exception as exc:
+            # Cleanup can fail after already stopping part of the old service.
+            # Keep the candidate that has been proven and durably published.
+            stopped = {"stopped": False, "detail": type(exc).__name__}
+        if not stopped.get("stopped"):
+            payload["failure_category"] = "handoff_cleanup_pending"
+            payload["handoff"] = {
+                "status": "cleanup_pending",
+                "previous_service_id": replace_service_id,
+                "candidate_preserved": True,
+                "previous_cleanup_verified": False,
+                "detail": "Candidate remains available; previous service cleanup is unverified.",
+            }
+            return DurableServiceStart(started.service_id, payload)
+        payload["handoff"] = {"status": "committed", "previous_service_id": replace_service_id}
+        return DurableServiceStart(started.service_id, payload)
 
     def resolve_preview_access(self, requested: object = "auto") -> str:
         return _resolve_preview_access(
@@ -125,6 +208,7 @@ class DurableServiceManager:
         cwd: Path,
         access: str = "auto",
         port: int | None = None,
+        execution_deadline: ExecutionDeadline | None = None,
     ) -> DurableServiceStart:
         """Start a constrained static preview using semantic network access."""
 
@@ -182,6 +266,7 @@ class DurableServiceManager:
             cwd_abs=cwd_abs,
             readiness_spec=readiness_spec,
             launch_builder=_preview_launch,
+            execution_deadline=execution_deadline,
             metadata_extra={
                 "preview_access": effective_access,
                 "preview_authentication_required": token is not None,
@@ -196,19 +281,33 @@ class DurableServiceManager:
         cwd_abs: Path,
         readiness_spec: dict[str, Any],
         launch_builder: Callable[[str], dict[str, Any]],
+        execution_deadline: ExecutionDeadline | None = None,
         metadata_extra: dict[str, Any] | None = None,
         metadata_from_readiness: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> DurableServiceStart:
+        if execution_deadline is not None:
+            decision = execution_deadline.start_decision(
+                DeadlineOperation.SHELL_BACKGROUND,
+                minimum_remaining_seconds=MINIMUM_TOOL_START_SECONDS,
+            )
+            if not decision.allowed:
+                raise DeadlineExhausted("Shared deadline prevents starting a new durable service")
         service_id = f"svc_{uuid.uuid4().hex[:16]}"
         service_dir = self._service_dir(service_id)
         service_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = service_dir / SERVICE_STDOUT_LOG
         stderr_path = service_dir / SERVICE_STDERR_LOG
         metadata_path = service_dir / SERVICE_METADATA
-        launch = launch_builder(service_id)
-
-        started_at = time.time()
         try:
+            launch = launch_builder(service_id)
+            # Preparation shares the readiness deadline and may create a private
+            # preview token, which must be removed even if launch is denied.
+            deadline_timeout_or_raise(
+                execution_deadline,
+                None,
+                operation="durable service launch",
+            )
+            started_at = time.time()
             with (
                 stdout_path.open("ab", buffering=0) as stdout_fh,
                 stderr_path.open("ab", buffering=0) as stderr_fh,
@@ -222,7 +321,11 @@ class DurableServiceManager:
                     stderr=stderr_fh,
                     env=launch["env"],
                     start_new_session=(os.name != "nt"),
-                    creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+                    creationflags=(
+                        subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                        if os.name == "nt"
+                        else 0
+                    ),
                     close_fds=True,
                 )
         except BaseException:
@@ -251,11 +354,36 @@ class DurableServiceManager:
             "stderr_log_path": os.fspath(stderr_path),
         }
         metadata.update(metadata_extra or {})
-        self._write_metadata(metadata)
-        readiness_payload = self._check_readiness(
-            metadata=metadata,
-            timeout_s=_readiness_timeout(readiness_spec),
-        )
+        try:
+            self._write_metadata(metadata)
+            readiness_timeout = _readiness_timeout(readiness_spec)
+            remaining_readiness_timeout = deadline_timeout_or_raise(
+                execution_deadline,
+                None,
+                operation="durable service readiness",
+            )
+            if remaining_readiness_timeout is not None:
+                readiness_timeout = min(readiness_timeout, remaining_readiness_timeout)
+            readiness_payload = self._check_readiness(
+                metadata=metadata,
+                timeout_s=readiness_timeout,
+            )
+            if execution_deadline is not None and execution_deadline.is_exhausted():
+                readiness_payload = {
+                    "type": readiness_spec["type"],
+                    "status": ReadinessStatus.FAILED.value,
+                    "detail": "shared deadline exhausted before service handoff",
+                    "failure_category": "deadline",
+                }
+        except BaseException:
+            try:
+                self._terminate_loaded_metadata(metadata, remove_metadata=False)
+            except OSError:
+                pass  # Cleanup happened before its failing persistence attempt.
+            finally:
+                _terminate_popen_tree(popen, timeout_s=_STOP_TIMEOUT_S)
+                self._safe_unlink(service_dir / SERVICE_PREVIEW_TOKEN)
+            raise
         if readiness_payload["status"] != ReadinessStatus.READY.value:
             self._terminate_loaded_metadata(metadata, remove_metadata=False)
             status_payload = self.status(service_id)
@@ -267,17 +395,34 @@ class DurableServiceManager:
             if startup_error:
                 status_payload["startup_error"] = startup_error
             return DurableServiceStart(service_id=service_id, payload=status_payload)
-        if metadata_from_readiness is not None:
-            try:
+        try:
+            if readiness_payload.get("container_id"):
+                metadata["container_id"] = readiness_payload["container_id"]
+                self._write_metadata(metadata)
+            if metadata_from_readiness is not None:
                 metadata.update(metadata_from_readiness(readiness_payload))
                 self._write_metadata(metadata)
-            except BaseException:
+        except BaseException:
+            try:
                 self._terminate_loaded_metadata(metadata, remove_metadata=False)
+            except OSError:
+                pass  # Preserve the original storage failure after cleanup.
+            finally:
+                _terminate_popen_tree(popen, timeout_s=_STOP_TIMEOUT_S)
                 self._safe_unlink(service_dir / SERVICE_PREVIEW_TOKEN)
-                raise
-        return DurableServiceStart(service_id=service_id, payload=self.status(service_id))
+            raise
+        payload = _metadata_public_payload(
+            metadata,
+            status=DurableServiceStatus.RUNNING.value,
+            alive=True,
+            identity_valid=True,
+            readiness=readiness_payload,
+        )
+        return DurableServiceStart(
+            service_id=service_id, payload=self._attach_preview_access_url(payload, metadata)
+        )
 
-    def status(self, service_id: str) -> dict[str, Any]:
+    def status(self, service_id: str, *, timeout_s: float | None = None) -> dict[str, Any]:
         metadata = self._read_metadata(service_id)
         if metadata is None:
             return {
@@ -304,7 +449,11 @@ class DurableServiceManager:
         self._write_metadata(metadata)
         readiness = self._check_readiness(
             metadata=metadata,
-            timeout_s=_readiness_timeout(dict(metadata.get("readiness") or {})),
+            timeout_s=(
+                _readiness_timeout(dict(metadata.get("readiness") or {}))
+                if timeout_s is None
+                else max(0.0, timeout_s)
+            ),
         )
         payload = _metadata_public_payload(
             metadata,
@@ -326,7 +475,7 @@ class DurableServiceManager:
                 "failure_category": "unknown_service",
             }
         alive, identity_valid = self._metadata_process_alive(metadata)
-        if alive and not identity_valid:
+        if alive and not identity_valid and not metadata.get("cleanup_processes"):
             payload = _metadata_public_payload(
                 metadata,
                 status=DurableServiceStatus.STALE.value,
@@ -343,8 +492,12 @@ class DurableServiceManager:
             metadata["status"] = DurableServiceStatus.STALE.value
             self._write_metadata(metadata)
             return payload
-        if alive:
-            self._terminate_loaded_metadata(metadata, remove_metadata=True)
+        if alive or metadata.get("backend") == "docker" or metadata.get("cleanup_processes"):
+            if not self._terminate_loaded_metadata(metadata, remove_metadata=True):
+                payload = self.status(service_id)
+                payload["stopped"] = False
+                payload["failure_category"] = "service_cleanup_unverified"
+                return payload
         else:
             self._remove_metadata(metadata)
         payload = _metadata_public_payload(
@@ -368,7 +521,9 @@ class DurableServiceManager:
         for metadata_path in sorted(self.state_dir.glob(f"*/{SERVICE_METADATA}")):
             service_id = metadata_path.parent.name
             payload = self.status(service_id)
-            if payload.get("status") == DurableServiceStatus.RUNNING.value:
+            if payload.get("status") == DurableServiceStatus.RUNNING.value or payload.get(
+                "cleanup_pending"
+            ):
                 services.append(payload)
         return services
 
@@ -445,6 +600,7 @@ class DurableServiceManager:
                 env_allowlist=self.settings.docker_env_allowlist,
                 published_ports=published_ports,
             )
+            argv[2:2] = ["--label", f"alysis.service_id={service_id}"]
             return {
                 "backend": "docker",
                 "container_name": container_name,
@@ -481,6 +637,8 @@ class DurableServiceManager:
                 return {
                     "type": readiness_type,
                     "status": status.value,
+                    "strength": "process_alive",
+                    "endpoint_owned": False,
                     "detail": "process is alive"
                     if status == ReadinessStatus.READY
                     else "process is not alive",
@@ -495,14 +653,26 @@ class DurableServiceManager:
                 host = str(readiness.get("host") or "localhost")
                 port = int(readiness.get("port") or 0)
                 try:
-                    with socket.create_connection((host, port), timeout=min(interval_s, 0.5)):
-                        return {
-                            "type": readiness_type,
-                            "status": ReadinessStatus.READY.value,
-                            "host": host,
-                            "port": port,
-                            "detail": "tcp connection succeeded",
-                        }
+                    with socket.create_connection(
+                        (host, port), timeout=min(interval_s, 0.5)
+                    ) as conn:
+                        ownership = _endpoint_ownership(
+                            metadata,
+                            peer=conn.getpeername(),
+                            timeout_s=max(0.01, deadline - time.monotonic()),
+                        )
+                        if ownership["endpoint_owned"] and all(
+                            self._metadata_process_alive(metadata)
+                        ):
+                            return {
+                                "type": readiness_type,
+                                "status": ReadinessStatus.READY.value,
+                                "host": host,
+                                "port": port,
+                                "detail": "launched service owns the accepting TCP listener",
+                                **ownership,
+                            }
+                        last_detail = ownership["detail"]
                 except OSError as exc:
                     last_detail = str(exc)
             elif readiness_type == "preview_ready":
@@ -519,7 +689,16 @@ class DurableServiceManager:
                     host = str(ready["probe_host"])
                     port = int(ready["port"])
                     try:
-                        with socket.create_connection((host, port), timeout=min(interval_s, 0.5)):
+                        with socket.create_connection(
+                            (host, port), timeout=min(interval_s, 0.5)
+                        ) as conn:
+                            ownership = _endpoint_ownership(
+                                metadata,
+                                peer=conn.getpeername(),
+                                timeout_s=max(0.01, deadline - time.monotonic()),
+                            )
+                            if not ownership["endpoint_owned"]:
+                                raise OSError(ownership["detail"])
                             return {
                                 "type": readiness_type,
                                 "status": ReadinessStatus.READY.value,
@@ -530,19 +709,51 @@ class DurableServiceManager:
                                 "runtime": str(ready["runtime"]),
                                 "authentication_required": bool(ready["authentication_required"]),
                                 "detail": "preview server reported ready and accepted TCP",
+                                **ownership,
                             }
                     except OSError as exc:
                         last_detail = str(exc)
             elif readiness_type == "unix_socket":
                 path = Path(str(readiness.get("path") or ""))
-                if path.exists():
-                    return {
-                        "type": readiness_type,
-                        "status": ReadinessStatus.READY.value,
-                        "path": os.fspath(path),
-                        "detail": "unix socket exists",
-                    }
-                last_detail = "unix socket does not exist"
+                try:
+                    # Prove ownership before connecting. A pending Unix socket
+                    # connection can appear in psutil's global list with no PID,
+                    # making the listener look ambiguously owned.
+                    ownership = _endpoint_ownership(metadata, unix_path=path)
+                    if not ownership["endpoint_owned"]:
+                        raise OSError(ownership["detail"])
+                    path_identity = path.stat()
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                        conn.settimeout(min(interval_s, 0.5))
+                        conn.connect(os.fspath(path))
+                        connected_path_identity = path.stat()
+                        if (
+                            path_identity.st_dev,
+                            path_identity.st_ino,
+                        ) != (
+                            connected_path_identity.st_dev,
+                            connected_path_identity.st_ino,
+                        ):
+                            raise OSError("Unix socket path changed during readiness probe")
+                        if hasattr(socket, "SO_PEERCRED"):
+                            peer_credentials = conn.getsockopt(
+                                socket.SOL_SOCKET,
+                                socket.SO_PEERCRED,
+                                struct.calcsize("3i"),
+                            )
+                            peer_pid = struct.unpack("3i", peer_credentials)[0]
+                            if peer_pid not in ownership["listener_pids"]:
+                                raise OSError("Unix socket peer is not the owned listener")
+                        if all(self._metadata_process_alive(metadata)):
+                            return {
+                                "type": readiness_type,
+                                "status": ReadinessStatus.READY.value,
+                                "path": os.fspath(path),
+                                **ownership,
+                            }
+                        last_detail = "service process exited during readiness probe"
+                except (OSError, AttributeError) as exc:
+                    last_detail = str(exc)
             elif readiness_type == "command":
                 command = str(readiness.get("command") or "").strip()
                 if not command:
@@ -559,7 +770,7 @@ class DurableServiceManager:
                         env=_safe_parent_env(),
                         capture_output=True,
                         text=True,
-                        timeout=min(max(0.1, timeout_s), 5.0),
+                        timeout=min(max(0.01, deadline - time.monotonic()), 5.0),
                         check=False,
                     )
                 except subprocess.TimeoutExpired:
@@ -571,6 +782,8 @@ class DurableServiceManager:
                             "status": ReadinessStatus.READY.value,
                             "exit_code": result.returncode,
                             "detail": "readiness command passed",
+                            "strength": "command_only",
+                            "endpoint_owned": False,
                         }
                     last_detail = f"readiness command exited {result.returncode}"
             else:
@@ -586,20 +799,24 @@ class DurableServiceManager:
                     "status": ReadinessStatus.FAILED.value,
                     "detail": last_detail or "readiness probe timed out",
                 }
-            time.sleep(interval_s)
+            time.sleep(min(interval_s, max(0.0, deadline - time.monotonic())))
 
     def _metadata_process_alive(self, metadata: dict[str, Any]) -> tuple[bool, bool]:
         pid = int(metadata.get("pid") or 0)
         if pid <= 0:
             return False, False
         expected_token = str(metadata.get("pid_start_token") or "")
-        if expected_token:
-            current_token = _pid_start_token(pid)
-            if current_token and current_token != expected_token:
-                return True, False
         popen = self._popens.get(str(metadata.get("service_id") or ""))
         if popen is not None and popen.poll() is not None:
             return False, True
+        if expected_token:
+            current_token = _pid_start_token(pid)
+            if current_token != expected_token:
+                return _pid_exists(pid), False
+        elif popen is None:
+            # Historical metadata without identity is inspectable but cannot
+            # authorize termination of a PID that may now belong to someone else.
+            return _pid_exists(pid), False
         return _pid_exists(pid), True
 
     def _terminate_loaded_metadata(
@@ -607,30 +824,51 @@ class DurableServiceManager:
         metadata: dict[str, Any],
         *,
         remove_metadata: bool,
-    ) -> None:
+    ) -> bool:
         service_id = str(metadata.get("service_id") or "")
+        alive, identity_valid = self._metadata_process_alive(metadata)
+        if alive and not identity_valid and not metadata.get("cleanup_processes"):
+            return False
         popen = self._popens.get(service_id)
+        cleanup_verified = True
         if str(metadata.get("backend") or "") == "docker" and metadata.get("container_name"):
-            _docker_cleanup_container(
-                str(metadata["container_name"]),
-                cwd=os.fspath(self.root),
-                env=_safe_parent_env(),
-                warning_callback=None,
-                reason="durable service stop",
-                quiet=True,
+            container = _owned_container_snapshot(metadata, timeout_s=2.0)
+            cleanup_verified = False
+            if container is not None and (docker := shutil.which("docker")):
+                try:
+                    removed = subprocess.run(
+                        [docker, "rm", "--force", str(container["id"])],
+                        cwd=os.fspath(self.root),
+                        env=_safe_parent_env(),
+                        capture_output=True,
+                        timeout=_STOP_TIMEOUT_S,
+                        check=False,
+                    )
+                    cleanup_verified = removed.returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        if alive or metadata.get("cleanup_processes"):
+            processes_stopped = _terminate_owned_process_tree(
+                metadata,
+                timeout_s=_STOP_TIMEOUT_S,
+                include_leader=alive and identity_valid,
+                persist_metadata=self._write_metadata,
             )
-        if popen is not None:
-            if popen.poll() is None:
-                _terminate_popen_tree(popen, timeout_s=_STOP_TIMEOUT_S)
-        else:
-            pid = int(metadata.get("pid") or 0)
-            pgid = metadata.get("pgid")
-            _terminate_pid_or_group(pid=pid, pgid=pgid, timeout_s=_STOP_TIMEOUT_S)
-        metadata["status"] = DurableServiceStatus.STOPPED.value
-        if remove_metadata:
+            if popen is not None:
+                with _ignore_timeout():
+                    popen.wait(timeout=_KILL_TIMEOUT_S)
+            cleanup_verified = cleanup_verified and processes_stopped
+        metadata["status"] = (
+            DurableServiceStatus.STOPPED.value
+            if cleanup_verified
+            else DurableServiceStatus.UNKNOWN.value
+        )
+        metadata["cleanup_pending"] = not cleanup_verified
+        if remove_metadata and cleanup_verified:
             self._remove_metadata(metadata)
         else:
             self._write_metadata(metadata)
+        return cleanup_verified
 
     def _read_metadata(self, service_id: str) -> dict[str, Any] | None:
         normalized = _normalize_service_id(service_id)
@@ -645,6 +883,10 @@ class DurableServiceManager:
             return None
         if raw.get("service_id") != normalized:
             return None
+        if raw.get("ownership") != ProcessOwnership.DURABLE_SERVICE.value:
+            return None
+        if Path(str(raw.get("root") or "")).resolve() != self.root:
+            return None
         return raw
 
     def _write_metadata(self, metadata: dict[str, Any]) -> None:
@@ -652,10 +894,12 @@ class DurableServiceManager:
         service_dir = self._service_dir(service_id)
         service_dir.mkdir(parents=True, exist_ok=True)
         path = service_dir / SERVICE_METADATA
-        path.write_text(
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(
             json.dumps(_sanitize_metadata(metadata), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        os.replace(temporary, path)
 
     def _remove_metadata(self, metadata: dict[str, Any]) -> None:
         service_id = str(metadata.get("service_id") or "")
@@ -923,6 +1167,7 @@ def _metadata_public_payload(
         "pid": metadata.get("pid"),
         "pgid": metadata.get("pgid"),
         "backend": metadata.get("backend"),
+        "cleanup_pending": bool(metadata.get("cleanup_pending")),
         "readiness": readiness,
         "start_timestamp": metadata.get("started_at_wall"),
         "stdout_log_path": metadata.get("stdout_log_path"),
@@ -965,6 +1210,7 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "cwd",
         "backend",
         "container_name",
+        "container_id",
         "cmd_sha256",
         "readiness",
         "stdout_log_path",
@@ -975,6 +1221,9 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "preview_authentication_required",
         "preview_port",
         "preview_runtime",
+        "replaces_service_id",
+        "cleanup_pending",
+        "cleanup_processes",
     }
     return {key: metadata[key] for key in sorted(allowed_keys) if key in metadata}
 
@@ -1021,6 +1270,11 @@ def _pid_exists(pid: int) -> bool:
 
 
 def _pid_start_token(pid: int) -> str | None:
+    if not Path("/proc/self/stat").exists():
+        try:
+            return f"process:{psutil.Process(pid).create_time():.6f}"
+        except (psutil.Error, OSError):
+            return None
     stat_path = Path("/proc") / str(pid) / "stat"
     try:
         text = stat_path.read_text(encoding="utf-8")
@@ -1032,6 +1286,296 @@ def _pid_start_token(pid: int) -> str | None:
         return f"linux:{fields[19]}"
     except (IndexError, ValueError):
         return None
+
+
+def _endpoint_ownership(
+    metadata: dict[str, Any],
+    *,
+    peer: tuple[Any, ...] | None = None,
+    unix_path: Path | None = None,
+    timeout_s: float = 2.0,
+) -> dict[str, Any]:
+    """Associate a reachable endpoint with this launch, never just a live PID.
+
+    Missing OS visibility is not proof. Global listeners are checked where the
+    OS permits it. macOS requires per-process inspection for non-root callers.
+    """
+    rejected = {"endpoint_owned": False, "strength": "unverified"}
+    if metadata.get("backend") == "docker":
+        return _docker_endpoint_ownership(metadata, peer=peer, timeout_s=timeout_s)
+    pid = int(metadata.get("pid") or 0)
+    token = str(metadata.get("pid_start_token") or "")
+    if not token or _pid_start_token(pid) != token:
+        return {**rejected, "detail": "service process identity cannot be verified"}
+    try:
+        process = psutil.Process(pid)
+        owned = {item.pid: item for item in [process, *process.children(recursive=True)]}
+        kind = "unix" if unix_path is not None else "tcp"
+        if platform.system().lower() == "darwin":
+            # psutil.net_connections() always raises AccessDenied for non-root
+            # macOS users. Inspect every member of this verified process tree;
+            # any denied member makes endpoint ownership unprovable.
+            connections = [
+                (owner.pid, connection)
+                for owner in owned.values()
+                for connection in owner.net_connections(kind=kind)
+            ]
+        else:
+            connections = [
+                (connection.pid, connection) for connection in psutil.net_connections(kind=kind)
+            ]
+        matches = []
+        for owner_pid, connection in connections:
+            if connection.type != socket.SOCK_STREAM:
+                continue
+            if unix_path is not None:
+                if (
+                    not connection.laddr
+                    or Path(str(connection.laddr)).resolve() != unix_path.resolve()
+                ):
+                    continue
+            else:
+                if connection.status != psutil.CONN_LISTEN or not connection.laddr or peer is None:
+                    continue
+                if int(connection.laddr.port) != int(peer[1]):
+                    continue
+                address = ipaddress.ip_address(str(connection.laddr.ip).split("%", 1)[0])
+                target = ipaddress.ip_address(str(peer[0]).split("%", 1)[0])
+                if address != target and not address.is_unspecified:
+                    continue
+                if address.version != target.version:
+                    continue
+            matches.append((owner_pid, connection))
+        if not matches:
+            detail = (
+                "endpoint is occupied by an unrelated or unidentifiable listener"
+                if peer is not None and platform.system().lower() == "darwin"
+                else "no owned listener was visible for the endpoint"
+            )
+            return {**rejected, "detail": detail}
+        if any(owner_pid not in owned for owner_pid, _ in matches):
+            return {
+                **rejected,
+                "detail": "endpoint is occupied by an unrelated or unidentifiable listener",
+            }
+        # Recheck cached Process identities after enumeration to reject PID reuse
+        # or a launcher exiting during the observation.
+        if not process.is_running() or _pid_start_token(pid) != token:
+            return {**rejected, "detail": "service identity changed during readiness probe"}
+        for owner_pid, _ in matches:
+            owner = owned[owner_pid]
+            if not owner.is_running():
+                return {**rejected, "detail": "listener exited during readiness probe"}
+        return {
+            "endpoint_owned": True,
+            "strength": "owned_endpoint",
+            "listener_pids": sorted({owner_pid for owner_pid, _ in matches}),
+            "detail": "endpoint listener belongs to the launched service",
+        }
+    except (psutil.Error, OSError, ValueError, NotImplementedError) as exc:
+        return {**rejected, "detail": f"endpoint ownership unavailable: {type(exc).__name__}"}
+
+
+def _docker_endpoint_ownership(
+    metadata: dict[str, Any],
+    *,
+    peer: tuple[Any, ...] | None,
+    timeout_s: float = 2.0,
+) -> dict[str, Any]:
+    rejected = {"endpoint_owned": False, "strength": "unverified"}
+    deadline = time.monotonic() + max(0.01, timeout_s)
+    if peer is None:
+        return {**rejected, "detail": "container readiness requires a published TCP endpoint"}
+    docker = shutil.which("docker")
+    container_name = str(metadata.get("container_name") or "")
+    if not docker or not container_name:
+        return {**rejected, "detail": "container identity unavailable"}
+    # A published-port proxy alone can accept connections before the application
+    # binds. Prove both this launch's immutable container identity and a listener
+    # on a routable interface inside that exact container's network namespace.
+    try:
+        container = _owned_container_snapshot(metadata, timeout_s=min(timeout_s, 2.0))
+        if container is None or container.get("running") is not True:
+            return {**rejected, "detail": "container does not belong to this running service"}
+        port = int(peer[1])
+        bindings = (container.get("ports") or {}).get(f"{port}/tcp") or []
+        if not any(
+            str(item.get("HostPort")) == str(port) and str(item.get("HostIp")) == str(peer[0])
+            for item in bindings
+        ):
+            return {**rejected, "detail": "endpoint is not published by this container"}
+        container_id = str(container["id"])
+        sockets = subprocess.run(
+            [docker, "exec", container_id, "cat", "/proc/net/tcp", "/proc/net/tcp6"],
+            capture_output=True,
+            text=True,
+            timeout=max(0.01, min(2.0, deadline - time.monotonic())),
+            check=False,
+        )
+        if sockets.returncode != 0:
+            return {**rejected, "detail": "container listener ownership unavailable"}
+        routable = {"00000000", "0" * 32}
+        for network in (container.get("networks") or {}).values():
+            ip = str(network.get("IPAddress") or "")
+            if ip:
+                routable.add(socket.inet_aton(ip)[::-1].hex().upper())
+        for line in sockets.stdout.splitlines():
+            fields = line.split()
+            if len(fields) < 4 or fields[3] != "0A":
+                continue
+            address, port_hex = fields[1].rsplit(":", 1)
+            if int(port_hex, 16) == port and address.upper() in routable:
+                return {
+                    "endpoint_owned": True,
+                    "strength": "owned_endpoint",
+                    "container_id": container_id,
+                    "detail": "launched container owns the published endpoint and application listener",
+                }
+        return {**rejected, "detail": "launched container has no routable application listener"}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return {**rejected, "detail": "container endpoint ownership probe failed"}
+
+
+def _owned_container_snapshot(
+    metadata: dict[str, Any], *, timeout_s: float
+) -> dict[str, Any] | None:
+    docker = shutil.which("docker")
+    container_name = str(metadata.get("container_name") or "")
+    if not docker or not container_name:
+        return None
+    template = (
+        '{"id":{{json .Id}},"running":{{json .State.Running}},'
+        '"ports":{{json .NetworkSettings.Ports}},'
+        '"networks":{{json .NetworkSettings.Networks}},'
+        '"service":{{json (index .Config.Labels "alysis.service_id")}}}'
+    )
+    try:
+        inspected = subprocess.run(
+            [docker, "inspect", "--format", template, container_name],
+            capture_output=True,
+            text=True,
+            timeout=max(0.01, timeout_s),
+            check=False,
+        )
+        if inspected.returncode != 0:
+            return None
+        container = json.loads(inspected.stdout)
+        if not isinstance(container, dict) or container.get("service") != metadata.get(
+            "service_id"
+        ):
+            return None
+        if not container.get("id"):
+            return None
+        if metadata.get("container_id") and metadata["container_id"] != container["id"]:
+            return None
+        return container
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _terminate_owned_process_tree(
+    metadata: dict[str, Any],
+    *,
+    timeout_s: float,
+    include_leader: bool,
+    persist_metadata: Callable[[dict[str, Any]], None],
+) -> bool:
+    """Persist owned identities before signalling, including across cleanup retries."""
+    identities: dict[tuple[int, float], dict[str, Any]] = {}
+    for record in metadata.get("cleanup_processes") or []:
+        if not isinstance(record, dict):
+            return False
+        pid, created = record.get("pid"), record.get("create_time")
+        if (
+            type(pid) is not int
+            or pid <= 0
+            or type(created) not in {float, int}
+            or not math.isfinite(created)
+            or created <= 0
+        ):
+            return False
+        identities[(pid, float(created))] = {"pid": pid, "create_time": float(created)}
+
+    roots: list[psutil.Process] = []
+    unresolved: dict[tuple[int, float], dict[str, Any]] = {}
+    for identity, record in identities.items():
+        try:
+            process = psutil.Process(identity[0])
+            if process.create_time() == identity[1] and process.is_running():
+                roots.append(process)
+            # A different creation time proves that the original owned process
+            # exited. Its replacement is never signalled or adopted.
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error:
+            unresolved[identity] = record
+    if include_leader:
+        pid = int(metadata.get("pid") or 0)
+        try:
+            leader = psutil.Process(pid)
+            if _pid_start_token(pid) != metadata.get("pid_start_token"):
+                return False
+            if leader.is_running():
+                roots.append(leader)
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.Error:
+            return False
+
+    owned: dict[tuple[int, float], psutil.Process] = {}
+    try:
+        for root in roots:
+            try:
+                descendants = root.children(recursive=True)
+            except psutil.NoSuchProcess:
+                descendants = []
+            for process in [root, *descendants]:
+                try:
+                    if process.is_running():
+                        owned[(process.pid, process.create_time())] = process
+                except psutil.NoSuchProcess:
+                    pass
+    except psutil.Error:
+        # Do not stop a parent when its descendants could not be inventoried:
+        # losing that parent would make safe discovery on a retry impossible.
+        return False
+
+    records = {identity: {"pid": identity[0], "create_time": identity[1]} for identity in owned}
+    process_identities = {id(process): identity for identity, process in owned.items()}
+    metadata["cleanup_processes"] = list({**unresolved, **records}.values())
+    metadata["cleanup_pending"] = True
+    persist_metadata(metadata)
+    processes = list(owned.values())
+    for process in reversed(processes):
+        try:
+            process.terminate()
+        except psutil.Error:
+            pass  # The waits below must establish termination, not the signal.
+    try:
+        _, pending = psutil.wait_procs(processes, timeout=timeout_s)
+    except psutil.Error:
+        pending = processes
+    for process in pending:
+        try:
+            process.kill()
+        except psutil.Error:
+            pass
+    try:
+        _, pending = psutil.wait_procs(pending, timeout=_KILL_TIMEOUT_S)
+    except psutil.Error:
+        pass  # Retain every identity from the preceding incomplete wait.
+    for process in pending:
+        try:
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                continue
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.Error:
+            pass
+        identity = process_identities[id(process)]
+        unresolved[identity] = records[identity]
+    metadata["cleanup_processes"] = list(unresolved.values())
+    return not unresolved
 
 
 def _process_group_id(pid: int) -> int | None:

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from alysis_code.llm.openai_compat import OpenAICompatClient
+from alysis_code.llm.openai_responses import OpenAIResponsesClient
 from alysis_code.llm.temperature_compat import (
     ANTHROPIC_DEPRECATED_SAMPLING_PARAMETERS,
     DEEPSEEK_THINKING_TEMPERATURE_UNSUPPORTED,
@@ -13,6 +14,46 @@ from alysis_code.llm.temperature_compat import (
     QWEN_QVQ_DEFAULT_TEMPERATURE,
     documented_temperature_omit_reason,
 )
+
+
+@pytest.mark.parametrize("client_class", [OpenAICompatClient, OpenAIResponsesClient])
+@pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("effort", [None, "low", "max", "none"])
+def test_gpt6_omits_temperature_before_first_reasoning_request(client_class, model, effort):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp_test",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "42"},
+                            ],
+                        },
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"choices": [{"message": {"content": "42"}}]})
+
+    client = client_class(
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model=model,
+        reasoning_effort=effort,
+        temperature=0.2,
+        transport=httpx.MockTransport(handler),
+    )
+    assert client.chat(messages=[{"role": "user", "content": "17 + 25?"}]).content == "42"
+    assert len(requests) == 1
+    assert ("temperature" in requests[0]) is (effort == "none")
 
 
 @pytest.mark.parametrize(

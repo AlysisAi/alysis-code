@@ -1,21 +1,156 @@
 from __future__ import annotations
 
+import io
+import socket
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
+from rich.console import Console
 
+from alysis_code.agent.tools_assembly import build_tools
+from alysis_code.config import AppConfig
+from alysis_code.session_store import SessionStore
+from alysis_code.tools import git as git_tools
 from alysis_code.tools.git import GitError, git_diff, git_status
+
+
+@pytest.fixture(autouse=True)
+def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALYSIS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    def deny_network(*_args, **_kwargs):
+        pytest.fail("Git diff tests must not call a provider or use the network")
+
+    monkeypatch.setattr(socket, "create_connection", deny_network)
+    monkeypatch.setattr(socket, "getaddrinfo", deny_network)
+    monkeypatch.setattr(socket.socket, "connect", deny_network)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny_network)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", deny_network)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", deny_network)
 
 
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(root), *args],
+        ["git", "--no-optional-locks", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
         check=True,
         capture_output=True,
         text=True,
         encoding="utf-8",
     ).stdout
+
+
+def _repo(tmp_path: Path, *, changes: bool = True) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Git diff fixture")
+    _git(root, "config", "user.email", "fixture@example.invalid")
+    for name in ("staged.txt", "unstaged.txt"):
+        (root / name).write_text("original\n")
+    _git(root, "add", "staged.txt", "unstaged.txt")
+    _git(root, "commit", "-qm", "Initial fixture")
+    if changes:
+        (root / "staged.txt").write_text("index-only change\n")
+        _git(root, "add", "staged.txt")
+        (root / "unstaged.txt").write_text("worktree-only change\n")
+    return root
+
+
+def _tool(root: Path, *, mode: str = "auto", depth: int = 0):
+    return build_tools(
+        root=root,
+        console=Console(file=io.StringIO(), force_terminal=False),
+        store=SessionStore(
+            enabled=False,
+            sessions_dir=root.parent / "sessions",
+            session_id="git-diff-test",
+            cwd=str(root),
+            repo_root=str(root),
+        ),
+        mode=mode,
+        yes=True,
+        cfg=AppConfig(model="test-model"),
+        non_interactive=True,
+        subagent_depth=depth,
+    )["git_diff"]
+
+
+@pytest.mark.parametrize(("mode", "depth"), [("auto", 0), ("review", 1)])
+@pytest.mark.parametrize(
+    ("arguments", "view"),
+    [({}, "unstaged"), ({"staged": False}, "unstaged"), ({"staged": True}, "staged")],
+)
+def test_assembled_diff_selects_one_view_without_changing_repo(
+    tmp_path: Path, arguments: dict, view: str, mode: str, depth: int
+) -> None:
+    root = _repo(tmp_path)
+    expected = {"staged": _git(root, "diff", "--cached"), "unstaged": _git(root, "diff")}
+    assert expected["staged"] and expected["unstaged"] != expected["staged"]
+    tool = _tool(root, mode=mode, depth=depth)
+    paths = [root / "staged.txt", root / "unstaged.txt", root / ".git/index"]
+    before = {path: path.read_bytes() for path in paths}
+
+    result = tool.run(arguments)
+
+    assert result["diff"] == expected[view]
+    assert result["view"] == view
+    assert {path: path.read_bytes() for path in paths} == before
+    assert _git(root, "diff", "--cached") == expected["staged"]
+    assert _git(root, "diff") == expected["unstaged"]
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_empty_diff_still_identifies_selected_view(tmp_path: Path, staged: bool) -> None:
+    result = _tool(_repo(tmp_path, changes=False)).run({"staged": staged})
+
+    assert result["diff"] == ""
+    assert result["view"] == ("staged" if staged else "unstaged")
+    assert result["next_offset"] is None
+    assert result["truncated"] is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"cached": True},
+        {"unknown": True},
+        {"staged": True, "cached": True},
+        {"staged": "false"},
+        {"staged": 0},
+        {"staged": 1},
+        {"staged": None},
+    ],
+)
+def test_invalid_diff_arguments_fail_before_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: dict
+) -> None:
+    tool = _tool(_repo(tmp_path))
+
+    def unexpected_git(**_kwargs):
+        pytest.fail("Invalid git_diff arguments reached Git")
+
+    monkeypatch.setattr(git_tools, "_run_git_checked", unexpected_git)
+
+    with pytest.raises((git_tools.GitError, TypeError)):
+        tool.run(arguments)
+
+
+def test_model_schema_and_help_describe_the_supported_view_option(tmp_path: Path) -> None:
+    model_tool = _tool(_repo(tmp_path)).as_openai_tool()["function"]
+    parameters = model_tool["parameters"]
+
+    assert set(parameters["properties"]) == {"path", "staged", "offset", "diff_id"}
+    assert parameters["properties"]["staged"]["type"] == "boolean"
+    assert parameters["properties"]["staged"]["default"] is False
+    assert parameters["required"] == []
+    assert parameters["additionalProperties"] is False
+    assert "staged=true" in model_tool["description"]
+    assert "unstaged" in model_tool["description"]
 
 
 @pytest.fixture

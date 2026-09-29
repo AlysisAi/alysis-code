@@ -420,7 +420,7 @@ def test_rich_surface_summarizes_fs_read_without_raw_content_dump() -> None:
     assert '"content"' not in out
 
 
-def test_rich_surface_shows_fs_read_lines_trace_and_summary() -> None:
+def test_rich_surface_shows_fs_read_window_trace_and_summary() -> None:
     buffer = io.StringIO()
     surface = RichSurface(console=Console(file=buffer, force_terminal=False))
     surface.set_trace_level("full")
@@ -428,7 +428,7 @@ def test_rich_surface_shows_fs_read_lines_trace_and_summary() -> None:
     surface.on_tool_start(
         ToolStartEvent(
             tool_call_id="call_lines",
-            name="fs_read_lines",
+            name="fs_read",
             args={"path": "README.md", "start_line": 40, "end_line": 42, "max_lines": 10},
             step=2,
         )
@@ -436,7 +436,7 @@ def test_rich_surface_shows_fs_read_lines_trace_and_summary() -> None:
     surface.on_tool_output(
         ToolOutputEvent(
             tool_call_id="call_lines",
-            name="fs_read_lines",
+            name="fs_read",
             chunk=json.dumps(
                 {
                     "path": "README.md",
@@ -453,7 +453,7 @@ def test_rich_surface_shows_fs_read_lines_trace_and_summary() -> None:
     surface.on_tool_end(
         ToolEndEvent(
             tool_call_id="call_lines",
-            name="fs_read_lines",
+            name="fs_read",
             status="done",
             elapsed_ms=7,
             meta={},
@@ -461,9 +461,9 @@ def test_rich_surface_shows_fs_read_lines_trace_and_summary() -> None:
     )
 
     out = buffer.getvalue()
-    assert "Step 2: Read File Lines" in out
+    assert "Step 2: Read File" in out
     assert "Input: README.md:40-42 (max 10)" in out
-    assert 'Read File Lines: Loaded "README.md" lines 40-42 (3 lines).' in out
+    assert 'Read File: Loaded "README.md" lines 40-42 (3 lines).' in out
     assert "(7ms)" in out
 
 
@@ -611,6 +611,85 @@ def test_rich_surface_shows_file_op_trace_and_summary(
     assert expected_input in out
     assert expected_summary in out
     assert "(10ms)" in out
+
+
+def _captured_rich_tool_end(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    status: str,
+    meta: dict[str, Any],
+    trace_level: str = "compact",
+) -> list[tuple[str, str]]:
+    surface = RichSurface(console=Console(file=io.StringIO(), force_terminal=False))
+    surface.set_trace_level(trace_level)
+    lines: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        surface,
+        "_emit_thinking",
+        lambda message, *, style="dim": lines.append((message, style)),
+    )
+    surface.on_tool_end(
+        ToolEndEvent(
+            tool_call_id="fetch-1", name="web_fetch", status=status, elapsed_ms=900, meta=meta
+        )
+    )
+    return lines
+
+
+def test_rich_surface_renders_remote_site_outcome_as_ordinary_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = _captured_rich_tool_end(
+        monkeypatch,
+        status="failed",
+        meta={
+            "error": "HTTP error 429 while fetching '…': remote site is rate-limiting requests.",
+            "blocked_by_remote_site": True,
+            "remote_site_reason": "site is rate-limiting requests",
+        },
+    )
+    [(message, style)] = lines
+    assert "site is rate-limiting requests" in message
+    assert "failed" not in message
+    assert "HTTP error" not in message
+    assert style == rich_surface_mod._STYLE_CHROME
+    assert (
+        _captured_rich_tool_end(
+            monkeypatch,
+            status="failed",
+            meta={"remote_site_reason": "site didn't respond"},
+            trace_level="off",
+        )
+        == []
+    )
+
+
+def test_rich_surface_marks_withdrawn_tool_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = _captured_rich_tool_end(
+        monkeypatch,
+        status="done",
+        meta={"tool_unavailable": True, "unavailable_reason": "Network is unreachable"},
+    )
+    [(message, style)] = lines
+    assert "unavailable" in message
+    assert "Network is unreachable" in message
+    assert style == rich_surface_mod._STYLE_WARNING
+
+
+def test_rich_surface_keeps_red_failure_for_ordinary_fetch_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = _captured_rich_tool_end(
+        monkeypatch,
+        status="failed",
+        meta={"error": "HTTP error 404 while fetching 'https://docs.example.com/missing'."},
+    )
+    [(message, style)] = lines
+    assert "failed" in message
+    assert "HTTP error 404" in message
+    assert style == "red"
 
 
 def test_rich_surface_shows_verify_run_trace_and_summary() -> None:

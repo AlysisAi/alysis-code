@@ -30,7 +30,7 @@ _BUILTIN_IDENTITIES: dict[str, SubagentIdentity] = {
     # Silver keeps delegated work visually distinct from the main modes.
     "visual-designer": SubagentIdentity("#c9d1d9"),
     "explorer": SubagentIdentity("#58a6ff"),
-    "implementer": SubagentIdentity("#f0883e"),
+    "general": SubagentIdentity("#f0883e"),
     "debugger": SubagentIdentity("#f47067"),
     "verifier": SubagentIdentity("#79c0ff"),
     "code-reviewer": SubagentIdentity("#db61a2"),

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,67 @@ _NUM_PREFIX = re.compile(r"^\s*\d+\)\s*")
 
 _PICKER_HINT = "↑/↓ move · Enter confirm · 1-9 quick-pick · Esc cancel"
 _INPUT_HINT = "Enter confirm · Esc cancel"
+
+# ---- startup input stash ---------------------------------------------------
+# Input that arrives before a guard picker has ever been painted was typed at a
+# blank screen: it is the user's *message*, not a picker command. Pre-render
+# keystrokes therefore never act on the picker (a buffered digit used to
+# quick-pick - and on the candidate step, bind a workspace - sight-unseen)
+# and printable ones are stashed here instead of dropped. The chat loop
+# drains the stash into the chat input once the TUI starts.
+_PREFILL_STASH: list[str] = []
+
+
+def _stash_enabled() -> bool:
+    """Kill switch ``ALYSIS_STARTUP_INPUT_STASH`` (default on).
+
+    Off restores the previous behavior: buffered input acts on the pickers
+    immediately and unbound keys are dropped.
+    """
+    value = os.environ.get("ALYSIS_STARTUP_INPUT_STASH", "").strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def _stash_gating_active(input: Any) -> bool:
+    """Whether the pre-render input gate applies to this picker run.
+
+    The blank-screen race is a real-terminal phenomenon: the kernel buffers
+    what the user typed before the picker attached. Injected test inputs
+    (``input is not None``) are exempt so the existing headless tests keep
+    driving pickers with preloaded keys; set
+    ``ALYSIS_STARTUP_INPUT_STASH_FORCE=1`` to exercise the gate with an
+    injected input (the stash tests do).
+    """
+    if not _stash_enabled():
+        return False
+    if input is None:
+        return True
+    force = os.environ.get("ALYSIS_STARTUP_INPUT_STASH_FORCE", "").strip().lower()
+    return force in {"1", "true", "on", "yes"}
+
+
+def _stash_printable(data: Any) -> None:
+    if not _stash_enabled():
+        return
+    text = str(data or "")
+    if text and text.isprintable():
+        _PREFILL_STASH.append(text)
+
+
+# How long after a guard app starts running that keys still count as "typed at
+# the blank screen". Buffered bytes are delivered by prompt_toolkit within
+# milliseconds of run start (the kernel had them queued before the app even
+# existed); a human reacting to a freshly painted picker needs ≥ ~300 ms. A
+# key inside the window is stashed instead of acted on; the failure mode of a
+# grotesquely slow machine is the old pre-fix behavior, never a new one.
+_STASH_GRACE_SECONDS = 0.35
+
+
+def drain_startup_input_stash() -> str:
+    """Return and clear text typed at unpainted startup pickers."""
+    text = "".join(_PREFILL_STASH)
+    _PREFILL_STASH.clear()
+    return text
 
 
 def _strip_num(label: str) -> str:
@@ -100,8 +162,10 @@ def _run_option_picker(
         from prompt_toolkit.application import Application
         from prompt_toolkit.application.current import get_app
         from prompt_toolkit.data_structures import Point
+        from prompt_toolkit.filters import Condition
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.keys import Keys
         from prompt_toolkit.layout import Layout
         from prompt_toolkit.layout.containers import HSplit, ScrollOffsets, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
@@ -172,32 +236,49 @@ def _run_option_picker(
 
     kb = KeyBindings()
 
+    # Blank-screen stash gate: keys processed within the grace window of this
+    # picker starting to run were typed at a blank screen (the kernel had them
+    # buffered before the picker existed - prompt_toolkit delivers them right
+    # after its first synchronous redraw). They must not navigate, quick-pick,
+    # confirm or (Esc) cancel a UI nobody has seen; printable ones are kept
+    # for the chat input instead. Ctrl-C / Ctrl-D stay live as the abort.
+    started = {"t": None}
+    stash_active = _stash_gating_active(input)
+
+    def _gate_open() -> bool:
+        if not stash_active:
+            return True
+        t0 = started["t"]
+        return t0 is not None and (time.monotonic() - t0) > _STASH_GRACE_SECONDS
+
+    live = Condition(_gate_open)
+
     def _invalidate() -> None:
         try:
             get_app().invalidate()
         except Exception:
             pass
 
-    @kb.add("up", eager=True)
-    @kb.add("k", eager=True)
+    @kb.add("up", eager=True, filter=live)
+    @kb.add("k", eager=True, filter=live)
     def _up(event: Any) -> None:
         state["index"] = (state["index"] - 1) % len(picker_rows)
         _invalidate()
 
-    @kb.add("down", eager=True)
-    @kb.add("j", eager=True)
+    @kb.add("down", eager=True, filter=live)
+    @kb.add("j", eager=True, filter=live)
     def _down(event: Any) -> None:
         state["index"] = (state["index"] + 1) % len(picker_rows)
         _invalidate()
 
-    @kb.add("enter", eager=True)
+    @kb.add("enter", eager=True, filter=live)
     def _confirm(event: Any) -> None:
         state["result"] = picker_rows[state["index"]]["value"]
         event.app.exit()
 
     for _digit in "123456789":
 
-        @kb.add(_digit, eager=True)
+        @kb.add(_digit, eager=True, filter=live)
         def _pick(event: Any) -> None:
             try:
                 idx = int(event.data) - 1
@@ -208,12 +289,22 @@ def _run_option_picker(
                 state["result"] = picker_rows[idx]["value"]
                 event.app.exit()
 
-    @kb.add("escape")
+    @kb.add("escape", filter=live)
     @kb.add("c-c")
     @kb.add("c-d")
     def _cancel(event: Any) -> None:
         state["result"] = None
         event.app.exit()
+
+    # NOT eager: an eager wildcard would fire ahead of the exact Ctrl-C /
+    # Ctrl-D bindings and swallow the always-on abort. As a plain wildcard it
+    # only receives keys no active exact binding claims.
+    @kb.add(Keys.Any, filter=~live)
+    def _stash_in_grace(event: Any) -> None:
+        _stash_printable(getattr(event, "data", None))
+
+    def _mark_started() -> None:
+        started["t"] = time.monotonic()
 
     app: Application = Application(
         layout=Layout(root, focused_element=body_window),
@@ -225,7 +316,7 @@ def _run_option_picker(
         output=output,
     )
     try:
-        app.run()
+        app.run(pre_run=_mark_started)
     except Exception:
         return None, False
     return state["result"], True
@@ -348,17 +439,35 @@ def workspace_guard_prompt_text(
     kb = KeyBindings()
     result: dict[str, Any] = {"text": None, "cancelled": False}
 
-    @kb.add("enter", eager=True)
+    # Blank-screen stash gate (see _run_option_picker): a buffered Enter must not
+    # accept the default and a buffered Esc must not cancel before anyone saw
+    # this prompt. Typed characters are fine here - they land in the visible
+    # text field, where the user can see and edit them.
+    started = {"t": None}
+    stash_active = _stash_gating_active(input)
+
+    def _gate_open() -> bool:
+        if not stash_active:
+            return True
+        t0 = started["t"]
+        return t0 is not None and (time.monotonic() - t0) > _STASH_GRACE_SECONDS
+
+    live = Condition(_gate_open)
+
+    @kb.add("enter", eager=True, filter=live)
     def _submit(event: Any) -> None:
         result["text"] = input_area.text
         event.app.exit()
 
-    @kb.add("escape")
+    @kb.add("escape", filter=live)
     @kb.add("c-c")
     @kb.add("c-d")
     def _cancel(event: Any) -> None:
         result["cancelled"] = True
         event.app.exit()
+
+    def _mark_started() -> None:
+        started["t"] = time.monotonic()
 
     app: Application = Application(
         layout=Layout(root, focused_element=input_area),
@@ -369,7 +478,7 @@ def workspace_guard_prompt_text(
         input=input,
         output=output,
     )
-    app.run()
+    app.run(pre_run=_mark_started)
     if result["cancelled"]:
         raise KeyboardInterrupt
     entered = str(result["text"] or "").strip()
@@ -379,6 +488,7 @@ def workspace_guard_prompt_text(
 
 
 __all__ = [
+    "drain_startup_input_stash",
     "select_guarded_workspace_action",
     "select_workspace_candidate",
     "workspace_guard_prompt_text",

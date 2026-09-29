@@ -13,7 +13,7 @@ import pytest
 
 from alysis_code.config import AppConfig
 from alysis_code.ide import stdio_bridge
-from alysis_code.ide.change_ledger import ChangeLedger
+from alysis_code.ide.change_ledger import ChangeLedger, ChangeLedgerError
 from alysis_code.ide.prompt_queue import DurablePromptQueue
 from alysis_code.ide.stdio_bridge import StdioBridge
 
@@ -58,6 +58,206 @@ def configured_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
     monkeypatch.setattr(stdio_bridge, "load_config", lambda: AppConfig(model="test-model"))
     return workspace
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled"])
+def test_checkpoint_failure_blocks_edits_and_recovery_preserves_turn_outcome(
+    configured_workspace: Path, tmp_path: Path, outcome: str
+) -> None:
+    output = io.StringIO()
+    events: list[dict[str, Any]] = []
+    captures: list[str] = []
+    messages: list[str] = []
+
+    class MemoryStore:
+        session_artifact_root = tmp_path / "artifacts"
+
+        def append(self, event_type: str, payload: dict[str, Any]) -> None:
+            events.append({"type": event_type, "payload": payload})
+
+        def events_snapshot(self) -> list[dict[str, Any]]:
+            return list(events)
+
+    class FakeSession:
+        store = MemoryStore()
+
+        def __init__(self, guard: Any) -> None:
+            self.guard = guard
+
+        def run_turn(self, message: str) -> int:
+            self.guard.check_tool_call("file_edit", {})
+            (configured_workspace / "value.txt").write_text(message, encoding="utf-8")
+            self.workspace_touched_paths.add("value.txt")
+            messages.append(message)
+            if outcome == "failed":
+                raise RuntimeError("turn failed independently of checkpoints")
+            if outcome == "cancelled":
+                raise stdio_bridge.BridgeCancellationError("cancelled_by_user")
+            return 0
+
+        def close(self) -> None:
+            pass
+
+    class FailedLedger:
+        def ensure_baseline(self, session_id: str) -> None:
+            raise ChangeLedgerError("storage unavailable")
+
+        def capture(self, session_id: str, **kwargs: Any) -> SimpleNamespace:
+            captures.append(session_id)
+            return SimpleNamespace(
+                checkpoint_id="unexpected-checkpoint",
+                changes=[],
+                omitted_paths=[],
+                non_revertible_paths=[],
+            )
+
+    bridge = StdioBridge(
+        stdout=output,
+        create_session_fn=lambda **kwargs: FakeSession(kwargs["tool_dispatch_guard"]),
+        prompt_queue=DurablePromptQueue(tmp_path / "queue.sqlite3"),
+    )
+    try:
+        bridge.process_line(
+            _request(
+                "session.create",
+                {
+                    "workspace": os.fspath(configured_workspace),
+                    "mode": "readonly",
+                    "session_id": "failed-checkpoint-session",
+                },
+                "create",
+            )
+        )
+        assert _response(output, "create")["ok"] is True, _response(output, "create")
+        session = bridge._sessions["failed-checkpoint-session"]
+        session.change_ledger = FailedLedger()
+        bridge.process_line(
+            _request(
+                "chat.send",
+                {
+                    "session_id": session.session_id,
+                    "message": "blocked edit",
+                    "idempotency_key": "failed-checkpoint-turn",
+                },
+                "send",
+            )
+        )
+        job_id = _response(output, "send")["result"]["job_id"]
+        job = bridge._jobs[job_id]
+        assert job.thread is not None
+        job.thread.join(timeout=5)
+        assert not job.thread.is_alive()
+        assert job.status == "failed"
+        assert messages == []
+        assert not (configured_workspace / "value.txt").exists()
+        assert captures == []
+        assert session.change_ledger is None
+        assert any(event["type"] == "ide_prompt_started" for event in events)
+        assert "checkpoint_unavailable" in output.getvalue()
+        session.change_ledger = ChangeLedger(configured_workspace)
+        bridge.process_line(
+            _request(
+                "chat.send",
+                {
+                    "session_id": session.session_id,
+                    "message": "retry with checkpoints",
+                    "idempotency_key": "recovered-checkpoint-turn",
+                },
+                "retry",
+            )
+        )
+        recovered = bridge._jobs[_response(output, "retry")["result"]["job_id"]]
+        assert recovered.thread is not None
+        recovered.thread.join(timeout=10)
+        assert not recovered.thread.is_alive()
+        assert recovered.status == outcome
+        assert messages == ["retry with checkpoints"]
+        assert (configured_workspace / "value.txt").read_text(encoding="utf-8") == messages[0]
+        assert session.change_ledger is not None
+    finally:
+        bridge.close()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled"])
+def test_text_only_turn_never_waits_for_or_warns_about_checkpoint_storage(
+    configured_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+    outcome: str,
+) -> None:
+    output = io.StringIO()
+    events: list[str] = []
+
+    def unexpected(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("Text-only turns must not initialize or capture checkpoints")
+
+    ledger = SimpleNamespace(ensure_baseline=unexpected, capture=unexpected)
+    monkeypatch.setattr(stdio_bridge, "ChangeLedger", unexpected)
+
+    class FakeSession:
+        store = SimpleNamespace(
+            session_artifact_root=tmp_path / "artifacts",
+            append=lambda kind, payload: events.append(kind),
+            events_snapshot=lambda: [],
+        )
+
+        def run_turn(self, message: str) -> int:
+            if outcome == "failed":
+                raise RuntimeError("provider failed")
+            if outcome == "cancelled":
+                raise stdio_bridge.BridgeCancellationError("cancelled_by_user")
+            return 0
+
+        def close(self) -> None:
+            pass
+
+    bridge = StdioBridge(
+        stdout=output,
+        create_session_fn=lambda **kwargs: FakeSession(),
+        prompt_queue=DurablePromptQueue(tmp_path / "queue.sqlite3"),
+    )
+    try:
+        bridge.process_line(
+            _request(
+                "session.create",
+                {
+                    "workspace": os.fspath(configured_workspace),
+                    "mode": "review",
+                    "session_id": "text-only",
+                },
+                "create",
+            )
+        )
+        assert _response(output, "create")["ok"] is True
+        session = bridge._sessions["text-only"]
+        session.change_ledger = ledger if existing else None
+        bridge.process_line(
+            _request(
+                "chat.send",
+                {
+                    "session_id": session.session_id,
+                    "message": "hi",
+                    "idempotency_key": "greeting",
+                },
+                "send",
+            )
+        )
+        job = bridge._jobs[_response(output, "send")["result"]["job_id"]]
+        assert job.thread is not None
+        job.thread.join(timeout=5)
+        assert not job.thread.is_alive()
+        assert job.status == outcome
+        assert session.change_ledger is (ledger if existing else None)
+        assert "ide_prompt_started" in events
+        assert "Checkpoint" not in output.getvalue()
+        if outcome == "completed":
+            assert "ide_prompt_completed" in events
+            assert job.result["checkpoint_id"] is None
+            assert job.result["changed_files"] == []
+    finally:
+        bridge.close()
 
 
 def test_chat_send_queues_and_deletes_follow_up(configured_workspace: Path, tmp_path: Path) -> None:
@@ -154,6 +354,7 @@ def test_chat_send_injects_validated_context_and_rejects_sensitive_paths(
 ) -> None:
     output = io.StringIO()
     captured: list[str] = []
+    captured_context: list[str] = []
     source = configured_workspace / "app.py"
     source.write_text("answer = 42\n", encoding="utf-8")
     (configured_workspace / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
@@ -161,8 +362,11 @@ def test_chat_send_injects_validated_context_and_rejects_sensitive_paths(
     class FakeSession:
         store = SimpleNamespace(session_artifact_root=tmp_path / "artifacts")
 
-        def run_turn(self, message: str) -> int:
+        def run_turn(
+            self, message: str, *, ephemeral_user_messages: list[str] | None = None
+        ) -> int:
             captured.append(message)
+            captured_context.extend(ephemeral_user_messages or [])
             return 0
 
         def close(self) -> None:
@@ -215,8 +419,9 @@ def test_chat_send_injects_validated_context_and_rejects_sensitive_paths(
             and f"job_completed {job_id}" in str(item.get("payload", {}).get("message"))
         ),
     )
-    assert "IDE CONTEXT (untrusted data" in captured[0]
-    assert '"path":"app.py"' in captured[0]
+    assert captured == ["explain"]
+    assert "IDE CONTEXT (untrusted data" in captured_context[0]
+    assert '"path":"app.py"' in captured_context[0]
 
     sensitive = dict(selection)
     sensitive["path"] = ".env"
@@ -257,10 +462,12 @@ def test_chat_turn_checkpoint_revert_and_redo(configured_workspace: Path, tmp_pa
             return list(self.events)
 
     class FakeSession:
-        def __init__(self) -> None:
+        def __init__(self, guard: Any) -> None:
             self.store = MemoryStore()
+            self.guard = guard
 
         def run_turn(self, _message: str) -> int:
+            self.guard.check_tool_call("file_edit", {"path": "value.txt"})
             target.write_text("after\n", encoding="utf-8")
             # Real agent turns populate this set from successful mutating tool results. The fake
             # must model that contract instead of relying on an unsafe whole-workspace scan.
@@ -272,7 +479,7 @@ def test_chat_turn_checkpoint_revert_and_redo(configured_workspace: Path, tmp_pa
 
     bridge = StdioBridge(
         stdout=output,
-        create_session_fn=lambda **_kwargs: FakeSession(),
+        create_session_fn=lambda **kwargs: FakeSession(kwargs["tool_dispatch_guard"]),
         prompt_queue=DurablePromptQueue(tmp_path / "queue.sqlite3"),
     )
     bridge.process_line(

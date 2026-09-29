@@ -137,12 +137,13 @@ Common interactive commands:
 - `/pwd`: show workspace and active workdir
 - `/permissions`: inspect or select execution permissions for the next message
 - `/persona`: select Code, Architect, Ask, Debug, or a custom persona
+- `/objective`: inspect the current task, or use `new` and `amend` to change it
 - `/config`: open the configuration menu
 - `/usage`: show token and cost usage
 - `/stream`: open the live-output picker (On by default)
 - `/stream on|off|status`: control or inspect live answer and reasoning output for this session
 - `/trace off|compact|full`: control reasoning/tool progress detail
-- `/image <path>`: attach an image to the next turn
+- `/image [path]`: attach an image or file to the next turn; with no path it takes the picture on the clipboard
 - `/subagents`: open the active-subagent picker and select a run for the live pane
 - `/skill`: list discovered skills
 - `$<skill> [task]`: at an idle prompt, show skill info or attach it for one turn
@@ -151,12 +152,14 @@ Common interactive commands:
 - `/exit`: quit chat
 
 While an agent turn is running, press Enter to send the current text as a
-mid-turn message. Already-issued tool calls finish, then Alysis Code delivers it
-at the next safe step boundary and keeps it in conversation history. Press Ctrl+Q
-instead to queue a separate follow-up turn. With an empty input, Shift+Left recalls
-the newest queued follow-up for editing; Enter returns it to the queue. Esc interrupts
-the active turn and preserves undelivered messages and staged commands. Follow-ups
-wait for the interrupted worker to finish before starting.
+mid-turn message. Already-issued tool calls finish normally; Alysis Code then
+delivers the message at the next safe step boundary before the model chooses
+more tools, and keeps it in conversation history. Press Ctrl+Q instead to queue
+the text as a separate follow-up turn. With an empty input, Shift+Left recalls
+only the newest queued follow-up for editing; it never retracts a submitted
+mid-turn message. Enter returns the edited follow-up to the queue. Esc interrupts
+the active turn and preserves undelivered messages as ordered follow-up turns.
+Staged operations survive the interrupt and apply when the session becomes idle.
 
 Read-only commands remain available during a running turn: `/help` (and `/`),
 `/status`, `/subagents`, `/pwd`, `/context` or `/ctx`, `/usage`, `/model-info`, `/trace`,
@@ -174,15 +177,15 @@ for the next message.
 Bare `/config` opens its overlay immediately so settings
 can be browsed and saved while output continues. A save reaches disk at once,
 but the live session reload waits until the running turn finishes. Other
-state-changing commands and unknown commands remain blocked while a turn is in
-flight; the mid-turn allowlist fails closed.
+commands that replace history or start another session remain blocked while a
+turn is in flight; the mid-turn allowlist fails closed. Forge-session-only verbs
+are unknown outside Forge rather than appearing as chat commands.
 
 Forge mode has its own command surface for goal, task, plan, review, and
 execution actions. See [Forge](forge.md).
 
-Legacy chat Plan Mode and the `/plan <task>` draft/approve flow have been removed.
-Use `/persona architect` for planning in chat. Inside Forge, `/plan tasks|markdown|edit`
-continues to show or edit the current plan. `/mode` is retired in favor of `/permissions`.
+The former chat `/plan` commands have been removed. Use `/persona architect`
+for planning in chat; inside Forge, `/plan tasks|markdown|edit` remains available.
 
 Interactive chat opens in the full-screen TUI. The transcript owns mouse-wheel
 scrolling and shows a persistent scrollbar while the input and footer remain
@@ -191,7 +194,28 @@ pinned. It scrolls three rows per wheel event by default. Set
 for a high-resolution trackpad or a physical mouse wheel.
 
 Enter submits a message; **Ctrl+J** inserts a new line. Pasted multiline text
-keeps its line breaks.
+keeps its line breaks. A long message wraps between words, and its continuation
+rows line up under the text after the `> ` prompt. **Up** and **Down** move
+the cursor between wrapped rows, keeping its column. The welcome screen also
+fits smaller windows: its hint lines break between phrases, and the owl is
+left out when it doesn't fit.
+
+Dropping a file on the terminal, or pasting its path, attaches it instead of
+spilling the path into the message: the composer shows a chip (`[Image #1]`,
+`[File #1]`, `[Folder #1]`) and the line under the input names the file and its
+size. **Ctrl+V** attaches the picture on the clipboard, and `/image [path]` does
+either from the keyboard. One Backspace over a chip removes the whole chip and
+detaches the file. Images ride the turn as real images; a file or folder chip
+expands to its absolute path so the agent's own tools can read it. A paste that
+mixes prose with a path stays an ordinary paste.
+
+Drops work from inside WSL too: Explorer hands the terminal a Windows path
+(`C:\Users\me\shot.png`) whatever is running in it, so that form is also tried
+against the distro's drive mount (`/mnt/c/...`, or whatever `automount.root` in
+`/etc/wsl.conf` says), and `\\wsl$\<distro>\...` resolves back to the plain distro
+path. Terminals that type a dropped path in instead of sending it as a bracketed
+paste are handled as well, as long as the path arrives quoted or as a `file://`
+URI - the two shapes a terminal produces and a person writing a message does not.
 
 The context footer shows remaining conversation capacity after startup prompts
 and tools, starting at 100% when that space is unused. It uses provider token
@@ -211,6 +235,15 @@ Without a selection, Ctrl+C keeps its normal interrupt/exit behavior. Copied tex
 omits Alysis Code's visual message and reasoning markers. When stdin is redirected
 on WSL or another POSIX host, the TUI reads interaction from the controlling
 terminal so wheel events are not lost in the pipe.
+
+Links in the transcript are underlined and clickable: click a URL, or the text of
+a markdown link, to open it in your browser. From WSL it opens in the Windows
+browser. This covers web addresses in replies, sources, tool lines and code
+blocks, plus local dev-server addresses such as `localhost:5173`. A server
+announced on `0.0.0.0` opens as `localhost` on the same port. Dragging across a
+link still selects its text. Only `http` and `https` addresses open, and a URL
+cut short with `…` is left unlinked. If no browser can be started, for example
+over SSH, the address is copied to the clipboard instead.
 
 When subagents are running, the TUI can show a short live-tail pane above the
 input without covering the transcript. Press Ctrl+N to move forward and Ctrl+B
@@ -286,6 +319,7 @@ limits.
 - `role_models.router`
 - `subagents_enabled`
 - `custom_tools_enabled`
+- `web_fetch_trusted_domains`
 - `web_search_policy`
 - `web_search_mode`
 - `web_search_adapter`
@@ -320,11 +354,22 @@ without the router, for example `reply_language = "Greek"`. When set, the host
 injects a reply-language directive and keys the final-summary language rewrite
 to it; when empty, the model answers in the user's language naturally.
 
-Two chat commands accompany the unified turn path. `/ask <question>` runs one
+`/ask <question>` runs one
 read-only turn: the session switches to the readonly execution mode for
-exactly that turn and the previous mode is restored afterwards, even on
-errors. `/chat <message>` produces one bounded conversational reply from the
-main model with a minimal prompt, no tools, and no workspace context.
+exactly that turn and the previous mode is restored afterwards, even on errors.
+
+Alysis Code keeps the current task across chat turns and session resume. The first
+accepted request becomes the objective; ordinary follow-ups keep it while still
+being delivered as instructions. Use `/objective` to inspect the task,
+`/objective new <request>` to start another task without clearing conversation
+history, or `/objective amend <constraint>` to add a constraint. `/clear` clears
+history and retires the task. These commands do not change permissions or mark
+a task complete.
+
+The host preserves the accepted request and amendments through compaction and
+resume. If saved task state cannot be recovered, start a new task with
+`/objective new`. If a long request cannot be carried forward without losing
+requirements, Alysis Code stops and asks you to restate the missing text.
 
 Useful environment overrides:
 
@@ -364,6 +409,58 @@ telemetry and reverts the directives and gate policy.
 unset to inherit `model`, or set it to a smaller/cheaper model while keeping the
 main coding model stronger.
 
+## AgentBox Telemetry
+
+AgentBox telemetry is opt-in, metadata-only, and built into Alysis Code. No
+AgentBox package or sibling source checkout is required:
+
+```bash
+python -m pip install alysis-code
+```
+
+From a contributor checkout, the normal `python -m pip install -e ".[dev]"`
+installation includes the integration.
+
+On an enrolled computer, Alysis Code reads the machine URL, token, identity, and
+privacy detail setting from `~/.agentbox/config.toml`. Set only the opt-in switch:
+
+```bash
+export AGENTBOX_ENABLED=1
+```
+
+Use `AGENTBOX_CONFIG` to select another enrollment config. Environment
+variables override config values when an explicit per-process override is
+needed:
+
+```bash
+export AGENTBOX_ENABLED=1
+export AGENTBOX_PLANE_URL=https://agentbox.example.com
+export AGENTBOX_TOKEN="<this machine's ingest token>"
+export AGENTBOX_MACHINE_ID="<this machine's ID>"
+# optional overrides:
+export AGENTBOX_AGENT_ID="<unique Alysis Code agent ID>"
+export AGENTBOX_TASK_DETAIL=category
+export AGENTBOX_QUEUE_DIR=~/.agentbox/alysis-sdk-queue
+```
+
+Each computer must be enrolled separately. Do not copy another machine's token
+or identity. By default, the enrolled Alysis Code agent ID is
+`<machine-id>_alysis`, so computers appear as distinct agents.
+
+Alysis Code uses its dedicated `~/.agentbox/sdk-queue` rather than the
+connector shipper's `~/.agentbox/queue`. Set `AGENTBOX_QUEUE_DIR` only when a
+separate Alysis Code-specific queue location is required.
+
+Network failures leave events in that queue for replay and do not fail the
+Alysis Code run. Scrubbed client errors are written to
+`~/.agentbox/alysis-agentbox.log`; URLs and filesystem paths are removed.
+
+When disabled or missing required configuration, Alysis Code does not create the
+AgentBox client and emits nothing. When enabled, it sends session lifecycle,
+short sanitized task objectives, turn token/cost totals, and tool activity
+categories only. Prompts, diffs, tool arguments, outputs, file contents, and
+full paths are never sent.
+
 ## Profiles
 
 Profiles group provider settings such as protocol, base URL, API key source,
@@ -380,10 +477,40 @@ alysis profile list
 ```
 
 OpenAI, Anthropic, and Gemini profiles can use their native API protocols.
-Other provider and gateway profiles use the OpenAI-compatible protocol.
+Custom profiles start with the OpenAI-compatible protocol; a gateway may require
+a different supported protocol for a particular model.
 
 Presets are convenience templates, not hard constraints. Custom profiles can
 point at model provider endpoints.
+
+For Anthropic Messages, factory-created clients default to the resolved model
+output limit without a universal 32,000-token cap. Unknown output capacity uses
+the shared 32,000-token fallback, including context reservation. Catalog values
+and explicit metadata overrides take precedence; existing shared-window
+adjustments still apply. The allowance may include reasoning as well as the
+visible answer, depending on the provider. An explicit per-request limit takes
+precedence. A larger allowance is a ceiling, not a request to use all those tokens.
+
+### OpenCode Go
+
+Use `https://opencode.ai/zen/go/v1` as the base URL. In `/config`, add the custom
+profile, enter its key in **API Key**, and choose the exact provider model ID in
+**Default Model**. Custom profiles load the provider's live model list when
+available; a failed lookup leaves manual model entry available. Discovery does
+not prove that every listed model uses the selected protocol.
+
+Alysis sends OpenCode's required `x-opencode-session` header automatically, using
+a stable conversation identity across requests and settings refreshes. Children
+use their own session identities. Standalone auxiliary clients retain an identity
+for their lifetime. An explicitly configured session header remains an override;
+normally leave extra headers empty so each conversation is identified separately.
+
+The provider uses different protocols behind the same base URL. For example,
+`deepseek-v4.1-flash` uses `openai_compat`, Qwen and MiniMax use
+`anthropic_messages`, and GPT Luna uses `openai_responses`. Select the protocol
+the provider documents; the model picker does not infer it from a model name.
+See the [official Go endpoint table](https://opencode.ai/docs/go/#endpoints) for
+current IDs and protocol requirements.
 
 ## Built-In Tools
 
@@ -450,16 +577,29 @@ provider-hosted adapter and model coverage matrix.
 
 `web_fetch` requires provenance before it retrieves a URL. Accepted provenance
 classes are an explicit user-provided URL, a URL returned by `web_search`, an
-observed canonical redirect from either source, and a bounded same-origin or
-search-mediated recovery URL. URLs found inside trusted fetched pages, trusted
-local file reads, and registered tool or shell output are recorded with their
-source event and parent URL when applicable, then treated as source-linked
-derived provenance rather than broad domain permission. URL comparison
-canonicalizes scheme, host, default ports, fragments, and harmless
-trailing-slash variants. Recovery still runs through the same SSRF, credential,
-scheme, redirect, and byte-cap checks as a normal fetch. In deadline
-finalization, missing provenance returns a structured recovery message instead
-of starting optional web search.
+observed canonical redirect from either source, a bounded same-origin or
+search-mediated recovery URL, and a URL on the configured trusted-domain
+allowlist. URLs found inside trusted fetched pages, trusted local file reads,
+and registered tool or shell output are recorded with their source event and
+parent URL when applicable, then treated as source-linked derived provenance
+rather than broad domain permission. URL comparison canonicalizes scheme, host,
+default ports, fragments, and harmless trailing-slash variants. Recovery still
+runs through the same SSRF, credential, scheme, redirect, and byte-cap checks
+as a normal fetch. In deadline finalization, missing provenance returns a
+structured recovery message instead of starting optional web search.
+
+`web_fetch_trusted_domains` lists hosts fetchable without prior session
+provenance, matched exactly or as a dot-suffix (so entries cover their
+subdomains). It defaults to major public package registries —
+`registry.npmjs.org`, `pypi.org`, `crates.io`, `rubygems.org`, Maven Central,
+the Go module proxy, `hex.pm`, `packagist.org`, and `api.nuget.org` among them —
+because registry JSON endpoints are not indexed by search engines, which made
+them unreachable through search-mediated recovery (a fresh subagent checking
+dependency versions dead-ended on every fetch). The allowlist bypasses only the
+provenance gate; every fetch still passes the full safe-HTTP validation.
+Setting the field to `[]` restores strict provenance-only fetching, and
+`ALYSIS_WEB_FETCH_TRUSTED_DOMAINS` overrides the field (comma-separated hosts;
+`none` disables the allowlist).
 
 ## Verification
 
@@ -632,7 +772,11 @@ readiness probe.
 `alysis run --deadline-seconds N` sets an invocation-wide monotonic deadline
 for one-shot execution. It is distinct from `llm_timeout_s`: the run deadline
 has a soft finalization window plus a hard exhaustion point, while
-`llm_timeout_s` bounds a single model request. During normal work, operation
+`llm_timeout_s` controls HTTP operation timeouts, including the wait for more
+response data. It is not a total request-duration limit: a stream that keeps
+delivering data can run longer. The separate meaningful-progress watchdog on
+Responses and OpenAI-compatible streams does not extend this socket timeout.
+During normal work, operation
 launches are checked against hard remaining time and the reserved finalization
 window. During finalization, Alysis Code blocks new routing, compaction,
 subagents, background work, broad exploration, provider retry sleeps, and
@@ -809,8 +953,9 @@ If an unchanged episode repeats beyond the bounded nudge policy, the run exits
 non-zero as completion-gate stagnation. Actual completion-gate repair
 step-budget exhaustion instead reports `TERMINATE_BUDGET_EXHAUSTED`, and
 forced-summary wording distinguishes that budget case from gate stagnation.
-Changes to this behavior should include focused regression coverage and follow
-the project [release process](RELEASING.md).
+Release maintainers should keep the focused regression matrix in the
+[release checklist](release_checklist.md) green and follow the
+[release process](RELEASING.md) when changing this behavior.
 
 ## Forge
 

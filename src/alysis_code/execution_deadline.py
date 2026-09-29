@@ -864,9 +864,23 @@ class ExecutionDeadline:
 
 def derive_subagent_deadline(
     parent_deadline: ExecutionDeadline | None,
-    fallback_seconds: float,
+    fallback_seconds: float | None,
 ) -> ExecutionDeadline:
-    """Return the earlier of an active parent ceiling and a finite child fallback."""
+    """Return the earlier active parent ceiling or an optional child ceiling.
+
+    With no configured child ceiling, an existing parent deadline is inherited
+    exactly.  If neither exists, the child receives a disabled deadline object
+    so callers can keep one uniform admission and telemetry path without
+    inventing a lifetime limit.
+    """
+
+    if fallback_seconds is None:
+        if parent_deadline is not None:
+            return parent_deadline
+        return ExecutionDeadline.from_duration(
+            None,
+            source=DeadlineSource.ABSENT,
+        )
 
     fallback = validate_deadline_seconds(fallback_seconds, key="subagent_timeout_s")
     if parent_deadline is None:
@@ -983,15 +997,16 @@ def temporarily_clamp_client_timeout(
     # reserve-aware bound would be unusably small) fall back to the plain
     # cleanup-reserve clamp, which is the pre-existing behavior.
     timeout: float | None = None
+    effective_reserve = max(0.0, float(reserve_seconds))
     if deadline.phase() not in (DeadlinePhase.FINALIZATION_WINDOW, DeadlinePhase.EXHAUSTED):
+        effective_reserve += deadline.finalization_reserve_seconds()
         timeout = deadline.clamp_timeout(
             configured,
-            reserve_seconds=(
-                max(0.0, float(reserve_seconds)) + deadline.finalization_reserve_seconds()
-            ),
+            reserve_seconds=effective_reserve,
             minimum_timeout_seconds=minimum_timeout_seconds,
         )
     if timeout is None:
+        effective_reserve = max(0.0, float(reserve_seconds))
         timeout = deadline_timeout_or_raise(
             deadline,
             configured,
@@ -999,8 +1014,16 @@ def temporarily_clamp_client_timeout(
             minimum_timeout_seconds=minimum_timeout_seconds,
             operation=operation,
         )
+    deadline_limited_cutoff = (
+        deadline.deadline_monotonic - effective_reserve
+        if deadline.deadline_monotonic is not None
+        and timeout is not None
+        and (configured is None or timeout < configured)
+        else None
+    )
 
     def _provider_retry_deadline_allows(wait_seconds: float) -> bool:
+        nonlocal deadline_limited_cutoff
         retry_window_seconds = max(0.0, float(wait_seconds)) + max(
             0.0,
             float(minimum_timeout_seconds),
@@ -1034,6 +1057,8 @@ def temporarily_clamp_client_timeout(
             current_timeout = getattr(client, "timeout_s", None)
             if current_timeout is None or float(current_timeout) > budget_after_sleep:
                 client.timeout_s = budget_after_sleep
+                if deadline.deadline_monotonic is not None:
+                    deadline_limited_cutoff = deadline.deadline_monotonic - reserve_guard
         return True
 
     client.timeout_s = timeout
@@ -1047,6 +1072,18 @@ def temporarily_clamp_client_timeout(
     client._stream_deadline_exhausted = _stream_deadline_exhausted
     try:
         yield
+    except Exception as exc:
+        # A provider's own timeout remains a provider failure. When this host
+        # narrowed the attempt and that exact allowance has elapsed, a typed
+        # transport timeout belongs to the run deadline, including its reserve.
+        # Do not infer this from error text or a merely nearby hard deadline.
+        if (
+            deadline_limited_cutoff is not None
+            and float(deadline._clock()) >= deadline_limited_cutoff
+            and _has_transport_timeout_cause(exc)
+        ):
+            raise DeadlineExhausted(f"run deadline exhausted during {operation}") from exc
+        raise
     finally:
         client.timeout_s = original
         if original_retry_deadline is _MISSING:
@@ -1063,3 +1100,20 @@ def temporarily_clamp_client_timeout(
                 pass
         else:
             client._stream_deadline_exhausted = original_stream_deadline
+
+
+def _has_transport_timeout_cause(error: BaseException) -> bool:
+    import httpx
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError) or isinstance(
+            getattr(current, "provider_status_code", None), int
+        ):
+            return False
+        if isinstance(current, (TimeoutError, httpx.TimeoutException)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False

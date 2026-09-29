@@ -242,6 +242,7 @@ class PersistentServiceRecord:
     command: str
     pid: int
     probe_port: int | None = None
+    status_probe: Callable[[], dict[str, Any]] | None = None
 
     def summary(self) -> str:
         label = " ".join(str(self.command or "").split()) or self.service_id
@@ -257,6 +258,7 @@ class LivenessReport:
     pid_alive: bool
     probe_port: int | None = None
     port_listening: bool | None = None
+    endpoint_owned: bool | None = None
 
     @property
     def healthy(self) -> bool:
@@ -264,12 +266,14 @@ class LivenessReport:
             return False
         if self.probe_port is None:
             return True
-        return bool(self.port_listening)
+        return bool(self.port_listening) and self.endpoint_owned is not False
 
     def describe(self) -> str:
         parts = ["pid alive" if self.pid_alive else "pid not running"]
         if self.probe_port is not None:
             parts.append(describe_port_probe(self.probe_port, bool(self.port_listening)))
+        if self.endpoint_owned is False:
+            parts.append("endpoint ownership unverified")
         return "; ".join(part for part in parts if part)
 
     def as_payload(self) -> dict[str, Any]:
@@ -277,6 +281,8 @@ class LivenessReport:
         if self.probe_port is not None:
             payload["probe_port"] = self.probe_port
             payload["port_listening"] = bool(self.port_listening)
+        if self.endpoint_owned is not None:
+            payload["endpoint_owned"] = self.endpoint_owned
         return payload
 
 
@@ -290,6 +296,20 @@ def check_service(
     pid_probe: PidProbe = pid_alive,
     port_probe: PortProbe = probe_tcp_port,
 ) -> LivenessReport:
+    if record.status_probe is not None:
+        payload = record.status_probe()
+        readiness = payload.get("readiness") or {}
+        alive = payload.get("alive") is True and payload.get("identity_valid") is True
+        return LivenessReport(
+            pid_alive=alive,
+            probe_port=record.probe_port,
+            port_listening=readiness.get("status") == "ready"
+            if record.probe_port is not None
+            else None,
+            endpoint_owned=readiness.get("endpoint_owned") is True
+            if record.probe_port is not None
+            else None,
+        )
     alive = bool(pid_probe(record.pid))
     if record.probe_port is None:
         return LivenessReport(pid_alive=alive)

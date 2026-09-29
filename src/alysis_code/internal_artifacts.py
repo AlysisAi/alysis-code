@@ -8,9 +8,10 @@ state: the parent asked for a deliverable and got the child's runtime diary
 instead, which then flowed verbatim into the parent's final summary.
 
 The rule this module encodes: a locally generated stop report is an *internal
-artifact*, and internal artifacts never become user-facing output. The
-enforcement is a marker, set where the artifact is produced and honoured where
-output is assembled -- never a search for characteristic phrases in the text.
+artifact*, not a model-authored deliverable or a later-turn instruction. A
+top-level runtime may still surface the report as honest audit evidence, while
+nested output and later provider history honor the marker. Enforcement is
+metadata-based -- never a search for characteristic phrases in the text.
 Pattern-matching "Remaining work:" would break the moment the wording, the
 language, or the model changed; a marker cannot silently stop matching.
 
@@ -32,6 +33,14 @@ INTERNAL_ARTIFACT_MESSAGE_KEY = "alysis_internal_artifact"
 # ``final_text_source`` reported by the subagent boundary when the child's last
 # answer was a locally generated stop report rather than a real final report.
 INTERNAL_FALLBACK_SOURCE = "internal_fallback"
+
+# Provider-visible replacement for a locally generated fallback report kept in
+# durable conversation history.  The full report remains available to the user
+# and in the audit log, while later model calls see only a closed-turn boundary
+# with no imperative "remaining work" prose to continue.
+INTERNAL_FALLBACK_TERMINAL_CONTENT = (
+    "The previous assistant turn ended at a runtime boundary; its recorded tool activity is closed."
+)
 
 SUBAGENT_INCOMPLETE_ERROR_CODE = "subagent_incomplete"
 SUBAGENT_PARTIAL_REPORT_MAX_CHARS = 4096
@@ -60,6 +69,37 @@ def summary_input_messages(messages: Iterable[Any]) -> list[Any]:
     because it is never handed one, regardless of what the artifact says.
     """
     return [message for message in messages if not message_is_internal(message)]
+
+
+def provider_history_messages(messages: Iterable[Any]) -> list[Any]:
+    """Project durable history into safe provider-visible conversation turns.
+
+    A marked assistant artifact is retained in persistent history so transcript
+    replay and the user-visible audit trail remain faithful.  Its prose is not
+    sent back to a later model call: it is replaced with one neutral assistant
+    boundary.  This is keyed only by artifact metadata, never report wording.
+
+    Marked non-assistant artifacts are omitted because changing their role could
+    create an invalid tool-call pairing.  Today fallback artifacts are assistant
+    messages; failing closed keeps this projection safe if another role is ever
+    marked accidentally.
+    """
+
+    projected: list[Any] = []
+    for message in messages:
+        if not message_is_internal(message):
+            projected.append(message)
+            continue
+        if str(message.get("role") or "").strip().lower() != "assistant":
+            continue
+        boundary = {
+            "role": "assistant",
+            "content": INTERNAL_FALLBACK_TERMINAL_CONTENT,
+        }
+        if projected and projected[-1] == boundary:
+            continue
+        projected.append(boundary)
+    return projected
 
 
 @dataclass(frozen=True)

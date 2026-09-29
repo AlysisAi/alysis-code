@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..agent import _patchable
+from ..agentbox_integration import AgentBoxTelemetry
+from ..atomic_io import atomic_write_json
 from ..background_runner import (
     DisabledBackgroundRunner,
     LazyBackgroundShellRunner,
@@ -30,7 +32,11 @@ from ..budget_policy import (
     resolve_budget_grace_seconds,
 )
 from ..build_identity import load_build_info
-from ..cancellation import CooperativeCancellationError, EventCancellationToken
+from ..cancellation import (
+    CooperativeCancellationError,
+    EventCancellationToken,
+    InteractiveCancellationToken,
+)
 from ..compaction.conversation_compactor import ConversationCompactor
 from ..compaction.settings import resolve_compaction_settings
 from ..compaction.tool_output_offload import ToolOutputOffloader
@@ -42,6 +48,7 @@ from ..config import (
     resolve_crash_diagnostic_log_path,
     resolve_llm_enable_thinking,
     resolve_llm_reasoning_effort,
+    resolve_llm_timeout,
     resolve_llm_timeout_s,
     resolve_prompt_cache_key,
     resolve_prompt_cache_retention,
@@ -67,6 +74,7 @@ from ..extensions.activation import (
     WorkspaceTrustPromptFn,
     WorkspaceTrustPromptRequest,
 )
+from ..failure_category import FailureCategory, classify_failure_category
 from ..hooks import (
     HOOK_AUDIT_ARTIFACT_PARTS,
     HookDispatcher,
@@ -100,7 +108,7 @@ from ..mcp.config import load_resolved_mcp_config
 from ..mcp.manager import ForgeTaskScopedMcpManager, McpManager, create_mcp_manager
 from ..model_metadata_policy import ActiveModelRef, evaluate_active_model_metadata_policy
 from ..model_registry import ModelRegistry, resolve_model_provider_key
-from ..model_router import ROLE_CODING, ROLE_COMPACTOR, ROLE_ROUTER, resolve_model_for_role
+from ..model_router import ROLE_CODING, ROLE_COMPACTOR, resolve_model_for_role
 from ..personas import (
     PersonaSwitchState,
     load_custom_personas,
@@ -132,6 +140,7 @@ from ..request_estimation import (
     request_message_signatures,
     tool_schema_signature,
 )
+from ..run_outcome import task_outcome_notice, task_outcome_record
 from ..run_provenance import (
     CONFIG_SNAPSHOT_EVENT,
     config_snapshot_payload,
@@ -149,13 +158,22 @@ from ..sandbox_runner import (
 )
 from ..sandbox_settings import resolve_shell_sandbox_settings
 from ..service_persistence import PersistentServiceRegistry
-from ..session_store import SessionStore, make_session_id, resolve_sessions_dir
+from ..session_store import (
+    SessionStore,
+    SessionStoreUnavailableError,
+    make_session_id,
+    resolve_sessions_dir,
+)
 from ..skills import ConventionDocument, SkillBundle, SkillCatalogEntry
 from ..step_budget import StepBudgetRuntime, normalize_step_budget_policy
 from ..subagents import SubagentDefinition, unavailable_builtin_subagents
 from ..surface import ApprovalRequest, NoopSurface, StatusEvent
 from ..surface.base import Surface
 from ..terminal_manager import TerminalManager
+from ..tools.availability import ToolAvailabilitySnapshot
+from ..tools.availability import (
+    tool_availability_snapshot as copy_tool_availability_snapshot,
+)
 from ..tools.registry import iter_builtin_tool_metadata
 from ..usage_tracker import (
     ContextLeft,
@@ -231,11 +249,11 @@ from .turn.events import (
 if TYPE_CHECKING:
     from ..ide.managed_browser import ManagedBrowserService
 from .steering import SteerInbox
-from .subagent_execution import ChildScheduler
+from .subagent_execution import ChildScheduler, SubagentCoordinator
+from .task_state import TASK_STATE_SCHEMA_VERSION, SessionTaskState, validate_task_relation
 
 OpenAICompatClient = _OpenAICompatClient
 _DEFAULT_CREATE_MCP_MANAGER = create_mcp_manager
-_SKILL_SELECTOR_TIMEOUT_S = 15.0
 
 
 def _skill_selector_provider_retry_settings(
@@ -517,6 +535,22 @@ class AgentSession:
     tools: dict[str, ToolDef]
     tool_list: list[dict[str, Any]]
     messages: list[dict[str, Any]]
+    # A depth-0 TUI turn may finish on a complete captured-duplicate lifecycle
+    # transition.  The TUI consumes this once at its post-turn boundary to
+    # replace stale model-visible history with one allowlisted state capsule.
+    _pending_subagent_history_rollover: dict[str, Any] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    # First persistent-history index owned by the active ``run_turn``. A turn
+    # may later receive hook/steer user-role messages, so scanning backward for
+    # the last user role is not a reliable activity boundary.
+    _active_turn_message_start_index: int | None = field(default=None, init=False, repr=False)
+    # Build-time optional-tool state is session-owned. Each turn takes a
+    # detached copy so concurrent child builds and later permission rebuilds
+    # cannot rewrite the authority of an in-flight turn.
+    tool_availability_snapshot: ToolAvailabilitySnapshot = field(default_factory=dict)
     _cache_efficiency_summary_recorded: bool = field(
         default=False,
         init=False,
@@ -526,7 +560,18 @@ class AgentSession:
     # terminates the turn. Read by close() so the run_finished crash event
     # carries it, which is how a harness tells a budget stop from a crash.
     stop_reason: str | None = field(default=None, init=False, repr=False)
+    last_turn_outcome: dict[str, Any] = field(default_factory=dict, init=False)
+    _turn_execution_state: Any = field(default=None, init=False, repr=False)
+    _anytime_checkpoints: Any = field(default=None, init=False, repr=False)
+    _task_evidence_state: Any = field(default=None, init=False, repr=False)
+    _acknowledged_checkpoint: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    # Managed hosts supply the actual task separately from their generated context pack.
+    acceptance_instruction: str | None = field(default=None, init=False, repr=False)
     startup_messages: list[dict[str, Any]] = field(default_factory=list)
+    # A resumed child gets a fresh log, while continuing its own provider
+    # conversation. This identity is never inherited from a parent or sibling.
+    provider_session_id: str | None = None
+    prompt_guidance_profile: str | None = None
     runtime_kind: RuntimeKind = RuntimeKind.INTERACTIVE_CHAT
     prompt_cache_stream_key: str | None = None
     mcp_manager: McpManager | ForgeTaskScopedMcpManager | None = None
@@ -537,9 +582,8 @@ class AgentSession:
     managed_browser_service: ManagedBrowserService | None = None
     managed_browser_owner_id: str | None = None
     managed_browser_cancel_check: Callable[[], bool] | None = None
+    # Deprecated compatibility field; skill choice uses the main agent.
     router_client: Any | None = None
-    _semantic_router_bound_client: Any | None = None
-    _provisioned_router_client: Any | None = None
     api_key: str = ""
     api_key_source: str = "missing"
     shell_runner: Any | None = None
@@ -598,7 +642,10 @@ class AgentSession:
     enforce_explicit_subagent_requests: bool = True
     subagent_depth: int = 0
     subagent_registry: dict[str, SubagentDefinition] | None = None
+    subagent_coordinator: SubagentCoordinator | None = None
+    # Compatibility alias for callers that still use the scheduler name.
     child_scheduler: ChildScheduler | None = None
+    pending_permissions_mode: str | None = None
     steer_inbox: SteerInbox = field(default_factory=SteerInbox)
     child_repetition_signal: Callable[[dict[str, Any]], bool] | None = None
     read_ledger: SessionReadLedger | None = None
@@ -617,6 +664,11 @@ class AgentSession:
     active_workdir_relpath: str = "."
     session_source: str = "startup"
     session_source_metadata: dict[str, Any] = field(default_factory=dict)
+    # Host-owned task identity. None is the legitimate startup state.
+    task_state: SessionTaskState | None = None
+    task_state_unrecovered: bool = False
+    task_parent_session_id: str | None = None
+    task_sequence_high_water: int = 0
     pinned_prefix_len: int = 0
     startup_context_baseline_tokens: int = 0
     request_context_measurement: RequestContextMeasurement | None = None
@@ -628,6 +680,7 @@ class AgentSession:
     cache_keepalive: ParentCacheKeepalive | None = None
     crash_diagnostics: CrashDiagnosticLogger | None = None
     crash_diagnostic_log_path: str | None = None
+    agentbox_telemetry: AgentBoxTelemetry | None = None
     process_group_registry: ProcessGroupRegistry | None = None
     # Empty-response handling is budgeted per session, not per turn: two failed
     # recovery cycles mean the endpoint is not answering, and re-spending the
@@ -649,13 +702,16 @@ class AgentSession:
 
     def __post_init__(self) -> None:
         self._bind_provider_retry_observer(self.client)
-        if self.child_scheduler is None:
+        if self.subagent_coordinator is None and self.child_scheduler is None:
+            # Compatibility for callers that construct AgentSession directly
+            # from a build_tools result rather than through create_session.
             subagent_tool = self.tools.get("subagent_run")
             launcher = getattr(getattr(subagent_tool, "run", None), "__self__", None)
-            scheduler = getattr(launcher, "child_scheduler", None)
-            if scheduler is not None:
-                self.child_scheduler = scheduler
-        if self.child_scheduler is not None:
+            self.subagent_coordinator = getattr(launcher, "subagent_coordinator", None)
+        if self.subagent_coordinator is not None:
+            self.child_scheduler = self.subagent_coordinator.scheduler
+            self.subagent_coordinator.set_parent_steer_inbox(self.steer_inbox)
+        elif self.child_scheduler is not None:
             self.child_scheduler.set_parent_steer_inbox(self.steer_inbox)
         if self.cache_keepalive is None and self.subagent_depth == 0:
             cache_config = self.cfg.cache
@@ -669,6 +725,76 @@ class AgentSession:
                 unsupported_reason=unsupported_reason,
                 deadline=self.execution_deadline,
             )
+
+    def arm_subagent_history_rollover(self, capsule: dict[str, Any]) -> bool:
+        """Durably arm one TUI-only model-history rollover.
+
+        Other interactive hosts and nested/one-shot runtimes keep the existing
+        terminalization behavior.  The durable event is written before the
+        in-memory latch so a crash cannot resurrect the stale pre-boundary
+        transcript during session resume.
+        """
+
+        if (
+            self.runtime_kind != RuntimeKind.INTERACTIVE_CHAT
+            or self.subagent_depth != 0
+            or not bool(getattr(self, "_alysis_tui_interactive", False))
+        ):
+            return False
+        extra_fields = getattr(self.cfg, "extra_fields", {})
+        if (
+            isinstance(extra_fields, dict)
+            and extra_fields.get("native_subagent_history_rollover_enabled") is False
+        ):
+            # The controlled history A/B keeps its original manual-clear
+            # treatment; production TUI sessions default to native rollover.
+            return False
+        capsule_copy = copy.deepcopy(capsule)
+        if not isinstance(capsule_copy, dict):
+            raise ValueError("invalid subagent lifecycle capsule")
+        from .turn.subagent_progress import validate_subagent_lifecycle_capsule
+
+        validate_subagent_lifecycle_capsule(capsule_copy)
+        canonical = json.dumps(
+            capsule_copy,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        capsule_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        pending = {
+            "capsule": capsule_copy,
+            "capsule_sha256": capsule_sha256,
+        }
+        existing = self._pending_subagent_history_rollover
+        if existing is not None:
+            if existing == pending:
+                return True
+            raise RuntimeError("a different subagent history rollover is already pending")
+        previous_result = capsule_copy["previous_result"]
+        self.store.append(
+            "subagent_history_rollover_armed",
+            {
+                "trigger": "captured_duplicate_subagent_result",
+                "capsule_sha256": capsule_sha256,
+                "run_id": str(previous_result.get("run_id") or ""),
+                "canonical_run_id": str(previous_result.get("canonical_run_id") or ""),
+                "capsule": capsule_copy,
+            },
+        )
+        self._pending_subagent_history_rollover = pending
+        return True
+
+    def pending_subagent_history_rollover(self) -> dict[str, Any] | None:
+        pending = self._pending_subagent_history_rollover
+        return copy.deepcopy(pending) if pending is not None else None
+
+    def acknowledge_subagent_history_rollover(self, *, capsule_sha256: str) -> bool:
+        pending = self._pending_subagent_history_rollover
+        if pending is None or pending.get("capsule_sha256") != str(capsule_sha256 or ""):
+            return False
+        self._pending_subagent_history_rollover = None
+        return True
 
     def _bind_provider_retry_observer(self, client: Any) -> None:
         if client is None:
@@ -747,9 +873,19 @@ class AgentSession:
         self._reap_tracked_process_groups(event=ReapEvent.SESSION_CLOSE)
         if self.cache_keepalive is not None:
             self.cache_keepalive.close()
-        if self.child_scheduler is not None:
+        coordinator = self.subagent_coordinator or self.child_scheduler
+        defer_store_close = isinstance(coordinator, SubagentCoordinator)
+        if coordinator is not None:
             try:
-                self.child_scheduler.shutdown(cancel_pending=True)
+                if isinstance(coordinator, SubagentCoordinator):
+                    # Session close owns cancellation but must not hang forever
+                    # on a provider call or child runtime that ignores it.
+                    coordinator.shutdown(
+                        cancel_pending=True,
+                        wait_for_running=False,
+                    )
+                else:
+                    coordinator.shutdown(cancel_pending=True)
             except Exception as exc:  # noqa: BLE001 - session teardown must continue
                 self._hook_warning(
                     f"Child scheduler shutdown failed: {exc}",
@@ -804,6 +940,7 @@ class AgentSession:
                     # Only present when a path actually claimed a reason, so an
                     # ordinary run's event is byte-identical to before.
                     run_finished_payload["stop_reason"] = self.stop_reason
+                run_finished_payload["task_outcome"] = dict(self.last_turn_outcome)
                 self.crash_diagnostics.event(
                     "run_finished",
                     run_finished_payload,
@@ -838,7 +975,19 @@ class AgentSession:
             if self.mcp_manager is not None:
                 self.mcp_manager.close()
         finally:
-            self.store.close()
+            if self.agentbox_telemetry is not None:
+                self.agentbox_telemetry.close(error=reason not in {"session_close", "completed"})
+            if defer_store_close and isinstance(coordinator, SubagentCoordinator):
+                # A nonblocking coordinator shutdown may still be unwinding a
+                # provider stream or isolated workspace. Keep the durable store
+                # open until those owned workers have emitted their terminal
+                # lifecycle and the workspace provider has closed.
+                try:
+                    coordinator.run_after_shutdown_cleanup(self.store.close)
+                except Exception:  # noqa: BLE001 - never leak the store handle
+                    self.store.close()
+            else:
+                self.store.close()
 
     def _hook_warning(self, message: str, *, code: str = "hook_warning") -> None:
         clean = str(message or "").strip()
@@ -970,6 +1119,9 @@ class AgentSession:
 
     def refresh_compactor_calibration_filters(self) -> None:
         compactor = self.conversation_compactor
+        client_updater = getattr(compactor, "update_main_client", None)
+        if callable(client_updater):
+            client_updater(self.client)
         updater = getattr(compactor, "update_calibration_filters", None)
         if not callable(updater):
             return
@@ -1150,6 +1302,8 @@ class AgentSession:
                     persistent_has_media=request_contains_media(self.messages),
                 )
             self.store.append("llm_usage", usage_record.to_payload())
+            if self.agentbox_telemetry is not None:
+                self.agentbox_telemetry.record_usage(usage_record)
             return usage_record
         except Exception as exc:  # noqa: BLE001 -- accounting cannot break the agent turn
             self.store.append(
@@ -1292,21 +1446,51 @@ class AgentSession:
         )
         if rewrite_payload is not None:
             self.store.append("final_summary_rewrite", rewrite_payload)
-        # Keep ordinary text replies in history so follow-up requests retain the
-        # assistant turn even when the provider supplies no opaque metadata.
-        assistant_message = (
-            None if internal_fallback else {"role": "assistant", "content": emitted_text}
-        )
+        # Host verdicts and artifact identity are appended after any model
+        # translation, so a rewrite cannot alter them or trigger an extra call.
+        if (final_event_payload or {}).get("verification_notice") is True:
+            emitted_text += task_outcome_notice(final_event_payload["task_outcome"])
+        checkpoint = getattr(self._anytime_checkpoints, "best", None)
+        contract = getattr(self._turn_execution_state, "acceptance_contract", None)
+        if (
+            checkpoint
+            and checkpoint.get("task_id") == getattr(self.task_state, "task_id", "")
+            and contract is not None
+            and checkpoint.get("acceptance_revision", "") == contract.acceptance_revision
+        ):
+            checkpoint_path = checkpoint["archive_path"]
+            if checkpoint_path not in emitted_text:
+                emitted_text += f"\n\nPreserved verified checkpoint: [{checkpoint['archive_sha256'][:12]}](<{checkpoint_path}>)."
+        # Every completed reply is a turn boundary. Previously only replies with
+        # provider metadata entered live history, leaving ordinary text replies
+        # visible in the UI but absent from the next provider request.
+        assistant_message = {"role": "assistant", "content": emitted_text}
         if assistant_response is not None:
             assistant_message = assistant_message_from_response(
                 assistant_response,
                 content=emitted_text,
             )
-        extra_payload = (
-            {"message": assistant_message}
-            if assistant_message is not None and PROVIDER_METADATA_KEY in assistant_message
-            else None
-        )
+        history_message = assistant_message
+        if internal_fallback:
+            # Keep the complete user-visible report in durable history for audit
+            # and resume rendering.  Provider requests project this marked
+            # message to a neutral terminal boundary instead of replaying its
+            # imperative recovery prose into a later turn.
+            history_message = mark_message_internal(
+                {"role": "assistant", "content": emitted_text},
+                kind=internal_fallback_kind or "forced_final_summary_fallback",
+            )
+        extra_payload: dict[str, Any] | None = None
+        if internal_fallback or PROVIDER_METADATA_KEY in history_message:
+            extra_payload = {"message": history_message}
+        if internal_fallback:
+            extra_payload = {
+                **(extra_payload or {}),
+                "internal_fallback": True,
+                "artifact_visibility": ArtifactVisibility.INTERNAL.value,
+            }
+            if internal_fallback_kind:
+                extra_payload["internal_fallback_kind"] = internal_fallback_kind
         if internal_fallback and self.subagent_depth > 0:
             # A nested run's locally generated stop report is internal state. The
             # nested surface forwards assistant messages up to the parent's panel,
@@ -1314,7 +1498,7 @@ class AgentSession:
             # tool result never carries it. Record it; do not show it.
             self.store.append(
                 "assistant_message",
-                {"content": emitted_text, "internal_fallback": True},
+                {"content": emitted_text, **(extra_payload or {})},
             )
         else:
             self._emit_assistant_message_if_changed(
@@ -1323,18 +1507,8 @@ class AgentSession:
                 extra_payload=extra_payload,
                 streamed_text_emitted=streamed_text_emitted,
             )
-        if assistant_message is not None:
-            if internal_fallback:
-                # Today a fallback always arrives with assistant_response=None, so
-                # nothing is appended and this does not fire. It is here because the
-                # invariant is "an internal artifact that enters the transcript is
-                # marked", and that has to hold at the point of entry, not by anyone
-                # remembering to re-check later.
-                mark_message_internal(
-                    assistant_message,
-                    kind=internal_fallback_kind or "forced_final_summary_fallback",
-                )
-            self.messages.append(assistant_message)
+        if history_message is not None:
+            self.messages.append(history_message)
         final_payload: dict[str, Any] = {"content": emitted_text}
         if internal_fallback:
             # A locally generated stop report, not a model answer. Recorded as a
@@ -1379,7 +1553,20 @@ class AgentSession:
                     return value.strip()
             return ""
 
-        for message in self.messages:
+        start_index = self._active_turn_message_start_index
+        if isinstance(start_index, int) and 0 <= start_index <= len(self.messages):
+            turn_messages = self.messages[start_index:]
+        else:
+            # Direct unit callers and legacy sessions may not have the explicit
+            # boundary.  Fall back to the most recent user-role boundary; live
+            # ``run_turn`` calls always take the explicit path above.
+            turn_messages = self.messages
+            for index in range(len(self.messages) - 1, -1, -1):
+                if str(self.messages[index].get("role") or "") == "user":
+                    turn_messages = self.messages[index + 1 :]
+                    break
+
+        for message in turn_messages:
             role = str(message.get("role") or "")
             if role == "assistant":
                 for raw_call in message.get("tool_calls") or []:
@@ -1428,6 +1615,14 @@ class AgentSession:
                 _append_unique(listed_paths, path)
             elif name in {"fs_write", "fs_edit", "apply_patch"} and path:
                 _append_unique(edited_paths, path)
+            elif name == "subagent_apply" and isinstance(result, dict):
+                applied_paths = result.get("applied_paths")
+                if isinstance(applied_paths, list) and applied_paths:
+                    for applied_path in applied_paths:
+                        if isinstance(applied_path, str):
+                            _append_unique(edited_paths, applied_path)
+                else:
+                    _append_unique(other_actions, name)
             elif name in {"shell", "shell_command", "shell_run", "verify_run"} and command:
                 if name == "verify_run":
                     _append_unique(verification_commands, command)
@@ -1455,6 +1650,7 @@ class AgentSession:
         max_steps: int | None,
         fallback_reason: str,
         latest_assistant_text: str = "",
+        implementation_workflow_active: bool | None = None,
     ) -> str:
         snapshot = self._forced_final_summary_activity_snapshot()
 
@@ -1504,24 +1700,40 @@ class AgentSession:
             "- Continue from the recorded tool results instead of restarting from scratch.",
         ]
         writes_allowed = self.workspace_write_contract_allows_writes()
-        if not edited_paths and writes_allowed:
+        # Permissions are a capability ceiling, not evidence that the user asked
+        # for implementation. Nested implementers have a typed write contract;
+        # top-level interactive turns need either explicit controller authority
+        # or an observed edit before local fallback prose may claim there is an
+        # implementation/verification workflow to finish.
+        if self.subagent_depth > 0:
+            # A nested child's profile is a typed effect contract, so it is
+            # stronger evidence than the root controller's interactive intent.
+            implementation_active = bool(writes_allowed)
+        elif implementation_workflow_active is None:
+            implementation_active = bool(writes_allowed and edited_paths)
+        else:
+            implementation_active = bool(
+                writes_allowed and (implementation_workflow_active or edited_paths)
+            )
+        if not edited_paths and implementation_active:
             remaining.append(
                 "- Implementation has not started yet; identify the smallest safe fix first."
             )
         elif not edited_paths:
-            remaining.append("- Deliver the requested analysis or report.")
+            if self.subagent_depth > 0 and not writes_allowed:
+                remaining.append("- Deliver the requested analysis or report.")
+            else:
+                remaining.append("- Complete the requested result from the recorded evidence.")
         if edited_paths and not verification_commands:
             remaining.append("- Run focused verification for the edited files before finalizing.")
         if failed_actions:
             remaining.append(
                 f"- Resolve failed tool calls: {_join_limited(failed_actions, limit=5)}."
             )
-        if writes_allowed:
+        if implementation_active:
             remaining.append("- Finish the requested implementation or report a concrete blocker.")
         else:
-            remaining.append(
-                "- Report a concrete blocker if the requested result cannot be delivered."
-            )
+            remaining.append("- Complete the requested result or report a concrete blocker.")
 
         kind = _normalize_forced_summary_termination_kind(termination_kind)
         if kind == ForcedFinalSummaryTerminationKind.STEP_BUDGET_EXHAUSTED:
@@ -1546,7 +1758,7 @@ class AgentSession:
             stop_risk,
             "- This fallback was generated from runtime state before the turn terminated.",
         ]
-        if not verification_commands:
+        if not verification_commands and implementation_active:
             risks.append("- No verification result was recorded in this turn.")
 
         return (
@@ -1569,6 +1781,7 @@ class AgentSession:
         latest_assistant_text: str = "",
         allow_llm_summary: bool = True,
         local_summary_override: str = "",
+        implementation_workflow_active: bool | None = None,
         final_event_payload: dict[str, Any] | None = None,
     ) -> str:
         normalized_termination_kind = _normalize_forced_summary_termination_kind(
@@ -1655,6 +1868,7 @@ class AgentSession:
                     max_steps=max_steps,
                     fallback_reason=fallback_reason,
                     latest_assistant_text=latest_assistant_text,
+                    implementation_workflow_active=implementation_workflow_active,
                 )
             fallback_payload: dict[str, Any] = {
                 "reason": reason,
@@ -1694,6 +1908,55 @@ class AgentSession:
             self.store.append("forced_final_summary_completed", completed_payload)
         return emitted_text
 
+    def _record_task_outcome(
+        self, *, exit_code: int | None, reason: str, terminal: bool = True
+    ) -> dict[str, Any]:
+        state = self._turn_execution_state
+        task_id = getattr(self.task_state, "task_id", "")
+        state_payload = state.as_payload() if state is not None else None
+        baseline = self._task_evidence_state
+        if state_payload is None and baseline is not None and baseline.task_id == task_id:
+            # Early provider/deadline exits still refer to the current task's
+            # cumulative generation, without reusing any previous turn's proof.
+            state_payload = {
+                "verification_relevant_edit_generation": baseline.verification_relevant_edit_generation,
+                "touched_repo_paths": sorted(baseline.touched_repo_paths),
+            }
+        record = task_outcome_record(
+            exit_code=exit_code,
+            reason=reason,
+            task_id=task_id,
+            state=state_payload,
+            terminal=terminal,
+        )
+        record["session_id"] = self.store.session_id
+        record["runtime_kind"] = self.runtime_kind.value
+        checkpoint = getattr(self._anytime_checkpoints, "best", None)
+        if (
+            checkpoint
+            and checkpoint.get("task_id") == record["task_id"]
+            and checkpoint.get("acceptance_revision", "") == record["acceptance_revision"]
+        ):
+            record["best_verified_checkpoint"] = dict(checkpoint)
+        if record == self.last_turn_outcome:
+            return record
+        self.last_turn_outcome = record
+        # Diagnostics are independent sinks. A failed session log must not
+        # suppress the explicitly requested host artifact or mask a provider error.
+        try:
+            self.store.append("turn_outcome", record)
+        except Exception:
+            pass
+        if self.store.artifact_persistence_enabled:
+            try:
+                atomic_write_json(self.store.path.with_suffix(".outcome.json"), record)
+            except OSError:
+                pass
+        host_output = env_get("ALYSIS_TASK_OUTCOME_PATH")
+        if host_output and self.subagent_depth == 0 and self.one_shot_execution:
+            atomic_write_json(Path(host_output).expanduser().resolve(), record)
+        return record
+
     def run_turn(
         self,
         instruction: str,
@@ -1704,28 +1967,169 @@ class AgentSession:
         ephemeral_user_messages: list[str] | tuple[str, ...] | None = None,
         cancellation_token: Any | None = None,
         chat_only: bool = False,
+        task_relation: str | None = None,
+        task_request_id: str | None = None,
     ) -> int:
+        # Rejected host input must not clear or republish the prior accepted
+        # task's outcome. Validate before entering the per-turn lifecycle.
+        try:
+            task_relation = validate_task_relation(task_relation)
+        except ValueError as exc:
+            self._emit_terminal_error(exc)
+            raise
+        self._turn_execution_state = None
+        self.last_turn_outcome = {}
+        self._record_task_outcome(exit_code=None, reason="turn_started", terminal=False)
         turn_thread_id = threading.get_ident()
+        turn_interrupted = False
+        cancellation_request_lock = threading.Lock()
+        cancellation_request_recorded = False
+
+        def _record_cancellation_requested() -> None:
+            """Persist the user boundary before provider/child unwind begins."""
+
+            nonlocal cancellation_request_recorded
+            with cancellation_request_lock:
+                if cancellation_request_recorded:
+                    return
+                cancellation_request_recorded = True
+                # Keep persistence inside the one-shot lock. The token's event
+                # becomes visible before callbacks run, so the turn worker can
+                # otherwise reach its finally block and record turn_interrupted
+                # while this callback is still waiting to append.
+                try:
+                    self.store.append(
+                        "cancellation_requested",
+                        {
+                            "reason": "cancelled_by_user",
+                            "trigger": "interactive_token",
+                            "runtime_kind": str(
+                                getattr(self.runtime_kind, "value", self.runtime_kind)
+                            ),
+                        },
+                    )
+                except Exception:
+                    pass
+
+        def _record_turn_interrupted(
+            *,
+            trigger: str,
+            cancellation_already_requested: bool,
+            cancellation_requested: bool,
+        ) -> None:
+            nonlocal turn_interrupted
+            if cancellation_requested and isinstance(
+                cancellation_token, InteractiveCancellationToken
+            ):
+                # The token event is published before its callbacks. Establish
+                # the durable request event here too, so a polling/cooperative
+                # provider cannot race terminal interruption ahead of it.
+                _record_cancellation_requested()
+            if turn_interrupted:
+                return
+            turn_interrupted = True
+            try:
+                self.store.append(
+                    "turn_interrupted",
+                    {
+                        "reason": "cancelled_by_user",
+                        "trigger": trigger,
+                        "cancellation_already_requested": cancellation_already_requested,
+                        "cancellation_requested": cancellation_requested,
+                        "runtime_kind": str(getattr(self.runtime_kind, "value", self.runtime_kind)),
+                    },
+                )
+            except Exception:
+                pass
+
+        cancellation_unsubscribe: Callable[[], None] | None = None
+        cancellation_request_clear: Callable[[], None] | None = None
+        record_cancellation_request: Callable[[], None] | None = None
+        if isinstance(cancellation_token, InteractiveCancellationToken):
+            record_cancellation_request = _record_cancellation_requested
+            set_request_callback = getattr(cancellation_token, "set_request_callback", None)
+            clear_request_callback = getattr(cancellation_token, "clear_request_callback", None)
+            if callable(set_request_callback):
+                set_request_callback(_record_cancellation_requested)
+                if callable(clear_request_callback):
+                    cancellation_request_clear = clear_request_callback
+            else:
+                subscribe = getattr(cancellation_token, "subscribe", None)
+                if callable(subscribe):
+                    cancellation_unsubscribe = subscribe(_record_cancellation_requested)
+
         self._turn_owner_thread_id = turn_thread_id
         self._bind_provider_retry_observer(self.client)
         try:
-            return _run_turn(
-                self,
-                instruction,
-                image_paths=image_paths,
-                routing_mode_override=routing_mode_override,
-                ephemeral_system_messages=ephemeral_system_messages,
-                ephemeral_user_messages=ephemeral_user_messages,
-                cancellation_token=cancellation_token,
-                chat_only=chat_only,
+            if self.agentbox_telemetry is None:
+                return _run_turn(
+                    self,
+                    instruction,
+                    image_paths=image_paths,
+                    routing_mode_override=routing_mode_override,
+                    ephemeral_system_messages=ephemeral_system_messages,
+                    ephemeral_user_messages=ephemeral_user_messages,
+                    cancellation_token=cancellation_token,
+                    record_cancellation_request=record_cancellation_request,
+                    chat_only=chat_only,
+                    task_relation=task_relation,
+                    task_request_id=task_request_id,
+                )
+            self.agentbox_telemetry.task(instruction)
+            with self.agentbox_telemetry.turn():
+                return _run_turn(
+                    self,
+                    instruction,
+                    image_paths=image_paths,
+                    routing_mode_override=routing_mode_override,
+                    ephemeral_system_messages=ephemeral_system_messages,
+                    ephemeral_user_messages=ephemeral_user_messages,
+                    cancellation_token=cancellation_token,
+                    record_cancellation_request=record_cancellation_request,
+                    chat_only=chat_only,
+                    task_relation=task_relation,
+                    task_request_id=task_request_id,
+                )
+        except KeyboardInterrupt:
+            self._record_task_outcome(exit_code=130, reason="cancelled_by_user")
+            # Interactive Esc/Ctrl-C uses KeyboardInterrupt for its established
+            # caller control flow, but first publish cooperative cancellation so
+            # the finally block can stop every accepted child through the
+            # coordinator. This token belongs to one turn only; later messages
+            # receive a fresh token from their interactive host.
+            was_cancelled = bool(
+                cancellation_token is not None
+                and getattr(cancellation_token, "is_cancelled", False)
             )
+            cancel = getattr(cancellation_token, "cancel", None)
+            if not was_cancelled and callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+            cancellation_requested = bool(
+                cancellation_token is not None
+                and getattr(cancellation_token, "is_cancelled", False)
+            )
+            _record_turn_interrupted(
+                trigger="cancellation_token" if was_cancelled else "keyboard_interrupt",
+                cancellation_already_requested=was_cancelled,
+                cancellation_requested=cancellation_requested,
+            )
+            raise
         except CooperativeCancellationError as exc:
             # The budget watchdog cancels through the same cooperative channel a
             # user does, so the two are told apart by reason. A budget stop is a
-            # normal outcome and is finalized cleanly; a user cancellation and
-            # every other cooperative stop fall through to the failure boundary
-            # below, unchanged.
+            # normal outcome and is finalized cleanly. Interactive cancellation
+            # retains KeyboardInterrupt as the host boundary; every other
+            # cooperative stop falls through to terminal-failure handling.
+            if (
+                isinstance(cancellation_token, InteractiveCancellationToken)
+                and cancellation_token.is_cancelled
+            ):
+                raise KeyboardInterrupt(str(exc)) from None
             if not is_budget_cancellation(exc):
+                self._record_task_outcome(exit_code=130, reason="cancelled")
                 self._emit_terminal_error(exc)
                 raise
             return self._finalize_run_budget_stop()
@@ -1734,38 +2138,100 @@ class AgentSession:
             # run, interactive chat, Forge workers, subagents) routes turns through
             # here, so one durable, redacted record makes a crashed build
             # reconstructable from artifacts alone. Re-raise unchanged afterwards.
+            if (
+                isinstance(cancellation_token, InteractiveCancellationToken)
+                and cancellation_token.is_cancelled
+            ):
+                raise KeyboardInterrupt from None
+            category = classify_failure_category(exc)
+            self._record_task_outcome(
+                exit_code=1,
+                reason="provider_failure"
+                if category
+                in {
+                    FailureCategory.PROVIDER_UNAVAILABLE,
+                    FailureCategory.PROVIDER_THROTTLED,
+                    FailureCategory.PROVIDER_ERROR,
+                }
+                else "terminal_error",
+            )
             self._emit_terminal_error(exc)
             raise
         finally:
             # Same reasoning as the boundary above: this is the only per-turn point
             # that sees normal returns, exceptions, and cancellation, so turn-level
             # process hygiene belongs here rather than in the loop's success path.
+            for tool in self.tools.values():
+                visual_delivery = getattr(tool, "visual_delivery", None)
+                if visual_delivery is not None:
+                    visual_delivery.clear_visual_messages()
             try:
-                if (
+                cancellation_requested = bool(
                     cancellation_token is not None
-                    and bool(getattr(cancellation_token, "is_cancelled", False))
-                    and self.child_scheduler is not None
+                    and getattr(cancellation_token, "is_cancelled", False)
+                )
+                if (
+                    isinstance(cancellation_token, InteractiveCancellationToken)
+                    and cancellation_requested
                 ):
-                    pending_run_ids = self.child_scheduler.pending_run_ids()
-                    if pending_run_ids:
-                        self.child_scheduler.cancel(
-                            run_id=pending_run_ids,
-                            wait_for_running=True,
-                            # Unbounded while there is budget left, as before.
-                            # Once it is gone this join has nothing to wait
-                            # with, and a child that ignores its cancellation
-                            # would otherwise pin the run open indefinitely --
-                            # on a path that only became reachable now that a
-                            # budget stop cancels cooperatively.
-                            wait_timeout_s=(
-                                resolve_budget_grace_seconds()
-                                if (
-                                    self.execution_deadline is not None
-                                    and self.execution_deadline.is_exhausted()
-                                )
-                                else None
-                            ),
+                    self._record_task_outcome(exit_code=130, reason="cancelled_by_user")
+                    # TUI cancellation is cooperative: it can unwind as a normal
+                    # return or as a provider-specific error rather than a direct
+                    # KeyboardInterrupt. The token is the durable authority in
+                    # every case, while the helper keeps the event one-per-turn.
+                    _record_turn_interrupted(
+                        trigger="cancellation_token",
+                        cancellation_already_requested=True,
+                        cancellation_requested=True,
+                    )
+                if (
+                    (turn_interrupted or cancellation_requested)
+                    and self.child_scheduler is not None
+                    and getattr(self, "_turn_owner_thread_id", None) == turn_thread_id
+                ):
+                    wait_timeout_s = (
+                        resolve_budget_grace_seconds()
+                        if (
+                            self.execution_deadline is not None
+                            and self.execution_deadline.is_exhausted()
                         )
+                        else None
+                    )
+                    cancel_parent_turn = getattr(
+                        self.child_scheduler,
+                        "cancel_parent_turn",
+                        None,
+                    )
+                    if cancellation_token is not None and callable(cancel_parent_turn):
+                        cancellation = cancel_parent_turn(
+                            parent_cancellation_token=cancellation_token,
+                            wait_for_running=True,
+                            wait_timeout_s=wait_timeout_s,
+                        )
+                        pending_run_ids = list(cancellation.get("parent_scoped_run_ids") or [])
+                        cancellation_wait_started = bool(
+                            cancellation.get("cancellation_wait_started")
+                        )
+                    elif not isinstance(
+                        cancellation_token,
+                        InteractiveCancellationToken,
+                    ):
+                        # Compatibility for scheduler implementations without
+                        # turn-token ownership. Interactive tokens must never use
+                        # this session-wide fallback because it could catch work
+                        # accepted by a later turn.
+                        pending_run_ids = self.child_scheduler.pending_run_ids()
+                        cancellation_wait_started = bool(pending_run_ids)
+                        if pending_run_ids:
+                            self.child_scheduler.cancel(
+                                run_id=pending_run_ids,
+                                wait_for_running=True,
+                                wait_timeout_s=wait_timeout_s,
+                            )
+                    else:
+                        pending_run_ids = []
+                        cancellation_wait_started = False
+                    if pending_run_ids and cancellation_wait_started:
                         self.store.append(
                             "subagent_turn_end_enforcement",
                             {
@@ -1776,10 +2242,16 @@ class AgentSession:
                         )
             finally:
                 try:
-                    self._reap_tracked_process_groups(event=ReapEvent.TURN_FINALIZATION)
+                    if cancellation_request_clear is not None:
+                        cancellation_request_clear()
+                    if cancellation_unsubscribe is not None:
+                        cancellation_unsubscribe()
                 finally:
-                    if getattr(self, "_turn_owner_thread_id", None) == turn_thread_id:
-                        self._turn_owner_thread_id = None
+                    try:
+                        self._reap_tracked_process_groups(event=ReapEvent.TURN_FINALIZATION)
+                    finally:
+                        if getattr(self, "_turn_owner_thread_id", None) == turn_thread_id:
+                            self._turn_owner_thread_id = None
 
     def _finalize_run_budget_stop(self) -> int:
         """Finalize a watchdog-cancelled run as a clean budget stop.
@@ -1793,6 +2265,7 @@ class AgentSession:
         exit zero, because running out of time is an outcome and not a crash.
         """
         self.stop_reason = STOP_REASON_RUN_BUDGET_EXHAUSTED
+        self._record_task_outcome(exit_code=BUDGET_STOP_EXIT_CODE, reason="deadline_exhausted")
         payload: dict[str, Any] = {
             "operation": "budget_watchdog",
             "stop_reason": STOP_REASON_RUN_BUDGET_EXHAUSTED,
@@ -1974,6 +2447,7 @@ def create_session(
     session_log_dir_override: Path | None = None,
     session_id_override: str | None = None,
     prompt_cache_parent_session_id: str | None = None,
+    provider_session_id: str | None = None,
     surface: Surface | None = None,
     usage_role: str = "main",
     trusted_system_prompt_override: str | None = None,
@@ -2122,7 +2596,7 @@ def create_session(
             workspace_root=workspace_context.workspace_root,
             role=role,
             profile_name=active_profile_name,
-            session_id=session_id if session_scoped_cache_affinity else None,
+            session_id=provider_session_id if session_scoped_cache_affinity else None,
         )
 
     registry = ModelRegistry(cfg=session_cfg, api_key=api_key)
@@ -2146,10 +2620,11 @@ def create_session(
     session_id = session_id_override.strip() if session_id_override else make_session_id()
     if not session_id:
         session_id = make_session_id()
+    provider_session_id = str(provider_session_id or "").strip() or session_id
     prompt_cache_stream_key = resolve_prompt_cache_key(session_cfg)
     if prompt_cache_stream_key is None and session_cfg.cache.prompt_cache_key_enabled:
         prompt_cache_stream_key = derive_prompt_cache_stream_key(
-            session_id=session_id,
+            session_id=provider_session_id,
             parent_session_id=prompt_cache_parent_session_id,
         )
     if mcp_manager is None:
@@ -2194,16 +2669,7 @@ def create_session(
             role=ROLE_COMPACTOR,
             plan=None,
         )
-    router_model_name = ""
-    if resolved_skills_enabled and skills_auto_invoke and bool(discovered_skills.ordered):
-        router_model_name = resolve_model_for_role(
-            cfg=session_cfg,
-            role=ROLE_ROUTER,
-            plan=None,
-        )
     active_model_refs = [ActiveModelRef(role=ROLE_CODING, model_name=session_cfg.model)]
-    if router_model_name:
-        active_model_refs.append(ActiveModelRef(role=ROLE_ROUTER, model_name=router_model_name))
     if compactor_model_name:
         active_model_refs.append(
             ActiveModelRef(role=ROLE_COMPACTOR, model_name=compactor_model_name)
@@ -2224,63 +2690,43 @@ def create_session(
         prompt_cache_namespace=_prompt_cache_namespace(ROLE_CODING),
         enable_thinking=llm_enable_thinking,
         reasoning_effort=llm_reasoning_effort,
-        session_id=session_id,
+        session_id=provider_session_id,
     )
-    router_client: ChatClient | None = None
-    if router_model_name:
-        selector_timeout_s = min(llm_timeout_s, _SKILL_SELECTOR_TIMEOUT_S)
-        router_client = _make_session_llm_client(
-            cfg=session_cfg,
-            api_key=api_key,
-            model=router_model_name,
-            timeout_s=selector_timeout_s,
-            temperature=0.0,
-            prompt_cache_key=prompt_cache_stream_key,
-            prompt_cache_retention=resolve_prompt_cache_retention(session_cfg),
-            prompt_cache_namespace=_prompt_cache_namespace(ROLE_ROUTER),
-            enable_thinking=False,
-            reasoning_effort="",
-            session_id=session_id,
-        )
-        # Client adapters normalize an empty effort to ``None``. Keep the
-        # selector's session-owned state explicit so later in-place reloads and
-        # stale-client checks preserve the reasoning-off contract verbatim.
-        router_client.reasoning_effort = ""
-        if hasattr(router_client, "stream_no_progress_timeout_s"):
-            router_client.stream_no_progress_timeout_s = min(
-                float(router_client.stream_no_progress_timeout_s),
-                selector_timeout_s,
-            )
-        if hasattr(router_client, "provider_retry_settings"):
-            router_client.provider_retry_settings = _skill_selector_provider_retry_settings(
-                session_cfg
-            )
     sessions_dir = (
         session_log_dir_override
         if session_log_dir_override is not None
         else resolve_sessions_dir(session_cfg)
     )
-    store = SessionStore(
-        enabled=not no_log,
-        artifact_persistence_enabled=(not no_log) or session_log_dir_override is not None,
-        sessions_dir=sessions_dir,
-        session_id=session_id,
-        cwd=str(initial_active_workdir),
-        repo_root=str(root),
-        workspace_root=str(workspace_context.workspace_root),
-        focus_dir=str(workspace_context.focus_path),
-        git_root=(
-            str(workspace_context.git_root) if workspace_context.git_root is not None else None
-        ),
-        workspace_kind=workspace_context.workspace_kind,
-        binding_source=binding_source,
-        binding_requested_path=binding_requested_path,
-        binding_risk_level=binding_risk_level,
-        binding_created_path=binding_created_path,
-        runtime_kind=resolved_runtime_kind.value,
-        active_workdir=str(initial_active_workdir),
-        active_workdir_relpath=initial_active_workdir_relpath,
-    )
+    try:
+        store = SessionStore(
+            enabled=not no_log,
+            artifact_persistence_enabled=(not no_log) or session_log_dir_override is not None,
+            sessions_dir=sessions_dir,
+            session_id=session_id,
+            cwd=str(initial_active_workdir),
+            repo_root=str(root),
+            workspace_root=str(workspace_context.workspace_root),
+            focus_dir=str(workspace_context.focus_path),
+            git_root=(
+                str(workspace_context.git_root) if workspace_context.git_root is not None else None
+            ),
+            workspace_kind=workspace_context.workspace_kind,
+            binding_source=binding_source,
+            binding_requested_path=binding_requested_path,
+            binding_risk_level=binding_risk_level,
+            binding_created_path=binding_created_path,
+            runtime_kind=resolved_runtime_kind.value,
+            active_workdir=str(initial_active_workdir),
+            active_workdir_relpath=initial_active_workdir_relpath,
+        )
+    except SessionStoreUnavailableError as exc:
+        # A durable session log was requested and cannot be provided. Refuse
+        # to start rather than run an unlogged session that would look like
+        # a deliberate ``--no-log`` one; the operator chooses explicitly.
+        raise ConfigError(
+            f"Session log unavailable: {exc}. Fix the sessions directory "
+            f"({sessions_dir}) or pass --no-log to run without a durable session log."
+        ) from exc
     resolved_crash_diagnostic_log_path = resolve_crash_diagnostic_log_path(
         session_cfg,
         cli_diagnostic_log_path=crash_diagnostic_log_path,
@@ -2426,6 +2872,7 @@ def create_session(
                     **sampling_warning.payload(),
                 },
             )
+        resolved_llm_timeout = resolve_llm_timeout(cfg)
         store.append(
             CONFIG_SNAPSHOT_EVENT,
             config_snapshot_payload(
@@ -2433,6 +2880,18 @@ def create_session(
                 version=__version__,
                 build_info=load_build_info().telemetry_payload(),
                 sampling=sampling_settings,
+                # What the session will enforce, not what the config file says:
+                # ``config.llm_timeout_s`` above is the raw field (its default
+                # when unset), while an ALYSIS_LLM_TIMEOUT_S override governs
+                # the actual requests. Recording only the former misdiagnosed
+                # a full 89-task campaign as having dropped the operator's
+                # timeout. Values here go through the same resolvers the
+                # session itself uses, paired with the source that won.
+                effective_values={
+                    "llm_timeout_s": resolved_llm_timeout.seconds,
+                    "llm_timeout_source": resolved_llm_timeout.source,
+                    "prompt_guidance_profile": prompt_context.prompt_guidance_profile,
+                },
             ),
         )
 
@@ -2441,6 +2900,10 @@ def create_session(
         {
             "session_source": normalized_session_source,
             "session_source_metadata": normalized_session_source_metadata,
+            # Marks a log written by a task-state-aware runtime: on resume, a
+            # request without an acceptance record was not accepted, so the
+            # legacy first-user-message fallback never applies to this log.
+            "task_state_schema": TASK_STATE_SCHEMA_VERSION,
             "mode": mode,
             "runtime_kind": resolved_runtime_kind.value,
             "max_steps": max_steps,
@@ -2448,7 +2911,7 @@ def create_session(
             "task_max_steps": session_cfg.task_max_steps,
             "subagent_max_steps": session_cfg.subagent_max_steps,
             "model": session_cfg.model,
-            "router_model": router_model_name,
+            "prompt_guidance_profile": prompt_context.prompt_guidance_profile,
             "base_url_descriptor": endpoint_descriptor(session_cfg.base_url),
             "profile_name": active_profile.name,
             "protocol": active_profile.protocol,
@@ -2777,11 +3240,19 @@ def create_session(
                 )
             )
         )
+        subagent_coordinator_holder: dict[str, SubagentCoordinator] = {}
         child_scheduler_holder: dict[str, ChildScheduler] = {}
+        tool_availability_holder: dict[str, ToolAvailabilitySnapshot] = {}
         read_ledger_holder: dict[str, SessionReadLedger] = {}
+
+        def _capture_subagent_coordinator(coordinator: SubagentCoordinator) -> None:
+            subagent_coordinator_holder["coordinator"] = coordinator
 
         def _capture_child_scheduler(scheduler: ChildScheduler) -> None:
             child_scheduler_holder["scheduler"] = scheduler
+
+        def _capture_tool_availability(snapshot: ToolAvailabilitySnapshot) -> None:
+            tool_availability_holder["snapshot"] = copy_tool_availability_snapshot(snapshot)
 
         def _capture_read_ledger(ledger: SessionReadLedger) -> None:
             read_ledger_holder["ledger"] = ledger
@@ -2844,6 +3315,7 @@ def create_session(
             host_action_handler=host_action_handler,
             host_action_capabilities=host_action_capabilities,
             child_scheduler_sink=_capture_child_scheduler,
+            tool_availability_sink=_capture_tool_availability,
             parent_steer_inbox=parent_steer_inbox,
             read_ledger_sink=_capture_read_ledger,
             readonly_child_web_tool_names=readonly_child_web_tool_names,
@@ -3050,7 +3522,7 @@ def create_session(
                 prompt_cache_namespace=_prompt_cache_namespace(ROLE_COMPACTOR),
                 enable_thinking=llm_enable_thinking,
                 reasoning_effort=llm_reasoning_effort,
-                session_id=session_id,
+                session_id=provider_session_id,
             )
             conversation_compactor = ConversationCompactor(
                 root=root,
@@ -3058,6 +3530,7 @@ def create_session(
                 store=store,
                 settings=compaction_settings,
                 compactor_client=compactor_client,
+                main_client=client,
                 model_registry=registry,
                 usage_summary=usage_summary,
                 usage_role=usage_role,
@@ -3169,9 +3642,6 @@ def create_session(
             surface=surface,
             store=store,
             client=client,
-            router_client=router_client,
-            _semantic_router_bound_client=client,
-            _provisioned_router_client=router_client,
             persona_client_cache={(session_cfg.model, coding_temperature): client},
             persona_client_key=(session_cfg.model, coding_temperature),
             model_registry=registry,
@@ -3185,7 +3655,10 @@ def create_session(
             tools=tools,
             tool_list=tool_list,
             messages=messages,
+            tool_availability_snapshot=tool_availability_holder["snapshot"],
             startup_messages=startup_messages,
+            provider_session_id=provider_session_id,
+            prompt_guidance_profile=prompt_context.prompt_guidance_profile,
             runtime_kind=resolved_runtime_kind,
             prompt_cache_stream_key=prompt_cache_stream_key,
             mcp_manager=mcp_manager,
@@ -3197,6 +3670,7 @@ def create_session(
             enforce_explicit_subagent_requests=bool(enforce_explicit_subagent_requests),
             subagent_depth=subagent_depth,
             subagent_registry=resolved_subagent_registry,
+            subagent_coordinator=subagent_coordinator_holder.get("coordinator"),
             child_scheduler=child_scheduler_holder.get("scheduler"),
             steer_inbox=parent_steer_inbox,
             read_ledger=read_ledger_holder.get("ledger"),
@@ -3221,6 +3695,10 @@ def create_session(
             execution_deadline=execution_deadline,
             crash_diagnostics=crash_diagnostics,
             crash_diagnostic_log_path=resolved_crash_diagnostic_log_path,
+            agentbox_telemetry=AgentBoxTelemetry.from_env(
+                root=root,
+                runtime_version=f"alysis-{__version__}",
+            ),
             process_group_registry=process_group_registry,
         )
         if subagent_depth == 0 and store.enabled:

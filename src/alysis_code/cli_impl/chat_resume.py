@@ -748,9 +748,13 @@ def _resume_chat_session(
         history_messages = gate_messages_for_provider_route(
             history_messages,
             active_route_identity,
+            preserve_internal_artifacts=True,
         )
     else:
-        history_messages = strip_provider_metadata_from_messages(history_messages)
+        history_messages = strip_provider_metadata_from_messages(
+            history_messages,
+            preserve_internal_artifacts=True,
+        )
 
     restored_trace_level = str(runtime_settings.get("trace_level") or "compact")
     trace_setter = getattr(getattr(new_session, "surface", None), "set_trace_level", None)
@@ -768,6 +772,15 @@ def _resume_chat_session(
 
     if history_messages:
         new_session.messages.extend(history_messages)
+
+    # The fresh session bootstrap carries the empty task placeholder. Restore
+    # the host-owned task identity from the persisted log so the first resumed
+    # model request names the same objective the interrupted session had.
+    task_state_note = _restore_chat_resume_task_state(
+        new_session,
+        path=target_path,
+        source_session_id=requested_id,
+    )
 
     # Restored compaction state (summary/pins) only becomes model-visible via
     # _upsert_context_messages, which otherwise runs on the next compaction.
@@ -796,6 +809,7 @@ def _resume_chat_session(
             "compaction_memory_reinjected": compaction_memory_reinjected,
             "historical_model_restored": historical_model_restored,
             "model_restore_reason": model_restore_reason,
+            **task_state_note,
         },
     )
 

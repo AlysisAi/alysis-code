@@ -1,7 +1,7 @@
-"""Persona modes PR A: registry, config keys, env-context line, surface event.
+"""Persona modes: registry, config keys, env-context line, surface event.
 
 Personas are conventions layered on the execution-mode gate (see
-``docs/personas.md``). This suite pins the registry surface: the
+``docs/personas.md``). This suite pins the persona configuration surface: the
 registry vocabulary and defaults, strict config-time validation vs lenient
 runtime normalization, the kill-switch pair, the ``persona_models.<persona>``
 dotted keys, the environment-context ``persona:`` line (absent for the no-op
@@ -420,6 +420,7 @@ def test_apply_persona_architect_scopes_writes_to_markdown(loop_mod) -> None:  #
                 "effective_mode": "review",
                 "source": "user",
                 "model": "",
+                "prompt_guidance_profile": None,
             },
         )
     ]
@@ -1300,20 +1301,16 @@ def test_sticky_persona_model_swaps_and_restores(tmp_path: Path) -> None:
     )
     try:
         base_client = session.client
-        selector_client = session.router_client
-        assert selector_client is not None
-        assert session._semantic_router_bound_client is base_client
+        assert session.router_client is None
         assert str(base_client.model) == "test-model"
         chat_facade._apply_chat_persona(session=session, persona="architect")
         assert str(session.client.model) == "planner-model"
         assert session.client is not base_client
-        assert session.router_client is selector_client
-        assert session._semantic_router_bound_client is session.client
-        assert session._provisioned_router_client is selector_client
+        assert session.router_client is None
         chat_facade._apply_chat_persona(session=session, persona="code")
         # The base client object itself is restored from the cache.
         assert session.client is base_client
-        assert session._semantic_router_bound_client is base_client
+        assert session.router_client is None
     finally:
         session.close()
 

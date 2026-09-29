@@ -872,11 +872,17 @@ def test_stream_retry_telemetry_records_restart_without_raw_content() -> None:
     reset_provider_telemetry_for_tests()
     attempts = 0
 
+    class EofStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            return httpx.Response(200, stream=_TelemetryTruncatedSseStream())
+            # Clean premature EOF exercises provider_stream_truncated. A raised
+            # RemoteProtocolError belongs to the existing connection-drop path.
+            return httpx.Response(200, stream=EofStream())
         body = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
         return httpx.Response(200, content=body)
 
@@ -895,9 +901,9 @@ def test_stream_retry_telemetry_records_restart_without_raw_content() -> None:
 
     summary = last_provider_call_summary()
     assert summary is not None
-    assert summary["retry_reasons"] == ["transport_connection_drop"]
+    assert summary["retry_reasons"] == ["provider_stream_truncated"]
     assert summary["streaming"]["stream_restart_count"] == 1
-    assert summary["streaming"]["stream_restart_reason"] == "transport_connection_drop"
+    assert summary["streaming"]["stream_restart_reason"] == "provider_stream_truncated"
     rendered = json.dumps(summary, sort_keys=True)
     assert "partial" not in rendered
 

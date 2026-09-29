@@ -13,7 +13,7 @@ import re
 import sys
 from typing import Any
 
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.formatted_text import ANSI, fragment_list_width, to_formatted_text
 
 from ...surface.styles import TerminalTheme
 
@@ -89,6 +89,7 @@ class OwlAnimation:
     def __init__(self, frames: list[list[str]]):
         self._frames = frames or []
         self._index = 0
+        self._width: int | None = None
 
     @property
     def available(self) -> bool:
@@ -97,6 +98,20 @@ class OwlAnimation:
     @property
     def frame_count(self) -> int:
         return len(self._frames)
+
+    @property
+    def width(self) -> int:
+        """Terminal cells the widest frame row needs (its escape codes excluded)."""
+        if self._width is None:
+            self._width = max(
+                (
+                    fragment_list_width(to_formatted_text(ANSI(line)))
+                    for frame in self._frames
+                    for line in frame
+                ),
+                default=0,
+            )
+        return self._width
 
     def advance(self) -> None:
         if self._frames:

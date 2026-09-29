@@ -4,6 +4,8 @@ import ipaddress
 import logging
 import os
 import platform
+import re
+import shlex
 import shutil
 import site
 import subprocess
@@ -26,6 +28,84 @@ _LOGGER = logging.getLogger("alysis_code.sandbox_runner")
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BWRAP_UNSHARE_CGROUP_SUPPORTED: bool | None = None
 _PROTECTED_REPO_META = (".git", ".alysis", ".alysis_images", "alysis-feedback")
+
+# `protect_repo_meta` mounts `.git` read-only, which blocked `git commit` —
+# the safest, most reversible git operation — with the same mechanism as
+# history rewrites. A vetted allowlist of plain staging/commit commands runs
+# with repo metadata writable for that single invocation; everything else
+# (amend, rebase, force updates, config edits, reflog) keeps the read-only
+# mount. The command must be a single simple `git` invocation: any shell
+# metacharacter disqualifies it.
+_SAFE_GIT_SHELL_METACHAR_RE = re.compile(r"[;&|<>`\n\r]|\$\(")
+_SAFE_GIT_COMMIT_VALUE_FLAGS = {"-m", "--message", "--date"}
+_SAFE_GIT_COMMIT_BARE_FLAGS = {
+    "-a",
+    "--all",
+    "-am",
+    "-q",
+    "--quiet",
+    "--no-verify",
+    "--allow-empty",
+    "--",
+}
+_SAFE_GIT_ADD_BARE_FLAGS = {"-A", "--all", "-u", "--update", "--"}
+_SAFE_GIT_CONFIG_KEYS = {"user.name", "user.email"}
+
+
+def is_safe_repo_meta_git_command(cmd: str) -> bool:
+    """True for a single plain ``git add``/``git commit`` invocation.
+
+    Deliberately conservative: unknown flags, chained commands, substitutions,
+    and every other git subcommand return False and keep the read-only mount.
+    """
+    raw = str(cmd or "").strip()
+    if not raw or _SAFE_GIT_SHELL_METACHAR_RE.search(raw):
+        return False
+    try:
+        tokens = shlex.split(raw)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "git":
+        return False
+    index = 1
+    # Optional identity config: `-c user.name=...` / `-c user.email=...` only.
+    while index + 1 < len(tokens) and tokens[index] == "-c":
+        key_value = tokens[index + 1]
+        key = key_value.split("=", 1)[0].strip().lower()
+        if key not in _SAFE_GIT_CONFIG_KEYS:
+            return False
+        index += 2
+    if index >= len(tokens):
+        return False
+    subcommand = tokens[index]
+    rest = tokens[index + 1 :]
+    if subcommand == "add":
+        for token in rest:
+            if token.startswith("-") and token not in _SAFE_GIT_ADD_BARE_FLAGS:
+                return False
+        return True
+    if subcommand == "commit":
+        position = 0
+        while position < len(rest):
+            token = rest[position]
+            if token in _SAFE_GIT_COMMIT_VALUE_FLAGS:
+                if position + 1 >= len(rest):
+                    return False
+                position += 2
+                continue
+            if any(token.startswith(f"{flag}=") for flag in _SAFE_GIT_COMMIT_VALUE_FLAGS):
+                position += 1
+                continue
+            if token in _SAFE_GIT_COMMIT_BARE_FLAGS:
+                position += 1
+                continue
+            if token.startswith("-"):
+                return False
+            position += 1
+        return True
+    return False
+
+
 _BWRAP_SYSTEM_BIND_ROOTS = (Path("/usr"), Path("/bin"), Path("/lib"), Path("/lib64"))
 _BWRAP_COMMON_TOOLCHAIN_COMMANDS = (
     "python",
@@ -526,6 +606,8 @@ def _build_bwrap_argv(
     clear_env: bool,
     profile: str,
     unshare_cgroup: bool,
+    protect_repo_meta: bool = True,
+    allow_repo_meta_writes: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     """Build bwrap argv + parent-process env. Pure function; no subprocess calls."""
 
@@ -545,7 +627,11 @@ def _build_bwrap_argv(
         args.append("--unshare-pid")
 
     args.extend(["--bind", os.fspath(root_abs), "/workspace"])
-    if profile == "hardened":
+    # Repo-meta protection now honors the protect_repo_meta setting (it was
+    # previously welded to the hardened profile, making the config knob dead on
+    # the bwrap backend), and a vetted safe git write skips the read-only
+    # mounts for its single invocation.
+    if profile == "hardened" and protect_repo_meta and not allow_repo_meta_writes:
         for host_path, rel_posix_path in _protected_repo_paths(root_abs):
             args.extend(
                 [
@@ -636,6 +722,8 @@ class BwrapShellRunner:
     network: str = "off"
     clear_env: bool = True
     profile: str = "hardened"
+    protect_repo_meta: bool = True
+    safe_git_writes: bool = True
     process_group_registry: ProcessGroupRegistry | None = None
     close_stdin: bool = False
 
@@ -647,6 +735,9 @@ class BwrapShellRunner:
         cmd: str,
         timeout_s: int,
     ) -> subprocess.CompletedProcess[str]:
+        allow_repo_meta_writes = bool(
+            self.protect_repo_meta and self.safe_git_writes and is_safe_repo_meta_git_command(cmd)
+        )
         args, run_env = _build_bwrap_argv(
             root=root,
             cwd=cwd,
@@ -655,6 +746,8 @@ class BwrapShellRunner:
             clear_env=self.clear_env,
             profile=self.profile,
             unshare_cgroup=_supports_bwrap_unshare_cgroup(),
+            protect_repo_meta=self.protect_repo_meta,
+            allow_repo_meta_writes=allow_repo_meta_writes,
         )
         return run_in_tracked_process_group(
             args,
@@ -717,6 +810,7 @@ def _build_docker_argv(
     protect_repo_meta: bool,
     env_allowlist: tuple[str, ...],
     published_ports: tuple[tuple[str, int, int], ...] = (),
+    allow_repo_meta_writes: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     """Build docker run argv + parent-process env. Pure function."""
 
@@ -737,7 +831,7 @@ def _build_docker_argv(
         "-w",
         workdir,
     ]
-    if protect_repo_meta or read_only_rootfs:
+    if (protect_repo_meta and not allow_repo_meta_writes) or read_only_rootfs:
         for host_path, rel_posix_path in _protected_repo_paths(root_abs):
             args.extend(
                 [
@@ -820,6 +914,7 @@ class DockerShellRunner:
     cpus: str | None = None
     read_only_rootfs: bool = False
     protect_repo_meta: bool = True
+    safe_git_writes: bool = True
     env_allowlist: tuple[str, ...] = ()
     warning_callback: Callable[[str], None] | None = None
     close_stdin: bool = False
@@ -834,10 +929,17 @@ class DockerShellRunner:
     ) -> subprocess.CompletedProcess[str]:
         root_abs = root.resolve()
         container_name = f"alysis-sbx-{uuid.uuid4().hex[:12]}"
+        allow_repo_meta_writes = bool(
+            self.protect_repo_meta
+            and self.safe_git_writes
+            and not self.read_only_rootfs
+            and is_safe_repo_meta_git_command(cmd)
+        )
         args, run_env = _build_docker_argv(
             root=root_abs,
             cwd=cwd,
             cmd=cmd,
+            allow_repo_meta_writes=allow_repo_meta_writes,
             container_name=container_name,
             network=self.network,
             docker_image=self.docker_image,
@@ -970,6 +1072,8 @@ def build_shell_runner_from_settings(
                 network=settings.network,
                 clear_env=settings.clear_env,
                 profile=settings.bwrap_profile,
+                protect_repo_meta=settings.protect_repo_meta,
+                safe_git_writes=settings.safe_git_writes,
                 process_group_registry=process_group_registry,
             )
         if has_docker:
@@ -982,6 +1086,7 @@ def build_shell_runner_from_settings(
                 cpus=settings.docker_cpus,
                 read_only_rootfs=settings.docker_read_only,
                 protect_repo_meta=settings.protect_repo_meta,
+                safe_git_writes=settings.safe_git_writes,
                 env_allowlist=settings.docker_env_allowlist,
                 warning_callback=warning_callback,
             )
@@ -993,6 +1098,8 @@ def build_shell_runner_from_settings(
                 network=settings.network,
                 clear_env=settings.clear_env,
                 profile=settings.bwrap_profile,
+                protect_repo_meta=settings.protect_repo_meta,
+                safe_git_writes=settings.safe_git_writes,
                 process_group_registry=process_group_registry,
             )
         return fallback_or_error(reason="bwrap backend selected, but bubblewrap is not available")
@@ -1008,6 +1115,7 @@ def build_shell_runner_from_settings(
                 cpus=settings.docker_cpus,
                 read_only_rootfs=settings.docker_read_only,
                 protect_repo_meta=settings.protect_repo_meta,
+                safe_git_writes=settings.safe_git_writes,
                 env_allowlist=settings.docker_env_allowlist,
                 warning_callback=warning_callback,
             )

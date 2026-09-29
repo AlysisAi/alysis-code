@@ -105,6 +105,28 @@ class _ScriptedClient:
         return response
 
 
+def _failed_edit_response() -> LLMResponse:
+    """Observe mutation intent without changing files, before testing write safeguards.
+
+    One-shot mode alone no longer authorizes implementation pressure. The missing
+    target makes this real tool attempt fail without producing material changes.
+    """
+    return LLMResponse(
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="attempt-initial-edit",
+                name="fs_edit",
+                arguments={
+                    "path": "missing-edit-target.py",
+                    "edits": [{"op": "replace_exact", "target": "before", "replacement": "after"}],
+                },
+            )
+        ],
+        raw={},
+    )
+
+
 def test_shell_run_semantic_progress_classifier_distinguishes_dumps_from_progress() -> None:
     for command in (
         "cat src/app.py",
@@ -503,7 +525,10 @@ def test_verification_failed_completion_gate_nudge_instructs_fix_then_rerun() ->
         verification_failure_snippet="pytest failed\nNameError: search_notes is not defined",
     )
 
-    assert "Your last verification failed: NameError: search_notes is not defined" in message
+    assert (
+        "An unresolved verification failure is recorded: NameError: search_notes is not defined"
+        in message
+    )
     assert "Fix and re-run" in message
     assert "Re-read the task statement once" in message
 
@@ -742,7 +767,7 @@ def test_claim_evidence_accepts_clean_cd_wrapper_but_rejects_masking_pipeline(
     assert _fresh_executed_evidence_for_claim(masked_state, claim_kind="tests") == []
 
 
-def test_completion_gate_accepts_configured_pytest_no_tests_skip(
+def test_completion_gate_keeps_configured_pytest_no_tests_skip_incomplete(
     tmp_path: Path,
 ) -> None:
     state = TurnExecutionState(
@@ -781,11 +806,10 @@ def test_completion_gate_accepts_configured_pytest_no_tests_skip(
     )
 
     assert state.verification_attempt_count == 1
-    assert state.last_verification_passed is True
-    assert state.covered_verification_commands == {"pytest -q"}
-    assert state.failed_verification_commands() == set()
-    assert state.last_verification_failure_snippet == ""
-    assert state.accepted_verification_evidence
+    assert state.last_verification_passed is False
+    assert state.covered_verification_commands == set()
+    assert state.missing_verification_commands() == {"pytest -q"}
+    assert not state.accepted_verification_evidence
 
     problems = _completion_gate_problems(
         state=state,
@@ -794,7 +818,7 @@ def test_completion_gate_accepts_configured_pytest_no_tests_skip(
         verification_expected=True,
         require_material_edit_evidence=True,
     )
-    assert problems == []
+    assert problems
 
 
 def test_successful_supplemental_check_before_authority_stays_unverified(
@@ -809,18 +833,21 @@ def test_successful_supplemental_check_before_authority_stays_unverified(
     _record_supplemental_check(root=tmp_path, state=state, exit_code=0)
 
     assert state.verification_attempt_count == 1
-    assert state.last_verification_passed is None
+    # A passing execution is distinct from satisfying the required selection.
+    assert state.last_verification_passed is True
     assert state.covered_verification_commands == set()
     assert state.missing_verification_commands() == {_VERIFY_OK_COMMAND}
     assert state.accepted_verification_evidence == []
     assert len(state.supplemental_verification_evidence) == 1
-    assert "verification_failed" in _completion_gate_problems(
+    problems = _completion_gate_problems(
         state=state,
         final_text="Implemented and checked.",
         blocked=False,
         verification_expected=True,
         require_material_edit_evidence=False,
     )
+    assert "verification_incomplete" in problems
+    assert "verification_failed" not in problems
 
 
 def test_successful_supplemental_check_preserves_authoritative_pass_state(
@@ -1105,7 +1132,14 @@ def test_shell_service_start_counts_as_material_work_and_durable_acceptance(
         "ownership": "DURABLE_SERVICE",
         "status": "running",
         "alive": True,
-        "readiness": {"type": "tcp", "status": "ready", "port": 8080},
+        "identity_valid": True,
+        "readiness": {
+            "type": "tcp",
+            "status": "ready",
+            "port": 8080,
+            "endpoint_owned": True,
+            "strength": "owned_endpoint",
+        },
     }
 
     _record_tool_effect(
@@ -1416,80 +1450,97 @@ def test_shell_verification_detection_rejects_non_matching_or_non_verification_c
 
 
 @pytest.mark.parametrize(
-    ("cmd", "known"),
+    ("cmd", "known", "expected"),
     [
-        ("pytest -q", ["pytest -q"]),
-        ("make verify", ["make verify"]),
-        ("just verify", ["just verify"]),
-        ("PYTHONPATH=src pytest -q", ["pytest -q"]),
-        ("env PYTHONPATH=src pytest -q", ["pytest -q"]),
-        ("python -m pytest -q", ["pytest -q"]),
-        ("python3 -m pytest -q", ["pytest -q"]),
-        ("py -m pytest -q", ["pytest -q"]),
-        ("uv run py -m pytest -q", ["pytest -q"]),
-        ("pytest tests/test_cli.py -q", ["pytest -q"]),
-        ("pytest tests/test_cli.py -v", ["pytest -q"]),
-        ("python -m pytest tests/test_cli.py -v", ["pytest -q"]),
-        ("python -m pytest tests/test_cli.py -q", ["pytest -q"]),
-        ("python3 -m pytest tests/test_cli.py -q", ["pytest -q"]),
-        ("py -m pytest tests/test_cli.py -q", ["pytest -q"]),
-        ("cd /tmp/x && python -m pytest tests/test_batching.py -v", ["pytest -q"]),
-        ("python3 -m unittest -v", ["unittest -v"]),
-        ("bash -lc 'pytest -q'", ["pytest -q"]),
-        ("bash -lc 'cd /tmp/x && python -m pytest tests/test_batching.py -v'", ["pytest -q"]),
-        ("bash -lc 'PYTHONPATH=src pytest -q'", ["pytest -q"]),
-        ("bash -lc 'make verify'", ["make verify"]),
-        ("poetry run pytest -q", ["pytest -q"]),
-        ("uv run pytest -q", ["pytest -q"]),
-        ("pipenv run pytest -q", ["pytest -q"]),
-        ("python -m ruff check .", ["ruff check ."]),
-        ("python3 -m ruff check .", ["ruff check ."]),
-        ("py -m ruff check .", ["ruff check ."]),
-        ("uv run python -m ruff check .", ["ruff check ."]),
-        ("uv run py -m ruff check .", ["ruff check ."]),
-        (r"C:\Python311\python.exe -m pytest -q", ["pytest -q"]),
-        (r"C:\Python311\python.exe -m ruff check .", ["ruff check ."]),
-        (r'"C:\Program Files\Python311\python.exe" -m pytest -q', ["pytest -q"]),
-        (r'"C:\Program Files\Python311\python.exe" -m ruff check .', ["ruff check ."]),
-        (r"uv run C:\Python311\python.exe -m pytest -q", ["pytest -q"]),
-        (r'uv run "C:\Program Files\Python311\python.exe" -m ruff check .', ["ruff check ."]),
-        (r"C:/Python311/python.exe -m pytest -q", ["pytest -q"]),
-        (r'"C:/Program Files/Python311/python.exe" -m ruff check .', ["ruff check ."]),
-        ("python -m ruff check src/app.py", ["ruff check ."]),
-        ("cargo test redirect --quiet", ["cargo test"]),
-        ("cargo check --workspace", ["cargo check"]),
-        ("npm test -- redirect", ["npm test"]),
-        ("pnpm test -- redirect", ["pnpm test"]),
-        ("go test ./pkg/...", ["go test ./..."]),
-        ("ruff check src/app.py", ["ruff check ."]),
-        ("make verify TARGET=unit", ["make verify"]),
+        ("pytest -q", ["pytest -q"], True),
+        ("make verify", ["make verify"], True),
+        ("just verify", ["just verify"], True),
+        ("PYTHONPATH=src pytest -q", ["pytest -q"], False),
+        ("env PYTHONPATH=src pytest -q", ["pytest -q"], False),
+        ("python -m pytest -q", ["pytest -q"], True),
+        ("python3 -m pytest -q", ["pytest -q"], True),
+        ("py -m pytest -q", ["pytest -q"], True),
+        ("uv run py -m pytest -q", ["pytest -q"], False),
+        ("pytest tests/test_cli.py -q", ["pytest -q"], False),
+        ("pytest tests/test_cli.py -v", ["pytest -q"], False),
+        ("python -m pytest tests/test_cli.py -v", ["pytest -q"], False),
+        ("python -m pytest tests/test_cli.py -q", ["pytest -q"], False),
+        ("python3 -m pytest tests/test_cli.py -q", ["pytest -q"], False),
+        ("py -m pytest tests/test_cli.py -q", ["pytest -q"], False),
+        ("cd /tmp/x && python -m pytest tests/test_batching.py -v", ["pytest -q"], False),
+        ("python3 -m unittest -v", ["unittest -v"], True),
+        ("bash -lc 'pytest -q'", ["pytest -q"], False),
+        (
+            "bash -lc 'cd /tmp/x && python -m pytest tests/test_batching.py -v'",
+            ["pytest -q"],
+            False,
+        ),
+        ("bash -lc 'PYTHONPATH=src pytest -q'", ["pytest -q"], False),
+        ("bash -lc 'make verify'", ["make verify"], False),
+        ("poetry run pytest -q", ["pytest -q"], False),
+        ("uv run pytest -q", ["pytest -q"], False),
+        ("pipenv run pytest -q", ["pytest -q"], False),
+        ("python -m ruff check .", ["ruff check ."], True),
+        ("python3 -m ruff check .", ["ruff check ."], True),
+        ("py -m ruff check .", ["ruff check ."], True),
+        ("uv run python -m ruff check .", ["ruff check ."], False),
+        ("uv run py -m ruff check .", ["ruff check ."], False),
+        ("C:\\Python311\\python.exe -m pytest -q", ["pytest -q"], False),
+        ("C:\\Python311\\python.exe -m ruff check .", ["ruff check ."], False),
+        ('"C:\\Program Files\\Python311\\python.exe" -m pytest -q', ["pytest -q"], False),
+        ('"C:\\Program Files\\Python311\\python.exe" -m ruff check .', ["ruff check ."], False),
+        ("uv run C:\\Python311\\python.exe -m pytest -q", ["pytest -q"], False),
+        (
+            'uv run "C:\\Program Files\\Python311\\python.exe" -m ruff check .',
+            ["ruff check ."],
+            False,
+        ),
+        ("C:/Python311/python.exe -m pytest -q", ["pytest -q"], False),
+        ('"C:/Program Files/Python311/python.exe" -m ruff check .', ["ruff check ."], False),
+        ("python -m ruff check src/app.py", ["ruff check ."], False),
+        ("cargo test redirect --quiet", ["cargo test"], False),
+        ("cargo check --workspace", ["cargo check"], False),
+        ("npm test -- redirect", ["npm test"], False),
+        ("pnpm test -- redirect", ["pnpm test"], False),
+        ("go test ./pkg/...", ["go test ./..."], False),
+        ("ruff check src/app.py", ["ruff check ."], False),
+        ("make verify TARGET=unit", ["make verify"], False),
     ],
 )
-def test_shell_verification_detection_accepts_exact_and_wrapped_effective_commands(
+def test_shell_verification_detection_distinguishes_execution_from_required_coverage(
     cmd: str,
     known: list[str],
+    expected: bool,
 ) -> None:
-    assert _shell_command_is_verification_attempt(cmd, known_verification_commands=known) is True
+    assert _shell_command_is_verification_attempt(cmd, known_verification_commands=None) is True
+    assert (
+        _shell_command_is_verification_attempt(cmd, known_verification_commands=known) is expected
+    )
 
 
 @pytest.mark.parametrize(
     ("observed", "effective", "expected"),
     [
-        ("pytest tests/test_cli.py -q", ["pytest -q", "ruff check ."], {"pytest -q"}),
-        ("pytest tests/test_cli.py -v", ["pytest -q", "ruff check ."], {"pytest -q"}),
-        ("python -m pytest tests/test_cli.py -v", ["pytest -q", "ruff check ."], {"pytest -q"}),
+        ("pytest tests/test_cli.py -q", ["pytest -q", "ruff check ."], set()),
+        ("pytest tests/test_cli.py -v", ["pytest -q", "ruff check ."], set()),
+        ("python -m pytest tests/test_cli.py -v", ["pytest -q", "ruff check ."], set()),
         (
             "cd /tmp/x && python -m pytest tests/test_batching.py -v",
             ["pytest -q", "ruff check ."],
-            {"pytest -q"},
+            set(),
         ),
-        ("ruff check src/app.py", ["pytest -q", "ruff check ."], {"ruff check ."}),
-        ("cargo test redirect --quiet", ["cargo test", "ruff check ."], {"cargo test"}),
-        ("go test ./pkg/...", ["go test ./...", "ruff check ."], {"go test ./..."}),
+        ("ruff check src/app.py", ["pytest -q", "ruff check ."], set()),
+        ("cargo test redirect --quiet", ["cargo test", "ruff check ."], set()),
+        ("go test ./pkg/...", ["go test ./...", "ruff check ."], set()),
         ("echo ok", ["pytest -q", "ruff check ."], set()),
+        (
+            "python -m pytest tests/test_cli.py -v",
+            ["pytest tests/test_cli.py -q", "ruff check ."],
+            {"pytest tests/test_cli.py -q"},
+        ),
     ],
 )
-def test_matching_effective_verification_commands_maps_targeted_commands_to_coverage(
+def test_matching_effective_verification_commands_does_not_promote_subset_coverage(
     observed: str,
     effective: list[str],
     expected: set[str],
@@ -1929,7 +1980,7 @@ def test_one_shot_greek_blocker_text_is_not_treated_as_non_final_progress(tmp_pa
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -1938,6 +1989,7 @@ def test_one_shot_greek_blocker_text_is_not_treated_as_non_final_progress(tmp_pa
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="Δεν μπορώ να προχωρήσω, χρειάζομαι έγκριση.",
                 tool_calls=[],
@@ -1991,7 +2043,7 @@ def test_one_shot_greek_completion_text_is_not_treated_as_non_final_progress(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -2001,6 +2053,7 @@ def test_one_shot_greek_completion_text_is_not_treated_as_non_final_progress(
     completion_text = "Υλοποίησα το search command, πρόσθεσα tests και έτρεξα τα tests."
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(content=completion_text, tool_calls=[], raw={}),
             LLMResponse(content=completion_text, tool_calls=[], raw={}),
             LLMResponse(content=completion_text, tool_calls=[], raw={}),
@@ -2300,13 +2353,22 @@ def test_one_shot_repeated_empty_after_read_salvages_locally(tmp_path: Path) -> 
     salvages = [event for event in events if event.get("type") == "empty_response_stall_salvage"]
 
     # The targeted retry cap still applies, then handling is bounded and the turn
-    # salvages. Exhausting that bounded recovery is an intentional clean stop.
+    # salvages. The shared stop policy treats exhausted empty-response recovery
+    # as a graceful process stop; the structured outcome must still disclose
+    # that no work was saved, rather than imply the requested edit succeeded.
     assert exit_code == 0
+    assert session.stop_reason == "empty_response_anomaly_retry_exhausted"
     assert incomplete
     assert incomplete[-1]["payload"]["attempt"] == 3
     assert 1 <= len(recoveries) <= 2
     assert len(salvages) == 1
     assert salvages[0]["payload"]["material_work_persisted"] is False
+    assert salvages[0]["payload"]["stop_reason"] == "empty_response_anomaly_retry_exhausted"
+    final = next(event["payload"] for event in reversed(events) if event.get("type") == "final")
+    assert final["degraded"] is True
+    assert final["internal_fallback"] is True
+    assert final["internal_fallback_kind"] == "empty_response_stall_salvage"
+    assert not (tmp_path / "answer.txt").exists()
     assert "forced_final_summary_requested" not in event_types
 
 
@@ -2514,17 +2576,19 @@ def test_one_shot_question_uses_normal_evidence_gate_for_explicit_artifact(
     payload = failed[0]["payload"]
     assert payload["blocked_response"] is False
     assert payload["blocked_response_allows_completion"] is False
-    assert "no_material_edits" in payload["problems"]
+    assert "expectations_unaddressed" in payload["problems"]
+    assert "acceptance_criteria_unverified" in payload["problems"]
+    assert (tmp_path / "answer.txt").read_text(encoding="utf-8") == "2\n"
     assert "clarification_requested" not in payload["problems"]
     assert "clarification_response" not in payload
     assert "clarification_allows_completion" not in payload
 
 
-def test_one_shot_plan_only_request_completes_via_advisory_completion(tmp_path: Path) -> None:
-    # Router-free path: one-shot turns always carry the execute contract, so a
-    # plan-only reply takes one bounded completion-gate repair round and then
-    # finalizes honestly as an advisory completion (no follow-through
-    # auto-continue loop).
+@pytest.mark.parametrize("one_shot_execution", [False, True])
+def test_one_shot_plan_only_request_completes_via_advisory_completion(
+    tmp_path: Path, one_shot_execution: bool
+) -> None:
+    # Invocation mode does not turn inspection or advice into a request for edits.
     cfg = AppConfig(model="test-model", routing_mode="code_only")
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -2535,7 +2599,8 @@ def test_one_shot_plan_only_request_completes_via_advisory_completion(tmp_path: 
         max_steps=4,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="one-shot-plan-only",
     )
@@ -2555,22 +2620,23 @@ def test_one_shot_plan_only_request_completes_via_advisory_completion(tmp_path: 
         session.close()
 
     assert exit_code == 0
-    assert session.client.calls == 2  # type: ignore[attr-defined]
+    assert session.client.calls == 1  # type: ignore[attr-defined]
 
     events = list(read_session_events(sessions_dir / "one-shot-plan-only.jsonl"))
     event_types = [event.get("type") for event in events]
     assert "continuation_nudge" not in event_types
     assert "one_shot_non_final_progress_detected" not in event_types
-    assert "one_shot_completion_gate_failed" in event_types
+    assert "one_shot_completion_gate_failed" not in event_types
     assert "one_shot_completion_gate_incomplete_after_retries" not in event_types
-    assert "completion_gate_accepted_with_open_problems" in event_types
-    assert "advisory_completion" in event_types
+    assert "completion_gate_accepted_with_open_problems" not in event_types
+    assert "advisory_completion" not in event_types
 
 
-def test_one_shot_review_only_request_completes_via_advisory_completion(tmp_path: Path) -> None:
-    # Router-free path: no router classification exempts review turns; the
-    # completion gate runs one bounded repair round and the turn finalizes
-    # honestly as an advisory completion.
+@pytest.mark.parametrize("one_shot_execution", [False, True])
+def test_one_shot_review_only_request_completes_via_advisory_completion(
+    tmp_path: Path, one_shot_execution: bool
+) -> None:
+    # Invocation mode does not turn inspection or advice into a request for edits.
     cfg = AppConfig(model="test-model", routing_mode="code_only")
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -2581,7 +2647,8 @@ def test_one_shot_review_only_request_completes_via_advisory_completion(tmp_path
         max_steps=4,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override="one-shot-review-only",
     )
@@ -2601,14 +2668,15 @@ def test_one_shot_review_only_request_completes_via_advisory_completion(tmp_path
         session.close()
 
     assert exit_code == 0
+    assert session.client.calls == 1  # type: ignore[attr-defined]
     events = list(read_session_events(sessions_dir / "one-shot-review-only.jsonl"))
     event_types = [event.get("type") for event in events]
     assert "one_shot_non_final_progress_detected" not in event_types
     assert "continuation_nudge" not in event_types
-    assert "one_shot_completion_gate_failed" in event_types
+    assert "one_shot_completion_gate_failed" not in event_types
     assert "one_shot_completion_gate_incomplete_after_retries" not in event_types
-    assert "completion_gate_accepted_with_open_problems" in event_types
-    assert "advisory_completion" in event_types
+    assert "completion_gate_accepted_with_open_problems" not in event_types
+    assert "advisory_completion" not in event_types
 
 
 @pytest.mark.parametrize(
@@ -2631,14 +2699,15 @@ def test_one_shot_review_only_request_completes_via_advisory_completion(tmp_path
         ),
     ],
 )
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_one_shot_non_execution_repo_question_completes_via_advisory_completion(
     tmp_path: Path,
+    one_shot_execution: bool,
     instruction: str,
     response: str,
     session_id: str,
 ) -> None:
-    # Router-free path: repo questions in one-shot mode are gate-governed like
-    # every other one-shot turn and finalize honestly as advisory completions.
+    # Invocation mode does not turn inspection or advice into a request for edits.
     cfg = AppConfig(model="test-model", routing_mode="code_only")
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -2649,7 +2718,8 @@ def test_one_shot_non_execution_repo_question_completes_via_advisory_completion(
         max_steps=4,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
     )
@@ -2669,14 +2739,15 @@ def test_one_shot_non_execution_repo_question_completes_via_advisory_completion(
         session.close()
 
     assert exit_code == 0
+    assert session.client.calls == 1  # type: ignore[attr-defined]
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     event_types = [event.get("type") for event in events]
     assert "one_shot_non_final_progress_detected" not in event_types
     assert "continuation_nudge" not in event_types
-    assert "one_shot_completion_gate_failed" in event_types
+    assert "one_shot_completion_gate_failed" not in event_types
     assert "one_shot_completion_gate_incomplete_after_retries" not in event_types
-    assert "completion_gate_accepted_with_open_problems" in event_types
-    assert "advisory_completion" in event_types
+    assert "completion_gate_accepted_with_open_problems" not in event_types
+    assert "advisory_completion" not in event_types
 
 
 @pytest.mark.parametrize(
@@ -2699,7 +2770,7 @@ def test_one_shot_non_final_progress_accepts_second_final_after_single_nudge(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -2710,6 +2781,7 @@ def test_one_shot_non_final_progress_accepts_second_final_after_single_nudge(
     repeated_progress_text = "I will implement search next."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content=repeated_progress_text,
                 tool_calls=[],
@@ -2747,7 +2819,7 @@ def test_one_shot_non_final_progress_accepts_second_final_after_single_nudge(
         session.close()
 
     assert exit_code == 0
-    assert client.calls == 2
+    assert client.calls == 3  # Failed edit, progress, and one bounded continuation.
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     assert any(event.get("type") == "continuation_nudge" for event in events)
@@ -2765,7 +2837,7 @@ def test_one_shot_non_final_progress_accepts_second_final_after_single_nudge(
     assert "No changes made:" in surface.final_messages[-1]
 
 
-def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
+def test_non_final_progress_tool_markup_is_retried_then_stops_without_execution(
     tmp_path: Path,
 ) -> None:
     cfg = AppConfig(model="test-model", routing_mode="code_only")
@@ -2776,7 +2848,7 @@ def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -2794,6 +2866,7 @@ def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
     )
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content=progress_text,
                 tool_calls=[],
@@ -2810,14 +2883,105 @@ def test_non_final_progress_second_response_is_accepted_even_if_tool_markup(
     finally:
         session.close()
 
-    assert exit_code == 0
+    assert exit_code == 1
     events = list(read_session_events(sessions_dir / "one-shot-forced-summary-tool-markup.jsonl"))
     assert any(event.get("type") == "continuation_nudge" for event in events)
     assert not [event for event in events if event.get("type") == "forced_final_summary_fallback"]
-    # Turn-contract v2: zero-edit execute turn gets a visible advisory-completion
-    # suffix; the raw tool-markup text is preserved as the leading content.
-    assert surface.final_messages[-1].startswith(raw_tool_markup)
-    assert "No changes made:" in surface.final_messages[-1]
+    assert client.calls == 4
+    assert sum(event.get("type") == "tool_call_markup_recovery" for event in events) == 1
+    assert not any("DSML" in message for message in surface.final_messages)
+    assert "Commands in those replies were not run" in surface.final_messages[-1]
+    assert not any(
+        event.get("type") == "tool_call" and event.get("payload", {}).get("name") == "shell_run"
+        for event in events
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("one_shot", [False, True])
+@pytest.mark.parametrize("native_in_first_response", [False, True])
+def test_tool_markup_recovers_to_native_tool_call_without_executing_printed_commands(
+    tmp_path: Path,
+    stream: bool,
+    one_shot: bool,
+    native_in_first_response: bool,
+) -> None:
+    (tmp_path / "proof.txt").write_text("expected content", encoding="utf-8")
+    surface = _RecordingSurface()
+    deltas: list[str] = []
+    surface.on_assistant_token = deltas.append  # type: ignore[method-assign]
+    session = create_session(
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        root=tmp_path,
+        mode="auto",
+        yes=True,
+        max_steps=6,
+        no_log=False,
+        api_key_override="x",
+        one_shot_execution=one_shot,
+        surface=surface,
+        session_log_dir_override=tmp_path / "sessions",
+    )
+    session.stream = stream
+    markup = (
+        "I will check.\n<｜｜DSML｜｜ calls>\n"
+        '<｜｜DSML｜｜ invoke name="fs_write">'
+        '<｜｜DSML｜｜ parameter name="path">must-not-exist.txt</｜｜DSML｜｜ parameter>'
+        "</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
+    )
+    read_call = ToolCall(id="read", name="fs_read", arguments={"path": "proof.txt"})
+    malformed = LLMResponse(
+        content=markup,
+        tool_calls=[read_call] if native_in_first_response else [],
+        raw={},
+        provider_metadata={"openai_compat_reasoning": {"reasoning_content": "Preserved state"}},
+    )
+    client = _ScriptedClient(
+        [
+            malformed,
+            *(
+                []
+                if native_in_first_response
+                else [LLMResponse(content="", tool_calls=[read_call], raw={})]
+            ),
+            LLMResponse(content="The file contains expected content.", tool_calls=[], raw={}),
+        ]
+    )
+    original_chat = client.chat
+
+    def chat(*, on_reasoning_delta=None, **kwargs):
+        response = original_chat(**kwargs)
+        if kwargs.get("stream") and kwargs.get("on_text_delta"):
+            for char in response.content:
+                kwargs["on_text_delta"](char)
+        return response
+
+    client.chat = chat  # type: ignore[method-assign]
+    session.client = client  # type: ignore[assignment]
+    event_path = session.store.path
+    try:
+        assert session.run_turn("Read proof.txt and tell me its contents.") == 0
+    finally:
+        session.close()
+    assert client.calls == (2 if native_in_first_response else 3)
+    assert not (tmp_path / "must-not-exist.txt").exists()
+    assert "DSML" not in "".join(deltas + surface.final_messages)
+    assert surface.final_messages[-1] == "The file contains expected content."
+    events = list(read_session_events(event_path))
+    assert sum(e["type"] == "tool_call_markup_recovery" for e in events) == (
+        0 if native_in_first_response else 1
+    )
+    tool_events = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_events) == 1
+    assert tool_events[0]["payload"]["name"] == "fs_read"
+    assert all("must-not-exist" not in str(m) for m in client.call_records[1]["messages"])
+    assistant = next(
+        m for m in reversed(client.call_records[1]["messages"]) if m["role"] == "assistant"
+    )
+    assert (
+        assistant["_alysis_provider_metadata"]["openai_compat_reasoning"]["reasoning_content"]
+        == "Preserved state"
+    )
 
 
 def test_one_shot_non_final_progress_accepts_after_single_nudge_without_forced_summary(
@@ -2831,7 +2995,7 @@ def test_one_shot_non_final_progress_accepts_after_single_nudge_without_forced_s
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -2842,6 +3006,7 @@ def test_one_shot_non_final_progress_accepts_after_single_nudge_without_forced_s
     latest_progress_text = "I will update the parser next."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="I will inspect the parser next.",
                 tool_calls=[],
@@ -2879,7 +3044,7 @@ def test_one_shot_non_final_progress_accepts_after_single_nudge_without_forced_s
         session.close()
 
     assert exit_code == 0
-    assert client.calls == 2
+    assert client.calls == 3  # Failed edit, progress, and one bounded continuation.
     events = list(
         read_session_events(sessions_dir / "one-shot-continuation-cap-forced-summary.jsonl")
     )
@@ -2939,15 +3104,12 @@ def test_one_shot_completion_gate_rejects_empty_final_response(tmp_path: Path) -
     events = list(read_session_events(sessions_dir / "one-shot-empty-final.jsonl"))
     assert any(event.get("type") == "empty_model_response_recovery" for event in events)
     assert any(event.get("type") == "completion_gate_nudge" for event in events)
-    accepted_events = [
-        event
-        for event in events
-        if event.get("type") == "completion_gate_accepted_with_open_problems"
-    ]
-    assert accepted_events
-    payload = dict(accepted_events[-1].get("payload") or {})
-    problems = set(payload.get("problems") or [])
-    assert "empty_final_response" in problems
+    # Empty output is handled before the completion gate can accept it as an
+    # answer with open problems. Only the later visible response may finish.
+    assert session.client.calls == 4  # type: ignore[attr-defined]
+    final_events = [event["payload"] for event in events if event.get("type") == "final"]
+    assert len(final_events) == 1
+    assert final_events[0]["content"].startswith("Completed work: no material work was completed.")
     assert not [
         event
         for event in events
@@ -3039,7 +3201,7 @@ def test_two_incomplete_final_claims_can_still_recover(tmp_path: Path) -> None:
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3048,6 +3210,7 @@ def test_two_incomplete_final_claims_can_still_recover(tmp_path: Path) -> None:
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(content=claim, tool_calls=[], raw={}),
             LLMResponse(content=claim, tool_calls=[], raw={}),
             LLMResponse(
@@ -3351,7 +3514,7 @@ def test_blocker_words_in_ordinary_prose_have_no_control_flow_effect(tmp_path: P
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3360,6 +3523,7 @@ def test_blocker_words_in_ordinary_prose_have_no_control_flow_effect(tmp_path: P
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="The task is blocked because credentials and permission are missing.",
                 tool_calls=[],
@@ -3415,17 +3579,12 @@ def test_blocker_words_in_ordinary_prose_have_no_control_flow_effect(tmp_path: P
 def test_interactive_completion_gate_rejects_claim_only_without_evidence(
     tmp_path: Path,
 ) -> None:
-    # Behavioral rejection: an interactive execute turn that performed action-level
-    # tool activity (verification) but produced no material edit is caught for
-    # no_material_edits. The trigger is observed tool evidence, not a prose claim --
-    # under the structured gate, interactive material-edit evidence is required only
-    # once repo tool activity is observed, so verify_run supplies that signal.
-    # (verify_run is mocked to pass by the autouse _fake_one_shot_verify_run fixture.)
-    cfg = AppConfig(
-        model="test-model",
-        routing_mode="code_only",
-        verify_commands=[_VERIFY_OK_COMMAND],
-    )
+    # Behavioral rejection: an interactive execute turn that attempted a direct
+    # parent-workspace mutation but produced no material edit is caught for
+    # no_material_edits. Read-only checks and isolated subagent lifecycle work do
+    # not create that requirement because they may legitimately complete with a
+    # clean parent workspace.
+    cfg = AppConfig(model="test-model", routing_mode="code_only")
     sessions_dir = tmp_path / "sessions"
     session_id = "interactive-claim-no-evidence"
     session = create_session(
@@ -3447,8 +3606,17 @@ def test_interactive_completion_gate_rejects_claim_only_without_evidence(
                 tool_calls=[
                     ToolCall(
                         id="tc1",
-                        name="verify_run",
-                        arguments={"commands": [_VERIFY_OK_COMMAND]},
+                        name="fs_edit",
+                        arguments={
+                            "path": "missing-target.py",
+                            "edits": [
+                                {
+                                    "op": "replace_exact",
+                                    "target": "before",
+                                    "replacement": "after",
+                                }
+                            ],
+                        },
                     )
                 ],
                 raw={},
@@ -3552,7 +3720,7 @@ def test_one_shot_completion_gate_rejects_claim_only_without_evidence(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=4,
+        max_steps=5,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3561,14 +3729,21 @@ def test_one_shot_completion_gate_rejects_claim_only_without_evidence(
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
             LLMResponse(
                 content=(
@@ -3619,7 +3794,7 @@ def test_one_shot_no_material_edits_repo_activity_uses_distinct_stage_and_strong
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3628,6 +3803,7 @@ def test_one_shot_no_material_edits_repo_activity_uses_distinct_stage_and_strong
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -3714,7 +3890,7 @@ def test_one_shot_no_material_edits_bootstrap_nudge_includes_recent_path_anchors
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=7,
+        max_steps=8,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3723,6 +3899,7 @@ def test_one_shot_no_material_edits_bootstrap_nudge_includes_recent_path_anchors
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -3806,7 +3983,7 @@ def test_one_shot_no_material_edits_bootstrap_recovers_after_real_action(tmp_pat
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -3815,6 +3992,7 @@ def test_one_shot_no_material_edits_bootstrap_recovers_after_real_action(tmp_pat
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -3875,8 +4053,10 @@ def test_one_shot_no_material_edits_bootstrap_recovers_after_real_action(tmp_pat
     )
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_one_shot_empty_git_diff_finalization_is_blocked_until_a_change_exists(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
@@ -3888,16 +4068,18 @@ def test_one_shot_empty_git_diff_finalization_is_blocked_until_a_change_exists(
         root=repo,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         verification_enabled=False,
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
     )
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -3942,10 +4124,10 @@ def test_one_shot_empty_git_diff_finalization_is_blocked_until_a_change_exists(
     assert blocked
     assert not any(event.get("type") == "empty_diff_forced" for event in events)
     corrective = str((blocked[-1].get("payload") or {}).get("message") or "")
-    assert "no human user exists" in corrective
-    assert "no fix has been applied" in corrective
-    assert "Continue working from the repository" in corrective
-    assert "make a concrete code change and verify it" in corrective
+    assert "An implementation attempt was observed" in corrective
+    assert "no file changes are present" in corrective
+    assert "Check the attempted operation and its result" in corrective
+    assert "Complete the requested change and verify it" in corrective
     assert (
         "src/app.py"
         in subprocess.run(
@@ -3957,8 +4139,10 @@ def test_one_shot_empty_git_diff_finalization_is_blocked_until_a_change_exists(
     )
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_one_shot_empty_git_diff_is_forced_only_when_step_budget_is_exhausted(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
@@ -3970,10 +4154,12 @@ def test_one_shot_empty_git_diff_is_forced_only_when_step_budget_is_exhausted(
         root=repo,
         mode="auto",
         yes=True,
-        max_steps=3,
+        max_steps=4,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
+        chat_turn_fixed_override=4,
         verification_enabled=False,
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
@@ -3981,6 +4167,7 @@ def test_one_shot_empty_git_diff_is_forced_only_when_step_budget_is_exhausted(
     final_text = "The correct fix would be to change src/app.py."
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -4236,91 +4423,145 @@ def test_one_shot_silent_authoritative_verifier_finalizes_after_one_run(
     )
 
 
-def test_one_shot_existing_test_edit_correctives_are_capped_and_logged(
+@pytest.mark.parametrize("one_shot", [True, False])
+@pytest.mark.parametrize("exhaust_budget", [True, False])
+@pytest.mark.parametrize("target_initially_dirty", [True, False])
+def test_tracked_test_extension_is_retained_without_automatic_restore(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    one_shot: bool,
+    exhaust_budget: bool,
+    target_initially_dirty: bool,
 ) -> None:
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
-    _commit_repo_file(repo, "tests/test_app.py", "def test_app():\n    assert True\n")
+    original = (
+        "import unittest\n\n\nclass ExistingBehavior(unittest.TestCase):\n"
+        "    def test_app(self):\n        self.assertEqual(2 + 2, 4)\n"
+    )
+    _commit_repo_file(repo, "tests/test_app.py", original)
+    _commit_repo_file(repo, "tests/test_user.py", "# User-owned test notes\n")
+
+    # Preserve both index and working-tree content, including an unstaged edit
+    # after staging. Neither is ours to restore from the starting commit.
+    user_staged = "# User-owned test notes\n# Staged user note\n"
+    user_worktree = user_staged + "# Unstaged user note\n"
+    user_path = repo / "tests/test_user.py"
+    user_path.write_text(user_staged, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "tests/test_user.py"], check=True)
+    user_path.write_text(user_worktree, encoding="utf-8")
+    if target_initially_dirty:
+        original += "\n# Existing user comment on this test file\n"
+        (repo / "tests/test_app.py").write_text(original, encoding="utf-8")
+    staged_before = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--cached", "--binary"]
+    )
+    head_before = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
+    extension = (
+        "\n\nclass NegativeBehavior(unittest.TestCase):\n"
+        "    def test_negative_values(self):\n        self.assertEqual(-2 + 2, 0)\n"
+    )
+    verification_command = "python3 -m unittest discover -s tests -v"
+
+    def successful_verify(*, root, commands, artifact_path, cfg, **kwargs):
+        return VerifyRunResult(
+            commands=list(commands),
+            command_results=[
+                VerifyCommandResult(
+                    command=command,
+                    exit_code=0,
+                    output="Ran 2 tests in 0.01s\n\nOK\n",
+                    real_execution=True,
+                )
+                for command in commands
+            ],
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(agent_loop_mod, "run_task_verification", successful_verify)
     sessions_dir = tmp_path / "sessions"
-    session_id = "one-shot-existing-test-edit-cap"
+    session_id = "tracked-test-extension"
     session = create_session(
-        cfg=AppConfig(model="test-model", routing_mode="code_only"),
+        cfg=AppConfig(
+            model="test-model", routing_mode="code_only", verify_commands=[verification_command]
+        ),
         root=repo,
         mode="auto",
         yes=True,
-        max_steps=9,
+        max_steps=1 if exhaust_budget else 5,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
-        verification_enabled=False,
+        one_shot_execution=one_shot,
+        enable_chat_turn_step_budget=not one_shot,
+        chat_turn_fixed_override=(1 if exhaust_budget else 5) if not one_shot else None,
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
     )
-    final_response = LLMResponse(
-        content="Implemented the requested behavior.",
-        tool_calls=[],
-        raw={},
-    )
-    test_edit_responses = [
+    responses = [
         LLMResponse(
             content="",
             tool_calls=[
                 ToolCall(
-                    id=f"tc-test-write-{index}",
-                    name="fs_write",
+                    id="extend-existing-test",
+                    name="fs_edit",
                     arguments={
                         "path": "tests/test_app.py",
-                        "content": "def test_app():\n    assert False\n",
+                        "edits": [{"op": "append", "content": extension}],
                     },
                 )
             ],
             raw={},
         )
-        for index in range(1, 4)
     ]
-    session.client = _ScriptedClient(
-        [
-            test_edit_responses[0],
-            final_response,
-            final_response,
-            test_edit_responses[1],
-            final_response,
-            test_edit_responses[2],
-            final_response,
-            final_response,
-            final_response,
-        ]
-    )  # type: ignore[assignment]
-
+    if not exhaust_budget:
+        responses.extend(
+            [
+                LLMResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="verify-regression-coverage",
+                            name="verify_run",
+                            arguments={"commands": [verification_command]},
+                        )
+                    ],
+                    raw={},
+                ),
+                LLMResponse(
+                    content="Added the requested regression case and verified it.",
+                    tool_calls=[],
+                    raw={},
+                ),
+            ]
+        )
+    session.client = _ScriptedClient(responses)  # type: ignore[assignment]
     try:
-        exit_code = session.run_turn("Fix the implementation without changing existing tests.")
+        exit_code = session.run_turn(
+            "Add a regression case for negative values to tests/test_app.py, preserving "
+            "its existing coverage and all pre-existing user edits. Run the focused tests."
+        )
     finally:
         session.close()
 
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
-    blocked = [
-        event for event in events if event.get("type") == "existing_test_edits_finalization_blocked"
-    ]
-    forced = [
-        event for event in events if event.get("type") == "existing_test_edits_violation_forced"
-    ]
-    assert exit_code == 0
-    assert len(blocked) == 3
-    assert [(event.get("payload") or {}).get("hard_block") for event in blocked] == [
-        False,
-        True,
-        True,
-    ]
-    assert "Hard block" in str((blocked[1].get("payload") or {}).get("message") or "")
-    assert "tests/test_app.py" in str((blocked[1].get("payload") or {}).get("message") or "")
-    assert (blocked[1].get("payload") or {}).get("restored_test_paths") == ["tests/test_app.py"]
-    assert len(forced) == 1
-    assert (forced[0].get("payload") or {}).get("reason") == "corrective_cap_exhausted"
-    assert (forced[0].get("payload") or {}).get("violation_flag") == "existing_test_edits"
-    assert (forced[0].get("payload") or {}).get("restored_test_paths") == ["tests/test_app.py"]
-    assert (repo / "tests" / "test_app.py").read_text(encoding="utf-8") == (
-        "def test_app():\n    assert True\n"
+    assert (repo / "tests/test_app.py").read_text(encoding="utf-8") == original + extension
+    assert user_path.read_text(encoding="utf-8") == user_worktree
+    assert subprocess.check_output(["git", "-C", str(repo), "diff", "--cached", "--binary"]) == (
+        staged_before
+    )
+    assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == head_before
+    assert not any(
+        event.get("type")
+        in {"existing_test_edits_finalization_blocked", "existing_test_edits_violation_forced"}
+        for event in events
+    )
+    if not exhaust_budget:
+        assert exit_code == 0
+        assert session.client.calls == 3
+    assert any(
+        "Extend existing tests or add new tests" in str(message.get("content", ""))
+        for message in session.client.call_records[0]["messages"]
+        if message.get("role") == "system"
     )
 
 
@@ -4347,7 +4588,7 @@ def test_repo_web_tool_failures_are_nonfatal_and_not_retried(
         root=repo,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -4371,6 +4612,7 @@ def test_repo_web_tool_failures_are_nonfatal_and_not_retried(
     session.tool_list = [tool.as_openai_tool() for tool in session.tools.values()]
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc-web-1", name=tool_name, arguments=arguments)],
@@ -4421,25 +4663,24 @@ def test_repo_web_tool_failures_are_nonfatal_and_not_retried(
     ]
     second_request_tool_names = {
         str((tool.get("function") or {}).get("name") or "")
-        for tool in (client.call_records[1].get("tools") or [])
+        for tool in (client.call_records[2].get("tools") or [])
     }
     assert exit_code == 0
     assert calls == 1
     assert blocked
     corrective = str((blocked[-1].get("payload") or {}).get("message") or "")
-    assert "no human user exists" in corrective
-    assert "Continue working from the repository" in corrective
+    assert "An implementation attempt was observed" in corrective
+    assert "Check the attempted operation and its result" in corrective
     assert len(tool_results) == 2
     assert all(isinstance(result, dict) and "error" not in result for result in tool_results)
     assert all(
         str(result.get("reason") or "").startswith(WEB_UNAVAILABLE_OBSERVATION)
         for result in tool_results
     )
-    # The observation that disables the tool names the underlying cause so the
-    # model (and the user) can see why web tools became unavailable; subsequent
-    # calls get the generic notice.
+    # The detached turn snapshot preserves the concrete first failure for stale
+    # repeated calls without invoking the provider again.
     assert "Cause: gateway returned 404" in str(tool_results[0].get("reason") or "")
-    assert tool_results[1].get("reason") == WEB_UNAVAILABLE_OBSERVATION
+    assert tool_results[1] == tool_results[0]
     assert tool_name not in second_request_tool_names
     assert sum(event.get("type") == "web_tool_unavailable" for event in events) == 1
     assert not any(
@@ -4578,7 +4819,7 @@ def test_one_shot_read_only_between_rejected_finals_does_not_reset_gate(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -4588,6 +4829,7 @@ def test_one_shot_read_only_between_rejected_finals_does_not_reset_gate(
     claim = "Implemented search, updated README, and ran tests."
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -4653,7 +4895,7 @@ def test_one_shot_no_material_to_verification_stage_transition_starts_new_episod
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=9,
+        max_steps=10,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -4663,6 +4905,7 @@ def test_one_shot_no_material_to_verification_stage_transition_starts_new_episod
     claim = "Implemented search, updated README, and ran tests."
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -4734,7 +4977,7 @@ def test_one_shot_completion_gate_no_material_edits_accepts_after_checklist(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=8,
+        max_steps=9,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -4745,6 +4988,7 @@ def test_one_shot_completion_gate_no_material_edits_accepts_after_checklist(
     latest_final_text = "Implemented search, updated README, and ran tests."
     client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -5621,7 +5865,10 @@ def test_one_shot_completion_gate_failed_verification_accepts_after_checklist(
     assert verify_results[-1].get("all_passed") is False
     assert not surface.errors
     assert not any(event.get("type") == "forced_final_summary_requested" for event in events)
-    assert surface.final_messages[-1] == latest_final_text
+    assert surface.final_messages[-1].startswith(
+        latest_final_text + "\n\nVerification status: unverified."
+    )
+    assert session.last_turn_outcome["verified_success"] is False
 
 
 def test_one_shot_completion_gate_nudge_includes_first_failed_verification_snippet(
@@ -5903,7 +6150,11 @@ def test_one_shot_runtime_messages_remain_english_without_explicit_override(
     assert "Understanding your request." in "\n".join(progress_events)
     assert all("Κατανοώ το αίτημά σου." not in message for message in progress_events)
     assert not any(event.get("type") == "final_summary_rewrite" for event in events)
-    assert surface.final_messages[-1] == final_summary
+    assert surface.final_messages[-1].startswith(
+        final_summary + "\n\nPreserved verified checkpoint:"
+    )
+    checkpoint = session.last_turn_outcome["best_verified_checkpoint"]
+    assert Path(checkpoint["archive_path"]).as_posix() in surface.final_messages[-1]
 
 
 def test_runtime_message_falls_back_to_english_for_unsupported_language() -> None:
@@ -7244,13 +7495,27 @@ def test_one_shot_two_shell_verification_commands_cover_effective_contract(
     assert exit_code == 0
 
 
-def test_one_shot_targeted_verify_run_commands_cover_effective_contract(
+def test_one_shot_targeted_verify_run_does_not_replace_declared_commands(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def successful_verify(*, commands, artifact_path, **_kwargs):
+        return VerifyRunResult(
+            commands=list(commands),
+            command_results=[
+                VerifyCommandResult(
+                    command=command, exit_code=0, output="ok\n", real_execution=True
+                )
+                for command in commands
+            ],
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(agent_loop_mod, "run_task_verification", successful_verify)
     cfg = AppConfig(
         model="test-model",
         routing_mode="code_only",
-        verify_commands=["pytest -q", "ruff check ."],
+        verify_commands=["pytest tests -q", "ruff check src"],
     )
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -7258,7 +7523,7 @@ def test_one_shot_targeted_verify_run_commands_cover_effective_contract(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=8,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -7300,6 +7565,17 @@ def test_one_shot_targeted_verify_run_commands_cover_effective_contract(
                 raw={},
             ),
             LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="verify-declared-selection",
+                        name="verify_run",
+                        arguments={"commands": ["pytest tests -q", "ruff check src"]},
+                    )
+                ],
+                raw={},
+            ),
+            LLMResponse(
                 content="Implemented the requested code change and ran verification.",
                 tool_calls=[],
                 raw={},
@@ -7313,6 +7589,16 @@ def test_one_shot_targeted_verify_run_commands_cover_effective_contract(
         session.close()
 
     assert exit_code == 0
+    events = list(read_session_events(sessions_dir / "one-shot-targeted-verify-run-coverage.jsonl"))
+    verifications = [
+        event["payload"]["result"]
+        for event in events
+        if event["type"] == "tool_result" and event["payload"].get("name") == "verify_run"
+    ]
+    assert len(verifications) == 2
+    assert verifications[0]["verification_evidence_allowed"] is False
+    assert verifications[0]["verification_evidence_supplemental_only"] is True
+    assert verifications[1]["verification_evidence_allowed"] is True
 
 
 def test_one_shot_verify_run_coverage_becomes_stale_after_later_code_edit(
@@ -7735,11 +8021,16 @@ def test_one_shot_task_specific_acceptance_cannot_override_authoritative_contrac
 
     assert exit_code == 0
     payload = _latest_completion_gate_payload(sessions_dir, session_id)
-    assert "verification_failed" in set(payload.get("problems") or [])
+    problems = set(payload.get("problems") or [])
+    assert "verification_incomplete" in problems
+    assert "verification_failed" not in problems
     assert payload.get("verification_evidence_category") == (
         VerificationEvidenceCategory.TASK_ACCEPTANCE.value
     )
     state = dict(payload.get("state") or {})
+    assert state["covered_verification_commands"] == []
+    assert state["missing_verification_commands"] == ["pytest -q"]
+    assert state["accepted_verification_evidence"] == []
     supplemental = list(state.get("supplemental_verification_evidence") or [])
     assert supplemental
     assert supplemental[-1]["supplemental_only"] is True
@@ -7900,7 +8191,7 @@ def test_one_shot_shell_verification_cache_artifacts_do_not_count_as_material_ed
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -7909,6 +8200,7 @@ def test_one_shot_shell_verification_cache_artifacts_do_not_count_as_material_ed
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="shell_run", arguments={"cmd": "pytest -q"})],
@@ -9121,15 +9413,19 @@ def test_one_shot_verify_run_non_executing_override_does_not_count(
     [
         (["pytest -q"], "bash -lc 'pytest -q'", "wrapped-pytest"),
         (["pytest -q"], "python -m pytest -q", "python-module-pytest"),
-        (["pytest -q"], "env PYTHONPATH=src pytest -q", "env-pytest"),
+        (["PYTHONPATH=src pytest -q"], "env PYTHONPATH=src pytest -q", "env-pytest"),
         (["pytest -q"], "poetry run pytest -q", "poetry-pytest"),
-        (["pytest -q"], "pytest tests/test_cli.py -q", "targeted-pytest"),
-        (["pytest -q"], "pytest tests/test_cli.py -v", "targeted-pytest-verbose"),
-        (["pytest -q"], "python -m pytest tests/test_cli.py -q", "targeted-python-module-pytest"),
-        (["cargo test"], "cargo test redirect --quiet", "cargo-targeted-test"),
-        (["go test ./..."], _VERIFY_GO_OK_COMMAND, "go-targeted-test"),
-        (["go test ./..."], _VERIFY_GO_MIXED_OK_COMMAND, "go-mixed-targeted-test"),
-        (["npm test"], "npm test -- redirect", "npm-targeted-test"),
+        (["pytest tests/test_cli.py -q"], "pytest tests/test_cli.py -q", "targeted-pytest"),
+        (["pytest tests/test_cli.py -q"], "pytest tests/test_cli.py -v", "targeted-pytest-verbose"),
+        (
+            ["pytest tests/test_cli.py -q"],
+            "python -m pytest tests/test_cli.py -q",
+            "targeted-python-module-pytest",
+        ),
+        (["cargo test redirect --quiet"], "cargo test redirect --quiet", "cargo-targeted-test"),
+        ([_VERIFY_GO_OK_COMMAND], _VERIFY_GO_OK_COMMAND, "go-targeted-test"),
+        ([_VERIFY_GO_MIXED_OK_COMMAND], _VERIFY_GO_MIXED_OK_COMMAND, "go-mixed-targeted-test"),
+        (["npm test -- redirect"], "npm test -- redirect", "npm-targeted-test"),
     ],
 )
 def test_one_shot_equivalent_real_verification_commands_still_count(
@@ -9294,7 +9590,7 @@ def test_one_shot_verify_run_go_mixed_output_counts(
     cfg = AppConfig(
         model="test-model",
         routing_mode="code_only",
-        verify_commands=["go test ./..."],
+        verify_commands=[_VERIFY_GO_MIXED_OK_COMMAND],
     )
     sessions_dir = tmp_path / "sessions"
     session = create_session(
@@ -9356,7 +9652,7 @@ def test_one_shot_verify_run_go_mixed_output_counts(
     verify_results = [result for result in tool_results if result.get("verification_note")]
     assert verify_results
     assert verify_results[0].get("verification_note") == (
-        "evidence origin: PREEXISTING_REPO_NATIVE (independent)"
+        "Matched command provenance: EXPLICIT_USER_COMMAND."
     )
 
 
@@ -9690,7 +9986,7 @@ def test_one_shot_repo_turn_includes_pinned_task_brief(tmp_path: Path) -> None:
             str(message.get("content") or "")
             for message in client.call_records[0]["messages"]
             if str(message.get("role") or "") == "user"
-            and str(message.get("content") or "").startswith("<task_brief>")
+            and "<task_brief>" in str(message.get("content") or "")
         ),
         "",
     )
@@ -9698,6 +9994,7 @@ def test_one_shot_repo_turn_includes_pinned_task_brief(tmp_path: Path) -> None:
     assert exit_code == 0
     assert "status: awaiting_substantive_repo_request" in startup_task_brief
     assert prompt_task_brief.startswith("<task_brief>")
+    assert "Refactor src/app.py without changing the public API." in prompt_task_brief
     assert "Refactor src/app.py without changing the public API." in post_turn_task_brief
 
 
@@ -10044,13 +10341,12 @@ def _install_stub_subagent_run(
     )
 
 
+@pytest.mark.parametrize("one_shot_execution", [False, True])
 def test_one_shot_readonly_explorer_subagent_synthesis_completes_via_advisory_completion(
     tmp_path: Path,
+    one_shot_execution: bool,
 ) -> None:
-    # Router-free path: no semantic route exempts the synthesis turn from the
-    # mutating-completion guards; the empty-diff guard runs its bounded rounds
-    # and the turn finalizes honestly as an advisory completion, leaving the
-    # tree untouched.
+    # Invocation mode does not turn inspection or advice into a request for edits.
     repo = tmp_path / "repo"
     _init_git_repo_with_commit(repo)
     sessions_dir = tmp_path / "sessions"
@@ -10063,7 +10359,8 @@ def test_one_shot_readonly_explorer_subagent_synthesis_completes_via_advisory_co
         max_steps=4,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         subagents_enabled=True,
         verification_enabled=False,
         session_log_dir_override=sessions_dir,
@@ -10105,7 +10402,7 @@ def test_one_shot_readonly_explorer_subagent_synthesis_completes_via_advisory_co
     events = list(read_session_events(sessions_dir / f"{session_id}.jsonl"))
     event_types = [str(event.get("type") or "") for event in events]
     assert exit_code == 0
-    assert client.calls == 4
+    assert client.calls == 2
     assert any(
         event.get("type") == "tool_result"
         and (event.get("payload") or {}).get("name") == "subagent_run"
@@ -10117,9 +10414,9 @@ def test_one_shot_readonly_explorer_subagent_synthesis_completes_via_advisory_co
         and str((event.get("payload") or {}).get("content") or "").startswith(final_text)
         for event in events
     )
-    assert "empty_diff_finalization_blocked" in event_types
-    assert "completion_gate_accepted_with_open_problems" in event_types
-    assert "advisory_completion" in event_types
+    assert "empty_diff_finalization_blocked" not in event_types
+    assert "completion_gate_accepted_with_open_problems" not in event_types
+    assert "advisory_completion" not in event_types
     assert not subprocess.run(
         ["git", "-C", os.fspath(repo), "diff", "--quiet", "HEAD", "--"],
         check=False,
@@ -10136,7 +10433,7 @@ def test_one_shot_exploration_stagnation_emits_nudge(tmp_path: Path) -> None:
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=14,
+        max_steps=15,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10145,6 +10442,7 @@ def test_one_shot_exploration_stagnation_emits_nudge(tmp_path: Path) -> None:
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="fs_read", arguments={"path": "f1.txt"})],
@@ -10179,7 +10477,9 @@ def test_one_shot_exploration_stagnation_emits_nudge(tmp_path: Path) -> None:
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="tc7", name="fs_write", arguments={"path": "out.txt", "content": "done"}
+                        id="tc7",
+                        name="fs_write",
+                        arguments={"path": "out.txt", "content": "done"},
                     )
                 ],
                 raw={},
@@ -10196,7 +10496,9 @@ def test_one_shot_exploration_stagnation_emits_nudge(tmp_path: Path) -> None:
                 raw={},
             ),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
         ]
     )  # type: ignore[assignment]
@@ -10214,7 +10516,7 @@ def test_one_shot_exploration_stagnation_emits_nudge(tmp_path: Path) -> None:
     assert "one_shot_exploration_incomplete_after_retries" not in event_types
 
 
-def test_one_shot_post_explore_stagnation_emits_implementation_bootstrap_nudge(
+def test_one_shot_explorer_after_failed_edit_does_not_restart_implementation_bootstrap(
     tmp_path: Path,
 ) -> None:
     _write_test_files(tmp_path, ["src/mini_notes/cli.py"])
@@ -10226,7 +10528,7 @@ def test_one_shot_post_explore_stagnation_emits_implementation_bootstrap_nudge(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=12,
+        max_steps=13,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10243,6 +10545,7 @@ def test_one_shot_post_explore_stagnation_emits_implementation_bootstrap_nudge(
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -10313,19 +10616,18 @@ def test_one_shot_post_explore_stagnation_emits_implementation_bootstrap_nudge(
     assert exit_code == 0
     events = list(read_session_events(sessions_dir / "one-shot-post-explore-bootstrap-nudge.jsonl"))
     event_types = [event.get("type") for event in events]
-    assert "one_shot_post_explore_stagnation_detected" in event_types
-    bootstrap_events = [
-        event for event in events if event.get("type") == "implementation_bootstrap_nudge"
-    ]
-    assert bootstrap_events
-    assert not any(event.get("type") == "no_material_edits_bootstrap_nudge" for event in events)
-    payload = dict(bootstrap_events[-1].get("payload") or {})
-    message = str(payload.get("message") or "")
-    assert "Do not call the same research subagent again in this turn." in message
-    assert "subagent_run(name=explorer)" not in message
+    assert "one_shot_post_explore_stagnation_detected" not in event_types
+    assert "implementation_bootstrap_nudge" not in event_types
+    assert "no_material_edits_bootstrap_nudge" not in event_types
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "implemented"
+    assert any(
+        event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "verify_run"
+        for event in events
+    )
 
 
-def test_one_shot_post_explore_bootstrap_recovers_after_real_action(tmp_path: Path) -> None:
+def test_one_shot_failed_edit_then_explorer_recovers_with_real_action(tmp_path: Path) -> None:
     _write_test_files(tmp_path, ["src/mini_notes/logic.py", "src/mini_notes/cli.py"])
 
     cfg = AppConfig(model="test-model", routing_mode="code_only")
@@ -10335,7 +10637,7 @@ def test_one_shot_post_explore_bootstrap_recovers_after_real_action(tmp_path: Pa
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=16,
+        max_steps=17,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10349,6 +10651,7 @@ def test_one_shot_post_explore_bootstrap_recovers_after_real_action(tmp_path: Pa
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -10430,9 +10733,15 @@ def test_one_shot_post_explore_bootstrap_recovers_after_real_action(tmp_path: Pa
 
     assert exit_code == 0
     events = list(read_session_events(sessions_dir / "one-shot-post-explore-recovery.jsonl"))
-    assert any(event.get("type") == "implementation_bootstrap_nudge" for event in events)
+    assert not any(event.get("type") == "implementation_bootstrap_nudge" for event in events)
     assert not any(
         event.get("type") == "one_shot_post_explore_incomplete_after_retries" for event in events
+    )
+    assert (tmp_path / "src/mini_notes/logic.py").read_text(encoding="utf-8") == "done\n"
+    assert any(
+        event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "verify_run"
+        for event in events
     )
 
 
@@ -10526,7 +10835,7 @@ def test_one_shot_greek_post_explore_progress_transitions_to_action(tmp_path: Pa
     assert "one_shot_incomplete_after_retries" not in event_types
 
 
-def test_one_shot_post_explore_stagnation_after_nudge_cap_accepts_final(
+def test_one_shot_failed_edit_then_explorer_uses_bounded_ordinary_stagnation_guard(
     tmp_path: Path,
 ) -> None:
     _write_test_files(tmp_path, ["src/mini_notes/cli.py"])
@@ -10539,7 +10848,7 @@ def test_one_shot_post_explore_stagnation_after_nudge_cap_accepts_final(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=12,
+        max_steps=13,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10554,6 +10863,7 @@ def test_one_shot_post_explore_stagnation_after_nudge_cap_accepts_final(
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -10594,25 +10904,18 @@ def test_one_shot_post_explore_stagnation_after_nudge_cap_accepts_final(
 
     assert exit_code == 0
     events = list(read_session_events(sessions_dir / "one-shot-post-explore-fail-cap.jsonl"))
-    detections = [
-        event
-        for event in events
-        if event.get("type") == "one_shot_post_explore_stagnation_detected"
-    ]
-    assert detections
-    assert any(dict(event.get("payload") or {}).get("nudge_sent") is False for event in detections)
-    bootstrap_events = [
-        event for event in events if event.get("type") == "implementation_bootstrap_nudge"
-    ]
-    assert len(bootstrap_events) == 1
     assert not any(
-        event.get("type") == "one_shot_post_explore_incomplete_after_retries" for event in events
+        event.get("type") == "one_shot_post_explore_stagnation_detected" for event in events
     )
+    assert not any(event.get("type") == "implementation_bootstrap_nudge" for event in events)
+    assert any(event.get("type") == "one_shot_exploration_stagnation_detected" for event in events)
+    assert len([event for event in events if event.get("type") == "exploration_nudge"]) == 1
     assert not any(event.get("type") == "forced_final_summary_requested" for event in events)
     assert surface.errors == []
+    assert "No changes made:" in surface.final_messages[-1]
 
 
-def test_one_shot_post_explore_bootstrap_nudge_includes_recent_path_anchors(
+def test_one_shot_failed_edit_then_explorer_preserves_findings_for_scoped_recovery(
     tmp_path: Path,
 ) -> None:
     _write_test_files(
@@ -10632,7 +10935,7 @@ def test_one_shot_post_explore_bootstrap_nudge_includes_recent_path_anchors(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=12,
+        max_steps=13,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10648,6 +10951,7 @@ def test_one_shot_post_explore_bootstrap_nudge_includes_recent_path_anchors(
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -10719,7 +11023,7 @@ def test_one_shot_post_explore_bootstrap_nudge_includes_recent_path_anchors(
             # tests/test_logic.py — so the blast-radius gate asks for the
             # neighbouring tests before it lets the run finalize. The extra
             # prose replies carry the run through those bounded rounds; this
-            # test is about the bootstrap nudge, not about satisfying the gate.
+            # test checks that findings survive scoped recovery and no false bootstrap is emitted.
             LLMResponse(
                 content="Implemented search, updated README, and ran tests.",
                 tool_calls=[],
@@ -10745,18 +11049,23 @@ def test_one_shot_post_explore_bootstrap_nudge_includes_recent_path_anchors(
 
     assert exit_code == 0
     events = list(read_session_events(sessions_dir / "one-shot-post-explore-path-anchors.jsonl"))
-    bootstrap_events = [
-        event for event in events if event.get("type") == "implementation_bootstrap_nudge"
+    assert not any(event.get("type") == "implementation_bootstrap_nudge" for event in events)
+    reports = [
+        str(((event.get("payload") or {}).get("result") or {}).get("result") or "")
+        for event in events
+        if event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "subagent_run"
     ]
-    assert bootstrap_events
-    payload = dict(bootstrap_events[-1].get("payload") or {})
-    anchor_paths = list(payload.get("anchor_paths") or [])
-    assert "src/mini_notes/logic.py" in anchor_paths
-    assert "src/mini_notes/cli.py" in anchor_paths
-    message = str(payload.get("message") or "")
-    assert "implementation or deliverable-creation action" in message
-    assert "Verification comes after material work exists." in message
-    assert "verify_run" not in message
+    assert any(
+        "src/mini_notes/logic.py" in report and "src/mini_notes/cli.py" in report
+        for report in reports
+    )
+    assert (tmp_path / "src/mini_notes/logic.py").read_text(encoding="utf-8") == "done\n"
+    assert any(
+        event.get("type") == "tool_result"
+        and (event.get("payload") or {}).get("name") == "verify_run"
+        for event in events
+    )
 
 
 def test_one_shot_repeated_successful_identical_read_loop_triggers_guard(tmp_path: Path) -> None:
@@ -10769,7 +11078,7 @@ def test_one_shot_repeated_successful_identical_read_loop_triggers_guard(tmp_pat
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=10,
+        max_steps=11,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10778,6 +11087,7 @@ def test_one_shot_repeated_successful_identical_read_loop_triggers_guard(tmp_pat
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="fs_read", arguments={"path": "repeat.txt"})],
@@ -10797,7 +11107,9 @@ def test_one_shot_repeated_successful_identical_read_loop_triggers_guard(tmp_pat
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="tc4", name="fs_write", arguments={"path": "out.txt", "content": "done"}
+                        id="tc4",
+                        name="fs_write",
+                        arguments={"path": "out.txt", "content": "done"},
                     )
                 ],
                 raw={},
@@ -10814,7 +11126,9 @@ def test_one_shot_repeated_successful_identical_read_loop_triggers_guard(tmp_pat
                 raw={},
             ),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
         ]
     )  # type: ignore[assignment]
@@ -10844,7 +11158,7 @@ def test_one_shot_action_progress_resets_exploration_stagnation_counters(tmp_pat
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=20,
+        max_steps=21,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -10853,6 +11167,7 @@ def test_one_shot_action_progress_resets_exploration_stagnation_counters(tmp_pat
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="fs_read", arguments={"path": "f1.txt"})],
@@ -10887,7 +11202,9 @@ def test_one_shot_action_progress_resets_exploration_stagnation_counters(tmp_pat
                 content="",
                 tool_calls=[
                     ToolCall(
-                        id="tc7", name="fs_write", arguments={"path": "out.txt", "content": "done"}
+                        id="tc7",
+                        name="fs_write",
+                        arguments={"path": "out.txt", "content": "done"},
                     )
                 ],
                 raw={},
@@ -10919,7 +11236,9 @@ def test_one_shot_action_progress_resets_exploration_stagnation_counters(tmp_pat
                 raw={},
             ),
             LLMResponse(
-                content="Implemented search, updated README, and ran tests.", tool_calls=[], raw={}
+                content="Implemented search, updated README, and ran tests.",
+                tool_calls=[],
+                raw={},
             ),
         ]
     )  # type: ignore[assignment]
@@ -11000,7 +11319,7 @@ def test_one_shot_exploration_after_nudge_cap_accepts_final(tmp_path: Path) -> N
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=10,
+        max_steps=11,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -11010,6 +11329,7 @@ def test_one_shot_exploration_after_nudge_cap_accepts_final(tmp_path: Path) -> N
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[ToolCall(id="tc1", name="fs_read", arguments={"path": "repeat.txt"})],
@@ -11074,7 +11394,7 @@ def test_one_shot_failed_varied_read_loop_step_budget_exhausted(tmp_path: Path) 
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -11083,6 +11403,7 @@ def test_one_shot_failed_varied_read_loop_step_budget_exhausted(tmp_path: Path) 
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -11282,7 +11603,7 @@ def test_one_shot_mixed_success_and_failed_exploration_records_signal(tmp_path: 
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=6,
+        max_steps=7,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -11291,6 +11612,7 @@ def test_one_shot_mixed_success_and_failed_exploration_records_signal(tmp_path: 
     )
     session.client = _ScriptedClient(
         [
+            _failed_edit_response(),
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -11432,7 +11754,7 @@ def test_one_shot_long_exploration_gets_limited_nudges_and_accepts_final(
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=14,
+        max_steps=15,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -11440,7 +11762,8 @@ def test_one_shot_long_exploration_gets_limited_nudges_and_accepts_final(
         session_id_override="one-shot-long-exploration-advisory",
     )
     session.client = _ScriptedClient(
-        [
+        [_failed_edit_response()]
+        + [
             LLMResponse(
                 content="",
                 tool_calls=[
@@ -11533,7 +11856,7 @@ def test_one_shot_long_stagnation_logs_spaced_detection_events(tmp_path: Path) -
         root=tmp_path,
         mode="auto",
         yes=True,
-        max_steps=20,
+        max_steps=21,
         no_log=False,
         api_key_override="override-key",
         one_shot_execution=True,
@@ -11541,7 +11864,8 @@ def test_one_shot_long_stagnation_logs_spaced_detection_events(tmp_path: Path) -
         session_id_override="one-shot-spaced-stagnation-telemetry",
     )
     session.client = _ScriptedClient(
-        [
+        [_failed_edit_response()]
+        + [
             LLMResponse(
                 content="",
                 tool_calls=[

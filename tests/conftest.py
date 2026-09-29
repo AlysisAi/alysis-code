@@ -37,6 +37,19 @@ _FORGE_WATCHDOG_CHILD_PROCESS_SCAN_LIMIT = 25
 _FORGE_WATCHDOG_GIT_PROBE_TIMEOUT_S = 0.2
 
 
+@pytest.fixture
+def require_symlinks(tmp_path: Path) -> None:
+    """Run link-boundary checks wherever the host permits creating real symlinks."""
+    target = tmp_path / "symlink-probe-target"
+    target.write_text("probe", encoding="utf-8")
+    try:
+        (tmp_path / "symlink-probe").symlink_to(target)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevated privilege")
+        raise
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolate_terminal_ownership_records(tmp_path_factory: pytest.TempPathFactory):
     """Never let background-process crash markers from tests reach the real user profile."""

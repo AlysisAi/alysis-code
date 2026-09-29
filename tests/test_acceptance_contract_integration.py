@@ -118,7 +118,7 @@ def test_one_shot_python_repo_keeps_existing_repo_native_pytest(
         _ = root, cfg
         calls.append(commands)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text("1 passed\n", encoding="utf-8")
+        artifact_path.write_text("1 passed in 0.01s\n", encoding="utf-8")
         return VerifyRunResult(
             commands=commands,
             command_results=[
@@ -126,7 +126,7 @@ def test_one_shot_python_repo_keeps_existing_repo_native_pytest(
                     command=commands[0],
                     effective_command=commands[0],
                     exit_code=0,
-                    output="1 passed\n",
+                    output="1 passed in 0.01s\n",
                     real_execution=True,
                 )
             ],
@@ -139,6 +139,8 @@ def test_one_shot_python_repo_keeps_existing_repo_native_pytest(
         model="test-model",
         routing_mode="code_only",
         verify_commands=["pytest -q"],
+        # The mocked verifier represents a host run with observable pytest defaults.
+        extra_fields={"verify_sandbox": {"mode": "off"}},
     )
     sessions_dir = tmp_path / "sessions"
     session_id = "acceptance-python-keeps-pytest"

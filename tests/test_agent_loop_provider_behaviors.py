@@ -8,8 +8,8 @@ propagation and sanitization, web-search tool exposure and failure handling,
 bounded ``/chat`` history, and session client provisioning — re-expressed on
 the unified turn path (``unified_turn_path_enabled=True`` is the default:
 ``run_turn`` never performs legacy pre-turn routing, and posture derives from
-the execution mode). A dedicated reasoning-off router-role client may still be
-provisioned for automatic skill selection.
+the execution mode). Skill choice stays with the main agent and provisions no
+separate selector client.
 
 Every test carries a "Salvages:" comment naming the original test whose
 assertion intent it preserves.
@@ -84,6 +84,7 @@ from typing import Any
 import pytest
 
 import alysis_code.agent.prompt_context as prompt_context_mod
+import alysis_code.agent.session as session_mod
 from alysis_code.agent.llm_calls import _is_fatal_non_repo_llm_error
 from alysis_code.agent.prompt_context import (
     _NON_REPO_MAX_RECENT_VISIBLE_HISTORY_CHARS,
@@ -107,7 +108,9 @@ from alysis_code.request_estimation import (
 from alysis_code.session_store import read_session_events
 from alysis_code.skills.models import DiscoveredSkills
 from alysis_code.surface.noop_surface import NoopSurface
+from alysis_code.surface.types import ToolEndEvent
 from alysis_code.tools.availability import WEB_UNAVAILABLE_OBSERVATION
+from alysis_code.tools.web import WebFetchError
 from alysis_code.tools.web_search import WebSearchError
 
 
@@ -922,7 +925,20 @@ def test_auth_error_propagates_with_error_event_and_transcript_rollback(
         with pytest.raises(LLMError, match="invalid_api_key"):
             session.run_turn("How are you?")
         assert client.calls == 1
-        assert session.messages == baseline_messages
+
+        # The transcript is rolled back to the pre-turn messages. The one pinned
+        # message allowed to differ is the task brief: the turn's instruction
+        # was accepted (and persisted) before the request, and acceptance is
+        # not withdrawn by a provider failure.
+        def _without_brief(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                message
+                for message in messages
+                if not str(message.get("content") or "").startswith("<task_brief>")
+            ]
+
+        assert _without_brief(session.messages) == _without_brief(baseline_messages)
+        assert len(session.messages) == len(baseline_messages)
         error_payloads = _event_payloads(session.store.path, "error")
         assert error_payloads
         assert "invalid_api_key" in str(error_payloads[-1].get("error") or "")
@@ -1166,8 +1182,11 @@ def test_web_failure_returns_observation_and_continues_without_failed_tool(
         web_search_mode="auto",
     )
     session = _session(tmp_path, cfg=cfg, mode="readonly")
+    search_attempts = 0
 
     def _failed_search(_args: dict[str, Any]) -> dict[str, Any]:
+        nonlocal search_attempts
+        search_attempts += 1
         raise WebSearchError("gateway permission denied")
 
     _replace_web_search_run(session, _failed_search)
@@ -1184,6 +1203,17 @@ def test_web_failure_returns_observation_and_continues_without_failed_tool(
                 ],
                 raw={},
             ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tc2",
+                        name="web_search",
+                        arguments={"query": "retry latest external docs"},
+                    )
+                ],
+                raw={},
+            ),
             LLMResponse(content="Continued without web access.", tool_calls=[], raw={}),
         ]
     )
@@ -1195,22 +1225,149 @@ def test_web_failure_returns_observation_and_continues_without_failed_tool(
     finally:
         session.close()
 
-    result = next(
+    results = [
         (payload.get("result") or {})
         for payload in _event_payloads(log_path, "tool_result")
         if payload.get("name") == "web_search"
-    )
+    ]
     assert exit_code == 0
-    assert client.calls == 2
-    assert isinstance(result, dict)
+    assert client.calls == 3
+    assert search_attempts == 1
+    assert len(results) == 2
+    assert all(isinstance(result, dict) for result in results)
     # The failure is surfaced as a non-error observation, never a hard error
     # the model would treat as its own mistake.
-    assert "error" not in result
-    assert str(result.get("reason") or "").startswith(WEB_UNAVAILABLE_OBSERVATION)
+    assert all("error" not in result for result in results)
+    assert all(
+        str(result.get("reason") or "").startswith(WEB_UNAVAILABLE_OBSERVATION)
+        for result in results
+    )
+    # The detached turn availability snapshot preserves the first concrete
+    # provider failure for a stale/repeated call without invoking the provider.
+    assert results[1] == results[0]
+    assert "gateway permission denied" in str(results[1].get("reason") or "")
     # The failed tool is withdrawn from the rest of the turn.
     assert "web_search" not in _tool_schema_names(client.call_records[1]["tools"])
     assert _event_payloads(log_path, "web_tool_unavailable")
     assert _final_contents(log_path) == ["Continued without web access."]
+
+
+class _ToolEndCaptureSurface(NoopSurface):
+    """Legacy-event surface recording tool completions as a transcript sees them."""
+
+    def __init__(self) -> None:
+        self.tool_ends: list[ToolEndEvent] = []
+
+    def on_tool_end(self, event: ToolEndEvent) -> None:
+        self.tool_ends.append(event)
+
+
+def _replace_web_fetch_run(session: Any, run: Any) -> None:
+    web_fetch_tool = session.tools["web_fetch"]
+    session.tools["web_fetch"] = ToolDef(
+        name=web_fetch_tool.name,
+        description=web_fetch_tool.description,
+        parameters=web_fetch_tool.parameters,
+        metadata=web_fetch_tool.metadata,
+        run=run,
+    )
+    session.tool_list = [tool.as_openai_tool() for tool in session.tools.values()]
+
+
+def _two_fetch_client(first_url: str, second_url: str) -> _ScriptedClient:
+    return _ScriptedClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc1", name="web_fetch", arguments={"url": first_url})],
+                raw={},
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="tc2", name="web_fetch", arguments={"url": second_url})],
+                raw={},
+            ),
+            LLMResponse(content="Answered from the pages I could read.", tool_calls=[], raw={}),
+        ]
+    )
+
+
+def test_web_fetch_remote_site_outcome_is_named_and_keeps_web_fetch(tmp_path: Path) -> None:
+    # A site that stalls or refuses automated clients is that source's outcome:
+    # the model gets a recoverable error, web_fetch stays on the tool list, and
+    # the tool-end event carries what the site did so transcripts can say so.
+    surface = _ToolEndCaptureSurface()
+    session = _session(tmp_path, mode="readonly", surface=surface)
+    attempts: list[str] = []
+
+    def _fetch(args: dict[str, Any]) -> dict[str, Any]:
+        url = str(args.get("url") or "")
+        attempts.append(url)
+        if "stalling" in url:
+            raise WebFetchError(
+                f"web_fetch request to '{url}' timed out during response read.",
+                recoverable=True,
+                remote_site_reason="site didn't respond",
+            )
+        return {"url": url, "final_url": url, "status_code": 200, "content": "ok"}
+
+    _replace_web_fetch_run(session, _fetch)
+    client = _two_fetch_client("https://stalling.example.com/", "https://docs.example.com/")
+    session.client = client  # type: ignore[assignment]
+
+    try:
+        exit_code = session.run_turn("Read both pages, then answer briefly.")
+        log_path = session.store.path
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert attempts == ["https://stalling.example.com/", "https://docs.example.com/"]
+    assert "web_fetch" in _tool_schema_names(client.call_records[1]["tools"])
+    assert not _event_payloads(log_path, "web_tool_unavailable")
+    first_result = next(
+        (payload.get("result") or {})
+        for payload in _event_payloads(log_path, "tool_result")
+        if payload.get("name") == "web_fetch"
+    )
+    assert first_result["recoverable"] is True
+    assert first_result["remote_site_reason"] == "site didn't respond"
+    stalled, fetched = surface.tool_ends
+    assert stalled.status == "failed"
+    assert stalled.meta["remote_site_reason"] == "site didn't respond"
+    assert fetched.status == "done"
+    assert "remote_site_reason" not in fetched.meta
+
+
+def test_withdrawn_web_fetch_tool_end_is_flagged_unavailable(tmp_path: Path) -> None:
+    # An environment-level failure withdraws web_fetch; the observation stays a
+    # non-error "done" for the model, but the tool-end event must say the call
+    # never ran instead of looking like a success.
+    surface = _ToolEndCaptureSurface()
+    session = _session(tmp_path, mode="readonly", surface=surface)
+
+    def _fetch(args: dict[str, Any]) -> dict[str, Any]:
+        raise WebFetchError(
+            f"HTTP request failed for '{args.get('url')}': [Errno 101] Network is unreachable"
+        )
+
+    _replace_web_fetch_run(session, _fetch)
+    session.client = _two_fetch_client(  # type: ignore[assignment]
+        "https://docs.example.com/a", "https://docs.example.com/b"
+    )
+
+    try:
+        exit_code = session.run_turn("Read both pages, then answer briefly.")
+    finally:
+        session.close()
+
+    assert exit_code == 0
+    assert len(surface.tool_ends) == 2
+    for event in surface.tool_ends:
+        assert event.status == "done"
+        assert event.meta["tool_unavailable"] is True
+        assert "Network is unreachable" in event.meta["unavailable_reason"]
+        assert not event.meta["unavailable_reason"].startswith(WEB_UNAVAILABLE_OBSERVATION)
 
 
 # Salvages: test_web_research_with_local_output_routes_to_repo_and_keeps_web_tools
@@ -1370,7 +1527,9 @@ def test_chat_only_turn_uses_small_visible_history_only(tmp_path: Path) -> None:
 
 
 # Salvages: test_create_session_uses_role_temperatures_for_clients.
-def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> None:
+def test_create_session_uses_role_temperatures_without_provisioning_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     secret_base_url = "https://route-user:route-password@api.example.test/private/token"
     cfg = AppConfig(
         model="test-model",
@@ -1379,33 +1538,39 @@ def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> No
         compactor_temperature=0.31,
     )
     cfg.extra_fields = {
-        "role_models": {"router": "selector-model"},
+        "role_models": {"router": "unavailable-selector-model"},
         "compaction": {
             "enabled": True,
             "summarize_conversation": True,
         },
     }
+    resolve_role = session_mod.resolve_model_for_role
+    make_client = session_mod._make_session_llm_client
+    provisioned_models: list[str] = []
+
+    def resolve_active_role(**kwargs: Any) -> str:
+        if kwargs["role"] == "router":
+            raise AssertionError("unused selector model must not be resolved")
+        return resolve_role(**kwargs)
+
+    def record_client(**kwargs: Any) -> Any:
+        provisioned_models.append(kwargs["model"])
+        return make_client(**kwargs)
+
+    monkeypatch.setattr(session_mod, "resolve_model_for_role", resolve_active_role)
+    monkeypatch.setattr(session_mod, "_make_session_llm_client", record_client)
     session = _session(tmp_path, cfg=cfg)
 
     try:
         assert session.client.temperature == 0.23
         assert session.client.model == "test-model"
-        assert session.router_client is not None
-        assert session.router_client.model == "selector-model"
-        assert session.router_client.temperature == 0.0
-        assert session.router_client.timeout_s == 15.0
-        assert session.router_client.stream_no_progress_timeout_s == 15.0
-        assert session.router_client.enable_thinking is False
-        assert session.router_client.reasoning_effort == ""
-        assert session.router_client.provider_retry_settings.disable_retries is True
+        assert session.router_client is None
+        assert provisioned_models == ["test-model", "test-model"]
         assert session.client.provider_retry_settings.disable_retries is False
-        assert session._semantic_router_bound_client is session.client
-        assert session._provisioned_router_client is session.router_client
         session_start_payload = _event_payloads(session.store.path, "session_start")[0]
-        assert session_start_payload["router_model"] == "selector-model"
-        assert {item["role"] for item in session_start_payload["model_metadata_diagnostics"]} >= {
+        assert "router_model" not in session_start_payload
+        assert {item["role"] for item in session_start_payload["model_metadata_diagnostics"]} == {
             "coding",
-            "router",
             "compactor",
         }
         assert session_start_payload["base_url_descriptor"] == endpoint_descriptor(secret_base_url)
@@ -1427,11 +1592,12 @@ def test_create_session_uses_role_temperatures_for_clients(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "cfg",
     [
+        AppConfig(model="test-model"),
         AppConfig(model="test-model", skills_enabled=False),
         AppConfig(model="test-model", skills_auto_invoke=False),
     ],
 )
-def test_skill_selector_client_requires_enabled_auto_skills(
+def test_skill_settings_do_not_provision_selector_client(
     tmp_path: Path,
     cfg: AppConfig,
 ) -> None:
@@ -1439,13 +1605,13 @@ def test_skill_selector_client_requires_enabled_auto_skills(
 
     try:
         assert session.router_client is None
-        assert session._semantic_router_bound_client is session.client
-        assert session._provisioned_router_client is None
+        assert not hasattr(session, "_semantic_router_bound_client")
+        assert not hasattr(session, "_provisioned_router_client")
     finally:
         session.close()
 
 
-def test_skill_selector_client_requires_nonempty_skill_registry(
+def test_empty_skill_registry_does_not_provision_selector_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1462,6 +1628,5 @@ def test_skill_selector_client_requires_nonempty_skill_registry(
     try:
         assert session.skills_ordered == ()
         assert session.router_client is None
-        assert session._provisioned_router_client is None
     finally:
         session.close()

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from alysis_code.agent.read_ledger import SessionReadLedger
 from alysis_code.agent.tools_assembly import ToolDef, build_tools
 from alysis_code.config import AppConfig, set_config_value
 from alysis_code.session_store import SessionStore
@@ -13,6 +18,7 @@ def _tools(
     *,
     session_id: str,
     read_ledger_enabled: bool = True,
+    read_ledger_sink=None,
 ) -> tuple[dict[str, ToolDef], SessionStore]:
     store = SessionStore(
         enabled=False,
@@ -21,6 +27,7 @@ def _tools(
         cwd=os.fspath(tmp_path),
         repo_root=os.fspath(tmp_path),
     )
+    ledgers = []
     tools = build_tools(
         root=tmp_path,
         console=None,
@@ -29,12 +36,26 @@ def _tools(
         yes=True,
         cfg=AppConfig(model="test-model", read_ledger_enabled=read_ledger_enabled),
         subagents_enabled=False,
+        read_ledger_sink=ledgers.append,
     )
+    if read_ledger_sink is not None:
+        read_ledger_sink(ledgers[0])
+    # These focused tests deliver the entire result. Runtime offload composition
+    # is exercised separately against the real turn/message boundary.
+    for name in ("fs_read",):
+        run = tools[name].run
+
+        def deliver(args, run=run):
+            result = run(args)
+            ledgers[0].record_delivery(result=result, content_for_message=json.dumps(result))
+            return result
+
+        tools[name] = replace(tools[name], run=deliver)
     return tools, store
 
 
 def _write_lines(path: Path, *lines: str) -> None:
-    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8", newline="")
 
 
 def test_exact_unchanged_reread_is_replaced_by_compact_notice(tmp_path: Path) -> None:
@@ -56,8 +77,8 @@ def test_partial_overlap_returns_only_unread_delta_and_notice(tmp_path: Path) ->
     _write_lines(tmp_path / "demo.txt", "one", "two", "three", "four", "five", "six")
     tools, store = _tools(tmp_path, session_id="partial")
     try:
-        first = tools["fs_read_lines"].run({"path": "demo.txt", "start_line": 2, "end_line": 4})
-        second = tools["fs_read_lines"].run({"path": "demo.txt", "start_line": 3, "end_line": 6})
+        first = tools["fs_read"].run({"path": "demo.txt", "start_line": 2, "end_line": 4})
+        second = tools["fs_read"].run({"path": "demo.txt", "start_line": 3, "end_line": 6})
 
         assert "2: two" in first["content"]
         assert second["read_ledger_partial"] is True
@@ -72,11 +93,14 @@ def test_partial_overlap_returns_only_unread_delta_and_notice(tmp_path: Path) ->
         store.close()
 
 
-def test_clipped_line_is_not_recorded_as_fully_returned(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pre_read_raw", [False, True])
+def test_clipped_line_is_not_recorded_as_fully_returned(tmp_path: Path, pre_read_raw: bool) -> None:
     _write_lines(tmp_path / "demo.txt", "abcdefghijklmnopqrstuvwxyz")
     tools, store = _tools(tmp_path, session_id="clipped-line")
     try:
-        clipped = tools["fs_read_lines"].run(
+        if pre_read_raw:
+            tools["fs_read"].run({"path": "demo.txt"})
+        clipped = tools["fs_read"].run(
             {
                 "path": "demo.txt",
                 "start_line": 1,
@@ -84,7 +108,7 @@ def test_clipped_line_is_not_recorded_as_fully_returned(tmp_path: Path) -> None:
                 "max_bytes": 10,
             }
         )
-        complete = tools["fs_read_lines"].run(
+        complete = tools["fs_read"].run(
             {
                 "path": "demo.txt",
                 "start_line": 1,
@@ -121,9 +145,9 @@ def test_observed_file_modification_invalidates_prior_ranges(tmp_path: Path) -> 
     _write_lines(target, "old-one", "old-two")
     tools, store = _tools(tmp_path, session_id="external-change")
     try:
-        tools["fs_read_lines"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
+        tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
         _write_lines(target, "new-one", "new-two")
-        result = tools["fs_read_lines"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
+        result = tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
 
         assert "new-one" in result["content"]
         assert "read_ledger_skipped" not in result
@@ -150,8 +174,8 @@ def test_force_bypasses_unchanged_range_dedupe(tmp_path: Path) -> None:
     _write_lines(tmp_path / "demo.txt", "one", "two")
     tools, store = _tools(tmp_path, session_id="force")
     try:
-        tools["fs_read_lines"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
-        result = tools["fs_read_lines"].run(
+        tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
+        result = tools["fs_read"].run(
             {"path": "demo.txt", "start_line": 1, "end_line": 2, "force": True}
         )
 
@@ -197,7 +221,174 @@ def test_read_ledger_config_and_force_schemas() -> None:
 
     from alysis_code.tools.registry import require_builtin_tool_metadata
 
-    for name in ("fs_read", "fs_read_lines"):
-        force = require_builtin_tool_metadata(name).parameters["properties"]["force"]
-        assert force["type"] == "boolean"
-        assert force["default"] is False
+    force = require_builtin_tool_metadata("fs_read").parameters["properties"]["force"]
+    assert force["type"] == "boolean"
+    assert force["default"] is False
+
+
+@pytest.mark.parametrize("raw_range", [False, True])
+@pytest.mark.parametrize("numbered_first", [False, True])
+def test_each_requested_presentation_is_delivered_once(
+    tmp_path: Path, raw_range: bool, numbered_first: bool
+) -> None:
+    _write_lines(tmp_path / "demo.txt", "  Ελληνικά", "second")
+    tools, store = _tools(tmp_path, session_id="presentations")
+    raw_args = {"path": "demo.txt"}
+    if raw_range:
+        raw_args.update(start_line=1, end_line=2, include_line_numbers=False)
+    numbered_args = {"path": "demo.txt", "start_line": 1, "end_line": 2}
+    calls = [("fs_read", raw_args), ("fs_read", numbered_args)]
+    if numbered_first:
+        calls.reverse()
+    try:
+        for name, args in calls:
+            result = tools[name].run(args)
+            numbered = args is numbered_args
+            assert result["content"] == (
+                "1:   Ελληνικά\n2: second\n" if numbered else "  Ελληνικά\nsecond\n"
+            )
+            assert "read_ledger_skipped" not in result
+        for name, args in calls:
+            assert tools[name].run(args)["read_ledger_skipped"] is True
+    finally:
+        store.close()
+
+
+def test_partial_numbered_coverage_does_not_inherit_raw_ranges(tmp_path: Path) -> None:
+    _write_lines(tmp_path / "demo.txt", "one", "two", "three", "four")
+    tools, store = _tools(tmp_path, session_id="partial-presentation")
+    try:
+        tools["fs_read"].run({"path": "demo.txt"})
+        tools["fs_read"].run({"path": "demo.txt", "start_line": 2, "end_line": 3})
+        result = tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 4})
+        assert result["returned_ranges"] == [
+            {"start_line": 1, "end_line": 1},
+            {"start_line": 4, "end_line": 4},
+        ]
+        assert result["skipped_ranges"] == [{"start_line": 2, "end_line": 3}]
+        assert result["content"].startswith("1: one\n4: four\n")
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("numbered", [False, True])
+@pytest.mark.parametrize("newline", ["\n", "\r", "\r\n"])
+def test_partial_overlap_uses_physical_lines_not_unicode_separators(
+    tmp_path: Path, numbered: bool, newline: str
+) -> None:
+    (tmp_path / "demo.txt").write_bytes(
+        newline.join(["first", "α\u2028β\vγ", "third", "fourth", ""]).encode("utf-8")
+    )
+    tools, store = _tools(tmp_path, session_id="physical-lines")
+    args = {"path": "demo.txt", "include_line_numbers": numbered}
+    try:
+        tools["fs_read"].run({**args, "start_line": 1, "end_line": 2})
+        result = tools["fs_read"].run({**args, "start_line": 2, "end_line": 4})
+        assert result["returned_ranges"] == [{"start_line": 3, "end_line": 4}]
+        expected = (
+            f"3: third{newline}4: fourth{newline}" if numbered else f"third{newline}fourth{newline}"
+        )
+        assert result["content"].startswith(expected)
+        assert "β" not in result["content"]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "line_endings", [("\n",) * 3, ("\r",) * 3, ("\r\n",) * 3, ("\r\n", "\r", "\n")]
+)
+def test_full_raw_read_covers_physical_lines_with_any_line_endings(
+    tmp_path: Path, line_endings: tuple[str, str, str]
+) -> None:
+    content = "".join(
+        line + ending
+        for line, ending in zip(("α\u2028β", "two", "three"), line_endings, strict=True)
+    )
+    (tmp_path / "demo.txt").write_bytes(content.encode("utf-8"))
+    tools, store = _tools(tmp_path, session_id="raw-physical-lines")
+    try:
+        assert tools["fs_read"].run({"path": "demo.txt"})["content"] == content
+        result = tools["fs_read"].run(
+            {"path": "demo.txt", "start_line": 1, "end_line": 3, "include_line_numbers": False}
+        )
+        assert result["read_ledger_skipped"] is True
+        assert result["skipped_ranges"] == [{"start_line": 1, "end_line": 3}]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("pre_read_raw", [False, True])
+def test_snapshot_resume_preserves_only_observed_presentations(
+    tmp_path: Path, pre_read_raw: bool
+) -> None:
+    _write_lines(tmp_path / "demo.txt", "one", "two", "three")
+    ledgers: list[SessionReadLedger] = []
+    tools, store = _tools(tmp_path, session_id="snapshot", read_ledger_sink=ledgers.append)
+    resumed_ledgers: list[SessionReadLedger] = []
+    resumed_tools, resumed_store = _tools(
+        tmp_path, session_id="resumed", read_ledger_sink=resumed_ledgers.append
+    )
+    try:
+        if pre_read_raw:
+            tools["fs_read"].run({"path": "demo.txt"})
+        tools["fs_read"].run({"path": "demo.txt", "start_line": 2, "end_line": 2})
+        snapshot = ledgers[0].snapshot()
+        assert resumed_ledgers[0].seed_from_snapshot(snapshot) == 1
+        raw = resumed_tools["fs_read"].run({"path": "demo.txt"})
+        assert (raw.get("read_ledger_skipped") is True) is pre_read_raw
+        numbered = resumed_tools["fs_read"].run(
+            {"path": "demo.txt", "start_line": 1, "end_line": 3}
+        )
+        assert numbered["returned_ranges"] == [
+            {"start_line": 1, "end_line": 1},
+            {"start_line": 3, "end_line": 3},
+        ]
+        assert snapshot["demo.txt"]["numbered_ranges"] == [(2, 2)]
+        assert resumed_ledgers[0].reset() == 1
+        assert resumed_tools["fs_read"].run({"path": "demo.txt"})["content"].startswith("one\n")
+        assert (
+            resumed_tools["fs_read"]
+            .run({"path": "demo.txt", "start_line": 1, "end_line": 3})["content"]
+            .startswith("1: one\n")
+        )
+    finally:
+        resumed_store.close()
+        store.close()
+
+
+def test_legacy_snapshot_does_not_claim_numbered_delivery(tmp_path: Path) -> None:
+    _write_lines(tmp_path / "demo.txt", "one", "two")
+    ledgers: list[SessionReadLedger] = []
+    tools, store = _tools(tmp_path, session_id="legacy", read_ledger_sink=ledgers.append)
+    try:
+        ledger = ledgers[0]
+        snapshot = {
+            "demo.txt": {"content_sha256": ledger.content_hash("demo.txt"), "ranges": [(1, 2)]}
+        }
+        assert ledger.seed_from_snapshot(snapshot) == 1
+        assert tools["fs_read"].run({"path": "demo.txt"})["read_ledger_skipped"] is True
+        numbered = tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 2})
+        assert numbered["content"] == "1: one\n2: two\n"
+        assert "read_ledger_skipped" not in numbered
+    finally:
+        store.close()
+
+
+def test_changed_file_invalidates_both_presentations_and_snapshot(tmp_path: Path) -> None:
+    target = tmp_path / "demo.txt"
+    _write_lines(target, "before")
+    ledgers: list[SessionReadLedger] = []
+    tools, store = _tools(tmp_path, session_id="both-invalidated", read_ledger_sink=ledgers.append)
+    try:
+        tools["fs_read"].run({"path": "demo.txt"})
+        tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 1})
+        snapshot = ledgers[0].snapshot()
+        _write_lines(target, "after")
+        assert ledgers[0].seed_from_snapshot(snapshot) == 0
+        assert tools["fs_read"].run({"path": "demo.txt"})["content"] == "after\n"
+        assert (
+            tools["fs_read"].run({"path": "demo.txt", "start_line": 1, "end_line": 1})["content"]
+            == "1: after\n"
+        )
+    finally:
+        store.close()

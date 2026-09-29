@@ -14,7 +14,11 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 from rich.text import Text
 
-from ..approval_scope import approval_session_scope_for_request
+from ..approval_scope import (
+    approval_dir_grant_candidate,
+    approval_session_scope_for_request,
+    request_matches_dir_grants,
+)
 from ..interactive_input_guard import interactive_prompt_guard
 from ..llm_error_display import classify_llm_error_display, friendly_llm_error_message
 from ..subagent_labels import subagent_identity
@@ -75,6 +79,7 @@ from .types import (
     ToolEndEvent,
     ToolOutputEvent,
     ToolStartEvent,
+    remote_site_outcome,
 )
 
 _SENSITIVE_PATTERNS = [
@@ -302,6 +307,12 @@ class RichSurface:
         self._show_status_line = show_status_line
         self._assistant_stream_open = False
         self._allow_for_session: set[str] = set()
+        # Folder-wide session grants: (operation, directory) pairs the
+        # user granted via "always for this folder" on a delete approval.
+        self._session_dir_grants: set[tuple[str, str]] = set()
+        self._approval_dir_candidate: str | None = None
+        # Cumulative ms blocked on approval prompts (see TuiSurface).
+        self.approval_wait_ms_total = 0
         self._thinking_open = False
         self._last_trace_line_key: str = ""
         self._tool_output_summary: dict[str, str] = {}
@@ -807,52 +818,54 @@ class RichSurface:
     def on_tool_end(self, event: ToolEndEvent) -> None:
         display = _tool_display_name(event.name)
         elapsed = _format_duration_ms(event.elapsed_ms)
+        # The human's approval-wait is disclosed, not billed to the tool.
+        approval_wait_ms = int(getattr(event, "approval_wait_ms", 0) or 0)
+        if approval_wait_ms > 0:
+            elapsed = f"{elapsed} · approval {_format_duration_ms(approval_wait_ms)}"
+        meta = event.meta if isinstance(event.meta, dict) else {}
         detail = ""
-        err = event.meta.get("error")
+        err = meta.get("error")
         if err:
             err_preview = _truncate_inline(_redact(str(err)), max_chars=140)
             detail = f": {err_preview}"
         self._tool_start_info.pop(event.tool_call_id, None)
         summary = self._tool_output_summary.pop(event.tool_call_id, "").strip()
-        should_render_outcome = (
-            self._trace_level != "off"
-            or event.status != "done"
-            or bool(event.meta.get("approval_declined"))
-        )
-        if should_render_outcome:
-            if event.status == "done":
-                outcome = f"{display} ({elapsed})"
-                if summary:
-                    outcome = f"{display}: {summary} ({elapsed})"
-                if event.subagent_name:
-                    self._emit_subagent_trace(
-                        subagent_name=event.subagent_name,
-                        message=outcome,
-                        style=_STYLE_CHROME,
-                        nesting_depth=event.nesting_depth,
-                    )
-                else:
-                    self._emit_thinking(outcome, style=_STYLE_CHROME)
-            elif event.meta.get("approval_declined"):
-                message = f"{display} approval declined ({elapsed}){detail}"
-                if event.subagent_name:
-                    self._emit_subagent_trace(
-                        subagent_name=event.subagent_name,
-                        message=message,
-                        style="red",
-                        nesting_depth=event.nesting_depth,
-                    )
-                else:
-                    self._emit_thinking(message, style="red")
-            elif event.subagent_name:
+        # A withdrawn optional tool reports "done" to the model but never ran.
+        unavailable = event.status == "done" and bool(meta.get("tool_unavailable"))
+        # A page the remote site refused, stalled, or dropped is that source's
+        # outcome, not an agent failure: rendered like any other trace line.
+        site_reason = remote_site_outcome(meta) if event.status != "done" else ""
+        message = ""
+        style = _STYLE_CHROME
+        if unavailable:
+            message = f"{display} unavailable ({elapsed})"
+            cause = str(meta.get("unavailable_reason") or "")
+            if cause:
+                message += f": {_truncate_inline(_redact(cause), max_chars=140)}"
+            style = _STYLE_WARNING
+        elif event.status == "done":
+            if self._trace_level != "off":
+                outcome = f"{display}: {summary}" if summary else display
+                message = f"{outcome} ({elapsed})"
+        elif meta.get("approval_declined"):
+            message = f"{display} approval declined ({elapsed}){detail}"
+            style = "red"
+        elif site_reason:
+            if self._trace_level != "off":
+                message = f"{display} · {site_reason} ({elapsed})"
+        else:
+            message = f"{display} failed ({elapsed}){detail}"
+            style = "red"
+        if message:
+            if event.subagent_name:
                 self._emit_subagent_trace(
                     subagent_name=event.subagent_name,
-                    message=f"{display} failed ({elapsed}){detail}",
-                    style="red",
+                    message=message,
+                    style=style,
                     nesting_depth=event.nesting_depth,
                 )
             else:
-                self._emit_thinking(f"{display} failed ({elapsed}){detail}", style="red")
+                self._emit_thinking(message, style=style)
         if not self._assistant_stream_open and not self._tool_start_info:
             self._start_thinking_spinner(label="Reasoning...")
 
@@ -1256,17 +1269,25 @@ class RichSurface:
             os.close(fd)
 
     def _approval_selector_options(self) -> list[tuple[str, str]]:
-        return [
+        options = [
             ("y", "Allow"),
             ("a", "Always allow for session"),
-            ("n", "Deny"),
-            ("v", "View context"),
         ]
+        if self._approval_dir_candidate is not None:
+            options.append(("d", f"Always for this folder ({self._approval_dir_candidate})"))
+        options.extend(
+            [
+                ("n", "Deny"),
+                ("v", "View context"),
+            ]
+        )
+        return options
 
     def _approval_confirmation(self, choice: str) -> tuple[str, str] | None:
         mapping = {
             "y": (" Allowed", _STYLE_SUCCESS),
             "a": (" Always allowed", _STYLE_SUCCESS),
+            "d": (" Always allowed for this folder", _STYLE_SUCCESS),
             "n": (" Denied", _STYLE_WARNING),
         }
         return mapping.get(choice)
@@ -1353,7 +1374,7 @@ class RichSurface:
                 if key in {"\r", "\n"}:
                     choice = options[selected_index][0]
                     break
-                if lowered in {"y", "a", "n", "v"}:
+                if lowered in {option_key for option_key, _label in options}:
                     choice = lowered
                     break
                 if lowered == "k" or key == "\x1b[A":
@@ -1384,17 +1405,25 @@ class RichSurface:
         return choice
 
     def _prompt_approval_choice(self) -> str:
-        if self._uses_inline_approval_selector():
-            with interactive_prompt_guard(owns_terminal=True):
-                return self._prompt_approval_selector()
-        with interactive_prompt_guard():
-            return self._prompt_approval_choice_fallback()
+        # The human's decision time must not be billed to the tool.
+        wait_started = time.perf_counter()
+        try:
+            if self._uses_inline_approval_selector():
+                with interactive_prompt_guard(owns_terminal=True):
+                    return self._prompt_approval_selector()
+            with interactive_prompt_guard():
+                return self._prompt_approval_choice_fallback()
+        finally:
+            self.approval_wait_ms_total += int((time.perf_counter() - wait_started) * 1000)
 
     def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
         self._stop_thinking_spinner()
         scope_info = approval_session_scope_for_request(request)
         if scope_info.key is not None and scope_info.key in self._allow_for_session:
             return ApprovalDecision(allow=True, allow_for_session=True)
+        if request_matches_dir_grants(request, self._session_dir_grants):
+            return ApprovalDecision(allow=True, allow_for_session=True)
+        self._approval_dir_candidate = approval_dir_grant_candidate(request)
 
         files = ", ".join(request.files[:8]) if request.files else "-"
         command = request.command or "-"
@@ -1485,6 +1514,13 @@ class RichSurface:
                         (" always  ", _STYLE_META),
                     ]
                 )
+            if self._approval_dir_candidate is not None:
+                options.extend(
+                    [
+                        ("[d]", _STYLE_EMPHASIS),
+                        (f" folder ({self._approval_dir_candidate})  ", _STYLE_META),
+                    ]
+                )
             options.extend(
                 [
                     ("[n]", _STYLE_EMPHASIS),
@@ -1507,6 +1543,12 @@ class RichSurface:
         while True:
             choice = self._prompt_approval_choice()
             if choice in {"1", "y"}:
+                return ApprovalDecision(allow=True)
+            if choice == "d":
+                directory = self._approval_dir_candidate
+                if directory is not None:
+                    self._session_dir_grants.add((str(request.kind), directory))
+                    return ApprovalDecision(allow=True, allow_for_session=True)
                 return ApprovalDecision(allow=True)
             if choice in {"2", "a"}:
                 if scope_info.supported and scope_info.key is not None:

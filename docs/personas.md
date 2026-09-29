@@ -37,13 +37,17 @@ opaque IDE task/debug launches) are unavailable while a persona write scope is a
   is not an error, and a repeated identical proposal is auto-declined. The tool exists only
   in top-level interactive chat — one-shot runs, Forge, swarm workers, and subagents never
   see it, so automation cannot switch personas silently.
-- `/permissions <exec-mode>` selects your base mode for the next user message. On activation,
-  it redefines that base and clears any persona-held restore point and write scope. Repeated
-  selections replace the pending choice without changing the running turn's tools.
-- Persona changes during a running turn wait until it finishes. Tab stages the next persona;
-  approved model proposals also apply at turn end. Persona switches are inert inside Forge.
-- Use Architect for planning in chat. Legacy chat Plan Mode, including `/plan mode` and the
-  `/plan <task>` draft/approve flow, has been removed. Forge retains `/plan tasks|markdown|edit`.
+- `/permissions` is the execution-permissions command. An explicit
+  `/permissions <exec-mode>` always wins:
+  it redefines your base mode and clears any persona-held restore point and write scope.
+- Permission selections apply to the next user message; repeated selections replace
+  the pending choice without changing a running turn's tools. Persona changes
+  during a running turn apply after it finishes.
+- Persona switches are inert inside a Forge session.
+- Chat plan mode is gone: the former `/plan mode` overlay and the `/plan <task>`
+  draft → review → approve → execute loop were both removed, and `/plan` is not a chat
+  command any more. Architect is the planning posture; Forge keeps its own
+  `/plan tasks|markdown|edit`.
 - The active persona survives `/resume`: the base mode is restored from the session start and
   the last applied persona is re-applied on top, reproducing the narrowed mode, scope, and
   model exactly.
@@ -122,4 +126,4 @@ event (persona, effective mode, source `user`/`model`/`config`/`resume`, and the
 `/status` shows the active persona; the model sees it as a `persona:` line in its environment
 context and receives a short system-prompt section explaining the persona contract.
 
-See also: [Subagents](subagents.md) and the [security model](security_model.md).
+See also: [Subagents](subagents.md) and [Security model](security_model.md).

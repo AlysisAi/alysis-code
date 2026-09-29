@@ -22,6 +22,7 @@ from ..config import (
     AgentRuntimeSettings,
     AppConfig,
     ConfigError,
+    _coerce_optional_positive_float,
     _normalize_web_search_mode,
     clear_persisted_api_key,
     clear_persisted_profile_key,
@@ -53,6 +54,7 @@ from ..profile_presets import (
     find_preset_for_base_url,
     find_preset_for_profile,
     make_profile_from_preset,
+    model_display_name,
     model_options_for_preset,
     preset_protocol_summary,
     preset_selection_label,
@@ -61,6 +63,7 @@ from ..profile_presets import (
 from ..profiles import (
     SUBSCRIPTION_SELECTION_REQUIRED_KEY,
     ProfileSpec,
+    apply_hosted_prompt_cache_defaults,
     get_active_profile,
     list_profiles,
     set_active_profile,
@@ -73,6 +76,7 @@ from ..provider_model_catalog import (
     ProviderModelOption,
     discover_provider_models,
 )
+from ..provider_url import display_endpoint
 from ..reasoning_contracts import (
     UNKNOWN_CONTRACT,
     reasoning_contract_for,
@@ -106,6 +110,7 @@ SECTION_VALUES: tuple[tuple[str, str], ...] = (
     ("default", "Default Model"),
     ("web_search", "Web Search"),
     ("cache", "Context & Cache"),
+    ("request_timeout", "Request timeout (advanced)"),
     ("subagents", "Subagent model overrides"),
     ("forge", "Forge model overrides"),
     ("sandbox", "Sandbox"),
@@ -148,7 +153,7 @@ _FIELD_LABELS: dict[str, str] = {
     "max_steps": "Max steps per response",
     "task_max_steps": "Max steps per task",
     "subagent_max_steps": "Max steps per subagent run",
-    "subagent_timeout_s": "Subagent timeout (seconds)",
+    "subagent_timeout_s": "Subagent timeout (seconds or unlimited)",
 }
 _API_KEY_ENV_PROMPT = "API key env var name (NOT the key itself, e.g. 'ANTHROPIC_API_KEY')"
 _API_KEY_ENV_FIELD_NAME = "API key env var name"
@@ -222,9 +227,13 @@ class ConfigMenuState:
     subscription_selection_required: bool = False
     default_workspace_path: str = ""
     thinking_label_explicitly_set: bool = field(default=False, repr=False)
+    hosted_prompt_cache_defaults_applied: bool = False
+    prompt_cache_mode_explicitly_set: bool = field(default=False, repr=False)
+    cache_prompt_key_enabled: bool = True
+    cache_keepalive_enabled: bool = False
     _subscription_models_cache: tuple[Any, ...] = field(default=(), repr=False)
     _subscription_models_loaded: bool = field(default=False, repr=False)
-    _provider_models_cache_identity: tuple[str, str, str] | None = field(default=None, repr=False)
+    _provider_models_cache_identity: tuple[str, ...] | None = field(default=None, repr=False)
     _provider_models_cache: tuple[ProviderModelOption, ...] = field(default=(), repr=False)
     _provider_model_catalog_warning: str = field(default="", repr=False)
     _account_changed: bool = field(default=False, repr=False)
@@ -232,6 +241,7 @@ class ConfigMenuState:
 
     @classmethod
     def from_cfg(cls, cfg: AppConfig) -> ConfigMenuState:
+        apply_hosted_prompt_cache_defaults(cfg, get_active_profile(cfg))
         warnings: list[str] = []
         try:
             resolved_key = resolve_api_key(cfg)
@@ -312,7 +322,7 @@ class ConfigMenuState:
                 "max_steps": _format_integer(getattr(cfg, "max_steps", 25)),
                 "task_max_steps": _format_integer(getattr(cfg, "task_max_steps", 100)),
                 "subagent_max_steps": _format_integer(getattr(cfg, "subagent_max_steps", 16)),
-                "subagent_timeout_s": _format_number(
+                "subagent_timeout_s": _format_optional_limit(
                     getattr(cfg, "subagent_timeout_s", DEFAULT_SUBAGENT_TIMEOUT_S)
                 ),
                 "stream": "true" if bool(getattr(cfg, "stream", True)) else "false",
@@ -359,6 +369,9 @@ class ConfigMenuState:
             default_workspace_path=default_workspace_path,
         )
         state._normalize_provider_thinking_label()
+        state.hosted_prompt_cache_defaults_applied = cfg.hosted_prompt_cache_defaults_applied
+        state.cache_prompt_key_enabled = cfg.cache.prompt_cache_key_enabled
+        state.cache_keepalive_enabled = cfg.cache.keepalive_enabled
         state._original = state.snapshot()
         return state
 
@@ -390,6 +403,8 @@ class ConfigMenuState:
             "clear_stored_key_confirmed": self.clear_stored_key_confirmed,
             "clear_stored_key_profile": self.clear_stored_key_profile,
             "thinking_label_explicitly_set": self.thinking_label_explicitly_set,
+            "hosted_prompt_cache_defaults_applied": self.hosted_prompt_cache_defaults_applied,
+            "prompt_cache_mode_explicitly_set": self.prompt_cache_mode_explicitly_set,
             "subscription_selection_required": self.subscription_selection_required,
         }
 
@@ -435,6 +450,12 @@ class ConfigMenuState:
         self.thinking_label_explicitly_set = bool(
             self._original.get("thinking_label_explicitly_set", False)
         )
+        self.hosted_prompt_cache_defaults_applied = bool(
+            self._original.get("hosted_prompt_cache_defaults_applied", False)
+        )
+        self.prompt_cache_mode_explicitly_set = bool(
+            self._original.get("prompt_cache_mode_explicitly_set", False)
+        )
         self.refresh_api_key_status()
 
     def set_field(self, name: str, value: str) -> None:
@@ -469,6 +490,16 @@ class ConfigMenuState:
         }:
             raise KeyError(f"Unknown config menu field: {name}")
         self.fields[key] = str(value)
+        if key in {
+            "prompt_cache_mode",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "anthropic_prompt_cache_enabled",
+            "anthropic_prompt_cache_ttl",
+        }:
+            self.hosted_prompt_cache_defaults_applied = True
+        if key == "prompt_cache_mode":
+            self.prompt_cache_mode_explicitly_set = True
         if key == "model":
             profile = _active_subscription_profile(self)
             if profile is not None and str(value).strip() != profile.default_model:
@@ -488,7 +519,7 @@ class ConfigMenuState:
         """Drop a stale effort inherited from another provider/model surface."""
 
         preset = _active_preset(self)
-        if preset is None or preset.key not in {"nvidia", "zai-coding-plan"}:
+        if preset is None or preset.key not in {"alysis", "nvidia", "zai-coding-plan"}:
             return
         allowed = _thinking_labels_for_state(
             self,
@@ -638,7 +669,14 @@ class ConfigMenuState:
         self.active_profile = profile_name
         self._subscription_models_cache = ()
         self._subscription_models_loaded = False
+        self._provider_models_cache_identity = None
+        self._provider_models_cache = ()
+        self._provider_model_catalog_warning = ""
         profile = ProfileSpec.from_dict(profile_name, self.profiles[profile_name])
+        cache_cfg = self._resolution_cfg()
+        if apply_hosted_prompt_cache_defaults(cache_cfg, profile):
+            self.fields["prompt_cache_mode"] = cache_cfg.prompt_cache_mode
+            self.hosted_prompt_cache_defaults_applied = True
         if profile.base_url:
             self.fields["base_url"] = profile.base_url
         if profile.auth_provider:
@@ -756,6 +794,11 @@ class ConfigMenuState:
             prompt_cache_mode=_normalize_prompt_cache_mode(
                 self.fields.get("prompt_cache_mode", "manual")
             ),
+            hosted_prompt_cache_defaults_applied=self.hosted_prompt_cache_defaults_applied,
+            cache={
+                "prompt_cache_key_enabled": self.cache_prompt_key_enabled,
+                "keepalive_enabled": self.cache_keepalive_enabled,
+            },
             prompt_cache_key=str(self.fields.get("prompt_cache_key", "") or ""),
             prompt_cache_retention=str(self.fields.get("prompt_cache_retention", "") or ""),
             anthropic_prompt_cache_enabled=_normalize_bool_text(
@@ -806,6 +849,7 @@ class ConfigMenuState:
             )
 
         changes: dict[str, Any] = {}
+        cfg.hosted_prompt_cache_defaults_applied = self.hosted_prompt_cache_defaults_applied
 
         execution = getattr(cfg, "execution", None)
         if execution is None:
@@ -900,7 +944,10 @@ class ConfigMenuState:
                 set_config_value(cfg, key, str(desired_int))
                 changes[key] = desired_int
 
-        desired_subagent_timeout = float(str(self.fields.get("subagent_timeout_s", "")).strip())
+        desired_subagent_timeout = _coerce_optional_positive_float(
+            self.fields.get("subagent_timeout_s", ""),
+            key="subagent_timeout_s",
+        )
         current_subagent_timeout = _finite_float(
             getattr(cfg, "subagent_timeout_s", None),
             fallback=None,
@@ -909,14 +956,21 @@ class ConfigMenuState:
             set_config_value(
                 cfg,
                 "subagent_timeout_s",
-                _format_number(desired_subagent_timeout),
+                (
+                    "unlimited"
+                    if desired_subagent_timeout is None
+                    else _format_number(desired_subagent_timeout)
+                ),
             )
             changes["subagent_timeout_s"] = desired_subagent_timeout
 
         desired_cache_mode = _normalize_prompt_cache_mode(
             self.fields.get("prompt_cache_mode", "manual")
         )
-        if str(getattr(cfg, "prompt_cache_mode", "") or "manual") != desired_cache_mode:
+        if (
+            str(getattr(cfg, "prompt_cache_mode", "") or "manual") != desired_cache_mode
+            or self.prompt_cache_mode_explicitly_set
+        ):
             set_config_value(cfg, "prompt_cache_mode", desired_cache_mode)
             changes["prompt_cache_mode"] = desired_cache_mode
 
@@ -1201,13 +1255,13 @@ class ConfigMenuState:
                 return f"{label} must be a positive integer."
             if value <= 0:
                 return f"{label} must be a positive integer."
-        subagent_timeout_text = str(self.fields.get("subagent_timeout_s", "")).strip()
         try:
-            subagent_timeout = float(subagent_timeout_text)
-        except ValueError:
-            return "Subagent timeout (seconds) must be a positive number."
-        if subagent_timeout <= 0 or not math.isfinite(subagent_timeout):
-            return "Subagent timeout (seconds) must be a positive number."
+            _coerce_optional_positive_float(
+                self.fields.get("subagent_timeout_s", ""),
+                key="subagent_timeout_s",
+            )
+        except ConfigError:
+            return "Subagent timeout must be a positive number or unlimited."
         try:
             _normalize_prompt_cache_mode(self.fields.get("prompt_cache_mode", "manual"))
         except ValueError as exc:
@@ -1299,6 +1353,8 @@ def run_config_menu(
             _run_web_search_section(state, console)
         elif action == "cache":
             _run_cache_section(state, console)
+        elif action == "request_timeout":
+            _run_request_timeout_section(state, console)
         elif action == "subagents":
             _run_subagent_section(state, console)
         elif action == "forge":
@@ -1388,7 +1444,7 @@ def _default_model_summary_text(state: ConfigMenuState) -> str:
     model = state.fields.get("model", "").strip()
     if not model:
         return _MISSING_REQUIRED
-    return f"{model} · thinking {state.thinking_label}"
+    return f"{model_display_name(model)} · thinking {state.thinking_label}"
 
 
 def _cache_summary_text(state: ConfigMenuState) -> str:
@@ -1399,8 +1455,12 @@ def _cache_summary_text(state: ConfigMenuState) -> str:
     if mode == "off":
         return f"cache off · {policy_summary} · {compaction}"
     if mode == "auto":
-        ttl = _normalize_anthropic_prompt_cache_ttl(
-            state.fields.get("anthropic_prompt_cache_ttl", "5m")
+        ttl = (
+            policy.anthropic_cache_control_ttl
+            if policy is not None
+            else _normalize_anthropic_prompt_cache_ttl(
+                state.fields.get("anthropic_prompt_cache_ttl", "5m")
+            )
         )
         return f"auto · {policy_summary} · Anthropic TTL {ttl} · {compaction}"
 
@@ -1458,18 +1518,32 @@ def _effective_cache_capability_for_state(
             )
             or preview_profile.name
         )
-        protocol = str(preview_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+        from ..llm.factory import resolve_model_protocol
+
+        protocol = resolve_model_protocol(
+            provider_key=provider_key,
+            model=model,
+            protocol=str(preview_profile.protocol or OPENAI_COMPAT_PROTOCOL).strip(),
+        )
         capabilities = get_provider_protocol_capabilities(
             provider_key=provider_key,
             protocol=protocol,
         )
         preset = find_preset_for_profile(preview_profile)
+        from ..provider_auth import create_provider_auth
+
+        provider_auth = (
+            create_provider_auth(preview_profile.auth_provider)
+            if preview_profile.auth_provider
+            else None
+        )
         return resolve_effective_cache_capability(
             provider_key=provider_key,
             protocol=protocol,
             model=model,
             base_url=base_url,
             transport_capabilities=capabilities,
+            auth_cache_capability=getattr(provider_auth, "cache_capability", None),
             preset_cache_capability=(preset.cache_capability if preset is not None else None),
             profile_cache_capability=preview_profile.cache_capability,
         )
@@ -1508,7 +1582,13 @@ def _resolved_cache_policy_with_error_for_state(
             )
             or profile.name
         )
-        protocol = str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip()
+        from ..llm.factory import resolve_model_protocol
+
+        protocol = resolve_model_protocol(
+            provider_key=provider_key,
+            model=model,
+            protocol=str(profile.protocol or OPENAI_COMPAT_PROTOCOL).strip(),
+        )
         capabilities = get_provider_protocol_capabilities(
             provider_key=provider_key,
             protocol=protocol,
@@ -1650,6 +1730,11 @@ def _top_level_menu_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
         ("default", f"Default Model{native_suffix}", model_summary),
         ("web_search", "Web Search", _web_search_summary_text(state)),
         ("cache", "Context & Cache", _cache_summary_text(state)),
+        (
+            "request_timeout",
+            "Request timeout (advanced)",
+            f"{state.fields['llm_timeout_s']} seconds",
+        ),
         ("subagents", "Subagent model overrides", _override_summary_text(subagent_values)),
         (
             "forge",
@@ -2511,7 +2596,7 @@ def _run_provider_section(state: ConfigMenuState, console: Console) -> None:
     for profile_name in sorted(state.profiles):
         marker = "active" if profile_name == state.active_profile else ""
         profile = ProfileSpec.from_dict(profile_name, state.profiles[profile_name])
-        console.print(f"{profile.name}: {profile.base_url} {marker}".rstrip())
+        console.print(f"{profile.name}: {display_endpoint(profile.base_url)} {marker}".rstrip())
     try:
         action = _run_config_picker(
             console=console,
@@ -2926,11 +3011,6 @@ def _run_default_section(state: ConfigMenuState, console: Console) -> None:
             state.thinking_label,
             labels=_thinking_labels_for_state(state, model=model),
         )
-        timeout = _prompt_positive_float_text(
-            console,
-            "Request timeout (seconds)",
-            state.fields["llm_timeout_s"],
-        )
     except (Abort, EOFError, KeyboardInterrupt):
         console.print("")
         _print_section_cancelled(console, "Default Model")
@@ -2938,7 +3018,6 @@ def _run_default_section(state: ConfigMenuState, console: Console) -> None:
 
     state.set_field("model", model)
     state.set_thinking_label(thinking_label)
-    state.set_field("llm_timeout_s", timeout)
     if direct_subscription:
         console.print("[dim]Model and reasoning choices came from your subscription account.[/dim]")
     else:
@@ -2946,6 +3025,17 @@ def _run_default_section(state: ConfigMenuState, console: Console) -> None:
             "[dim]Reasoning effort. Some providers ignore this until they add native "
             "reasoning support.[/dim]"
         )
+
+
+def _run_request_timeout_section(state: ConfigMenuState, console: Console) -> None:
+    try:
+        timeout = _prompt_positive_float_text(
+            console, "Request timeout (seconds)", state.fields["llm_timeout_s"]
+        )
+    except (Abort, EOFError, KeyboardInterrupt):
+        _print_section_cancelled(console, "Request timeout")
+        return
+    state.set_field("llm_timeout_s", timeout)
 
 
 def _run_cache_section(state: ConfigMenuState, console: Console) -> None:
@@ -3142,20 +3232,25 @@ def _default_model_picker_subtitle(state: ConfigMenuState) -> str:
         return "Pick a model currently advertised for your connected subscription."
     preset = _active_preset(state)
     if preset is None:
-        return "Pick the active profile model, or type a custom model ID."
+        return "Pick a provider-advertised model, or type a custom model ID."
     return f"Pick a supported model for {preset.label}."
 
 
 def _provider_models_for_state(
     state: ConfigMenuState,
-    preset: ProfilePreset,
+    preset: ProfilePreset | None,
 ) -> tuple[ProviderModelOption, ...]:
-    if preset.key != "nvidia":
+    if preset is not None and preset.key not in {"nvidia", "custom"}:
+        state._provider_model_catalog_warning = ""
         return ()
     try:
         profile_data = state.profiles[state.active_profile]
         profile = ProfileSpec.from_dict(state.active_profile, profile_data)
     except (KeyError, ConfigError):
+        state._provider_model_catalog_warning = ""
+        return ()
+    if profile.auth_provider:
+        state._provider_model_catalog_warning = ""
         return ()
     api_key = state.staged_api_key_for_active_profile()
     if not api_key:
@@ -3165,12 +3260,14 @@ def _provider_models_for_state(
             api_key = ""
     identity = (
         profile.name,
+        profile.protocol,
         str(profile.base_url or "").strip().rstrip("/"),
         credential_scope_fingerprint(api_key),
+        credential_scope_fingerprint(tuple(sorted(profile.extra_headers.items()))),
     )
     if state._provider_models_cache_identity == identity:
         return state._provider_models_cache
-    if not api_key:
+    if not api_key and preset is not None and preset.key == "nvidia":
         state._provider_models_cache_identity = identity
         state._provider_models_cache = ()
         state._provider_model_catalog_warning = (
@@ -3181,8 +3278,11 @@ def _provider_models_for_state(
         options = discover_provider_models(profile=profile, api_key=api_key)
     except ProviderModelCatalogError:
         options = ()
+        provider_label = (
+            "NVIDIA's" if preset is not None and preset.key == "nvidia" else "The provider's"
+        )
         state._provider_model_catalog_warning = (
-            "NVIDIA's live model catalog is unavailable; recommended and custom models "
+            f"{provider_label} live model catalog is unavailable; recommended and custom models "
             "remain available."
         )
     else:
@@ -3190,6 +3290,32 @@ def _provider_models_for_state(
     state._provider_models_cache_identity = identity
     state._provider_models_cache = tuple(sorted(options, key=lambda item: item.id.casefold()))
     return state._provider_models_cache
+
+
+def _provider_model_option_rows(
+    state: ConfigMenuState, preset: ProfilePreset | None
+) -> list[tuple[str, str, str]]:
+    rows: list[tuple[str, str, str]] = []
+    is_nvidia = preset is not None and preset.key == "nvidia"
+    catalog_label = "live NVIDIA catalog" if is_nvidia else "live provider catalog"
+    for option in _provider_models_for_state(state, preset):
+        description = str(option.description or "").strip()
+        if not description:
+            owner = option.id.partition("/")[0]
+            description = (
+                f"{catalog_label} · hosted model from {owner}"
+                if is_nvidia and owner and owner != option.id
+                else catalog_label
+            )
+        label = option.label or option.id
+        if option.chat_compatibility == "unknown":
+            label = f"{label} (chat compatibility unverified)"
+            description = (
+                f"{description} · provider catalog does not declare endpoint compatibility; "
+                "verify this model before relying on it"
+            )
+        rows.append((option.id, label, description))
+    return rows
 
 
 def _preset_model_option_rows(
@@ -3201,62 +3327,21 @@ def _preset_model_option_rows(
 
     NVIDIA's API catalog contains both NVIDIA and third-party models, so its live
     ``/v1/models`` inventory is merged with a small curated recommendation set.
-    The hosted Alysis Code Pro gateway similarly appends its live ``/v1/models``
-    allowlist. Discovery is best-effort and offline-safe: on failure the static
-    rows still render.
+    Alysis uses only its curated offering, so stale gateway catalogs cannot
+    reintroduce retired or paid models. Discovery for NVIDIA is best-effort and
+    offline-safe: on failure the static rows still render.
     """
     rows = list(model_options_for_preset(preset))
 
     if preset.key == "nvidia" and state is not None:
         known = {value for value, _label, _description in rows}
-        for option in _provider_models_for_state(state, preset):
-            if option.id in known:
+        for row in _provider_model_option_rows(state, preset):
+            if row[0] in known:
                 continue
-            known.add(option.id)
-            owner = option.id.partition("/")[0]
-            description = str(option.description or "").strip()
-            if not description:
-                description = (
-                    f"live NVIDIA catalog · hosted model from {owner}"
-                    if owner and owner != option.id
-                    else "live NVIDIA catalog"
-                )
-            label = option.label or option.id
-            if option.chat_compatibility == "unknown":
-                label = f"{label} (chat compatibility unverified)"
-                description = (
-                    f"{description} · provider catalog does not declare endpoint compatibility; "
-                    "verify this model before relying on it"
-                )
-            rows.append((option.id, label, description))
+            known.add(row[0])
+            rows.append(row)
         return rows
 
-    from ..alysis_cloud import PROFILE_KEY
-
-    if preset.key != PROFILE_KEY:
-        return rows
-
-    try:
-        from .. import account_login
-        from ..config import load_config
-
-        discovered = account_login.list_trial_models(load_config())
-    except Exception:  # noqa: BLE001 - discovery must never break the picker
-        discovered = []
-
-    def _same_model(a: str, b: str) -> bool:
-        # Equal, or one is just the provider-prefixed form of the other.
-        return a == b or a.endswith("/" + b) or b.endswith("/" + a)
-
-    known = [value for value, _label, _description in rows]
-    for model_id in discovered:
-        if any(_same_model(model_id, existing) for existing in known):
-            continue
-        known.append(model_id)
-        # A model the gateway serves but the client predates: the preset may
-        # still describe it; otherwise say where it comes from.
-        description = str(preset.suggested_model_descriptions.get(model_id) or "").strip()
-        rows.append((model_id, model_id, description or "available on your Alysis Code Pro plan"))
     return rows
 
 
@@ -3266,6 +3351,7 @@ def _default_model_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
     current_model = str(state.fields.get("model") or "").strip()
 
     if _active_subscription_profile(state) is not None:
+        state._provider_model_catalog_warning = ""
         subscription_models = _subscription_models_for_state(state)
         for model in subscription_models:
             if model.id in seen:
@@ -3286,11 +3372,18 @@ def _default_model_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
             )
         return rows
 
+    preset = _active_preset(state)
+    if preset is not None and preset.key not in {"nvidia", "custom"}:
+        state._provider_model_catalog_warning = ""
+    if preset is not None and preset.key == "alysis":
+        # This managed profile offers only V4.1 Flash. Neither a saved old model
+        # nor manual entry should add alternatives to its model picker.
+        return _preset_model_option_rows(preset, state=state)
+
     if current_model:
         rows.append((current_model, current_model, "current configured model"))
         seen.add(current_model)
 
-    preset = _active_preset(state)
     custom_added = False
     if preset is not None:
         preset_rows = _preset_model_option_rows(preset, state=state)
@@ -3318,10 +3411,18 @@ def _default_model_rows(state: ConfigMenuState) -> list[tuple[str, str, str]]:
                 "Use any model supported by the active provider",
             )
         )
+    if preset is None or preset.key == "custom":
+        for row in _provider_model_option_rows(state, preset):
+            if row[0] not in seen:
+                seen.add(row[0])
+                rows.append(row)
     return rows
 
 
 def _active_preset(state: ConfigMenuState) -> ProfilePreset | None:
+    if _active_alysis_profile(state) is not None:
+        # Managed gateway overrides still use the Alysis model offering.
+        return next(preset for preset in PROFILE_PRESETS if preset.key == "alysis")
     if state.active_profile and state.active_profile in state.profiles:
         profile = ProfileSpec.from_dict(state.active_profile, state.profiles[state.active_profile])
         preset = find_preset_for_profile(profile)
@@ -3629,7 +3730,7 @@ def _thinking_labels_for_state(
         if preset_key == "nvidia" and contract is UNKNOWN_CONTRACT:
             return ("auto",)
         current = _normalize_thinking_label(state.thinking_label)
-        if preset_key in {"nvidia", "zai-coding-plan"}:
+        if preset_key in {"alysis", "nvidia", "zai-coding-plan"}:
             # A global effort may have been saved for the previously active
             # provider. Do not preserve an invalid value merely because it is
             # current; these controls are exact per hosted model and surface.
@@ -3974,6 +4075,12 @@ def _format_number(raw: Any) -> str:
         return str(int(value))
     text = f"{value:.12g}"
     return re.sub(r"\.0+$", "", text)
+
+
+def _format_optional_limit(raw: Any) -> str:
+    if raw is None:
+        return "unlimited"
+    return _format_number(raw)
 
 
 def _format_integer(raw: Any) -> str:

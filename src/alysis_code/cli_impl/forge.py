@@ -27,6 +27,7 @@ from ..assets.worker_section import render_relevant_assets_section
 from ..assets.worker_tools import build_worker_asset_mcp_manager, compose_worker_asset_mcp_manager
 from ..branding import env_get
 from ..error_text import sanitize_error_summary, sanitize_optional_error_summary
+from ..execution_shared import build_task_acceptance_instruction
 from ..failure_category import FailureCategory
 from ..forge_events import (
     EVENT_PLAN_INVALID,
@@ -50,6 +51,7 @@ from ..plan_repair import (
     plan_repair_event_payload,
 )
 from ..plan_validation import PlannerFailedError, raise_for_execution_ready_plan
+from ..profiles import apply_runtime_base_url_override
 from ..replanning import resolve_replanning_mode
 from ..run_state import RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from ..runtime_kind import RuntimeKind
@@ -77,6 +79,7 @@ from ..verification_repair import (
     run_verification_repair_loop,
     verification_failure_excerpts,
 )
+from ..verify_gate import verify_run_status
 
 _PROTECTED_GLOBAL_NAMES: set[str] = set()
 
@@ -1588,7 +1591,7 @@ def forge_swarm(
             max_steps_source is not None and max_steps_source is not ParameterSource.DEFAULT
         )
     if base_url is not None:
-        effective.base_url = base_url
+        apply_runtime_base_url_override(effective, base_url)
     if model is not None:
         effective.model = model
     if temperature is not None:
@@ -2127,6 +2130,7 @@ def execute_forge_task(
                 cfg=run_cfg,
                 root=paths.root,
                 instruction=instruction,
+                acceptance_instruction=build_task_acceptance_instruction(task),
                 mode=effective_mode,
                 runtime_kind=RuntimeKind.FORGE_EXEC,
                 yes=yes,
@@ -2711,6 +2715,7 @@ def execute_forge_task(
                         cfg=run_cfg,
                         root=paths.root,
                         instruction=repair_instruction,
+                        acceptance_instruction=build_task_acceptance_instruction(task),
                         mode=effective_mode,
                         runtime_kind=RuntimeKind.FORGE_EXEC,
                         yes=yes,
@@ -2809,7 +2814,7 @@ def execute_forge_task(
                 # mode, because that is the only mode where the failure blocks.
                 repair_outcome = None
                 if (
-                    not verify_result.all_passed
+                    verify_run_status(verify_result) == "failed"
                     and verify_mode == "strict"
                     and verify_repair_budget > 0
                 ):
@@ -2944,7 +2949,17 @@ def execute_forge_task(
                             )
                         else:
                             scope_warnings.append(verify_mutation_msg)
-                if not verify_result.all_passed and verify_mode == "strict":
+                if verify_run_status(verify_result) == "not_run":
+                    # Tri-state: every command was benignly skipped, so
+                    # nothing checked this merge. Not a pass (the pre-fix
+                    # vacuous True treated it as one) and not a failure either:
+                    # warn honestly and proceed, matching the no-authoritative-
+                    # commands stance below.
+                    scope_warnings.append(
+                        f"Verification did not execute: {verify_result.summary} -- "
+                        "nothing checked this task's merge."
+                    )
+                elif not verify_result.all_passed and verify_mode == "strict":
                     success = False
                     verify_blocked = True
                     merge_result = "not merged: strict verification failed"
@@ -3249,7 +3264,10 @@ def execute_forge_task(
             changed_files = list(report_diff.changed_files)
 
     if runtime_artifacts_changed:
-        summary = "Task failed: agent modified files under .alysis/ which is not allowed."
+        summary = (
+            "Task failed: agent modified files under .alysis/ which is not allowed. "
+            "Changed paths: " + ", ".join(runtime_artifact_changes[:10])
+        )
     elif scope_violation_files:
         summary = "Task blocked due to strict scope isolation."
     elif no_material_changes_blocked:
@@ -3640,7 +3658,7 @@ def forge_exec(
             max_steps_source is not None and max_steps_source is not ParameterSource.DEFAULT
         )
     if base_url is not None:
-        effective.base_url = base_url
+        apply_runtime_base_url_override(effective, base_url)
     if model is not None:
         effective.model = model
     if temperature is not None:
@@ -4061,7 +4079,7 @@ def forge_run(
         )
 
     if base_url is not None:
-        effective.base_url = base_url
+        apply_runtime_base_url_override(effective, base_url)
     if model is not None:
         effective.model = model
     if temperature is not None:

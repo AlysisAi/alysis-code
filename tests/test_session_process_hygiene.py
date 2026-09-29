@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +13,9 @@ import pytest
 
 import alysis_code.agent.session as session_mod
 from alysis_code.agent_loop import create_session
+from alysis_code.cancellation import InteractiveCancellationToken
 from alysis_code.config import AppConfig
+from alysis_code.llm.openai_compat import LLMResponse, ToolCall
 from alysis_code.process_reaping import (
     ProcessGroupRegistry,
     ProcessReapOutcome,
@@ -25,11 +29,8 @@ posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX process-group beh
 
 def _make_session(tmp_path: Path, *, runtime_kind: RuntimeKind, session_id: str):
     sessions_dir = tmp_path / "sessions"
-    cfg = AppConfig(model="test-model", routing_mode="code_only")
-    # These tests exercise host process-group ownership, not a container backend.
-    cfg.extra_fields = {"shell_sandbox": {"mode": "off"}}
     session = create_session(
-        cfg=cfg,
+        cfg=AppConfig(model="test-model", routing_mode="code_only"),
         root=tmp_path,
         mode="auto",
         yes=True,
@@ -235,6 +236,359 @@ def test_turn_finalization_fires_on_cancellation(tmp_path: Path, monkeypatch) ->
     assert fake.reap_calls == 1
 
 
+def test_interrupted_turn_cancels_children_records_once_and_session_is_reusable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_id = "interactive-turn-cancel"
+    session, sessions_dir = _make_session(
+        tmp_path,
+        runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+        session_id=session_id,
+    )
+    original_scheduler = session.child_scheduler
+    calls = 0
+
+    class _PendingChildScheduler:
+        def __init__(self) -> None:
+            self.pending = ["active-child"]
+            self.cancel_calls: list[dict[str, Any]] = []
+
+        def pending_run_ids(self) -> list[str]:
+            return list(self.pending)
+
+        def cancel(self, **kwargs: Any) -> dict[str, Any]:
+            self.cancel_calls.append(dict(kwargs))
+            self.pending.clear()
+            return {"cancelled_run_ids": ["active-child"], "children": []}
+
+    scheduler = _PendingChildScheduler()
+    session.child_scheduler = scheduler  # type: ignore[assignment]
+
+    def _interrupt_then_cancel_then_succeed(*_args: Any, **kwargs: Any) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise KeyboardInterrupt
+        if calls == 2:
+            scheduler.pending = ["tui-active-child"]
+            kwargs["cancellation_token"].cancel()
+        return 0
+
+    monkeypatch.setattr(session_mod, "_run_turn", _interrupt_then_cancel_then_succeed)
+    classic_token = InteractiveCancellationToken()
+    tui_token = InteractiveCancellationToken()
+    next_turn_token = InteractiveCancellationToken()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            session.run_turn("classic interrupt", cancellation_token=classic_token)
+        assert classic_token.is_cancelled is True
+
+        assert session.run_turn("TUI interrupt", cancellation_token=tui_token) == 0
+        assert tui_token.is_cancelled is True
+
+        assert session.run_turn("next turn", cancellation_token=next_turn_token) == 0
+        assert next_turn_token.is_cancelled is False
+    finally:
+        session.child_scheduler = original_scheduler
+        session.close()
+
+    interrupted = _events(sessions_dir, session_id, "turn_interrupted")
+    requested = _events(sessions_dir, session_id, "cancellation_requested")
+    assert len(requested) == 2
+    assert all(event["reason"] == "cancelled_by_user" for event in requested)
+    assert all(event["trigger"] == "interactive_token" for event in requested)
+    assert len(interrupted) == 2
+    assert [event["reason"] for event in interrupted] == [
+        "cancelled_by_user",
+        "cancelled_by_user",
+    ]
+    assert [event["trigger"] for event in interrupted] == [
+        "keyboard_interrupt",
+        "cancellation_token",
+    ]
+    assert [event["cancellation_already_requested"] for event in interrupted] == [
+        False,
+        True,
+    ]
+    assert all(event["cancellation_requested"] is True for event in interrupted)
+    lifecycle_events = [
+        event["type"]
+        for event in read_session_events(sessions_dir / f"{session_id}.jsonl")
+        if event["type"] in {"cancellation_requested", "turn_interrupted"}
+    ]
+    assert lifecycle_events == [
+        "cancellation_requested",
+        "turn_interrupted",
+        "cancellation_requested",
+        "turn_interrupted",
+    ]
+    # Interactive tokens publish directly to the children accepted by their
+    # own turn. Session-wide cancellation would be able to catch children that
+    # belong to a later turn, so it is intentionally reserved for legacy tokens.
+    assert scheduler.cancel_calls == []
+
+
+def test_cancellation_request_persists_before_polling_turn_records_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "interactive-cancellation-order-race"
+    session, sessions_dir = _make_session(
+        tmp_path,
+        runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+        session_id=session_id,
+    )
+    token = InteractiveCancellationToken()
+    turn_started = threading.Event()
+    turn_observed_cancellation = threading.Event()
+    request_append_started = threading.Event()
+    allow_request_append = threading.Event()
+    interrupted_append_started = threading.Event()
+    failures: list[BaseException] = []
+    original_append = session.store.append
+
+    def _delayed_append(event_type: str, payload: dict[str, Any]) -> None:
+        if event_type == "cancellation_requested":
+            request_append_started.set()
+            assert allow_request_append.wait(timeout=3)
+        elif event_type == "turn_interrupted":
+            interrupted_append_started.set()
+        original_append(event_type, payload)
+
+    def _poll_until_cancelled(*_args: Any, **kwargs: Any) -> int:
+        turn_started.set()
+        cancellation_token = kwargs["cancellation_token"]
+        assert cancellation_token.wait(timeout=3)
+        turn_observed_cancellation.set()
+        return 0
+
+    def _run() -> None:
+        try:
+            session.run_turn("poll for cancellation", cancellation_token=token)
+        except BaseException as exc:  # noqa: BLE001 - surfaced on the test thread
+            failures.append(exc)
+
+    monkeypatch.setattr(session.store, "append", _delayed_append)
+    monkeypatch.setattr(session_mod, "_run_turn", _poll_until_cancelled)
+    worker = threading.Thread(target=_run)
+    canceller = threading.Thread(target=token.cancel)
+    try:
+        worker.start()
+        assert turn_started.wait(timeout=3)
+        canceller.start()
+        assert request_append_started.wait(timeout=3)
+        assert turn_observed_cancellation.wait(timeout=3)
+
+        # The token event is already visible to the worker, but its terminal
+        # event must wait for the request event's append to finish.
+        assert not interrupted_append_started.wait(timeout=0.1)
+
+        allow_request_append.set()
+        canceller.join(timeout=3)
+        worker.join(timeout=3)
+        assert not canceller.is_alive()
+        assert not worker.is_alive()
+        assert failures == []
+    finally:
+        allow_request_append.set()
+        canceller.join(timeout=3)
+        worker.join(timeout=3)
+        session.close()
+
+    lifecycle_events = [
+        event["type"]
+        for event in read_session_events(sessions_dir / f"{session_id}.jsonl")
+        if event["type"] in {"cancellation_requested", "turn_interrupted"}
+    ]
+    assert lifecycle_events == ["cancellation_requested", "turn_interrupted"]
+
+
+class _ToolCallThenDoneClient:
+    model = "test-model"
+    temperature = 0.2
+
+    def __init__(self, tool_call: ToolCall) -> None:
+        self._tool_call = tool_call
+        self.calls = 0
+
+    def chat(self, **_kwargs: Any) -> LLMResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(content="", tool_calls=[self._tool_call], raw={})
+        return LLMResponse(content="Done.", tool_calls=[], raw={})
+
+
+def test_tool_result_after_cancellation_is_logged_after_the_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The token is visible before its request callback appends. A tool that
+    # returns because of the cancellation (a subagent wait, for one) must still
+    # be logged after the request, whichever thread gets scheduled first.
+    session_id = "interactive-cancelled-tool-result-order"
+    session, sessions_dir = _make_session(
+        tmp_path,
+        runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+        session_id=session_id,
+    )
+    token = InteractiveCancellationToken()
+    tool_started = threading.Event()
+    request_append_started = threading.Event()
+    allow_request_append = threading.Event()
+    tool_result_append_started = threading.Event()
+    outcomes: list[BaseException | int] = []
+    original_append = session.store.append
+
+    def _delayed_append(event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        if event_type == "cancellation_requested":
+            request_append_started.set()
+            assert allow_request_append.wait(timeout=3)
+        elif event_type == "tool_result" and payload.get("tool_call_id") == "wait-for-cancel":
+            tool_result_append_started.set()
+        original_append(event_type, payload, **kwargs)
+
+    def _wait_for_cancellation(_args: dict[str, Any]) -> dict[str, Any]:
+        tool_started.set()
+        assert token.wait(timeout=3)
+        return {"entries": []}
+
+    def _run() -> None:
+        try:
+            outcomes.append(session.run_turn("List the files.", cancellation_token=token))
+        except BaseException as exc:  # noqa: BLE001 - surfaced on the test thread
+            outcomes.append(exc)
+
+    session.client = _ToolCallThenDoneClient(  # type: ignore[assignment]
+        ToolCall(id="wait-for-cancel", name="fs_list", arguments={"path": "."})
+    )
+    session.tools["fs_list"] = replace(session.tools["fs_list"], run=_wait_for_cancellation)
+    monkeypatch.setattr(session.store, "append", _delayed_append)
+    worker = threading.Thread(target=_run)
+    canceller = threading.Thread(target=token.cancel)
+    try:
+        worker.start()
+        assert tool_started.wait(timeout=5)
+        canceller.start()
+        assert request_append_started.wait(timeout=3)
+        # The tool has already returned, but its result waits for the request.
+        assert not tool_result_append_started.wait(timeout=0.3)
+        allow_request_append.set()
+        canceller.join(timeout=3)
+        worker.join(timeout=5)
+        assert not canceller.is_alive()
+        assert not worker.is_alive()
+        assert all(isinstance(outcome, int | KeyboardInterrupt) for outcome in outcomes)
+    finally:
+        allow_request_append.set()
+        canceller.join(timeout=3)
+        worker.join(timeout=5)
+        session.close()
+
+    ordered = [
+        event["type"]
+        for event in read_session_events(sessions_dir / f"{session_id}.jsonl")
+        if event["type"] == "cancellation_requested"
+        or (
+            event["type"] == "tool_result"
+            and (event.get("payload") or {}).get("tool_call_id") == "wait-for-cancel"
+        )
+    ]
+    assert ordered == ["cancellation_requested", "tool_result"]
+
+
+def test_late_cancelled_turn_cleanup_does_not_cancel_a_new_turn_child(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session, _sessions_dir = _make_session(
+        tmp_path,
+        runtime_kind=RuntimeKind.INTERACTIVE_CHAT,
+        session_id="overlapping-interactive-turns",
+    )
+    original_scheduler = session.child_scheduler
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    release_second = threading.Event()
+    failures: list[BaseException] = []
+
+    class _PendingChildScheduler:
+        def __init__(self) -> None:
+            self.pending: list[str] = []
+            self.cancel_calls: list[dict[str, Any]] = []
+
+        def pending_run_ids(self) -> list[str]:
+            return list(self.pending)
+
+        def cancel(self, **kwargs: Any) -> dict[str, Any]:
+            self.cancel_calls.append(dict(kwargs))
+            self.pending.clear()
+            return {"cancelled_run_ids": [], "children": []}
+
+    scheduler = _PendingChildScheduler()
+    session.child_scheduler = scheduler  # type: ignore[assignment]
+
+    def _overlapping_turns(
+        _session: Any,
+        instruction: str,
+        **kwargs: Any,
+    ) -> int:
+        if instruction == "cancelled turn":
+            first_started.set()
+            assert kwargs["cancellation_token"].is_cancelled is False
+            assert release_first.wait(timeout=5)
+            return 0
+        scheduler.pending = ["new-turn-child"]
+        second_started.set()
+        assert release_second.wait(timeout=5)
+        return 0
+
+    def _call_turn(instruction: str, token: InteractiveCancellationToken) -> None:
+        try:
+            session.run_turn(instruction, cancellation_token=token)
+        except BaseException as exc:  # noqa: BLE001 - surfaced on the test thread
+            failures.append(exc)
+
+    monkeypatch.setattr(session_mod, "_run_turn", _overlapping_turns)
+    cancelled_token = InteractiveCancellationToken()
+    next_token = InteractiveCancellationToken()
+    first_thread = threading.Thread(
+        target=_call_turn,
+        args=("cancelled turn", cancelled_token),
+    )
+    second_thread = threading.Thread(
+        target=_call_turn,
+        args=("next turn", next_token),
+    )
+    try:
+        first_thread.start()
+        assert first_started.wait(timeout=5)
+        cancelled_token.cancel()
+
+        second_thread.start()
+        assert second_started.wait(timeout=5)
+        release_first.set()
+        first_thread.join(timeout=5)
+
+        assert first_thread.is_alive() is False
+        assert scheduler.cancel_calls == []
+        assert scheduler.pending == ["new-turn-child"]
+        assert next_token.is_cancelled is False
+
+        release_second.set()
+        second_thread.join(timeout=5)
+        assert second_thread.is_alive() is False
+        assert failures == []
+    finally:
+        release_first.set()
+        release_second.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+        session.child_scheduler = original_scheduler
+        session.close()
+
+
 def test_turn_finalization_fires_on_success(tmp_path: Path, monkeypatch) -> None:
     fake = _FakeReaper(outcomes=(_outcome(),))
     _install_fake_reaper(monkeypatch, fake)
@@ -327,7 +681,12 @@ def test_real_interactive_survivor_is_reported_then_reaped_at_close(tmp_path: Pa
 
 
 @posix_only
-def test_session_shell_runner_places_commands_in_their_own_group(tmp_path: Path) -> None:
+def test_session_shell_runner_places_commands_in_their_own_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This checks host process-group isolation; a runner with Docker installed
+    # must not need access to the sandbox image for the assertion.
+    monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_MODE", "off")
     session, _sessions_dir = _make_session(
         tmp_path, runtime_kind=RuntimeKind.ONE_SHOT, session_id="reap-runner"
     )

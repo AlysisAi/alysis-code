@@ -107,27 +107,50 @@ def _noop_browser(opened: list[str]):
     return _open
 
 
-def test_alysis_preset_offers_pro_models() -> None:
+def test_alysis_preset_offers_flash_and_luna_models_for_free_credits() -> None:
     preset = get_preset("alysis")
     assert preset is not None
     assert preset.api_key_env is None
-    assert preset.suggested_models[0] == "deepseek-v4-flash"
-    # Mirrors the models offered by the Alysis Code Pro gateway.
-    assert set(preset.suggested_models) == {
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
-        "deepseek-v4-flash-vision-exp",
-        "deepseek-v4.1-flash-expires-on-0910",
-    }
+    assert preset.suggested_models[0] == "deepseek-flash"
+    # Offline fallback matches the free-credit offering; paid models are discovered.
+    assert preset.suggested_models == (
+        "deepseek-flash",
+        "glm-5.3-flash",
+        "gpt-6-luna",
+        "claude-sonnet-5-5",
+    )
     assert set(preset.suggested_model_descriptions) == set(preset.suggested_models)
     profile = make_profile_from_preset(preset, name="alysis")
-    assert profile.default_model == "deepseek-v4-flash"
-    # Retired MiMo-trial ids canonicalize to the Pro default via preset aliases,
-    # so old sessions stop pointing at models we no longer serve.
+    assert profile.default_model == "deepseek-flash"
+    # The retired Xiaomi campaign does not silently redirect to another model.
     from alysis_code.profile_presets import canonical_model_alias_for_preset
 
-    assert canonical_model_alias_for_preset(preset, "mimo") == "deepseek-v4-flash"
-    assert canonical_model_alias_for_preset(preset, "mimo-v2.5-pro") == "deepseek-v4-flash"
+    for model in ("mimo", "mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2.5"):
+        assert canonical_model_alias_for_preset(preset, model) == model
+
+
+@pytest.mark.parametrize(
+    "legacy_model",
+    [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4.1-flash-expires-on-0910",
+    ],
+)
+def test_login_migrates_retired_hosted_models(tmp_path: Path, monkeypatch, legacy_model) -> None:
+    from alysis_code.profiles import ProfileSpec, add_profile
+
+    _config_env(tmp_path, monkeypatch)
+    cfg = load_config()
+    add_profile(
+        cfg,
+        ProfileSpec(
+            name="alysis", base_url=alysis_cloud.gateway_base_url(), default_model=legacy_model
+        ),
+    )
+    result = account_login._activate_alysis_profile(cfg, email="me@example.com")
+    assert result.model == "deepseek-flash"
+    assert load_config().model == "deepseek-flash"
 
 
 def test_login_status_defaults_to_logged_out(tmp_path: Path, monkeypatch) -> None:
@@ -203,7 +226,7 @@ def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch
 
         # Result reflects an active alysis profile with the Pro default model.
         assert result.profile_name == "alysis"
-        assert result.model == "deepseek-v4-flash"
+        assert result.model == "deepseek-flash"
         assert result.base_url.rstrip("/").endswith("/v1")
 
         # The gateway key is persisted as the alysis profile key.
@@ -212,7 +235,7 @@ def test_login_full_flow_wires_gateway_key_as_bearer(tmp_path: Path, monkeypatch
         # Reloaded config has alysis active with the default model.
         reloaded = load_config()
         assert reloaded.extra_fields["active_profile"] == "alysis"
-        assert reloaded.model == "deepseek-v4-flash"
+        assert reloaded.model == "deepseek-flash"
 
         # The crucial wiring: resolve_api_key returns the gateway key as the
         # Bearer for the alysis profile (so requests hit the gateway authed).
@@ -279,7 +302,7 @@ def test_login_preserves_user_chosen_model_across_relogin(tmp_path: Path, monkey
     try:
         # Fresh connect defaults to the Pro flagship-for-volume model.
         first = account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
-        assert first.model == "deepseek-v4-flash"
+        assert first.model == "deepseek-flash"
 
         # Simulate the user picking another model in `/config`.
         cfg = load_config()
@@ -345,7 +368,7 @@ def test_login_activates_native_execution_after_delegated_runtime(
         assert reloaded.extra_fields["active_profile"] == "alysis"
         assert reloaded.base_url == gateway_url
         assert reloaded.model == (
-            "deepseek-v4-pro" if existing_hosted_profile else "deepseek-v4-flash"
+            "deepseek-v4-pro" if existing_hosted_profile else "deepseek-flash"
         )
         assert result.model == reloaded.model
         assert result.base_url == gateway_url
@@ -359,10 +382,11 @@ def test_login_activates_native_execution_after_delegated_runtime(
         stub.close()
 
 
-def test_login_migrates_legacy_mimo_selection(tmp_path: Path, monkeypatch) -> None:
-    # A user coming from the retired Xiaomi MiMo trial has a profile pinned to a
-    # MiMo id. The preset aliases canonicalize it to the Pro default at config
-    # load, so re-login lands them on a model the gateway actually serves.
+@pytest.mark.parametrize("legacy_model", ["mimo", "mimo-v2.5-pro", "mimo-v2-flash", "mimo-v2.5"])
+def test_login_does_not_redirect_old_xiaomi_campaign_model(
+    tmp_path: Path, monkeypatch, legacy_model: str
+) -> None:
+    # An unsupported campaign model must not silently select another provider's model.
     from dataclasses import replace
 
     from alysis_code.config import save_config
@@ -374,11 +398,15 @@ def test_login_migrates_legacy_mimo_selection(tmp_path: Path, monkeypatch) -> No
     try:
         account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
         cfg = load_config()
-        add_profile(cfg, replace(get_profile(cfg, "alysis"), default_model="mimo"))
+        add_profile(cfg, replace(get_profile(cfg, "alysis"), default_model=legacy_model))
         save_config(cfg)
 
         again = account_login.login(load_config(), browser_opener=_noop_browser([]), timeout_s=10)
-        assert again.model == "deepseek-v4-flash"
+        assert again.model == legacy_model
+        reloaded = load_config()
+        assert reloaded.model == legacy_model
+        assert reloaded.extra_fields["active_profile"] == "alysis"
+        assert reloaded.base_url == alysis_cloud.gateway_base_url()
     finally:
         stub.close()
 
@@ -449,18 +477,18 @@ class _StubModelsServer:
 
 def test_list_trial_models_parses_gateway_allowlist(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
-    stub = _StubModelsServer(["deepseek-v4-flash", "deepseek-v4-pro"])
+    stub = _StubModelsServer(["deepseek-flash", "deepseek-v4-pro"])
     monkeypatch.setenv("ALYSIS_GATEWAY_URL", f"{stub.base_url}/v1")
     try:
         models = account_login.list_trial_models(load_config())
-        assert models == ["deepseek-v4-flash", "deepseek-v4-pro"]
+        assert models == ["deepseek-flash", "deepseek-v4-pro"]
     finally:
         stub.close()
 
 
 def test_list_trial_models_empty_when_unreachable(tmp_path: Path, monkeypatch) -> None:
     _config_env(tmp_path, monkeypatch)
-    stub = _StubModelsServer(["deepseek-v4-flash"])
+    stub = _StubModelsServer(["deepseek-flash"])
     base_url = stub.base_url
     stub.close()  # nothing is listening now -> connection refused
     monkeypatch.setenv("ALYSIS_GATEWAY_URL", f"{base_url}/v1")

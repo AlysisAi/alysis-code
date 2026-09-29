@@ -156,14 +156,19 @@ def _build_tools(
     surface: object | None = None,
     cfg: AppConfig | None = None,
     yes: bool = True,
+    subagent_depth: int = 0,
+    store: object | None = None,
     skills_enabled: bool = True,
+    subagent_coordinator: object | None = None,
+    subagent_coordinator_sink: object | None = None,
+    child_scheduler_sink: object | None = None,
 ) -> dict[str, object]:
     _fake_git_repo(tmp_path)
     return build_tools(
         root=tmp_path,
         console=Console(file=io.StringIO()),
         surface=surface,
-        store=_store(tmp_path, enabled=True),
+        store=store or _store(tmp_path, enabled=True),  # type: ignore[arg-type]
         mode=mode,
         yes=yes,
         cfg=cfg
@@ -179,9 +184,13 @@ def _build_tools(
         verification_enabled=True,
         skills_enabled=skills_enabled,
         subagents_enabled=True,
+        subagent_depth=subagent_depth,
         subagent_registry={},
         runtime_kind=runtime_kind,
         mcp_manager=mcp_manager,  # type: ignore[arg-type]
+        subagent_coordinator=subagent_coordinator,  # type: ignore[arg-type]
+        subagent_coordinator_sink=subagent_coordinator_sink,  # type: ignore[arg-type]
+        child_scheduler_sink=child_scheduler_sink,  # type: ignore[arg-type]
     )
 
 
@@ -203,10 +212,232 @@ def test_build_tools_readonly_excludes_mutating_and_higher_risk_tools(tmp_path: 
         "shell_run",
         "verify_run",
         "git_apply_patch",
-        "subagent_run",
         "mcp__alpha__echo",
     ):
         assert name not in tools
+
+    for name in (
+        "subagent_run",
+        "subagent_spawn",
+        "subagent_send",
+        "subagent_resume",
+        "subagent_status",
+        "subagent_wait",
+        "subagent_cancel",
+    ):
+        assert name in tools
+    assert "subagent_apply" not in tools
+    assert "subagent_discard" not in tools
+
+
+def test_build_tools_nested_readonly_does_not_expose_delegation(
+    tmp_path: Path,
+) -> None:
+    tools = _build_tools(tmp_path, mode="readonly", subagent_depth=1)
+
+    assert not {name for name in tools if name.startswith("subagent_")}
+
+
+def test_live_tool_rebuild_reuses_session_subagent_coordinator(
+    tmp_path: Path,
+) -> None:
+    session_store = _store(tmp_path, enabled=True)
+    coordinators: list[object] = []
+    schedulers: list[object] = []
+    first = _build_tools(
+        tmp_path,
+        mode="review",
+        store=session_store,
+        subagent_coordinator_sink=coordinators.append,
+        child_scheduler_sink=schedulers.append,
+    )
+    coordinator = coordinators[0]
+    scheduler = schedulers[0]
+    first_status = first["subagent_status"]
+    first_spawn = first["subagent_spawn"]
+
+    second = _build_tools(
+        tmp_path,
+        mode="readonly",
+        store=session_store,
+        skills_enabled=False,
+        subagent_coordinator=coordinator,
+        subagent_coordinator_sink=coordinators.append,
+        child_scheduler_sink=schedulers.append,
+    )
+    try:
+        assert coordinators == [coordinator, coordinator]
+        assert schedulers == [scheduler, scheduler]
+        assert coordinator.registry is scheduler.registry  # type: ignore[attr-defined]
+        assert scheduler._closed is False  # type: ignore[attr-defined]  # noqa: SLF001
+        assert first_status.run({}) == second["subagent_status"].run({})
+        stale_spawn_result = first_spawn.run(
+            {"name": "missing-role", "task": "Exercise the captured tool closure."}
+        )
+        assert stale_spawn_result["error_code"] == "unknown_subagent"
+        assert "closed" not in str(stale_spawn_result["error"]).casefold()
+        assert coordinator.launcher.skills_enabled is False  # type: ignore[attr-defined]
+    finally:
+        coordinator.shutdown(cancel_pending=True)  # type: ignore[attr-defined]
+
+
+def test_failed_tool_rebuild_does_not_rebind_session_subagent_coordinator(
+    tmp_path: Path,
+) -> None:
+    class _FailingBinding:
+        def bind_session_mode(self, _mode: str) -> object:
+            raise RuntimeError("late MCP binding failure")
+
+    session_store = _store(tmp_path, enabled=True)
+    coordinators: list[object] = []
+    first = _build_tools(
+        tmp_path,
+        mode="review",
+        store=session_store,
+        subagent_coordinator_sink=coordinators.append,
+    )
+    coordinator = coordinators[0]
+    original_launcher = coordinator.launcher  # type: ignore[attr-defined]
+    old_spawn = first["subagent_spawn"]
+    failed_publish: list[object] = []
+    try:
+        with pytest.raises(RuntimeError, match="late MCP binding failure"):
+            _build_tools(
+                tmp_path,
+                mode="auto",
+                store=session_store,
+                mcp_manager=_DummyMcpManager(_FailingBinding()),  # type: ignore[arg-type]
+                subagent_coordinator=coordinator,
+                subagent_coordinator_sink=failed_publish.append,
+            )
+
+        assert failed_publish == []
+        assert coordinator.launcher is original_launcher  # type: ignore[attr-defined]
+        stale_result = old_spawn.run(
+            {"name": "missing-role", "task": "Use the last committed launcher."}
+        )
+        assert stale_result["error_code"] == "unknown_subagent"
+        assert "closed" not in str(stale_result["error"]).casefold()
+    finally:
+        coordinator.shutdown(cancel_pending=True)  # type: ignore[attr-defined]
+
+
+def test_failed_schema_conversion_does_not_rebind_session_subagent_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_store = _store(tmp_path, enabled=True)
+    coordinators: list[object] = []
+    first = _build_tools(
+        tmp_path,
+        mode="review",
+        store=session_store,
+        subagent_coordinator_sink=coordinators.append,
+    )
+    coordinator = coordinators[0]
+    original_launcher = coordinator.launcher  # type: ignore[attr-defined]
+    tool_type = type(first["subagent_spawn"])
+    original_conversion = tool_type.as_openai_tool
+
+    def _fail_late_schema_conversion(tool: object) -> dict[str, object]:
+        if getattr(tool, "name", "") == "subagent_wait":
+            raise RuntimeError("late schema conversion failure")
+        return original_conversion(tool)
+
+    monkeypatch.setattr(tool_type, "as_openai_tool", _fail_late_schema_conversion)
+    failed_publish: list[object] = []
+    try:
+        with pytest.raises(RuntimeError, match="late schema conversion failure"):
+            _build_tools(
+                tmp_path,
+                mode="auto",
+                store=session_store,
+                subagent_coordinator=coordinator,
+                subagent_coordinator_sink=failed_publish.append,
+            )
+
+        assert failed_publish == []
+        assert coordinator.launcher is original_launcher  # type: ignore[attr-defined]
+    finally:
+        coordinator.shutdown(cancel_pending=True)  # type: ignore[attr-defined]
+
+
+def test_live_tool_rebuild_commits_background_cap_changes(tmp_path: Path) -> None:
+    session_store = _store(tmp_path, enabled=True)
+    coordinators: list[object] = []
+    initial_cfg = AppConfig(model="test-model", web_search_mode="off")
+    initial_cfg.subagent_orchestration.max_background_children = 1
+    _build_tools(
+        tmp_path,
+        mode="review",
+        store=session_store,
+        cfg=initial_cfg,
+        subagent_coordinator_sink=coordinators.append,
+    )
+    coordinator = coordinators[0]
+    try:
+        expanded_cfg = initial_cfg.model_copy(deep=True)
+        expanded_cfg.subagent_orchestration.max_background_children = 5
+        _build_tools(
+            tmp_path,
+            mode="review",
+            store=session_store,
+            cfg=expanded_cfg,
+            subagent_coordinator=coordinator,
+        )
+        assert coordinator.max_background_children == 5  # type: ignore[attr-defined]
+        assert coordinator._executor_worker_capacity >= 5  # type: ignore[attr-defined]  # noqa: SLF001
+
+        reduced_cfg = expanded_cfg.model_copy(deep=True)
+        reduced_cfg.subagent_orchestration.max_background_children = 2
+        _build_tools(
+            tmp_path,
+            mode="review",
+            store=session_store,
+            cfg=reduced_cfg,
+            subagent_coordinator=coordinator,
+        )
+        assert coordinator.max_background_children == 2  # type: ignore[attr-defined]
+    finally:
+        coordinator.shutdown(cancel_pending=True)  # type: ignore[attr-defined]
+
+
+def test_live_tool_rebuild_can_enable_workspace_isolation(
+    tmp_path: Path,
+) -> None:
+    session_store = _store(tmp_path, enabled=True)
+    coordinators: list[object] = []
+    disabled_cfg = AppConfig(model="test-model", web_search_mode="off")
+    disabled_cfg.subagent_orchestration.workspace_isolation_enabled = False
+    disabled_tools = _build_tools(
+        tmp_path,
+        mode="review",
+        store=session_store,
+        cfg=disabled_cfg,
+        subagent_coordinator_sink=coordinators.append,
+    )
+    coordinator = coordinators[0]
+    workspace_provider = coordinator.workspace_provider  # type: ignore[attr-defined]
+    try:
+        assert workspace_provider is not None
+        assert "subagent_apply" not in disabled_tools
+        assert "subagent_discard" not in disabled_tools
+
+        enabled_cfg = disabled_cfg.model_copy(deep=True)
+        enabled_cfg.subagent_orchestration.workspace_isolation_enabled = True
+        enabled_tools = _build_tools(
+            tmp_path,
+            mode="review",
+            store=session_store,
+            cfg=enabled_cfg,
+            subagent_coordinator=coordinator,
+        )
+
+        assert coordinator.workspace_provider is workspace_provider  # type: ignore[attr-defined]
+        assert "subagent_apply" in enabled_tools
+        assert "subagent_discard" in enabled_tools
+    finally:
+        coordinator.shutdown(cancel_pending=True)  # type: ignore[attr-defined]
 
 
 def test_build_tools_readonly_keeps_expected_read_safe_inspection_tools(tmp_path: Path) -> None:
@@ -214,7 +445,6 @@ def test_build_tools_readonly_keeps_expected_read_safe_inspection_tools(tmp_path
 
     for name in (
         "fs_read",
-        "fs_read_lines",
         "fs_list",
         "search_rg",
         "symbol_search",
@@ -230,6 +460,8 @@ def test_build_tools_readonly_keeps_expected_read_safe_inspection_tools(tmp_path
         "web_search",
     ):
         assert name in tools
+
+    assert "fs_read_lines" not in tools
 
 
 def test_build_tools_readonly_does_not_construct_shell_runner(

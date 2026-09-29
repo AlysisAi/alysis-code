@@ -39,7 +39,7 @@ def test_neutral_theme_inherits_surface_backgrounds() -> None:
         "tui.picker",
         "tui.editor",
         "tui.approve",
-        "tui.modal.scrim",
+        "tui.dimbehind",
         "tui.config",
     )
 

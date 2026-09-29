@@ -7,9 +7,9 @@ repository or passed on the command line.
 ## Python package
 
 1. Start from a clean commit on `main` with all required checks passing.
-2. Update the version in `pyproject.toml` and `src/alysis_code/__init__.py`.
+2. Update the version in `pyproject.toml`, `src/alysis_code/__init__.py`, and `uv.lock`.
 3. Move user-facing entries from `Unreleased` into a dated section in `docs/CHANGELOG.md`.
-4. Run the release checks locally:
+4. Run the release checks locally, including the focused [release checklist](release_checklist.md):
 
    ```bash
    uv sync --frozen --extra dev

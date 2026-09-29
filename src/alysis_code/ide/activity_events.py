@@ -25,7 +25,7 @@ ActivityKind: TypeAlias = Literal[
     "other",
 ]
 ActivityStatus: TypeAlias = Literal[
-    "queued", "running", "succeeded", "failed", "cancelled", "blocked"
+    "queued", "running", "succeeded", "failed", "cancelled", "blocked", "completed_unverified"
 ]
 
 MAX_ACTIVITY_TEXT_CHARS = 500
@@ -47,7 +47,15 @@ ACTIVITY_KINDS = (
     "plan",
     "other",
 )
-ACTIVITY_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "blocked")
+ACTIVITY_STATUSES = (
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "blocked",
+    "completed_unverified",
+)
 
 _SAFE_METADATA_KEYS = frozenset(
     {
@@ -64,6 +72,8 @@ _SAFE_METADATA_KEYS = frozenset(
         "step",
         "truncated",
         "worker_id",
+        "task_outcome",
+        "verified_success",
     }
 )
 _INTERNAL_NAME_PATTERN = re.compile(r"(?:^|[._:/-])(?:rs|internal)(?:[._:/-]|$)", re.I)
@@ -335,6 +345,8 @@ def _normalize_status(status: str) -> ActivityStatus:
         return "queued"
     if normalized in {"running", "started", "in_progress", "progress"}:
         return "running"
+    if normalized == "completed_unverified":
+        return "completed_unverified"
     if normalized in {"done", "completed", "complete", "success", "succeeded", "ok"}:
         return "succeeded"
     if normalized in {"cancelled", "canceled", "interrupted"}:

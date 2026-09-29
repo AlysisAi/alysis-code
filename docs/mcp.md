@@ -29,7 +29,7 @@ MCP tools are exposed only in write-capable top-level runtimes:
 
 MCP tools are not exposed in:
 
-- `readonly` sessions, including the Ask persona
+- `readonly` sessions, including the `ask` persona and `/ask` turns
 - `swarm_worker`
 - `subagent`
 - `conflict_auto_resolve`
@@ -128,6 +128,14 @@ Allowed project override fields are:
 - `roots_mode`
 - `resources_mode`
 - `prompts_mode`
+
+For HTTP servers, `startup_timeout_s` applies to both the `initialize` request and
+the HTTP acknowledgement of `notifications/initialized`. Each uses the configured
+timeout; `call_timeout_s` governs subsequent requests. Stdio servers retain a short
+post-notification observation window.
+
+An MCP startup failure is reported as an MCP error. Chat exits cleanly instead of
+retrying the same failing connection through the classic chat fallback.
 
 ## Tool Policy
 

@@ -6,13 +6,12 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any
 
 import httpx
 
-from ..cancellation import raise_if_cancelled
 from ..error_text import sanitize_error_text_for_output
 from ..execution_deadline import DeadlineExhausted
 from ..provider_auth import ProviderAuthAdapter
@@ -20,6 +19,11 @@ from ..provider_telemetry import ProviderCallTelemetryRecorder
 from ..request_estimation import estimate_provider_payload_tokens
 from ..web_search_adapters import AUTO_WEB_SEARCH_ADAPTER, OPENAI_RESPONSES_ADAPTER
 from .cache_policy import merge_cache_policy_metadata
+from .http_cancellation import (
+    cancellable_httpx_request,
+    cancellable_httpx_send,
+    raise_if_cancelled,
+)
 from .metadata import (
     OPENAI_RESPONSES_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
@@ -31,6 +35,7 @@ from .metadata import (
     merge_canonical_headers,
     stamp_response_for_route,
 )
+from .protocols import OPENAI_RESPONSES_PROTOCOL, get_provider_protocol_capabilities
 from .provider_limits import (
     DEFAULT_PROVIDER_CONCURRENCY_CAPS,
     ProviderRetrySettings,
@@ -38,7 +43,7 @@ from .provider_limits import (
     mark_provider_call_non_retryable,
     run_provider_limited_call,
 )
-from .request_plan import LLMRequestPlan, RequestCachePlan
+from .request_plan import LLMRequestPlan, RequestCachePlan, WireRequestDiagnostics
 from .request_shape import build_request_shape_report
 from .streaming import (
     SSEFrame,
@@ -47,6 +52,7 @@ from .streaming import (
     iter_sse_frames,
     parse_sse_json_frame,
 )
+from .temperature_compat import documented_temperature_omit_reason
 from .types import (
     AssistantResponsePhase,
     InputTokenCount,
@@ -864,6 +870,7 @@ def _responses_tools(
     *,
     mode: str,
     adapter: str,
+    provider_key: str | None = None,
 ) -> _ResponsesToolMapping:
     normalized_mode = str(mode or "off").strip().lower()
     normalized_adapter = (
@@ -871,8 +878,26 @@ def _responses_tools(
     )
     raw_tools = [tool for tool in tools or [] if isinstance(tool, dict)]
     alysis_web_search_present = any(_is_alysis_web_search_function(tool) for tool in raw_tools)
+    capabilities = get_provider_protocol_capabilities(
+        provider_key=provider_key or "", protocol=OPENAI_RESPONSES_PROTOCOL
+    )
+    builtin_web_search_allowed = (
+        capabilities is None or capabilities.supports_provider_hosted_web_search_adapter
+    )
+    hosted_web_search_present = any(
+        _is_responses_hosted_web_search_tool(tool) for tool in raw_tools
+    )
+    if not builtin_web_search_allowed and (
+        (normalized_mode == "native" and alysis_web_search_present)
+        or (normalized_mode in {"auto", "native"} and hosted_web_search_present)
+    ):
+        raise LLMError(
+            f"Provider {provider_key!r} does not support built-in web search. "
+            "Use web_search_mode='auto' or 'external' with the Alysis web_search function."
+        )
     use_openai_builtin_web_search = (
-        alysis_web_search_present
+        builtin_web_search_allowed
+        and alysis_web_search_present
         and _openai_builtin_web_search_allowed(
             mode=normalized_mode,
             adapter=normalized_adapter,
@@ -1001,9 +1026,15 @@ def _responses_reasoning(
     enable_thinking: bool | None,
     reasoning_effort: str | None,
     request_summary: bool = False,
+    provider_key: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     reasoning: dict[str, Any] = {}
     effort = str(reasoning_effort or "").strip().lower()
+    if provider_key == "alysis" and model == "gpt-6-luna":
+        # Older hosted pickers exposed the generic Responses efforts. Preserve
+        # saved configs and environment overrides at Luna's supported bounds.
+        effort = {"minimal": "low", "ultra": "max"}.get(effort, effort)
     if effort:
         if effort not in _RESPONSES_REASONING_EFFORTS:
             raise LLMError(f"OpenAI Responses reasoning_effort is not supported: {effort}")
@@ -1723,6 +1754,11 @@ class OpenAIResponsesClient:
     )
     supports_tool_calling = True
     supports_forced_tool_choice = True
+    # The subscription adapter lifts only the initial instruction prefix;
+    # later system/developer messages retain their position in input.
+    preserves_late_system_message_position = True
+    # Neither serialization nor retry removes an explicit non-executing choice.
+    preserves_tool_choice_none = True
     usage_counts_authoritative = usage_contract.response_usage_authoritative
 
     def __init__(
@@ -1797,6 +1833,14 @@ class OpenAIResponsesClient:
         self.provider_auth = provider_auth
         self.session_id = str(session_id or "").strip() or None
         self.usage_contract = usage_contract or type(self).usage_contract
+        # Auth adapters can target a narrower endpoint surface than the public
+        # API. Counting requires an explicit opt-in on those routes; response
+        # usage and billing guarantees remain independent of that capability.
+        if (
+            provider_auth is not None
+            and getattr(provider_auth, "supports_input_token_count", False) is not True
+        ):
+            self.usage_contract = replace(self.usage_contract, input_token_count_strategy="none")
         self.usage_counts_authoritative = self.usage_contract.response_usage_authoritative
         self._input_token_count_available: bool | None = None
         self._reasoning_summary_support_by_model: dict[str, bool] = {}
@@ -1810,6 +1854,7 @@ class OpenAIResponsesClient:
             float(inflight_deadline_grace_s),
         )
         self._provider_retry_wall_clock_cap_seconds = _PROVIDER_RETRY_WALL_CLOCK_CAP_SECONDS
+        self._wire_request_diagnostics = WireRequestDiagnostics()
 
     def _reasoning_summary_support_key(self) -> str:
         return _responses_temperature_omit_key(self.base_url, self.model)
@@ -1901,12 +1946,16 @@ class OpenAIResponsesClient:
             )
         error_message = _extract_error_message(data)
         if error_message:
-            return LLMError(
+            err = LLMError(
                 sanitize_error_text_for_output(f"LLM error {response.status_code}: {error_message}")
             )
-        return LLMError(
-            sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
-        )
+        else:
+            err = LLMError(
+                sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
+            )
+        err.provider_status_code = response.status_code
+        err.provider_error_body = sanitize_error_text_for_output(json.dumps(data))
+        return err
 
     def count_input_tokens(
         self,
@@ -1915,13 +1964,17 @@ class OpenAIResponsesClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: Any | None = None,
     ) -> InputTokenCount | None:
-        if self._input_token_count_available is False:
+        if (
+            not self.usage_contract.supports_input_token_count
+            or self._input_token_count_available is False
+        ):
             return None
         messages = gate_messages_for_provider_route(messages, self.route_identity)
         tool_mapping = _responses_tools(
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         payload: dict[str, Any] = {
             "model": self.model,
@@ -2011,8 +2064,8 @@ class OpenAIResponsesClient:
         on_reasoning_delta: Callable[[str], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        request_plan: LLMRequestPlan | None = None,
         cancellation_token: Any | None = None,
+        request_plan: LLMRequestPlan | None = None,
     ) -> LLMResponse:
         default_cache = RequestCachePlan(
             strategy=(
@@ -2062,6 +2115,7 @@ class OpenAIResponsesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         mapped_tools = tool_mapping.tools
         temp_omit_key = _responses_temperature_omit_key(self.base_url, self.model)
@@ -2071,6 +2125,14 @@ class OpenAIResponsesClient:
             enable_thinking=self.enable_thinking,
             reasoning_effort=self.reasoning_effort,
             request_summary=self._should_request_reasoning_summary(),
+            provider_key=self.provider_key,
+            model=self.model,
+        )
+        documented_temperature_reason = documented_temperature_omit_reason(
+            self.model,
+            provider_key=self.provider_key
+            or best_effort_provider_key(base_url=self.base_url, model=self.model),
+            reasoning_effort=(reasoning or {}).get("effort"),
         )
         text_config = _responses_text_config(response_format)
         full_input = _responses_input_from_messages(messages)
@@ -2082,6 +2144,10 @@ class OpenAIResponsesClient:
         supports_previous_response_id = self.provider_auth is None or bool(
             getattr(self.provider_auth, "supports_previous_response_id", True)
         )
+        if self.provider_key == "alysis":
+            # Hosted credits meter the complete request. Shared upstream storage
+            # must never be addressable by another Alysis account.
+            supports_previous_response_id = False
         if continuation is not None and supports_previous_response_id:
             # With previous_response_id the API appends the sent input items to the
             # stored thread; system/developer messages from turn 1 are already
@@ -2110,7 +2176,10 @@ class OpenAIResponsesClient:
             }
             if prior_response_id:
                 payload["previous_response_id"] = prior_response_id
-            if temp_omit_key not in _RESPONSES_OMIT_TEMPERATURE_MODELS:
+            if (
+                documented_temperature_reason is None
+                and temp_omit_key not in _RESPONSES_OMIT_TEMPERATURE_MODELS
+            ):
                 payload["temperature"] = (
                     self.temperature if temperature is None else float(temperature)
                 )
@@ -2148,6 +2217,10 @@ class OpenAIResponsesClient:
                 payload["stream"] = True
             if self.provider_auth is not None:
                 payload = self.provider_auth.adapt_responses_payload(payload)
+            if self.provider_key == "alysis":
+                payload["store"] = False
+                payload["include"] = ["reasoning.encrypted_content"]
+                payload.pop("temperature", None)
             if self._reasoning_summary_support_by_model.get(reasoning_summary_support_key) is False:
                 _without_responses_reasoning_summary(payload)
             return payload
@@ -2166,6 +2239,8 @@ class OpenAIResponsesClient:
         full_input_estimate_tokens = estimate_provider_payload_tokens(
             _prompt_estimation_payload(full_estimate_payload)
         )
+
+        wire_diagnostics = self._wire_request_diagnostics.begin_request()
 
         def _request_plan_metadata(current_payload: dict[str, Any]) -> dict[str, Any]:
             extra: dict[str, Any] = {
@@ -2187,6 +2262,11 @@ class OpenAIResponsesClient:
                 sent_provider_payload=_prompt_estimation_payload(current_payload),
                 cache_policy_metadata=cache_policy,
                 extra=extra,
+            )
+            metadata.update(
+                wire_diagnostics(
+                    current_payload, history_key="input", instructions_key="instructions"
+                )
             )
             metadata["request_messages_signature"] = _stable_request_signature(messages)
             return metadata
@@ -2336,9 +2416,12 @@ class OpenAIResponsesClient:
                 try:
                     with httpx.Client(timeout=self.timeout_s, transport=self._transport) as client:
                         if stream:
-                            with client.stream(
-                                "POST",
-                                url,
+                            with cancellable_httpx_request(
+                                client=client,
+                                cancellation_token=cancellation_token,
+                                method="POST",
+                                url=url,
+                                stream=True,
                                 headers=self._headers(url, force_refresh=auth_refresh_used),
                                 json=payload,
                             ) as response:
@@ -2397,12 +2480,16 @@ class OpenAIResponsesClient:
                                         cancellation_token=cancellation_token,
                                     )
                                 )
-                        response = client.post(
-                            url,
+                        response = cancellable_httpx_send(
+                            client=client,
+                            cancellation_token=cancellation_token,
+                            method="POST",
+                            url=url,
                             headers=self._headers(url, force_refresh=auth_refresh_used),
                             json=payload,
                         )
                 except httpx.DecodingError as e:
+                    raise_if_cancelled(cancellation_token)
                     err = LLMError(
                         "OpenAI Responses decompression failed: "
                         f"{sanitize_error_text_for_output(e)}"
@@ -2413,6 +2500,7 @@ class OpenAIResponsesClient:
                 except DeadlineExhausted:
                     raise
                 except Exception as e:  # noqa: BLE001
+                    raise_if_cancelled(cancellation_token)
                     if isinstance(e, LLMError):
                         if stream and public_output_emitted:
                             mark_provider_call_non_retryable(e)
@@ -2480,6 +2568,7 @@ class OpenAIResponsesClient:
                         "_provider_retry_wall_clock_cap_seconds",
                         _PROVIDER_RETRY_WALL_CLOCK_CAP_SECONDS,
                     ),
+                    cancellation_token=cancellation_token,
                 )
             ),
             self.route_identity,

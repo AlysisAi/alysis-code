@@ -75,7 +75,7 @@ def test_shell_service_survives_close_and_can_stop_from_fresh_session(
     root = tmp_path / "workspace"
     sessions_dir = tmp_path / "sessions"
     root.mkdir()
-    (root / "index.html").write_text("ready\n", encoding="utf-8")
+    (root / "index.html").write_bytes(b"ready\n")
     port = _free_tcp_port()
     session = _create_service_session(root, sessions_dir)
     second_session = None
@@ -115,6 +115,20 @@ def test_shell_service_survives_close_and_can_stop_from_fresh_session(
         session.close()
         session_closed = True
         _assert_http_ready(port)
+        consumer = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import urllib.request; "
+                f"assert urllib.request.urlopen('http://127.0.0.1:{port}/', timeout=2).read() == b'ready\\n'",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert consumer.returncode == 0, consumer.stderr
+        assert started["readiness"]["endpoint_owned"] is True
         assert any(
             event["type"] == "durable_services_left_active"
             and event["payload"]["services"][0]["service_id"] == service_id
@@ -140,8 +154,11 @@ def test_shell_service_survives_close_and_can_stop_from_fresh_session(
             session.close()
 
 
-def test_shell_service_start_deadline_denial_is_warning_not_refusal(
+@pytest.mark.parametrize("tool_name", ["shell_service_start", "workspace_preview_start"])
+def test_service_deadline_denial_prevents_new_launch_and_preserves_existing(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
 ) -> None:
     root = tmp_path / "workspace"
     sessions_dir = tmp_path / "sessions"
@@ -153,25 +170,142 @@ def test_shell_service_start_deadline_denial_is_warning_not_refusal(
         clock=lambda: 3.5,
     )
     session = _create_service_session(root, sessions_dir, execution_deadline=deadline)
-    service_id = ""
+    manager = session.durable_service_manager
+    assert manager is not None
+    existing = manager.start(
+        cmd=_shell_join([sys.executable, "-c", "import time; time.sleep(30)"]),
+        cwd=root,
+    )
+    service_id = existing.service_id
+    monkeypatch.setattr(manager, "start", lambda **_: pytest.fail("new service launched"))
+    monkeypatch.setattr(manager, "start_preview", lambda **_: pytest.fail("new preview launched"))
     try:
-        started = session.tools["shell_service_start"].run(
+        started = session.tools[tool_name].run(
             {
                 "cmd": _shell_join([sys.executable, "-c", "import time; time.sleep(30)"]),
+                "replace_service_id": service_id,
             }
         )
-        service_id = str(started["service_id"])
-
-        assert started["lifetime"] == "durable"
-        assert started["status"] == "running"
-        assert started["deadline_prevented_launch"] is False
-        assert "error" not in started
-        assert "deadline_warning" in started
+        assert started["deadline_prevented_launch"] is True
+        assert started["failure_category"] == "deadline"
+        assert "error" in started
+        assert "service_id" not in started
         assert started["deadline_start_decision"]["allowed"] is False
         assert started["deadline_start_decision"]["reason"] == "finalization_disallows_operation"
+        assert manager.status(service_id)["status"] == "running"
     finally:
         if service_id and session.durable_service_manager is not None:
             session.durable_service_manager.stop(service_id)
+        session.close()
+
+
+@pytest.mark.parametrize("now", [3.5, 5.0])
+def test_persistent_background_deadline_denial_prevents_durable_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, now: float
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    deadline = ExecutionDeadline.from_absolute(
+        started_at_monotonic=0,
+        deadline_monotonic=4,
+        configured_duration_seconds=4,
+        clock=lambda: now,
+    )
+    session = _create_service_session(root, tmp_path / "sessions", execution_deadline=deadline)
+    monkeypatch.setattr(
+        session.durable_service_manager, "start", lambda **_: pytest.fail("durable launch reached")
+    )
+    try:
+        result = session.tools["shell_background"].run({"cmd": "echo ready", "persist": True})
+        assert result["deadline_prevented_launch"] is True
+        assert result["failure_category"] == "deadline"
+        assert result["deadline_start_decision"]["allowed"] is False
+        assert "service_id" not in result
+    finally:
+        session.close()
+
+
+def test_persistent_background_forwards_shared_deadline_through_launch_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    now = [0.0]
+    deadline = ExecutionDeadline.from_absolute(
+        started_at_monotonic=0,
+        deadline_monotonic=10,
+        configured_duration_seconds=10,
+        clock=lambda: now[0],
+    )
+    session = _create_service_session(root, tmp_path / "sessions", execution_deadline=deadline)
+    manager = session.durable_service_manager
+    assert manager is not None
+    build_launch = manager._build_launch
+    observed = []
+
+    def slow_preparation(**kwargs):
+        launch = build_launch(**kwargs)
+        observed.append(deadline.remaining_seconds())
+        now[0] = 11.0
+        return launch
+
+    monkeypatch.setattr(manager, "_build_launch", slow_preparation)
+    monkeypatch.setattr(
+        "alysis_code.durable_service_manager.subprocess.Popen",
+        lambda *_args, **_kwargs: pytest.fail("expired preparation reached process launch"),
+    )
+    try:
+        with pytest.raises(AgentRuntimeError, match="deadline"):
+            session.tools["shell_background"].run({"cmd": "echo ready", "persist": True})
+        assert observed == [10.0]
+        assert manager._popens == {}
+    finally:
+        session.close()
+
+
+def test_persistent_background_readiness_uses_remaining_shared_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    now = [0.0]
+    deadline = ExecutionDeadline.from_absolute(
+        started_at_monotonic=0,
+        deadline_monotonic=10,
+        configured_duration_seconds=10,
+        clock=lambda: now[0],
+    )
+    session = _create_service_session(root, tmp_path / "sessions", execution_deadline=deadline)
+    manager = session.durable_service_manager
+    assert manager is not None
+    build_launch, check_readiness = manager._build_launch, manager._check_readiness
+    observed = []
+
+    def slow_preparation(**kwargs):
+        launch = build_launch(**kwargs)
+        now[0] = 8.8  # Leave 0.2 seconds after the existing one-second cleanup reserve.
+        return launch
+
+    def observe_readiness(**kwargs):
+        observed.append(kwargs["timeout_s"])
+        return check_readiness(**kwargs)
+
+    monkeypatch.setattr(manager, "_build_launch", slow_preparation)
+    monkeypatch.setattr(manager, "_check_readiness", observe_readiness)
+    try:
+        result = session.tools["shell_background"].run(
+            {
+                "cmd": _shell_join([sys.executable, "-c", "import time; time.sleep(3)"]),
+                "persist": True,
+                "probe_port": _free_tcp_port(),
+            }
+        )
+        assert observed[0] == pytest.approx(0.2)
+        assert result["failure_category"] == "readiness_failed"
+        assert all(process.poll() is not None for process in manager._popens.values())
+    finally:
+        for service_id in tuple(manager._popens):
+            manager.stop(service_id)
         session.close()
 
 

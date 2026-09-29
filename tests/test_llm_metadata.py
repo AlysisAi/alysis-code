@@ -21,6 +21,20 @@ def test_openai_compat_reexports_shared_provider_metadata_helpers() -> None:
     assert openai_compat.assistant_message_from_response is metadata.assistant_message_from_response
 
 
+def test_resume_context_marker_is_durable_but_not_sent_to_provider() -> None:
+    message = {
+        "role": "user",
+        "content": "Host recovery context remains available to the model.",
+        metadata.RESUME_CONTEXT_MESSAGE_KEY: True,
+    }
+    wire = metadata.strip_provider_metadata_from_message(message)
+    assert wire == {"role": "user", "content": message["content"]}
+    assert metadata.strip_provider_metadata_from_messages(
+        [message], preserve_internal_artifacts=True
+    ) == [message]
+    assert message[metadata.RESUME_CONTEXT_MESSAGE_KEY] is True
+
+
 def test_shared_metadata_helpers_attach_and_strip_provider_state() -> None:
     response = LLMResponse(
         content="",

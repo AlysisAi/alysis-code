@@ -1183,7 +1183,9 @@ def _discover_setup_provider_models(
     transport: httpx.BaseTransport | None = None,
 ) -> tuple[tuple[ProviderModelOption, ...], str]:
     preset = profile_result.preset
-    if preset is None or preset.key != _NVIDIA_PRESET_KEY:
+    if profile_result.profile.auth_provider:
+        return (), ""
+    if preset is not None and preset.key not in {_NVIDIA_PRESET_KEY, "custom"}:
         return (), ""
     try:
         options = discover_provider_models(
@@ -1192,8 +1194,13 @@ def _discover_setup_provider_models(
             transport=transport,
         )
     except ProviderModelCatalogError:
+        provider_label = (
+            "NVIDIA's"
+            if preset is not None and preset.key == _NVIDIA_PRESET_KEY
+            else "The provider's"
+        )
         return (), (
-            "NVIDIA's live model catalog is unavailable. Recommended models and "
+            f"{provider_label} live model catalog is unavailable. Recommended models and "
             "custom model entry are still available."
         )
     return tuple(sorted(options, key=lambda option: option.id.casefold())), ""
@@ -1225,9 +1232,9 @@ def _model_picker_rows(
         "Type a custom model name",
         "Use any model supported by this provider",
     )
-    if preset is not None and preset.key == _NVIDIA_PRESET_KEY:
-        # Keep manual entry reachable without scrolling through NVIDIA's large
-        # live catalog. Curated recommendations remain above it; live inventory
+    if preset is None or preset.key in {_NVIDIA_PRESET_KEY, "custom"}:
+        # Keep manual entry reachable without scrolling through a large live
+        # catalog. Curated recommendations remain above it; live inventory
         # follows below.
         rows.append(custom_row)
     for option in discovered_models:
@@ -1238,10 +1245,12 @@ def _model_picker_rows(
         description = str(option.description or "").strip()
         if not description:
             owner = model_id.partition("/")[0]
+            is_nvidia = preset is not None and preset.key == _NVIDIA_PRESET_KEY
+            catalog_label = "live NVIDIA catalog" if is_nvidia else "live provider catalog"
             description = (
-                f"live NVIDIA catalog · hosted model from {owner}"
-                if owner and owner != model_id
-                else "live NVIDIA catalog"
+                f"{catalog_label} · hosted model from {owner}"
+                if is_nvidia and owner and owner != model_id
+                else catalog_label
             )
         label = option.label or model_id
         if option.chat_compatibility == "unknown":

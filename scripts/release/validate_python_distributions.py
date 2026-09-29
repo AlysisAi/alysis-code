@@ -30,7 +30,7 @@ _FORBIDDEN_SUFFIXES = {".jks", ".key", ".keystore", ".p12", ".pfx", ".pem", ".pp
 _FORBIDDEN_DIRECTORIES = {".aws", ".docker", ".gnupg", ".kube", ".ssh"}
 _MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 _MAX_MEMBER_BYTES = 64 * 1024 * 1024
-_SDIST_ROOT_FILES = {
+_SDIST_FILES = {
     ".gitignore",
     "docs/CHANGELOG.md",
     "LICENSE",
@@ -181,7 +181,7 @@ def _validate_sdist(
 
 
 def _is_allowed_sdist_member(relative_name: str) -> bool:
-    return relative_name in _SDIST_ROOT_FILES or relative_name.startswith("src/alysis_code/")
+    return relative_name in _SDIST_FILES or relative_name.startswith("src/alysis_code/")
 
 
 def _validate_member_names(

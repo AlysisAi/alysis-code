@@ -252,7 +252,7 @@ def test_run_task_worker_mirrors_plan_assets_into_worktree(tmp_path: Path, monke
         assert "artifact_path" not in stub
         assert stub["artifact_readable_via_fs"] is False
         assert "fs_read_path" not in stub
-        assert "use session_artifact_read with that locator" in stub["full_output"]
+        assert "session_artifact_read with that locator" in stub["full_output"]
         return 0
 
     monkeypatch.setattr("alysis_code.swarm_worker.run_agent", fake_run_agent)
@@ -1269,7 +1269,8 @@ def test_run_task_worker_runs_trusted_pytest_and_accepts_no_tests(
     assert result.verify_command_source == "repo_scan.likely_test_commands"
     assert result.verify_summary == "verification skipped: nothing to verify (1/1)"
     assert result.verify_payload is not None
-    assert result.verify_payload["all_passed"] is True
+    assert result.verify_payload["all_passed"] is False
+    assert result.verify_payload["status"] == "not_run"
     assert result.verify_payload["command_results"][0]["status"] == "skipped"
     assert "zero-diff" not in result.summary
 
@@ -4835,6 +4836,44 @@ def test_swarm_worker_trace_surface_compact_prefixes_and_summarizes() -> None:
     assert any('Loaded "src/app.py"' in line for line in rendered)
     assert any("Worker response ready" in line for line in rendered)
     assert not any("Worker response preview" in line for line in rendered)
+
+
+def test_swarm_worker_trace_surface_names_remote_site_outcomes_without_failure() -> None:
+    sink = _ListTraceSink()
+    surface = SwarmWorkerTraceSurface(
+        run_id="run-1",
+        task_id="T03",
+        trace_sink=sink,
+        trace_level="compact",
+    )
+
+    surface.on_tool_end(
+        ToolEndEvent(
+            tool_call_id="tool-1",
+            name="web_fetch",
+            status="failed",
+            elapsed_ms=900,
+            meta={
+                "error": "HTTP error 403 while fetching '…': remote site declined automated access.",
+                "blocked_by_remote_site": True,
+                "remote_site_reason": "site doesn't allow automated access",
+            },
+        )
+    )
+    surface.on_tool_end(
+        ToolEndEvent(
+            tool_call_id="tool-2",
+            name="web_fetch",
+            status="done",
+            elapsed_ms=5,
+            meta={"tool_unavailable": True, "unavailable_reason": "Network is unreachable"},
+        )
+    )
+
+    rendered = [format_swarm_trace_message(event) for event in sink.events]
+    assert any("site doesn't allow automated access" in line for line in rendered)
+    assert any("unavailable" in line for line in rendered)
+    assert not any("failed" in line for line in rendered)
 
 
 def test_swarm_worker_trace_surface_full_emits_richer_detail() -> None:

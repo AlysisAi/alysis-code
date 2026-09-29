@@ -80,6 +80,13 @@ def test_openai_codex_cannot_disable() -> None:
     assert astra.values == ("low", "medium", "high", "xhigh", "max")
     assert not astra.allows_value("none")
     assert not reasoning_off_is_safe("openai", "gpt-6-astra")
+    for model in ("gpt-6-sol", "gpt-6-luna"):
+        contract = reasoning_contract_for("openai", model)
+        assert contract.mode == OPTIONAL
+        assert contract.off == OFF_EXPLICIT
+        assert contract.default == "medium"
+        assert contract.values == ("none", "low", "medium", "high", "xhigh", "max")
+        assert reasoning_off_is_safe("openai", model)
     terra = reasoning_contract_for("openai", "gpt-5.6-terra")
     assert terra.allows_value("none") and terra.default == "medium"
     assert not terra.allows_value("minimal")  # dead on the 5.x families
@@ -207,7 +214,7 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     qwen37 = reasoning_contract_for("qwen", "qwen3.7-plus")
     deepseek = reasoning_contract_for("deepseek", "deepseek-v4-pro")
     deepseek_vision = reasoning_contract_for("deepseek", "deepseek-v4-flash-vision-exp")
-    deepseek_v41_beta = reasoning_contract_for("deepseek", "deepseek-v4.1-flash-expires-on-0910")
+    deepseek_v41 = reasoning_contract_for("deepseek", "deepseek-flash")
 
     assert qwen.wire == "reasoning_effort"
     assert qwen.values == ("low", "medium", "xhigh")
@@ -224,7 +231,7 @@ def test_qwen38_and_deepseek_use_their_exact_documented_effort_values() -> None:
     assert deepseek.allows_value("low")
     assert not deepseek.allows_value("medium")
     assert deepseek_vision is deepseek
-    assert deepseek_v41_beta is deepseek
+    assert deepseek_v41 is deepseek
 
 
 def test_dated_deepseek_gateway_routes_use_surface_specific_contracts() -> None:

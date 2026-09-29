@@ -84,7 +84,7 @@ def test_working_tips_follow_live_ui_without_entering_history(monkeypatch, colum
             clock["offset"] = TIP_INTERVAL_SECONDS * link_index
             await wait_for(lambda: "Tip: Star us on GitHub!" in rendered["text"])
             screens["linked"] = rendered["text"]
-            assert opened_urls == []
+            assert opened_urls == [], "rendering a link must not open it"
             input_buffer = application.layout.current_buffer
             row, line = next(
                 (row, line)
@@ -96,12 +96,12 @@ def test_working_tips_follow_live_ui_without_entering_history(monkeypatch, colum
             # events to cover hit testing, including the narrow clipped layout.
             pipe.send_text(f"\x1b[<2;{x};{y}M\x1b[<2;{x};{y}m")
             await asyncio.sleep(0.05)
-            assert opened_urls == []
+            assert opened_urls == [], "right click must not open the link"
 
             # Releasing on a link is not a click unless the press began there.
             pipe.send_text(f"\x1b[<0;{x};{y}m")
             await asyncio.sleep(0.05)
-            assert opened_urls == []
+            assert opened_urls == [], "release without a link press must not open it"
             pipe.send_text("draft message")
             await wait_for(lambda: "draft message" in rendered["text"])
             input_row, input_line = next(
@@ -114,7 +114,12 @@ def test_working_tips_follow_live_ui_without_entering_history(monkeypatch, colum
             await asyncio.sleep(0.05)
             pipe.send_text(f"\x1b[<32;{x};{y}M\x1b[<0;{x};{y}m")
             await asyncio.sleep(0.05)
-            assert opened_urls == []
+            assert opened_urls == [], "dragging from the input must not open the link"
+
+            # Terminal input can contain the whole drag before the next repaint.
+            pipe.send_text(f"\x1b[<0;{x};{y}M\x1b[<32;{input_x};{input_y}M\x1b[<0;{x};{y}m")
+            await asyncio.sleep(0.05)
+            assert opened_urls == [], "a batched drag must cancel the pending click"
 
             # Capture must also cancel a drag that leaves the link and returns
             # to the original cell, or a release outside followed by a stray up.
@@ -129,7 +134,7 @@ def test_working_tips_follow_live_ui_without_entering_history(monkeypatch, colum
                     await asyncio.sleep(0.05)
                 pipe.send_text(f"\x1b[<0;{x};{y}m")
                 await asyncio.sleep(0.05)
-                assert opened_urls == []
+                assert opened_urls == [], f"drag capture must cancel the click ({finish_inside=})"
 
             # A tip rotating away during the press cancels its pending click.
             pipe.send_text(f"\x1b[<0;{x};{y}M")
@@ -138,7 +143,7 @@ def test_working_tips_follow_live_ui_without_entering_history(monkeypatch, colum
             await wait_for(lambda: "Tip: Use /trace" in rendered["text"])
             pipe.send_text(f"\x1b[<0;{x};{y}m")
             await asyncio.sleep(0.05)
-            assert opened_urls == []
+            assert opened_urls == [], "a rotated tip must cancel the pending click"
             clock["offset"] = TIP_INTERVAL_SECONDS * link_index
             await wait_for(lambda: "Tip: Star us on GitHub!" in rendered["text"])
             input_buffer.reset()

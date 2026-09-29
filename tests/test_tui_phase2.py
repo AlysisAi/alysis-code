@@ -169,6 +169,124 @@ def test_surface_tool_trace_shows_argument_detail():
     assert s._tool_details == {}
 
 
+def _end_fetch(s: TuiSurface, *, status: str, meta: dict[str, object], call_id: str = "1") -> None:
+    s.on_tool_start(
+        ToolStartEvent(
+            tool_call_id=call_id,
+            name="web_fetch",
+            args={"url": "https://www.weather-atlas.com/en/greece/athens"},
+            step=1,
+        )
+    )
+    s.on_tool_end(
+        ToolEndEvent(
+            tool_call_id=call_id, name="web_fetch", status=status, elapsed_ms=558, meta=meta
+        )
+    )
+
+
+def test_surface_renders_remote_blocked_fetch_as_neutral_trace():
+    # A site refusing automated clients (anti-bot/403) is normal web reality,
+    # not an agent failure: a grey "◦ … site doesn't allow …" trace line, with
+    # no red ✗ and no amber warning.
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    _end_fetch(
+        s,
+        status="failed",
+        meta={
+            "error": "HTTP error 403 while fetching …: remote site declined automated access.",
+            "blocked_by_remote_site": True,
+        },
+    )
+    assert t.entries == [
+        (
+            "trace",
+            "◦ Fetch Web Page · https://www.weather-atlas.com/en/greece/athens · "
+            "site doesn't allow automated access (558ms)",
+        )
+    ]
+
+
+def test_surface_names_what_the_remote_site_did():
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    _end_fetch(
+        s,
+        status="failed",
+        meta={
+            "error": "web_fetch request to '…' timed out during response read.",
+            "remote_site_reason": "site didn't respond",
+        },
+    )
+    [(role, text)] = t.entries
+    assert role == "trace"
+    assert text.startswith("◦ Fetch Web Page · ")
+    assert text.endswith(" · site didn't respond (558ms)")
+    assert "timed out" not in text
+
+
+def test_surface_hides_remote_site_notices_when_trace_is_off():
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    s.set_trace_level("off")
+    _end_fetch(s, status="failed", meta={"remote_site_reason": "site requires sign-in"})
+    assert t.entries == []
+
+
+def test_surface_trace_off_does_not_render_successes_as_failures():
+    # Regression: with the trace off, a successful call fell through to the
+    # failure branch and printed "✗ … failed".
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    s.set_trace_level("off")
+    s.on_tool_start(ToolStartEvent(tool_call_id="1", name="fs_read", args={"path": "a.py"}, step=1))
+    s.on_tool_end(ToolEndEvent(tool_call_id="1", name="fs_read", status="done", elapsed_ms=12))
+    assert t.entries == []
+
+
+def test_surface_marks_withdrawn_tool_as_unavailable_not_done():
+    # An unrecoverable web failure withdraws web_fetch for the turn; its result
+    # reports "done" to the model, but the trace must not draw a success ✓.
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    _end_fetch(
+        s,
+        status="done",
+        meta={
+            "tool_unavailable": True,
+            "unavailable_reason": "HTTP request failed: [Errno 101] Network is unreachable",
+        },
+    )
+    [(role, text)] = t.entries
+    assert role == "warn"
+    assert text.startswith("⚠ Fetch Web Page · ")
+    assert "unavailable (558ms): HTTP request failed: [Errno 101] Network is unreachable" in text
+    assert not text.startswith("✓")
+
+
+def test_surface_keeps_red_error_for_ordinary_fetch_failures():
+    # Only remote-declined blocks are softened; other failures stay ✗ errors.
+    t = TuiTranscript()
+    s = TuiSurface(t)
+    s.on_tool_start(
+        ToolStartEvent(
+            tool_call_id="1", name="web_fetch", args={"url": "https://x.example/a"}, step=1
+        )
+    )
+    s.on_tool_end(
+        ToolEndEvent(
+            tool_call_id="1",
+            name="web_fetch",
+            status="failed",
+            elapsed_ms=120,
+            meta={"error": "HTTP error 500 while fetching 'https://x.example/a'."},
+        )
+    )
+    assert any(role == "error" and text.startswith("✗") for role, text in t.entries)
+    assert not any(role == "warn" for role, _text in t.entries)
+
+
 def test_surface_groups_consecutive_same_tool_traces():
     # Four searches must not render four "✓ Search Web · …" rows: the first is
     # a full line, consecutive same-tool successes become "  ↳ <query>" rows.
@@ -411,7 +529,6 @@ def _run_and_capture_input_geometry(monkeypatch, keys: str):
     from prompt_toolkit.application import Application as PromptToolkitApplication
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.layout.containers import VSplit
-    from prompt_toolkit.layout.layout import walk
     from prompt_toolkit.output import DummyOutput
 
     from alysis_code.cli_impl.tui import app as app_module
@@ -420,12 +537,7 @@ def _run_and_capture_input_geometry(monkeypatch, keys: str):
 
     def geometry(application):
         main = application.layout.container.content
-        input_window = application.layout.current_window
-        input_row = next(
-            container
-            for container in walk(main)
-            if isinstance(container, VSplit) and input_window in walk(container)
-        )
+        input_row = next(child for child in main.children if isinstance(child, VSplit))
         side = input_row.children[0]
         frame = input_row.children[1]
         input_inner = frame.children[1].children[1].get_container()
@@ -660,8 +772,11 @@ def test_backspace_at_paste_token_edge_removes_token_and_orphan(monkeypatch):
         "keep " + _bracketed_paste(payload) + "\x7f\r/exit\r",
     )
 
-    assert delivered == ["keep "]
-    assert user_echoes == ["keep "]
+    # Trailing composer whitespace is trimmed on submit, so "keep " arrives as
+    # "keep"; what this pins is that the token and its payload went with the
+    # single backspace.
+    assert delivered == ["keep"]
+    assert user_echoes == ["keep"]
     assert captured["payloads_before_submit"] == {}
 
 
@@ -674,8 +789,8 @@ def test_delete_at_paste_token_edge_removes_token_and_orphan(monkeypatch):
         "keep " + _bracketed_paste(payload) + "\x1b[D" * len(token) + "\x1b[3~\r/exit\r",
     )
 
-    assert delivered == ["keep "]
-    assert user_echoes == ["keep "]
+    assert delivered == ["keep"]
+    assert user_echoes == ["keep"]
     assert captured["payloads_before_submit"] == {}
 
 
@@ -1033,12 +1148,47 @@ def _run_ctrl_p_away_from_paste_tokens(monkeypatch, payloads):
                     pipe.send_text("\x04")
                     return
             else:
+                if not wait_for(
+                    lambda: captured.get("application") is not None,
+                    "application was never constructed",
+                ):
+                    pipe.send_text("\x04")
+                    return
                 time.sleep(0.1)
                 captured["editor_open"] = captured[
                     "application"
                 ].layout.current_buffer is not captured.get("input_buffer")
+                if captured["editor_open"]:
+                    # An unexpectedly open editor float would swallow "/exit"
+                    # as text and hang the app forever (the pre-hardening
+                    # flaky-hang mechanism). Close it so the test can FAIL
+                    # honestly on the assertion instead.
+                    pipe.send_text("\x1b")
+                    wait_for(
+                        lambda: (
+                            captured["application"].layout.current_buffer
+                            is captured.get("input_buffer")
+                        ),
+                        "unexpected editor did not close",
+                    )
             captured["input_buffer"].text = ""
             pipe.send_text("/exit\r")
+            # Failsafe: if the app is still running shortly after /exit, force
+            # an exit so a regression shows up as a failed assertion with
+            # feeder_errors context, never as an infinite hang.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                application = captured.get("application")
+                if application is not None and not application.is_running:
+                    return
+                time.sleep(0.05)
+            application = captured.get("application")
+            if application is not None and application.is_running:
+                feeder_errors.append("app did not exit after /exit; forced exit")
+                try:
+                    application.loop.call_soon_threadsafe(application.exit)
+                except Exception:
+                    pipe.send_text("\x04")
 
         feeder = threading.Thread(target=feed, daemon=True)
         feeder.start()

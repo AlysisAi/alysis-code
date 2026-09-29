@@ -31,6 +31,9 @@ class _Store:
     def append(self, event_type: str, payload: dict[str, Any]) -> None:
         self.events.append((event_type, payload))
 
+    def configure_web_fetch_trusted_domains(self, domains: Any) -> tuple[str, ...]:
+        return tuple(domains or ())
+
     def runtime_artifact_path(self, category: str, filename: str) -> Path:
         path = self.session_artifact_root / category / filename
         path.parent.mkdir(parents=True, exist_ok=True)

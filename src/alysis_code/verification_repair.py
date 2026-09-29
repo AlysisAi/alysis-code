@@ -219,6 +219,14 @@ def run_verification_repair_loop(
     budget = _clamp_attempts(max_attempts)
     if getattr(initial_result, "all_passed", False):
         return VerificationRepairOutcome(final_result=initial_result)
+    if str(getattr(initial_result, "status", "") or "") == "not_run":
+        # Tri-state: nothing executed, so there is no failing output to
+        # repair against. Before the fix this case was a vacuous all_passed=True
+        # and silently skipped repair as if verification were green.
+        return VerificationRepairOutcome(
+            final_result=initial_result,
+            skipped_reason="verification did not execute; nothing to repair",
+        )
     if budget <= 0:
         return VerificationRepairOutcome(
             final_result=initial_result,

@@ -60,6 +60,27 @@ class StaleWorkspaceError(ChangeLedgerError):
     """The workspace no longer matches the state being reversed."""
 
 
+def _checkpoint_storage_directory(workspace_root: Path, storage_root: Path | None = None) -> Path:
+    workspace = workspace_root.expanduser().resolve(strict=True)
+    workspace_key = hashlib.sha256(
+        os.path.normcase(os.fspath(workspace)).encode("utf-8")
+    ).hexdigest()[:24]
+    override = str(env_get("ALYSIS_DATA_DIR") or "").strip()
+    default_data_dir = Path(override).expanduser() if override else canonical_user_data_dir()
+    base = (storage_root or default_data_dir / "checkpoints").expanduser().resolve()
+    try:
+        base.relative_to(workspace)
+    except ValueError:
+        return base / workspace_key
+    raise ChangeLedgerError("Checkpoint storage must be outside the workspace.")
+
+
+def checkpoint_storage_exists(workspace_root: Path) -> bool:
+    """Check for durable checkpoint state without initializing storage or launching Git."""
+    storage = _checkpoint_storage_directory(workspace_root)
+    return (storage / "ledger.sqlite3").exists() or (storage / "objects.git").exists()
+
+
 @dataclass(frozen=True)
 class ChangeRecord:
     status: str
@@ -119,19 +140,7 @@ class ChangeLedger:
         self.workspace_root = workspace_root.expanduser().resolve(strict=True)
         if not self.workspace_root.is_dir():
             raise ChangeLedgerError("Checkpoint workspace must be a directory.")
-        workspace_key = hashlib.sha256(
-            os.path.normcase(os.fspath(self.workspace_root)).encode("utf-8")
-        ).hexdigest()[:24]
-        override = str(env_get("ALYSIS_DATA_DIR") or "").strip()
-        default_data_dir = Path(override).expanduser() if override else canonical_user_data_dir()
-        base = (storage_root or default_data_dir / "checkpoints").expanduser().resolve()
-        try:
-            base.relative_to(self.workspace_root)
-        except ValueError:
-            pass
-        else:
-            raise ChangeLedgerError("Checkpoint storage must be outside the workspace.")
-        self.storage_dir = base / workspace_key
+        self.storage_dir = _checkpoint_storage_directory(self.workspace_root, storage_root)
         self.git_dir = self.storage_dir / "objects.git"
         self.index_dir = self.storage_dir / "indexes"
         self.database_path = self.storage_dir / "ledger.sqlite3"
@@ -434,15 +443,25 @@ class ChangeLedger:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.index_dir.mkdir(parents=True, exist_ok=True)
         if not self.git_dir.exists():
-            result = subprocess.run(
-                ["git", "init", "--bare", "--quiet", os.fspath(self.git_dir)],
-                capture_output=True,
-                timeout=self.git_timeout_seconds,
-                check=False,
-                env=build_git_process_env(),
-            )
+            try:
+                result = subprocess.run(
+                    ["git", "init", "--bare", "--quiet", os.fspath(self.git_dir)],
+                    capture_output=True,
+                    timeout=self.git_timeout_seconds,
+                    check=False,
+                    env=build_git_process_env(),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                raise ChangeLedgerError(
+                    "Checkpoint storage could not start Git. Install Git and check that it can run."
+                ) from None
             if result.returncode != 0:
                 raise ChangeLedgerError("Unable to initialize external checkpoint storage.")
+        self._object_hash_name = (
+            self._git(["rev-parse", "--show-object-format"], check=True).stdout.decode().strip()
+        )
+        if self._object_hash_name not in {"sha1", "sha256"}:
+            raise ChangeLedgerError("Unsupported checkpoint Git object format.")
         info_dir = self.git_dir / "info"
         info_dir.mkdir(parents=True, exist_ok=True)
         exclude_path = info_dir / "exclude"
@@ -1397,6 +1416,16 @@ class ChangeLedger:
         path = _safe_workspace_path(self.workspace_root, rel_path)
         return self._path_identity(path)
 
+    def _blob_oid(self, data: bytes) -> str:
+        # Equivalent to `git hash-object --stdin` (no path or filters). Baseline
+        # capture checks every file twice; spawning Git for each hash adds
+        # thousands of process launches in a normal repository, especially costly
+        # on Windows. Keep the existing before/after stat and content checks.
+        digest = hashlib.new(self._object_hash_name, usedforsecurity=False)
+        digest.update(f"blob {len(data)}\0".encode("ascii"))
+        digest.update(data)
+        return digest.hexdigest()
+
     def _path_identity(self, path: Path) -> tuple[str, str] | None:
         if not os.path.lexists(path):
             return None
@@ -1406,12 +1435,7 @@ class ChangeLedger:
             after = path.lstat()
             if _stat_fingerprint(before) != _stat_fingerprint(after):
                 return "unstable", "unstable"
-            oid = (
-                self._git(["hash-object", "--stdin"], input_bytes=data, check=True)
-                .stdout.decode()
-                .strip()
-            )
-            return "120000", oid
+            return "120000", self._blob_oid(data)
         if not path.is_file():
             return "040000", "directory"
         try:
@@ -1423,13 +1447,8 @@ class ChangeLedger:
             return "unstable", "unstable"
         if _stat_fingerprint(before) != _stat_fingerprint(after):
             return "unstable", "unstable"
-        oid = (
-            self._git(["hash-object", "--stdin"], input_bytes=data, check=True)
-            .stdout.decode()
-            .strip()
-        )
         executable = bool(after.st_mode & stat.S_IXUSR) and os.name != "nt"
-        return ("100755" if executable else "100644"), oid
+        return ("100755" if executable else "100644"), self._blob_oid(data)
 
     def _session_git_env(self, session_id: str) -> dict[str, str]:
         env = build_git_process_env()

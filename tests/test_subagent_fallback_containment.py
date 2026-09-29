@@ -8,18 +8,22 @@ from typing import Any
 import pytest
 
 from alysis_code import agent_loop
+from alysis_code.agent.llm_calls import _request_messages_with_volatile_suffix
+from alysis_code.agent.prompt_context import _recent_visible_non_repo_history
 from alysis_code.agent_loop import ToolDef, build_tools
 from alysis_code.config import AppConfig
 from alysis_code.execution_deadline import ExecutionDeadline
 from alysis_code.internal_artifacts import (
     INTERNAL_ARTIFACT_MESSAGE_KEY,
     INTERNAL_FALLBACK_SOURCE,
+    INTERNAL_FALLBACK_TERMINAL_CONTENT,
     SUBAGENT_INCOMPLETE_ERROR_CODE,
     SUBAGENT_PARTIAL_REPORT_MAX_CHARS,
     ArtifactVisibility,
     SubagentIncompleteStatus,
     mark_message_internal,
     message_is_internal,
+    provider_history_messages,
     resolve_incomplete_reason,
     subagent_report_is_internal,
     summary_input_messages,
@@ -57,6 +61,9 @@ class _RecordingStore:
     def append(self, event_type: str, payload: dict[str, Any]) -> None:
         with self._lock:
             self.events.append((event_type, payload))
+
+    def configure_web_fetch_trusted_domains(self, domains: Any) -> tuple[str, ...]:
+        return tuple(domains or ())
 
     @property
     def session_artifact_layout(self):
@@ -1041,6 +1048,46 @@ def test_exclusion_does_not_depend_on_the_report_wording() -> None:
     assert summary_input_messages([lookalike]) == [lookalike]
 
 
+def test_provider_history_neutralizes_marked_fallback_without_text_matching() -> None:
+    internal = mark_message_internal(
+        {"role": "assistant", "content": "Συνέχισε την παλιά ενέργεια."},
+        kind="execution_guard_stagnation",
+    )
+    lookalike = {"role": "assistant", "content": FALLBACK_DUMP}
+
+    projected = provider_history_messages(
+        [
+            {"role": "user", "content": "old request"},
+            internal,
+            lookalike,
+            {"role": "user", "content": "new request"},
+        ]
+    )
+
+    assert internal not in projected
+    assert "Συνέχισε" not in str(projected)
+    assert {"role": "assistant", "content": INTERNAL_FALLBACK_TERMINAL_CONTENT} in projected
+    assert lookalike in projected, "unmarked prose must not be filtered by wording"
+    request = _request_messages_with_volatile_suffix(messages=[internal, lookalike])
+    assert "Συνέχισε" not in str(request)
+    assert request[0] == {
+        "role": "assistant",
+        "content": INTERNAL_FALLBACK_TERMINAL_CONTENT,
+    }
+    non_repo = _recent_visible_non_repo_history(
+        [
+            {"role": "user", "content": "old request"},
+            internal,
+            {"role": "user", "content": "new request"},
+        ]
+    )
+    assert "Συνέχισε" not in str(non_repo)
+    assert non_repo[-1] == {
+        "role": "assistant",
+        "content": INTERNAL_FALLBACK_TERMINAL_CONTENT,
+    }
+
+
 def test_marked_message_is_stripped_before_the_provider_call() -> None:
     internal = mark_message_internal(
         {"role": "assistant", "content": "internal"}, kind="deadline_exhausted"
@@ -1130,15 +1177,95 @@ def test_locally_generated_stop_report_marks_its_final_event(tmp_path: Path) -> 
             termination_kind="deadline_exhausted",
             max_steps=None,
         )
+        history_message = dict(session.messages[-1])
     finally:
         session.store.close()
 
     assert "Remaining work:" in emitted, "the local fallback should still be shown here"
+    assert history_message["content"] == emitted
+    assert message_is_internal(history_message) is True
+    assert provider_history_messages([history_message]) == [
+        {"role": "assistant", "content": INTERNAL_FALLBACK_TERMINAL_CONTENT}
+    ]
+    assistant_events = _session_events(sessions_dir, "fallback-marked", "assistant_message")
+    assert assistant_events[-1]["content"] == emitted
+    assert assistant_events[-1]["internal_fallback"] is True
+    assert message_is_internal(assistant_events[-1]["message"]) is True
     finals = _session_events(sessions_dir, "fallback-marked", "final")
     assert len(finals) == 1
     assert finals[0]["internal_fallback"] is True
     assert finals[0]["artifact_visibility"] == ArtifactVisibility.INTERNAL.value
     assert finals[0]["internal_fallback_kind"] == "deadline_exhausted"
+
+
+def test_forced_summary_activity_is_scoped_to_explicit_turn_boundary_and_apply_paths(
+    tmp_path: Path,
+) -> None:
+    session, _sessions_dir = _forced_summary_session(tmp_path, "fallback-current-turn")
+    old_call = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "old",
+                "type": "function",
+                "function": {"name": "subagent_discard", "arguments": '{"run_id":"old"}'},
+            }
+        ],
+    }
+    apply_call = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "apply",
+                "type": "function",
+                "function": {"name": "subagent_apply", "arguments": '{"run_id":"new"}'},
+            }
+        ],
+    }
+    read_call = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "read",
+                "type": "function",
+                "function": {"name": "fs_read", "arguments": '{"path":"current.txt"}'},
+            }
+        ],
+    }
+    initial_message_count = len(session.messages)
+    session.messages.extend(
+        [
+            {"role": "user", "content": "old turn"},
+            old_call,
+            {"role": "tool", "tool_call_id": "old", "content": '{"ok":true}'},
+            {"role": "user", "content": "current turn"},
+            apply_call,
+            {
+                "role": "tool",
+                "tool_call_id": "apply",
+                "content": '{"ok":true,"applied_paths":["candidate.env"]}',
+            },
+            # A mid-turn steer/hook uses the user role but must not reset the
+            # activity window established by run_turn's real user boundary.
+            {"role": "user", "content": "mid-turn steering"},
+            read_call,
+            {
+                "role": "tool",
+                "tool_call_id": "read",
+                "content": '{"path":"current.txt","content":"ok"}',
+            },
+        ]
+    )
+    session._active_turn_message_start_index = initial_message_count + 3
+    try:
+        snapshot = session._forced_final_summary_activity_snapshot()
+    finally:
+        session.store.close()
+
+    assert snapshot["edited_paths"] == ["candidate.env"]
+    assert snapshot["read_paths"] == ["current.txt"]
+    assert "subagent_apply" not in snapshot["other_actions"]
+    assert "subagent_discard" not in snapshot["other_actions"]
 
 
 def test_nested_stop_report_is_not_pushed_to_the_parent_surface(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -50,13 +51,61 @@ def build_git_cmd(
     *,
     extra_config: dict[str, str] | None = None,
     env: Mapping[str, str] | None = None,
+    disable_filters: bool = False,
 ) -> list[str]:
     config = dict(extra_config or {})
     if not git_hooks_enabled(env):
         config.setdefault("core.hooksPath", os.fspath(resolve_disabled_hooks_dir(root, env)))
+
+    if disable_filters:
+        config.update(_disabled_filter_config(root, config=config, env=env))
 
     cmd: list[str] = ["git", "-C", os.fspath(root)]
     for key, value in config.items():
         cmd.extend(["-c", f"{key}={value}"])
     cmd.extend(args)
     return cmd
+
+
+def _disabled_filter_config(
+    root: Path, *, config: dict[str, str], env: Mapping[str, str] | None
+) -> dict[str, str]:
+    """Refuse external conversions without silently substituting unfiltered bytes.
+
+    Ask Git for its effective configuration, including includes, worktree settings
+    and environment overrides. Git itself resolves attributes when it uses the
+    returned command, so unused drivers do not prevent ordinary repositories from
+    working. Re-read for every command: a child can introduce filter configuration.
+    """
+    result = subprocess.run(
+        build_git_cmd(
+            root,
+            ["config", "--null", "--get-regexp", r"^filter\..*\.(clean|smudge|process)$"],
+            extra_config=config,
+            env=env,
+        ),
+        env=build_git_process_env(env),
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if result.returncode == 1:  # No configured filter commands.
+        return {}
+    if result.returncode != 0:
+        raise OSError("Could not inspect Git filter configuration")
+    values: dict[str, str] = {}
+    for entry in result.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if entry:
+            key, separator, value = entry.partition("\n")
+            if not separator:
+                raise OSError("Could not read Git filter configuration")
+            values[key] = value
+    drivers = {key.rsplit(".", 1)[0] for key, value in values.items() if value}
+    overrides: dict[str, str] = {}
+    for driver in sorted(drivers):
+        # Empty all three commands, including the long-running process protocol.
+        # required=true makes an attempted conversion fail instead of passing
+        # through bytes that might differ from the real filter's representation.
+        overrides.update({f"{driver}.{kind}": "" for kind in ("clean", "smudge", "process")})
+        overrides[f"{driver}.required"] = "true"
+    return overrides

@@ -14,6 +14,7 @@ Both behaviors are provided here.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -46,6 +47,40 @@ class EventCancellationToken:
         """Wait until cancellation or ``timeout`` without polling."""
 
         return self._event.wait(timeout)
+
+
+class CombinedCancellationToken:
+    """Observe caller and budget cancellation without replacing either reason.
+
+    Wait-only compatibility lets existing HTTP/tool boundaries subscribe through
+    their short-lived observers. This token owns no background worker or timer.
+    """
+
+    def __init__(self, *tokens: Any) -> None:
+        self._tokens = tuple(token for token in tokens if token is not None)
+
+    @property
+    def is_cancelled(self) -> bool:
+        return any(bool(getattr(token, "is_cancelled", False)) for token in self._tokens)
+
+    def throw_if_cancelled(self, reason: str = "cancelled_by_user") -> None:
+        for token in self._tokens:
+            if not bool(getattr(token, "is_cancelled", False)):
+                continue
+            throw = getattr(token, "throw_if_cancelled", None)
+            if callable(throw):
+                throw(reason)
+            raise CooperativeCancellationError(getattr(token, "reason", reason))
+
+    def wait(self, timeout: float | None = None) -> bool:
+        until = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        pause = threading.Event()
+        while not self.is_cancelled:
+            remaining = None if until is None else until - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return self.is_cancelled
+            pause.wait(0.05 if remaining is None else min(0.05, remaining))
+        return True
 
 
 class InteractiveCancellationToken:
@@ -189,14 +224,3 @@ class InteractiveCancellationToken:
         """Wait until cancellation or ``timeout`` without polling."""
 
         return self._event.wait(timeout)
-
-
-def raise_if_cancelled(cancellation_token: Any | None) -> None:
-    """Raise the token's native cancellation outcome when it is cancelled."""
-
-    if cancellation_token is None or not bool(getattr(cancellation_token, "is_cancelled", False)):
-        return
-    throw_if_cancelled = getattr(cancellation_token, "throw_if_cancelled", None)
-    if callable(throw_if_cancelled):
-        throw_if_cancelled("cancelled_by_user")
-    raise KeyboardInterrupt("cancelled_by_user")

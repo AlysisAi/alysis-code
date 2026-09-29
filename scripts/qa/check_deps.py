@@ -16,6 +16,7 @@ OPTIONAL_DEPENDENCY_GROUPS = ("server",)
 
 IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow",
+    "markdown_it": "markdown-it-py",
     "multipart": "python-multipart",
     "prompt_toolkit": "prompt-toolkit",
 }

@@ -34,8 +34,10 @@ from .error_text import (
     sanitize_error_summary,
     sanitize_optional_error_summary,
 )
+from .execution_context import ExecutionContextBudgetError
 from .execution_shared import (
     build_execution_reporting_diff_with_commit_range,
+    build_task_acceptance_instruction,
     build_task_execution_instruction_bundle,
     build_workspace_snapshot_reporting_diff,
     mirror_plan_into_worktree,
@@ -111,6 +113,7 @@ from .verify_gate import (
     resolve_authoritative_task_verify_command_selection,
     run_task_verification,
     verify_run_result_to_payload,
+    verify_run_status,
 )
 from .workspace_context import WorkspaceContextError, resolve_workspace_context
 
@@ -1012,23 +1015,91 @@ def run_task_worker(
             kind=entry.kind,
             status=entry.status,
         )
-    instruction_bundle = build_task_execution_instruction_bundle(
-        plan=plan,
-        task=task,
-        root=worktree_repo_path,
-        cfg=run_cfg,
-        role_model=run_cfg.model,
-        mode=mode,
-        yes=yes,
-        deny_write_prefixes=[".alysis"],
-        allow_write_globs=allowed_scope if scope_mode == "strict" else None,
-        non_interactive=True,
-        verification_enabled=prompt_verification_enabled,
-        authoritative_verification_commands=(verify_cmds if prompt_verification_enabled else None),
-        api_key=api_key_override,
-        subagents_enabled=False,
-        leading_sections=[scratch_artifact_section, prepared_knowledge.prompt_section],
-    )
+
+    def _context_budget_failure(exc: ExecutionContextBudgetError) -> TaskWorkerResult:
+        # Reject before executor dispatch, while retaining the normal worker
+        # report/result shape so the orchestrator can persist the failed task.
+        finished_at = now_iso()
+        budget_path = write_execution_budget_artifact(
+            run_paths=run_paths, task_id=task_id, payload=exc.to_payload()
+        )
+        patch_path.write_text("", encoding="utf-8")
+        logs = write_exec_log_artifacts(
+            paths=run_paths,
+            task_id=task_id,
+            cfg=run_cfg,
+            no_log=no_log,
+            before_logs=set(),
+            sessions_dir=run_paths.execution_sessions_dir,
+            expected_session_id=safe_task,
+            session_started=False,
+        )
+        report_path = write_task_report(
+            paths=run_paths,
+            task=task,
+            result="failure",
+            result_kind="failure",
+            summary=str(exc),
+            started_at=started_at,
+            finished_at=finished_at,
+            changed_files=[],
+            verify_commands=verify_cmds,
+            patch_path=patch_path,
+            budget_artifact_path=budget_path,
+            execution_log_artifacts=logs,
+            base_branch=base_branch,
+            task_branch=task_branch,
+            merge_result="blocked before execution",
+        )
+        return TaskWorkerResult(
+            task_id=task_id,
+            title=task_title,
+            branch=task_branch,
+            worktree_path=os.fspath(worktree_repo_path),
+            started_at=started_at,
+            finished_at=finished_at,
+            success=False,
+            summary=str(exc),
+            commit_hash=None,
+            error=str(exc),
+            report_path=_repo_rel(run_paths.root, report_path),
+            patch_path=_repo_rel(run_paths.root, patch_path),
+            log_path="",
+            log_pointer_path=_repo_rel(run_paths.root, logs.pointer_path),
+            warnings=list(asset_setup_warnings),
+            changed_files=[],
+            verify_failed=False,
+            verify_summary=None,
+            verify_artifact_path=None,
+            verify_command_source=verify_command_source,
+            failure_reason=exc.error_code,
+            allowed_scope=list(allowed_scope),
+            agent_exit_code=1,
+            result_kind="failure",
+        )
+
+    try:
+        instruction_bundle = build_task_execution_instruction_bundle(
+            plan=plan,
+            task=task,
+            root=worktree_repo_path,
+            cfg=run_cfg,
+            role_model=run_cfg.model,
+            mode=mode,
+            yes=yes,
+            deny_write_prefixes=[".alysis"],
+            allow_write_globs=allowed_scope if scope_mode == "strict" else None,
+            non_interactive=True,
+            verification_enabled=prompt_verification_enabled,
+            authoritative_verification_commands=(
+                verify_cmds if prompt_verification_enabled else None
+            ),
+            api_key=api_key_override,
+            subagents_enabled=False,
+            leading_sections=[scratch_artifact_section, prepared_knowledge.prompt_section],
+        )
+    except ExecutionContextBudgetError as exc:
+        return _context_budget_failure(exc)
     asset_allocation: TaskAssetAllocation | None = None
     relevant_assets_section = ""
     if asset_surface is not None and task_asset_mirror.primary and not _cancel_requested():
@@ -1073,26 +1144,29 @@ def run_task_worker(
             api_key=api_key_override,
         )
     if relevant_assets_section:
-        instruction_bundle = build_task_execution_instruction_bundle(
-            plan=plan,
-            task=task,
-            root=worktree_repo_path,
-            cfg=run_cfg,
-            role_model=run_cfg.model,
-            mode=mode,
-            yes=yes,
-            deny_write_prefixes=[".alysis"],
-            allow_write_globs=allowed_scope if scope_mode == "strict" else None,
-            non_interactive=True,
-            verification_enabled=prompt_verification_enabled,
-            authoritative_verification_commands=(
-                verify_cmds if prompt_verification_enabled else None
-            ),
-            api_key=api_key_override,
-            subagents_enabled=False,
-            leading_sections=[scratch_artifact_section, prepared_knowledge.prompt_section],
-            relevant_assets_section=relevant_assets_section,
-        )
+        try:
+            instruction_bundle = build_task_execution_instruction_bundle(
+                plan=plan,
+                task=task,
+                root=worktree_repo_path,
+                cfg=run_cfg,
+                role_model=run_cfg.model,
+                mode=mode,
+                yes=yes,
+                deny_write_prefixes=[".alysis"],
+                allow_write_globs=allowed_scope if scope_mode == "strict" else None,
+                non_interactive=True,
+                verification_enabled=prompt_verification_enabled,
+                authoritative_verification_commands=(
+                    verify_cmds if prompt_verification_enabled else None
+                ),
+                api_key=api_key_override,
+                subagents_enabled=False,
+                leading_sections=[scratch_artifact_section, prepared_knowledge.prompt_section],
+                relevant_assets_section=relevant_assets_section,
+            )
+        except ExecutionContextBudgetError as exc:
+            return _context_budget_failure(exc)
     instruction = instruction_bundle.instruction
     write_execution_context_artifact(
         run_paths=run_paths,
@@ -1174,6 +1248,7 @@ def run_task_worker(
                 cfg=run_cfg,
                 root=worktree_repo_path,
                 instruction=instruction,
+                acceptance_instruction=build_task_acceptance_instruction(task),
                 mode=mode,
                 runtime_kind=RuntimeKind.SWARM_WORKER,
                 yes=yes,
@@ -1503,6 +1578,16 @@ def run_task_worker(
             else:
                 warnings.append(verify_mutation_msg)
 
+        if verify_run_status(verify_result) == "not_run":
+            # Tri-state: every command was benignly skipped (e.g. a test
+            # runner that found zero tests). Nothing checked the work, which is
+            # not a verification failure -- but it is no longer a vacuous pass
+            # either, so say so instead of staying silent.
+            warnings.append(
+                f"Verification did not execute: {verify_result.summary} -- "
+                "nothing checked this task's work."
+            )
+            return verification_ok
         if not verify_result.all_passed:
             verify_failure_category = (
                 verify_result.failure_category_value or FailureCategory.VERIFICATION_FAILED

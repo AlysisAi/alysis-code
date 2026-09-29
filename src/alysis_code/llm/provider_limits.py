@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 from ..failure_category import is_provider_throttling_error, provider_unavailable_retry_reason
@@ -22,6 +22,7 @@ from ..transport_retry import (
     is_connection_drop_error,
     mark_transport_connection_failure,
 )
+from .http_cancellation import raise_if_cancelled
 from .types import LLMStreamNoProgressError
 
 T = TypeVar("T")
@@ -80,7 +81,50 @@ _KNOWN_TRANSPORT_PROVIDER_KEYS = frozenset(
     }
 )
 _SEMAPHORE_LOCK = threading.Lock()
-_SEMAPHORES: dict[tuple[str, int], threading.Semaphore] = {}
+_SEMAPHORES: dict[tuple[str, int], _ProviderAdmissionGate] = {}
+
+
+class _ProviderAdmissionGate:
+    """A concurrency gate that an interactive cancellation can wake.
+
+    ``threading.Semaphore.acquire`` cannot wait on a cancellation event at the
+    same time. A condition gives each token a one-shot wake subscription, so a
+    saturated provider cap remains interruptible without imposing a timeout or
+    changing the cap's fairness semantics. Minimal legacy tokens without a
+    subscription use bounded observations solely to notice cancellation; the
+    wait has no overall time limit.
+    """
+
+    def __init__(self, permits: int) -> None:
+        self._condition = threading.Condition()
+        self._available = permits
+
+    def acquire(self, cancellation_token: Any | None = None) -> None:
+        subscribe = getattr(cancellation_token, "subscribe", None)
+
+        def _wake() -> None:
+            with self._condition:
+                self._condition.notify_all()
+
+        unsubscribe = subscribe(_wake) if callable(subscribe) else None
+        has_subscription = callable(unsubscribe)
+        try:
+            with self._condition:
+                while self._available <= 0:
+                    raise_if_cancelled(cancellation_token)
+                    self._condition.wait(
+                        timeout=None if cancellation_token is None or has_subscription else 0.1
+                    )
+                raise_if_cancelled(cancellation_token)
+                self._available -= 1
+        finally:
+            if callable(unsubscribe):
+                unsubscribe()
+
+    def release(self) -> None:
+        with self._condition:
+            self._available += 1
+            self._condition.notify()
 
 
 @dataclass(frozen=True)
@@ -176,6 +220,7 @@ def run_provider_limited_call(
     retry_deadline_allows: Callable[[float], bool] | None = None,
     retry_wall_clock_cap_seconds: float | None = None,
     clock_fn: Callable[[], float] | None = None,
+    cancellation_token: Any | None = None,
 ) -> T:
     settings = retry_settings or ProviderRetrySettings()
     canonical_key = canonical_provider_key(provider_key)
@@ -188,21 +233,30 @@ def run_provider_limited_call(
     retries_used = 0
 
     while True:
+        raise_if_cancelled(cancellation_token)
         if semaphore is not None:
-            semaphore.acquire()
+            semaphore.acquire(cancellation_token)
         try:
-            return call()
+            raise_if_cancelled(cancellation_token)
+            result = call()
+            # Close the small race between a provider's final transport check
+            # and returning control to the turn. A cancellation already
+            # published for this attempt still owns the outcome.
+            raise_if_cancelled(cancellation_token)
+            return result
         except Exception as exc:
+            raise_if_cancelled(cancellation_token)
             retry_reason = _provider_retry_reason(exc)
             if settings.disable_retries:
                 raise
             # A connection dropped mid-response gets a budget of its own. It is
             # the one failure class that costs nothing to retry -- the body
-            # never arrived, so no completed response work is repeated -- and
-            # giving up immediately can fail an otherwise recoverable request.
+            # never arrived, so no work is repeated -- and costs the whole task
+            # to give up on. Observed deterministically: regex-chess died at
+            # its first LLM call, the same way, in two consecutive trials.
             #
             # Every other reason keeps the configured budget untouched, and a
-            # caller that already raised max_retries keeps its larger value.
+            # campaign that already raised max_retries keeps its larger value.
             connection_drop = is_connection_drop_error(exc)
             retries_allowed = (
                 connection_drop_retry_budget(settings.max_retries)
@@ -214,8 +268,8 @@ def run_provider_limited_call(
             if connection_drop_budget_exhausted(retries_used, retries_allowed):
                 if connection_drop:
                     # Still a genuine error -- nothing was accomplished -- but
-                    # a named one, so diagnostics can distinguish a dead route
-                    # from a model that failed the task on its merits.
+                    # a named one, so a campaign can tell a dead route from a
+                    # model that failed the task on its merits.
                     mark_transport_connection_failure(exc)
                 raise
             if connection_drop:
@@ -286,7 +340,29 @@ def run_provider_limited_call(
             if semaphore is not None:
                 semaphore.release()
         retries_used += 1
-        sleep(wait_seconds)
+        raise_if_cancelled(cancellation_token)
+        if sleep_fn is not None:
+            # Injected sleepers are an intentional test/host compatibility
+            # boundary. They retain ownership of how time advances, with
+            # cancellation checked on both sides.
+            sleep(wait_seconds)
+        else:
+            subscribe = getattr(cancellation_token, "subscribe", None)
+            if callable(subscribe):
+                wake = threading.Event()
+                unsubscribe = subscribe(wake.set)
+                try:
+                    wake.wait(wait_seconds)
+                finally:
+                    if callable(unsubscribe):
+                        unsubscribe()
+            else:
+                wait_for_cancel = getattr(cancellation_token, "wait", None)
+                if callable(wait_for_cancel):
+                    wait_for_cancel(wait_seconds)
+                else:
+                    sleep(wait_seconds)
+        raise_if_cancelled(cancellation_token)
 
 
 def _retry_wall_clock_cap_blocks(
@@ -455,12 +531,12 @@ def qwen_provider_aliases() -> tuple[str, ...]:
     return tuple(sorted(_QWEN_PROVIDER_ALIASES))
 
 
-def _semaphore_for(provider_key: str, cap: int) -> threading.Semaphore:
+def _semaphore_for(provider_key: str, cap: int) -> _ProviderAdmissionGate:
     key = (provider_key, cap)
     with _SEMAPHORE_LOCK:
         semaphore = _SEMAPHORES.get(key)
         if semaphore is None:
-            semaphore = threading.Semaphore(cap)
+            semaphore = _ProviderAdmissionGate(cap)
             _SEMAPHORES[key] = semaphore
         return semaphore
 

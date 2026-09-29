@@ -15,8 +15,9 @@ from ...surface.theme import (
     _windows_terminal_settings_paths,
     detect_terminal_theme as _detect_owl_theme,
 )
-from ...branding import env_get
 from .cli_common import *
+from ...branding import env_get
+from ...tools.availability import tool_availability_snapshot as copy_tool_availability_snapshot
 from ..chat.forge_visibility import command_visible, visible_commands
 
 
@@ -700,7 +701,7 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
                         "/skill",
                         "no args lists; <name> shows info; <name> <task> attaches",
                     ),
-                    ("/image [path]", "add image (path, clipboard, Ctrl+Alt+V)"),
+                    ("/image [path]", "attach an image or file (drag & drop, or Ctrl+V to paste)"),
                     ("/assets", "open assets for the active Forge run"),
                     ("/config", "inline config menu; /config show|set|clear for model metadata"),
                     ("/toolbar", "customize toolbar items"),
@@ -727,6 +728,10 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
                 ("/permissions", "change execution mode"),
                 ("/persona", "switch persona (code, architect, ask, debug)"),
                 ("/ask <question>", "one read-only turn; mode restored afterwards"),
+                (
+                    "/objective [new|amend]",
+                    "show the current task; new starts another task, amend adds a constraint",
+                ),
                 ("/trace", "reasoning detail (off/compact/full)"),
             ],
         ),
@@ -749,7 +754,7 @@ def _chat_command_sections(*, ui_mode: str = "chat") -> list[tuple[str, list[tup
                     "no args lists; <name> shows info; <name> <task> attaches",
                 ),
                 ("$<name> [task]", "show skill info or attach it for one turn"),
-                ("/image [path]", "add image (path, clipboard, Ctrl+Alt+V)"),
+                ("/image [path]", "attach an image or file (drag & drop, or Ctrl+V to paste)"),
                 ("/assets", "open assets for the current Forge run pointer"),
                 (
                     "/forge [resume]",
@@ -803,6 +808,8 @@ def _chat_completer_commands(*, ui_mode: str = "chat") -> list[str]:
         _CHAT_GLOBAL_VISIBLE_COMMANDS
         + [
             "/forge resume",
+            "/objective new",
+            "/objective amend",
             "/usage hud",
             "/usage hud on",
             "/usage hud off",
@@ -829,39 +836,33 @@ def _suggest_chat_command(raw_command: str, *, ui_mode: str = "chat") -> str | N
 
 
 def _rebuild_session_tools_for_mode(*, session: Any, mode: str) -> None:
+    coordinator_holder: dict[str, Any] = {}
     scheduler_holder: dict[str, Any] = {}
+    availability_holder: dict[str, Any] = {}
     build_kwargs = _session_build_tools_kwargs(session=session, mode=mode)
+    build_kwargs["subagent_coordinator_sink"] = lambda coordinator: coordinator_holder.__setitem__(
+        "coordinator", coordinator
+    )
     build_kwargs["child_scheduler_sink"] = lambda scheduler: scheduler_holder.__setitem__(
         "scheduler", scheduler
     )
-    tools = build_tools(**build_kwargs)
-    previous_scheduler = getattr(session, "child_scheduler", None)
-    replacement_scheduler = scheduler_holder.get("scheduler")
-    lifecycle_listener = getattr(previous_scheduler, "lifecycle_listener", None)
-    set_lifecycle_listener = getattr(
-        replacement_scheduler,
-        "set_lifecycle_listener",
-        None,
+    build_kwargs["tool_availability_sink"] = lambda snapshot: availability_holder.__setitem__(
+        "snapshot", copy_tool_availability_snapshot(snapshot)
     )
-    if callable(set_lifecycle_listener) and callable(lifecycle_listener):
-        set_lifecycle_listener(lifecycle_listener)
+    tools = build_tools(**build_kwargs)
+    tool_list = [tool.as_openai_tool() for tool in tools.values()]
+    previous_scheduler = getattr(session, "child_scheduler", None)
+    replacement_coordinator = coordinator_holder.get(
+        "coordinator",
+        getattr(session, "subagent_coordinator", None),
+    )
+    replacement_scheduler = scheduler_holder.get("scheduler", previous_scheduler)
+    replacement_availability = availability_holder["snapshot"]
     session.tools = tools
-    session.tool_list = [tool.as_openai_tool() for tool in tools.values()]
+    session.tool_list = tool_list
+    session.tool_availability_snapshot = replacement_availability
+    session.subagent_coordinator = replacement_coordinator
     session.child_scheduler = replacement_scheduler
-    if previous_scheduler is not None and previous_scheduler is not replacement_scheduler:
-        clear_lifecycle_listener = getattr(
-            previous_scheduler,
-            "set_lifecycle_listener",
-            None,
-        )
-        if callable(clear_lifecycle_listener):
-            clear_lifecycle_listener(None)
-        notify_replaced = getattr(session, "on_child_scheduler_replaced", None)
-        if callable(notify_replaced):
-            notify_replaced("settings applied")
-        shutdown = getattr(previous_scheduler, "shutdown", None)
-        if callable(shutdown):
-            shutdown(cancel_pending=True)
 
 
 def _session_build_tools_kwargs(*, session: Any, mode: str) -> dict[str, Any]:
@@ -881,6 +882,12 @@ def _session_build_tools_kwargs(*, session: Any, mode: str) -> dict[str, Any]:
         "effective_verification_commands",
         None,
     )
+    subagent_coordinator = getattr(session, "subagent_coordinator", None)
+    legacy_scheduler = getattr(session, "child_scheduler", None)
+    if subagent_coordinator is None and callable(getattr(legacy_scheduler, "bind_launcher", None)):
+        # ChildScheduler is a compatibility name for the same stable engine.
+        # Adopt it explicitly so older live sessions also rebuild in place.
+        subagent_coordinator = legacy_scheduler
     return {
         "root": Path(getattr(session, "root", Path("."))),
         "console": getattr(session, "console", None),
@@ -935,6 +942,7 @@ def _session_build_tools_kwargs(*, session: Any, mode: str) -> dict[str, Any]:
         "subagents_enabled": bool(getattr(session, "subagents_enabled", False)),
         "subagent_depth": int(getattr(session, "subagent_depth", 0) or 0),
         "subagent_registry": getattr(session, "subagent_registry", None),
+        "subagent_coordinator": subagent_coordinator,
         "parent_steer_inbox": getattr(session, "steer_inbox", None),
         "session_log_dir_override": getattr(session, "session_log_dir_override", None),
         "step_budget_runtime": getattr(session, "step_budget_runtime", None),

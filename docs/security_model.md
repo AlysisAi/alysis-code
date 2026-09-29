@@ -20,7 +20,8 @@ confusion, but they are not a substitute for reviewing changes before running th
 
 ## Execution Modes
 
-- `readonly` exposes inspection tools only.
+- `readonly` exposes inspection tools plus top-level read-only delegation controls; it never
+  exposes writes, candidate apply/discard, or nested delegation.
 - `review` asks before writes and shell commands.
 - `auto` can make approved changes with fewer prompts.
 - `fullaccess` removes mode-level write and shell approval prompts.
@@ -28,9 +29,10 @@ confusion, but they are not a substitute for reviewing changes before running th
 The execution mode is the only approval authority. There is no second
 "auto-approve" switch that can answer prompts on your behalf: if the footer badge
 says `safe`, writes and shell commands stop and ask. In the TUI, Shift+Tab cycles
-the pending mode (`read → safe → fast → full`) and `/permissions` selects one directly.
-The selection activates when the next user message starts; the running turn keeps its current
-permissions. Both controls warn when selecting `fullaccess`.
+the next-message selection (`read → safe → fast → full`) and `/permissions`
+selects one directly. The footer shows active → selected Permissions until the next
+real user message activates the choice. Selecting `fullaccess` prints a warning immediately;
+it does not widen a turn already in progress.
 
 `--yes` is scoped to `auto` mode, where it skips the file-deletion and
 sensitive-command confirmations. It does not relax `review` and does not grant
@@ -109,8 +111,14 @@ Where supported, requests connect to a validated resolved address while preservi
 
 `web_fetch` has a separate provenance gate before the safe HTTP request is
 started. A fetchable URL must come from the user, from a configured
-`web_search` result, from an observed canonical redirect, or from a bounded
-same-origin/search-mediated recovery path. URLs discovered inside trusted
+`web_search` result, from an observed canonical redirect, from a bounded
+same-origin/search-mediated recovery path, or from the configured
+trusted-domain allowlist (`web_fetch_trusted_domains`, defaulting to major
+public package registries whose API endpoints search engines do not index).
+The allowlist widens only the provenance gate for the listed hosts and their
+subdomains; the safe HTTP guard's scheme, credential, DNS/IP, redirect, and
+byte-cap validation still applies to every fetch, and an empty list restores
+strict provenance-only behavior. URLs discovered inside trusted
 fetched pages, trusted local file reads, and registered tool or shell output are
 kept as bounded source-linked provenance records; source content is not persisted
 in the provenance graph. Canonicalization may ignore fragments, default ports,

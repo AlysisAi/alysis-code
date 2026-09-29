@@ -227,7 +227,7 @@ command, and asks before running it. Source or editable installs are left manual
 
 - [Credentials](credentials.md): API key precedence and persisted credentials.
 - [AI subscription connections](account-runtimes.md): use provider sign-in with Alysis Code's native agent and paired `/config` model/effort selection.
-- [Execution modes](../README.md#execution-modes): readonly, review, auto, and fullaccess.
+- [Permissions](../README.md#permissions--personas): readonly, review, auto, and fullaccess.
 - [Forge](forge.md): plan, execute, verify, and review larger tasks.
 - [MCP](mcp.md): connect external MCP servers.
 - [Skills](skills.md): install and use reusable instruction bundles.

@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import codecs
 import errno
 import hashlib
+import io
 import os
+import re
 import secrets
 import stat
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from ..file_classification import derived_artifact_reason
-from ..git_safe import build_git_process_env
 from ..runtime_artifacts import RUNTIME_ARTIFACT_DIR_NAMES
 
 
@@ -42,10 +45,9 @@ _DEFAULT_IGNORE_DIRS = {
     ".idea",
     ".vscode",
 } | set(RUNTIME_ARTIFACT_DIR_NAMES)
-_DEFAULT_READ_LINES_MAX_LINES = 200
-# Byte ceiling for fs_read_lines: far above any sane 200-line source window,
-# far below what a single minified/generated line can inject into the context.
-_DEFAULT_READ_LINES_MAX_BYTES = 48_000
+_DEFAULT_READ_WINDOW_MAX_LINES = 200
+_READ_CHUNK_BYTES = 8_192
+_PHYSICAL_NEWLINES = re.compile(rb"\r\n|\r|\n")
 # Derived artifacts smaller than this are returned whole; the stub would not
 # save anything meaningful.
 _DERIVED_ARTIFACT_STUB_MIN_BYTES = 2_048
@@ -55,7 +57,7 @@ _DERIVED_ARTIFACT_NOTE = (
     "full text rarely informs a task relative to its size. The head sample "
     "above is provided for orientation. If this artifact's contents are "
     "genuinely the subject of the task, re-call fs_read with "
-    "allow_derived=true, or use fs_read_lines for a bounded range."
+    "allow_derived=true, or set start_line on fs_read for a bounded range."
 )
 _FS_EDIT_OPERATIONS = {
     "replace_exact",
@@ -287,27 +289,59 @@ def _resolve_under_root(root: Path, user_path: str) -> Path:
     return p
 
 
-def _count_text_lines(path: Path) -> int:
-    _total = 0
-    with path.open("r", encoding="utf-8", errors="replace", newline="") as fh:
-        for _total, _line in enumerate(fh, start=1):
-            pass
-    return _total
+def _physical_line_chunks(handle: BinaryIO) -> Iterator[tuple[bytes, bool]]:
+    """Yield bounded byte fragments and physical line endings, without joining long lines."""
+    pending_cr = b""
+    in_line = False
+    while chunk := handle.read(_READ_CHUNK_BYTES):
+        data = pending_cr + chunk
+        pending_cr = b""
+        if data.endswith(b"\r"):
+            # Keep CRLF atomic even when it crosses a read boundary.
+            pending_cr, data = b"\r", data[:-1]
+        offset = 0
+        for boundary in _PHYSICAL_NEWLINES.finditer(data):
+            yield data[offset : boundary.end()], True
+            in_line = False
+            offset = boundary.end()
+        if offset < len(data):
+            yield data[offset:], False
+            in_line = True
+    if pending_cr:
+        yield pending_cr, True
+    elif in_line:
+        # Finalize the UTF-8 decoder and the unterminated last line at EOF.
+        yield b"", True
+
+
+def _head_line_metadata(text: str) -> tuple[int, bool]:
+    count = sum(1 for _line in io.StringIO(text, newline=""))
+    # A trailing CR may be the first half of CRLF; repeat that line safely.
+    return count, not text.endswith("\n")
 
 
 def _truncated_line_ranges(
     *,
     start_line: int,
     end_line: int,
-    total_lines: int,
+    total_lines: int | None,
     next_max_lines: int,
+    line_clipped: bool = False,
+    requested_end_line: int | None = None,
 ) -> dict[str, Any]:
-    next_start = end_line + 1
+    # A clipped line has not been read in full. Keep it in the continuation
+    # instead of silently skipping its unseen suffix.
+    next_start = max(start_line, end_line if line_clipped else end_line + 1)
     next_range = None
-    if next_start <= total_lines:
+    last_requested = next_start + max(1, next_max_lines) - 1
+    if total_lines is not None:
+        last_requested = min(last_requested, total_lines)
+    if requested_end_line is not None:
+        last_requested = min(last_requested, requested_end_line)
+    if next_start <= last_requested:
         next_range = {
             "start_line": next_start,
-            "end_line": min(total_lines, next_start + max(1, next_max_lines) - 1),
+            "end_line": min(last_requested, next_start + max(1, next_max_lines) - 1),
         }
     return {
         "total_lines": total_lines,
@@ -316,13 +350,44 @@ def _truncated_line_ranges(
     }
 
 
+def fs_read_uses_line_range(arguments: dict[str, Any]) -> bool:
+    """An explicit line option selects the bounded, optionally numbered view."""
+    return any(
+        arguments.get(key) is not None
+        for key in ("start_line", "end_line", "max_lines", "include_line_numbers")
+    )
+
+
 def fs_read(
     *,
     root: Path,
     path: str,
     max_bytes: int = _DEFAULT_FS_READ_MAX_BYTES,
     allow_derived: bool = False,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    max_lines: int | None = None,
+    include_line_numbers: bool | None = None,
 ) -> dict[str, Any]:
+    if max_bytes < 1:
+        raise FsError(f"Invalid max_bytes: {max_bytes} (must be >= 1)")
+    if fs_read_uses_line_range(
+        {
+            "start_line": start_line,
+            "end_line": end_line,
+            "max_lines": max_lines,
+            "include_line_numbers": include_line_numbers,
+        }
+    ):
+        return _read_line_window(
+            root=root,
+            path=path,
+            start_line=1 if start_line is None else start_line,
+            end_line=end_line,
+            max_lines=_DEFAULT_READ_WINDOW_MAX_LINES if max_lines is None else max_lines,
+            include_line_numbers=True if include_line_numbers is None else include_line_numbers,
+            max_bytes=max_bytes,
+        )
     p = _resolve_under_root(root, path)
     if not p.exists():
         raise FsError(f"Not found: {path}")
@@ -342,9 +407,7 @@ def fs_read(
                 with p.open("rb") as fh:
                     head = fh.read(min(_DERIVED_ARTIFACT_HEAD_BYTES, max(0, max_bytes)))
                 content = head.decode("utf-8", errors="ignore")
-                returned_end_line = content.count("\n")
-                if content and not content.endswith("\n"):
-                    returned_end_line += 1
+                returned_end_line, line_clipped = _head_line_metadata(content)
                 # ``truncated`` is always True for a stub so downstream caches
                 # never treat the head sample as the complete file content.
                 result = {
@@ -358,14 +421,15 @@ def fs_read(
                     "size_bytes": size_bytes,
                     "note": _DERIVED_ARTIFACT_NOTE,
                 }
-                if content and not content.endswith("\n"):
+                if line_clipped:
                     result["line_clipped"] = True
                 result.update(
                     _truncated_line_ranges(
                         start_line=1,
                         end_line=returned_end_line,
-                        total_lines=_count_text_lines(p),
-                        next_max_lines=_DEFAULT_READ_LINES_MAX_LINES,
+                        total_lines=None,
+                        next_max_lines=_DEFAULT_READ_WINDOW_MAX_LINES,
+                        line_clipped=bool(result.get("line_clipped")),
                     )
                 )
                 return result
@@ -377,6 +441,11 @@ def fs_read(
     if truncated:
         data = data[:max_bytes]
     text = data.decode("utf-8", errors="replace")
+    # Replacement glyphs and a split multibyte character must not expand the
+    # returned UTF-8 text past the advertised byte ceiling.
+    encoded_text = text.encode("utf-8")
+    truncated = truncated or len(encoded_text) > max_bytes
+    text = encoded_text[:max_bytes].decode("utf-8", errors="ignore")
     result = {
         "path": path,
         "content": text,
@@ -385,31 +454,34 @@ def fs_read(
         "max_bytes": max_bytes,
     }
     if truncated:
-        if text and not text.endswith("\n"):
+        returned_end_line, line_clipped = _head_line_metadata(text)
+        if line_clipped:
             result["line_clipped"] = True
-        returned_end_line = text.count("\n")
-        if text and not text.endswith("\n"):
-            returned_end_line += 1
+            result["note"] = (
+                "Byte ceiling cut a line. next_range includes that line; increase "
+                "max_bytes if a window read cannot return it completely."
+            )
         result.update(
             _truncated_line_ranges(
                 start_line=1,
                 end_line=returned_end_line,
-                total_lines=_count_text_lines(p),
-                next_max_lines=_DEFAULT_READ_LINES_MAX_LINES,
+                total_lines=None,
+                next_max_lines=_DEFAULT_READ_WINDOW_MAX_LINES,
+                line_clipped=bool(result.get("line_clipped")),
             )
         )
     return result
 
 
-def fs_read_lines(
+def _read_line_window(
     *,
     root: Path,
     path: str,
     start_line: int,
     end_line: int | None = None,
-    max_lines: int = _DEFAULT_READ_LINES_MAX_LINES,
+    max_lines: int = _DEFAULT_READ_WINDOW_MAX_LINES,
     include_line_numbers: bool = True,
-    max_bytes: int = _DEFAULT_READ_LINES_MAX_BYTES,
+    max_bytes: int,
 ) -> dict[str, Any]:
     if start_line < 1:
         raise FsError(f"Invalid start_line: {start_line} (must be >= 1)")
@@ -436,53 +508,57 @@ def fs_read_lines(
     content_lines: list[str] = []
     actual_end_line = start_line - 1
     total_lines: int | None = None
-    lines_seen = 0
+    lineno = 1
     truncated = False
     bytes_used = 0
     byte_truncated = False
     line_clipped = False
+    line_buffer = bytearray()
+    decoder = None
 
-    # Stream forward to the requested window and only report total_lines when
-    # we naturally reach EOF, so focused range reads stay cheap on large files.
-    # A byte ceiling bounds the result even when individual lines are enormous
-    # (minified bundles, generated single-line files) so one line can never
-    # flood the caller's context.
-    with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
-        for lineno, raw_line in enumerate(fh, start=1):
-            lines_seen = lineno
-            if lineno < start_line:
-                continue
+    # Locating a later line still scans its prefix, but skipped and minified
+    # lines never grow memory beyond a chunk. Selected lines are accumulated
+    # only up to the remaining output budget. At most one chunk is read ahead.
+    with p.open("rb") as fh:
+        for fragment, ends_line in _physical_line_chunks(fh):
             if lineno > effective_end_line:
                 truncated = requested_end_line is None or lineno <= requested_end_line
                 break
-
-            piece = f"{lineno}: {raw_line}" if include_line_numbers else raw_line
-            piece_bytes = len(piece.encode("utf-8"))
-            if bytes_used + piece_bytes > max_bytes:
+            if lineno < start_line:
+                if ends_line:
+                    lineno += 1
+                continue
+            if decoder is None:
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                if include_line_numbers:
+                    line_buffer.extend(f"{lineno}: ".encode())
+            decoded = decoder.decode(fragment, final=ends_line).encode("utf-8")
+            remaining = max_bytes - bytes_used
+            if len(line_buffer) + len(decoded) > remaining:
                 if not content_lines:
-                    # Even the first requested line exceeds the ceiling: return
-                    # a clipped head of it rather than nothing. Drop any partial
-                    # trailing character instead of decoding it with a
-                    # replacement glyph, so the clipped text never re-encodes to
-                    # more than the advertised max_bytes.
-                    clipped = piece.encode("utf-8")[:max_bytes]
-                    content_lines.append(clipped.decode("utf-8", errors="ignore"))
+                    # Keep a clipped first line visible, but do not claim its
+                    # unseen suffix in the read ledger or skip it on resume.
+                    line_buffer.extend(decoded[: max(0, remaining - len(line_buffer))])
+                    content_lines.append(bytes(line_buffer[:remaining]).decode("utf-8", "ignore"))
                     actual_end_line = lineno
                     line_clipped = True
-                byte_truncated = True
-                truncated = True
+                byte_truncated = truncated = True
                 break
-            bytes_used += piece_bytes
-            actual_end_line = lineno
-            content_lines.append(piece)
+            line_buffer.extend(decoded)
+            if ends_line:
+                content_lines.append(line_buffer.decode("utf-8"))
+                bytes_used += len(line_buffer)
+                actual_end_line = lineno
+                lineno += 1
+                line_buffer.clear()
+                decoder = None
         else:
-            total_lines = lines_seen
+            total_lines = lineno - 1
 
-    if lines_seen < start_line:
-        raise FsError(f"Start line {start_line} is beyond end of file ({lines_seen} lines): {path}")
-
-    if truncated and total_lines is None:
-        total_lines = _count_text_lines(p)
+    if total_lines is not None and total_lines < start_line:
+        raise FsError(
+            f"Start line {start_line} is beyond end of file ({total_lines} lines): {path}"
+        )
 
     result: dict[str, Any] = {
         "path": path,
@@ -507,8 +583,10 @@ def fs_read_lines(
             _truncated_line_ranges(
                 start_line=start_line,
                 end_line=actual_end_line,
-                total_lines=int(total_lines or 0),
+                total_lines=total_lines,
                 next_max_lines=max_lines,
+                line_clipped=line_clipped,
+                requested_end_line=requested_end_line,
             )
         )
     return result
@@ -1262,6 +1340,8 @@ def _find_git_marker_root(path: Path, *, boundary: Path) -> Path | None:
 
 
 def _git_repo_root(root: Path, *, boundary: Path) -> Path | None:
+    from ..git_safe import build_git_process_env
+
     marker_root = _find_git_marker_root(root, boundary=boundary)
     if marker_root is None:
         return None
@@ -1270,7 +1350,6 @@ def _git_repo_root(root: Path, *, boundary: Path) -> Path | None:
             ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
             check=False,
             capture_output=True,
-            text=True,
             env=build_git_process_env(),
             timeout=_GIT_PROBE_TIMEOUT_S,
         )
@@ -1278,7 +1357,7 @@ def _git_repo_root(root: Path, *, boundary: Path) -> Path | None:
         return None
     if cp.returncode != 0:
         return None
-    raw_root = cp.stdout.strip()
+    raw_root = os.fsdecode(cp.stdout.removesuffix(b"\n"))
     if not raw_root:
         return marker_root
     try:
@@ -1289,30 +1368,43 @@ def _git_repo_root(root: Path, *, boundary: Path) -> Path | None:
     return repo_root
 
 
-def _git_check_ignored(repo_root: Path, rel_paths: list[str]) -> set[str]:
+def _git_check_ignored(
+    repo_root: Path,
+    rel_paths: list[str],
+    *,
+    evidence_sources: set[str] | None = None,
+) -> set[str]:
+    from ..git_safe import build_git_process_env
+
     if not rel_paths:
         return set()
     try:
         cp = subprocess.run(
-            ["git", "-C", str(repo_root), "check-ignore", "--stdin"],
-            input="\n".join(rel_paths) + "\n",
+            ["git", "-C", str(repo_root), "check-ignore", "--stdin", "-z"],
+            input=b"\0".join(os.fsencode(path) for path in rel_paths) + b"\0",
             check=False,
             capture_output=True,
-            text=True,
             env=build_git_process_env(),
             timeout=_GIT_PROBE_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return set()
-    if cp.returncode not in (0, 1):  # 1 means "no matches"
+        cp = None
+    if cp is None or cp.returncode not in (0, 1):
+        if evidence_sources is not None:
+            evidence_sources.add("approximate_root_gitignore_fallback")
         return _fallback_gitignore_ignored_untracked(repo_root, rel_paths)
-    ignored = {Path(line.strip()).as_posix() for line in cp.stdout.splitlines() if line.strip()}
-    if not ignored:
-        ignored = _fallback_gitignore_ignored_untracked(repo_root, rel_paths)
-    return ignored
+    if evidence_sources is not None:
+        evidence_sources.add("git_check_ignore")
+    # Exit 1 is definitive negative evidence. The approximate fallback must
+    # never override Git's own matching semantics, including nested paths.
+    if cp.returncode == 1:
+        return set()
+    return {Path(os.fsdecode(path)).as_posix() for path in cp.stdout.split(b"\0") if path}
 
 
 def _git_tracked_paths(repo_root: Path, rel_paths: list[str]) -> set[str]:
+    from ..git_safe import build_git_process_env
+
     if not rel_paths:
         return set()
     try:
@@ -1320,7 +1412,6 @@ def _git_tracked_paths(repo_root: Path, rel_paths: list[str]) -> set[str]:
             ["git", "-C", str(repo_root), "ls-files", "-z", "--", *rel_paths],
             check=False,
             capture_output=True,
-            text=True,
             env=build_git_process_env(),
             timeout=_GIT_PROBE_TIMEOUT_S,
         )
@@ -1328,7 +1419,7 @@ def _git_tracked_paths(repo_root: Path, rel_paths: list[str]) -> set[str]:
         return set()
     if cp.returncode != 0:
         return set()
-    return {Path(item).as_posix() for item in cp.stdout.split("\0") if item}
+    return {Path(os.fsdecode(item)).as_posix() for item in cp.stdout.split(b"\0") if item}
 
 
 def _fallback_gitignore_ignored_untracked(repo_root: Path, rel_paths: list[str]) -> set[str]:
@@ -1383,6 +1474,8 @@ def fs_list(
 
     repo_root = _git_repo_root(base, boundary=root)
     entries: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    gitignore_evidence_sources: set[str] = set()
     truncated = False
     batch_size = max(256, max_results or 0)
     pending: list[tuple[Path, str, str | None]] = []
@@ -1392,16 +1485,21 @@ def fs_list(
         ignored_by_git: set[str] = set()
         if repo_root:
             rels = [rel_git for _, _, rel_git in pending if rel_git]
-            ignored_by_git = _git_check_ignored(repo_root, rels)
+            ignored_by_git = _git_check_ignored(
+                repo_root, rels, evidence_sources=gitignore_evidence_sources
+            )
 
         # Count visibility after gitignore filtering so returned entries fill the
         # visible result window and `truncated` only reflects hidden extra visible files.
         for path_obj, rel, rel_git in pending:
             if rel_git and rel_git in ignored_by_git:
                 continue
+            if rel in seen_paths:
+                continue
             if len(entries) >= max_results:
                 truncated = True
                 return True
+            seen_paths.add(rel)
             try:
                 size = path_obj.stat().st_size
             except OSError:
@@ -1412,6 +1510,17 @@ def fs_list(
     for pat in patterns:
         for p in base.glob(pat):
             rel_path = p.relative_to(base)
+            try:
+                resolved_path = p.resolve()
+                resolved_rel = resolved_path.relative_to(base)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            # Glob traversal and symlink targets must obey the same selected-root
+            # boundary. Preserve ordinary symlink names; canonicalize traversal
+            # aliases so their reported names remain usable and count only once.
+            if os.pardir in rel_path.parts:
+                p = resolved_path
+                rel_path = resolved_rel
             rel_parts = rel_path.parts
             if set(rel_parts) & _DEFAULT_IGNORE_DIRS:
                 continue
@@ -1453,4 +1562,30 @@ def fs_list(
         "truncated": truncated,
         "returned_count": len(entries),
         "max_results": max_results,
+        "scope": {
+            "globs": list(patterns),
+            "entry_kind": "files",
+            "path_boundary": "resolved targets stay within root_path",
+            "ignored_path_components": sorted(ignore_set),
+            "default_ignored_path_components": sorted(_DEFAULT_IGNORE_DIRS),
+            "gitignore": {
+                "policy": "best_effort",
+                "git_repository_resolved": repo_root is not None,
+                "evidence_sources": sorted(gitignore_evidence_sources),
+                **(
+                    {
+                        "limitation": (
+                            "Git evidence was unavailable; the root .gitignore fallback is "
+                            "approximate and does not implement all directory/nested rules."
+                        )
+                    }
+                    if "approximate_root_gitignore_fallback" in gitignore_evidence_sources
+                    else {}
+                ),
+            },
+            "completeness": (
+                "truncated applies only to matching files after these exclusions; "
+                "it does not establish repository-wide absence."
+            ),
+        },
     }

@@ -1,0 +1,3604 @@
+/*
+ * Chat shell, prompt, and disclosure layout adapted from Kilo Code (MIT),
+ * commit 28bc6b0e06cca3a02c280a2ba060f50d69a5e6e7.
+ * Copyright (c) 2026 Kilo Code; Copyright (c) 2025 opencode.
+ * Modified for Alysis Code's host contracts, personas and explicit permissions.
+ * See THIRD_PARTY_NOTICES.txt for the full license and source paths.
+ *
+ * MIT License
+ *
+ * Copyright (c) 2026 Kilo Code
+ * Copyright (c) 2025 opencode
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+:root {
+  color-scheme: light dark;
+  /* Legacy accent names retained for secondary surfaces; all follow the active VS Code theme. */
+  --alysis-green: var(--vscode-button-background, #0078d4);
+  --alysis-green-strong: var(--vscode-button-hoverBackground, #026ec1);
+  --alysis-green-soft: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 10%, transparent);
+  --alysis-green-line: var(--vscode-focusBorder, #0078d4);
+  --alysis-link: var(--vscode-textLink-foreground, var(--vscode-foreground));
+  --alysis-success: var(--vscode-testing-iconPassed, var(--vscode-foreground));
+  --alysis-border: var(--vscode-contrastBorder, var(--vscode-widget-border, rgba(127, 127, 127, 0.28)));
+  --alysis-subtle-border: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  --alysis-surface: var(--vscode-input-background, rgba(127, 127, 127, 0.08));
+  --alysis-hover: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.1));
+  --alysis-muted: var(--vscode-descriptionForeground);
+  --alysis-on-green: var(--vscode-button-foreground, #ffffff);
+  --alysis-chat-gutter: max(14px, calc((100% - 720px) / 2));
+  --alysis-font-caption: max(11px, calc(var(--vscode-font-size, 13px) - 2px));
+  --alysis-font-small: max(12px, calc(var(--vscode-font-size, 13px) - 1px));
+  --alysis-font-body: max(13px, var(--vscode-font-size, 13px));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  font-family: var(--vscode-font-family);
+  font-size: max(12px, var(--vscode-font-size));
+  line-height: 1.45;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--alysis-green));
+  outline-offset: 1px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.agent-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  container-type: inline-size;
+}
+
+/* Portable hosts use this toolbar; VS Code and Cursor already provide native navigation. */
+.sidebar-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--vscode-sideBar-border, var(--alysis-subtle-border));
+}
+
+.sidebar-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: var(--alysis-font-body);
+  font-weight: 600;
+}
+
+.sidebar-home img { width: 16px; height: 16px; object-fit: contain; }
+.sidebar-home span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-home:hover { background: var(--alysis-hover); }
+.sidebar-top-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; }
+.sidebar-top-actions .icon-button { width: 26px; height: 28px; }
+.sidebar-top-actions [aria-current="page"] { background: var(--alysis-hover); color: var(--vscode-foreground); }
+
+@container (max-width: 285px) {
+  .sidebar-home span { display: none; }
+  .sidebar-top-bar { gap: 2px; }
+}
+
+.surface-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.surface,
+.task-surface {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.task-surface {
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-scroll {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 28px var(--alysis-chat-gutter) 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.welcome-hero {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  flex: 0 0 auto;
+  text-align: center;
+  margin: auto 0 0;
+}
+
+.welcome-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  margin-bottom: 10px;
+}
+
+.welcome-mark img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.welcome-hero h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+}
+
+.recent-block {
+  width: 100%;
+  max-width: 420px;
+  flex: 0 0 auto;
+  margin: 22px auto 0;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-body);
+  font-weight: 500;
+}
+
+.quiet-link {
+  padding: 3px 0 3px 8px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.quiet-link:hover {
+  color: var(--vscode-foreground);
+}
+
+.recent-cards,
+.history-list {
+  display: grid;
+  gap: 2px;
+}
+
+.task-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.task-card:hover {
+  border-color: var(--alysis-border);
+  background: var(--alysis-hover);
+}
+
+.task-card.current {
+  background: var(--alysis-hover);
+  border-color: var(--alysis-subtle-border);
+}
+
+.task-title {
+  grid-column: 1;
+  overflow: hidden;
+  font-size: 1em;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-detail {
+  grid-column: 1;
+  overflow: hidden;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-action {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  color: var(--alysis-link);
+  font-size: var(--alysis-font-small);
+}
+
+.starter-prompts {
+  display: grid;
+  width: 100%;
+  max-width: 420px;
+  gap: 2px;
+  margin: 18px auto 0;
+  flex: 0 0 auto;
+}
+
+.starter-prompts button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.starter-prompts button:hover {
+  color: var(--vscode-foreground);
+  background: var(--alysis-hover);
+}
+
+.conversation {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-items {
+  height: 100%;
+  padding: 14px var(--alysis-chat-gutter) 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  cursor: text;
+}
+
+.conversation-item {
+  min-width: 0;
+}
+
+.message {
+  margin: 0 0 16px;
+}
+
+.message.user {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, color-mix(in srgb, var(--vscode-foreground) 5%, var(--vscode-sideBar-background)));
+}
+
+/* Sent but not yet confirmed by the engine: visibly in flight, not lost. */
+.message.user.pending {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.message.assistant {
+  padding-right: 2px;
+}
+
+.message.status,
+.message.info,
+.message.notice {
+  padding: 8px 0 8px 10px;
+  border-left: 1px solid var(--alysis-border);
+  color: var(--alysis-muted);
+}
+
+.message.warning,
+.message.error,
+.message.approval {
+  padding: 10px 11px;
+  border: 1px solid var(--alysis-border);
+  border-left: 2px solid var(--vscode-errorForeground, #f85149);
+  border-radius: 5px;
+  background: var(--alysis-surface);
+}
+
+.message.approval {
+  border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground) 40%, var(--alysis-border));
+  border-radius: 4px;
+}
+
+/* A warning is a note, not a failure: yellow accent, muted text. */
+.message.warning {
+  border-left-color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.message.warning .message-author {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.message.warning .message-body {
+  color: var(--alysis-muted);
+}
+
+.message-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.message-author {
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+  font-weight: 650;
+}
+
+.message.assistant .message-author {
+  color: var(--vscode-foreground);
+}
+
+.message .assistant-label { margin-bottom: 5px; }
+.message.assistant .assistant-label .message-author { color: var(--alysis-muted); font-size: var(--alysis-font-small); font-weight: 500; }
+.message.user .message-body { line-height: 1.5; }
+
+.message-status {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.message-body {
+  overflow-wrap: anywhere;
+  font-size: 1em;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.message-body p {
+  margin: 0 0 9px;
+  white-space: pre-wrap;
+}
+
+.message-body p:last-child,
+.message-body ul:last-child,
+.message-body pre:last-child {
+  margin-bottom: 0;
+}
+
+.message-body ul {
+  margin: 5px 0 10px;
+  padding-left: 20px;
+}
+
+.message-body li + li {
+  margin-top: 3px;
+}
+
+.message-body h3,
+.message-body h4,
+.message-body h5 {
+  margin: 12px 0 5px;
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-body);
+  font-weight: 650;
+}
+
+.message-body code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.94em;
+}
+
+.message-body pre,
+.work-step-technical pre {
+  max-height: 240px;
+  margin: 2px 0 6px;
+  padding: 8px;
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+  overscroll-behavior: contain;
+}
+
+.message-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.work-progress {
+  margin: 0 0 12px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-body);
+}
+
+details.work-progress {
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.work-progress > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 4px;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.work-progress > summary::-webkit-details-marker,
+.work-step-technical > summary::-webkit-details-marker {
+  display: none;
+}
+
+.work-progress > summary:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.work-progress[open] > summary {
+  color: var(--vscode-foreground);
+}
+
+.work-progress > summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+  border-radius: 3px;
+}
+
+.work-progress-marker {
+  position: relative;
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.work-progress.running .work-progress-marker::after {
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  border-radius: 50%;
+  content: "";
+  animation: work-indicator-spin 1.2s linear infinite;
+}
+
+@keyframes work-indicator-spin {
+  to { transform: rotate(360deg); }
+}
+
+.work-progress.failed .work-progress-marker {
+  border-color: color-mix(in srgb, var(--vscode-errorForeground, #f85149) 45%, transparent);
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.work-progress-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.work-progress-title {
+  overflow: hidden;
+  color: inherit;
+  font-size: var(--alysis-font-body);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-progress-count {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  white-space: nowrap;
+}
+
+.work-progress-marker,
+.work-progress-chevron,
+.work-progress-count { flex: 0 0 auto; }
+.work-progress-chevron { width: 12px; height: 12px; opacity: 0.6; }
+.work-progress > summary:hover .work-progress-chevron { opacity: 1; }
+
+.work-progress-chevron {
+  color: var(--alysis-muted);
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+  transition: transform 120ms ease;
+}
+
+.work-progress[open] > summary .work-progress-chevron {
+  transform: rotate(90deg);
+}
+
+.work-progress-thinking {
+  display: flex;
+  min-height: 30px;
+  padding: 5px 4px;
+  border: 1px solid transparent;
+  align-items: center;
+  gap: 7px;
+}
+
+.work-progress-steps {
+  margin: 2px 0 4px 12px;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--alysis-subtle-border);
+  list-style: none;
+}
+
+.work-step {
+  min-width: 0;
+  padding: 0;
+}
+
+.work-step + .work-step {
+  margin-top: 2px;
+}
+
+.work-step-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.work-step-main:hover { background: var(--alysis-hover); }
+.work-step-glyph { flex: 0 0 14px; }
+.work-step-status { flex: 0 0 auto; margin-left: auto; }
+.work-step-chevron { flex: 0 0 12px; width: 12px; height: 12px; opacity: 0.55; }
+.work-step-technical[open] .work-step-chevron { transform: rotate(90deg); }
+.work-step-technical > summary:focus-visible { outline-offset: -1px; }
+
+.work-step-glyph {
+  color: var(--alysis-link);
+  font-weight: 700;
+  text-align: center;
+}
+
+.work-step.running .work-step-glyph::after {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.work-step.failed .work-step-glyph {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.work-step-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-step-status,
+.work-step-context {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.work-step-context {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-step-technical {
+  margin: 0;
+}
+
+.work-step-technical > summary {
+  width: 100%;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  list-style: none;
+}
+
+.work-step-technical > summary:hover {
+  color: var(--vscode-foreground);
+}
+
+.work-step-technical pre {
+  margin: 6px 0 2px;
+  padding: 8px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* Approval card: the question in the title, the evidence as code, the answer as buttons. */
+.approval-card .message-header {
+  align-items: center;
+}
+
+.approval-card .approval-icon {
+  margin-right: 6px;
+  vertical-align: -3px;
+  color: var(--alysis-link);
+}
+
+.approval-card.declined .approval-icon {
+  color: var(--alysis-muted);
+}
+
+.approval-card.resolved {
+  border-left-color: var(--alysis-border);
+  opacity: 0.85;
+}
+
+.approval-card.resolved .message-author {
+  color: var(--alysis-muted);
+  font-weight: 600;
+}
+
+.approval-expiry {
+  flex: 0 0 auto;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.approval-reason {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.approval-card .code-block,
+.approval-card .diff-block {
+  margin: 6px 0 4px;
+}
+
+.approval-card.pending .diff-pre,
+.approval-card.pending .code-block pre {
+  max-height: min(260px, 34vh);
+  overscroll-behavior: contain;
+}
+
+.approval-card.pending .approval-actions {
+  padding-top: 8px;
+  border-top: 1px solid var(--alysis-subtle-border);
+}
+
+.approval-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.approval-files-more {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.approval-warning {
+  display: block;
+  margin-top: 8px;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+  font-size: 10.5px;
+}
+
+.diff-block {
+  overflow: hidden;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+}
+
+.diff-pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 6px 0;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: max(10.5px, calc(var(--vscode-editor-font-size, 13px) - 2px));
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+.diff-line {
+  display: block;
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-line.diff-add {
+  background: var(--vscode-diffEditor-insertedLineBackground, rgba(63, 185, 80, 0.16));
+}
+
+.diff-line.diff-del {
+  background: var(--vscode-diffEditor-removedLineBackground, rgba(248, 81, 73, 0.16));
+}
+
+.diff-line.diff-hunk {
+  color: var(--vscode-descriptionForeground, var(--alysis-muted));
+}
+
+.diff-line.diff-file {
+  color: var(--alysis-muted);
+}
+
+.approval-button {
+  padding: 5px 9px;
+  border: 1px solid var(--alysis-green);
+  border-radius: 4px;
+  background: var(--alysis-green);
+  color: var(--alysis-on-green);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+}
+
+.approval-button.secondary {
+  border-color: var(--alysis-border);
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+.task-composer {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 6px var(--alysis-chat-gutter) 6px;
+  background: var(--vscode-sideBar-background);
+}
+
+.secondary-open .task-composer {
+  display: none;
+}
+
+.permission-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.permission-strip:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+}
+
+.permission-strip.auto {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+.permission-strip:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
+#permissionLabel {
+  color: inherit;
+  font-size: var(--alysis-font-small);
+  font-weight: 550;
+}
+
+.permission-detail {
+  overflow: hidden;
+  font-size: var(--alysis-font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-box {
+  border: 1px solid var(--vscode-input-border, var(--alysis-border));
+  border-radius: 8px;
+  background: var(--vscode-input-background);
+  transition: border-color 100ms ease;
+}
+
+.composer-box:focus-within {
+  border-color: var(--vscode-focusBorder);
+  box-shadow: none;
+}
+
+.composer-input {
+  position: relative;
+}
+
+#taskInput {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  max-height: min(160px, 28vh);
+  resize: none;
+  padding: 8px 10px;
+  overflow-y: auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--vscode-input-foreground);
+  font-size: 1em;
+  line-height: 1.5;
+}
+
+#taskInput::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.composer-actions {
+  display: flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.send-task {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+}
+
+.send-task:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.send-task:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.send-task:disabled {
+  background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
+  color: var(--alysis-muted);
+  cursor: default;
+}
+
+.composer-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 5px 5px;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.composer-tools .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.composer-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  line-height: 16px;
+  padding: 4px;
+}
+
+.send-task > span:not(.sr-only) { display: flex; }
+.queue-task > .sr-only {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  clip: auto !important;
+  overflow: visible !important;
+  font-size: var(--alysis-font-caption);
+}
+.composer-actions > .queue-task { width: auto; gap: 3px; padding-inline: 5px; }
+.queue-task .sy-icon { width: 12px; height: 12px; }
+.composer-box .image-basket { max-height: 96px; overflow: auto; padding: 6px 8px 0; margin: 0; }
+.model-button:hover { background: var(--alysis-hover); }
+.model-button:disabled { cursor: default; opacity: 0.55; }
+.model-caret .sy-icon { width: 12px; height: 12px; }
+#permissionLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.permission-strip > [data-icon] { flex: 0 0 auto; display: flex; }
+.permission-strip .sy-icon { width: 13px; height: 13px; }
+
+.icon-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.icon-button:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.slash-button {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.model-button {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 3px 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.model-button[aria-expanded="true"] {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.model-caret {
+  flex: 0 0 auto;
+  font-size: 8px;
+  opacity: 0.75;
+}
+
+.model-button:hover {
+  color: var(--vscode-foreground);
+}
+
+#modelLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The persona control shares the model-button anatomy but never crowds the model chip out. */
+.persona-button {
+  flex: 0 1 auto;
+}
+
+.persona-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+#personaLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Active-persona status chip: theme tokens only, same quiet scale as the composer chips. */
+.persona-chip {
+  flex: 0 1 auto;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 999px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: var(--alysis-font-caption);
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sits beside Send while a task runs; the square glyph is the universal "stop". */
+.stop-task {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+}
+
+.stop-task .stop-glyph {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+.stop-task:hover:not(:disabled) {
+  border-color: var(--vscode-errorForeground, #f85149);
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.stop-task:disabled {
+  color: var(--alysis-muted);
+  cursor: default;
+}
+
+.secondary-surface {
+  padding: 16px max(14px, calc((100% - 640px) / 2)) 24px;
+  overflow-y: auto;
+}
+
+.surface-header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.surface-header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.surface-header p {
+  margin: 2px 0 0;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.back-button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+}
+
+.back-button:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.history-list {
+  padding-bottom: 12px;
+}
+
+.empty-history {
+  padding: 28px 12px;
+  border: 1px dashed var(--alysis-border);
+  border-radius: 5px;
+  text-align: center;
+}
+
+.empty-title,
+.empty-detail {
+  display: block;
+}
+
+.empty-title {
+  font-weight: 600;
+}
+
+.empty-detail {
+  margin-top: 4px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.settings-groups {
+  display: grid;
+  gap: 19px;
+}
+
+.settings-group h2 {
+  margin: 0 0 6px 2px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.settings-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 9px;
+  border-top: 1px solid var(--alysis-subtle-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-row:last-child {
+  border-bottom: 1px solid var(--alysis-subtle-border);
+}
+
+.settings-row:hover {
+  background: var(--alysis-hover);
+}
+
+.settings-row strong,
+.settings-row small {
+  display: block;
+}
+
+.settings-row strong {
+  font-size: var(--alysis-font-body);
+  font-weight: 550;
+}
+
+.settings-row small {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.5;
+}
+
+.settings-row.ready::before,
+.settings-row.attention::before,
+.settings-row.neutral::before {
+  position: absolute;
+  top: 16px;
+  left: 0;
+  width: 4px;
+  height: 4px;
+  border: 1px solid var(--alysis-muted);
+  border-radius: 50%;
+  content: "";
+}
+
+.settings-row.ready::before {
+  border-color: var(--alysis-green);
+  background: var(--alysis-green);
+}
+
+.settings-row.attention::before {
+  border-color: var(--alysis-green);
+}
+
+.surface-heading-copy {
+  min-width: 0;
+}
+
+.forge-header,
+.browser-header {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  margin-bottom: 14px;
+}
+
+.header-action {
+  align-self: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.header-action:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.forge-surface {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.forge-empty {
+  overflow-y: auto;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: center;
+  flex-direction: column;
+  justify-content: safe center;
+  padding: 20px 8px 32px;
+  text-align: center;
+}
+
+.forge-logo {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  margin-bottom: 16px;
+}
+
+.forge-logo img {
+  display: block;
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  image-rendering: pixelated;
+
+}
+
+.forge-empty h2 {
+  max-width: 290px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.forge-empty p {
+  max-width: 330px;
+  margin: 8px 0 17px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.55;
+}
+
+.primary-action,
+.secondary-action {
+  width: min(100%, 280px);
+  padding: 7px 10px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.primary-action {
+  border-color: var(--alysis-green);
+  background: var(--alysis-green);
+  color: var(--alysis-on-green);
+  font-weight: 600;
+}
+
+.secondary-action {
+  margin-top: 6px;
+  background: transparent;
+  color: var(--alysis-muted);
+}
+
+.secondary-action:hover,
+.primary-action:hover {
+  filter: brightness(1.06);
+}
+
+.secondary-action.wide {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.forge-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 12px;
+}
+
+.forge-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--alysis-surface) 70%, transparent);
+}
+
+.forge-summary.planning {
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: start;
+}
+
+.forge-live-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--alysis-green);
+  animation: soft-pulse 1.25s ease-in-out infinite;
+}
+
+.forge-kicker,
+.forge-goal,
+.forge-summary-text,
+.forge-warning-count,
+.forge-ready {
+  display: block;
+}
+
+.forge-kicker {
+  margin-bottom: 4px;
+  color: var(--alysis-link);
+  font-size: var(--alysis-font-caption);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.forge-goal {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.forge-summary-text {
+  margin-top: 5px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.5;
+}
+
+.forge-warning-count,
+.forge-ready {
+  margin-top: 7px;
+  font-size: var(--alysis-font-caption);
+}
+
+.forge-warning-count { color: var(--vscode-errorForeground, #f85149); }
+.forge-ready { color: var(--alysis-link); }
+
+.forge-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0 12px;
+}
+
+.forge-primary-actions button,
+.forge-card-actions button {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: var(--alysis-font-caption);
+}
+
+.forge-primary-actions button:hover:not(:disabled),
+.forge-card-actions button:hover:not(:disabled) {
+  border-color: var(--alysis-green-line);
+  background: var(--alysis-hover);
+}
+
+.forge-primary-actions button.accent {
+  border-color: var(--alysis-green);
+  background: var(--alysis-green);
+  color: var(--alysis-on-green);
+  font-weight: 600;
+}
+
+.forge-primary-actions button:disabled,
+.forge-card-actions button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.forge-tabs {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+}
+
+.forge-tabs button {
+  flex: 1 0 auto;
+  padding: 7px 5px 6px;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-caption);
+}
+
+.forge-tabs button.selected {
+  border-bottom-color: var(--alysis-green);
+  color: var(--vscode-foreground);
+}
+
+.forge-tabs span { color: var(--alysis-link); }
+
+.forge-tab-panel { padding: 10px 0 20px; }
+
+.subsection-label {
+  margin: 12px 2px 6px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.forge-tab-panel > .subsection-label:first-child,
+.activity-feed > .subsection-label:first-child { margin-top: 0; }
+
+.forge-task-card,
+.forge-card,
+.forge-notice,
+.activity-result {
+  margin-bottom: 7px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--alysis-surface) 58%, transparent);
+}
+
+.forge-task-card summary,
+.activity-result summary {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 37px;
+  padding: 7px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.forge-task-card summary::-webkit-details-marker,
+.activity-result summary::-webkit-details-marker { display: none; }
+
+.forge-task-card[open] summary,
+.activity-result[open] summary { border-bottom: 1px solid var(--alysis-subtle-border); }
+
+.forge-task-state,
+.activity-glyph { color: var(--alysis-muted); text-align: center; }
+
+.forge-task-state.complete,
+.forge-task-state.completed,
+.activity-result.ok .activity-glyph { color: var(--alysis-link); }
+
+.forge-task-state.failed,
+.forge-task-state.error,
+.activity-result.error .activity-glyph { color: var(--vscode-errorForeground, #f85149); }
+
+.forge-task-title,
+.activity-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--alysis-font-small);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-task-status,
+.activity-status { color: var(--alysis-muted); font-size: var(--alysis-font-caption); }
+
+.forge-task-body { padding: 9px 10px 10px 30px; }
+
+.forge-task-objective,
+.forge-card-detail {
+  display: block;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.5;
+}
+
+.forge-meta-row,
+.forge-meta-list { margin-top: 8px; font-size: var(--alysis-font-caption); }
+
+.forge-meta-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 7px;
+}
+
+.forge-meta-label { color: var(--alysis-muted); font-size: var(--alysis-font-caption); font-weight: 600; }
+.forge-meta-value { overflow-wrap: anywhere; }
+
+.forge-meta-list ul,
+.forge-notice ul { margin: 4px 0 0; padding-left: 17px; }
+
+.forge-meta-list li + li,
+.forge-notice li + li { margin-top: 3px; }
+
+.code { font-family: var(--vscode-editor-font-family, monospace); }
+
+.forge-card,
+.forge-notice { padding: 10px; }
+
+.forge-card-title {
+  display: block;
+  margin-bottom: 3px;
+  font-size: var(--alysis-font-small);
+  font-weight: 650;
+}
+
+.forge-card.readiness.ready,
+.approval-card { border-left: 2px solid var(--alysis-green); }
+
+.forge-card.readiness.blocked,
+.forge-notice.warning { border-left: 2px solid var(--vscode-errorForeground, #f85149); }
+
+.forge-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.forge-card-actions .danger-quiet:last-child { color: var(--vscode-errorForeground, #f85149); }
+
+.swarm-tasks {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.swarm-task {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--alysis-subtle-border);
+}
+
+.swarm-task .forge-card-actions,
+.swarm-task .swarm-untracked {
+  grid-column: 2 / span 2;
+  margin-top: 2px;
+}
+
+.swarm-recovery-card {
+  display: grid;
+  gap: 12px;
+  border-left: 2px solid var(--vscode-focusBorder);
+}
+
+.swarm-recovery-header,
+.swarm-recovery-job-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.swarm-recovery-header > div {
+  min-width: 0;
+}
+
+.swarm-recovery-list {
+  display: grid;
+  gap: 9px;
+}
+
+.swarm-recovery-job {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-sideBar-background));
+}
+
+.swarm-recovery-state {
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 999px;
+  font-size: var(--alysis-font-caption);
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.swarm-recovery-job-id {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--alysis-font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swarm-recovery-notice,
+.swarm-recovery-error,
+.swarm-recovery-usage {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--alysis-font-small);
+  line-height: 1.45;
+}
+
+.swarm-recovery-notice.error,
+.swarm-recovery-error {
+  color: var(--vscode-errorForeground);
+}
+
+.swarm-recovery-notice.success {
+  color: var(--vscode-testing-iconPassed);
+}
+
+.swarm-recovery-error {
+  overflow-wrap: anywhere;
+}
+
+@media (forced-colors: active) {
+  .swarm-recovery-card,
+  .swarm-recovery-job,
+  .swarm-recovery-state {
+    border-color: CanvasText;
+  }
+}
+
+.forge-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 9px 5px;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.forge-list-row:hover { background: var(--alysis-hover); }
+
+.forge-row-title {
+  overflow: hidden;
+  font-size: var(--alysis-font-small);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-row-detail {
+  grid-column: 1;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.forge-row-action {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  color: var(--alysis-link);
+  font-size: var(--alysis-font-caption);
+}
+
+.empty-panel {
+  margin: 0;
+  padding: 20px 10px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  text-align: center;
+}
+
+.activity-feed + .activity-feed { margin-top: 20px; }
+
+.activity-result pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 9px 10px;
+  overflow: auto;
+  color: var(--alysis-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--alysis-font-caption);
+  white-space: pre-wrap;
+}
+
+.activity-row {
+  padding: 8px 4px 8px 10px;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+  border-left: 1px solid var(--alysis-border);
+}
+
+.activity-row.warning,
+.activity-row.error { border-left-color: var(--vscode-errorForeground, #f85149); }
+
+.activity-row .activity-title,
+.activity-row .activity-detail { display: block; white-space: normal; }
+
+.activity-detail {
+  margin-top: 2px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  overflow-wrap: anywhere;
+}
+
+.command-palette {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  right: var(--alysis-chat-gutter);
+  bottom: calc(100% - 9px);
+  left: var(--alysis-chat-gutter);
+  z-index: 10;
+  max-height: min(430px, var(--alysis-palette-height, 58vh));
+  overflow: hidden;
+  border: 1px solid var(--alysis-border);
+  border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-sideBar-background));
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.command-palette header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.command-palette header strong { color: var(--vscode-foreground); font-size: var(--alysis-font-small); }
+.permission-palette > [role="menu"] { min-height: 0; overflow-y: auto; }
+.command-palette > input, .command-palette > .palette-footer-action { flex-shrink: 0; }
+
+#commandList {
+  max-height: min(390px, 52vh);
+  min-height: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.command-row:hover,
+.command-row.selected {
+  background: var(--vscode-list-activeSelectionBackground, var(--alysis-hover));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.command-row:disabled { cursor: default; opacity: 0.48; }
+
+.command-title {
+  overflow: hidden;
+  font-size: var(--alysis-font-small);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-category {
+  max-width: min(160px, 44vw);
+  overflow: hidden;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Slash rows lead with the literal command so what you pick is what gets inserted. */
+.slash-row .command-title code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+}
+
+.slash-row .slash-usage {
+  margin-left: 2px;
+  color: var(--alysis-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--alysis-font-caption);
+  font-weight: 400;
+}
+
+.slash-row .command-category {
+  align-self: center;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.command-description {
+  grid-column: 1 / span 2;
+  overflow: hidden;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vscode-light {
+  color-scheme: light;
+}
+
+.vscode-dark, .vscode-high-contrast { color-scheme: dark; }
+.vscode-high-contrast-light { color-scheme: light; }
+
+.vscode-light .welcome-mark,
+.vscode-light .forge-logo {
+  border-radius: 14px;
+  background: #0b0b0c;
+}
+
+.vscode-light .welcome-mark img,
+.vscode-light .forge-logo img {
+  filter: none;
+}
+
+.vscode-high-contrast .composer-box,
+.vscode-high-contrast .permission-strip,
+.vscode-high-contrast .task-card,
+.vscode-high-contrast .settings-row,
+.vscode-high-contrast .message.user,
+.vscode-high-contrast .message.warning,
+.vscode-high-contrast .message.error,
+.vscode-high-contrast .message.approval,
+.vscode-high-contrast .forge-summary,
+.vscode-high-contrast .forge-task-card,
+.vscode-high-contrast .forge-card,
+.vscode-high-contrast .forge-notice,
+.vscode-high-contrast .command-palette,
+.vscode-high-contrast .activity-result,
+.vscode-high-contrast .readiness-row,
+.vscode-high-contrast .code-block,
+.vscode-high-contrast .jump-to-latest,
+.vscode-high-contrast .image-chip {
+  border-color: var(--vscode-contrastBorder);
+}
+
+.vscode-high-contrast .md-link,
+.vscode-high-contrast .file-mention {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------------------
+   Icons. One inline SVG system sized from the surrounding text and coloured by
+   currentColor, so every affordance follows the active theme.
+   --------------------------------------------------------------------------- */
+
+.sy-icon {
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.14em;
+}
+
+.static-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.row-chevron,
+.section-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--alysis-muted);
+}
+
+.back-button .sy-icon,
+.icon-button .sy-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.state-complete {
+  color: var(--alysis-success);
+}
+
+.state-failed {
+  color: var(--vscode-errorForeground, var(--vscode-foreground));
+}
+
+.state-running {
+  color: var(--vscode-progressBar-background, var(--alysis-muted));
+}
+
+.state-neutral {
+  color: var(--alysis-muted);
+}
+
+/* ---------------------------------------------------------------------------
+   Readiness strip: everything blocking a run, pinned above the composer.
+   --------------------------------------------------------------------------- */
+
+.readiness-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.readiness-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--alysis-border);
+  border-left: 2px solid var(--vscode-errorForeground, #f85149);
+  border-radius: 5px;
+  background: var(--alysis-surface);
+}
+
+.readiness-row.warning {
+  border-left-color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.readiness-copy {
+  flex: 1 1 190px;
+  min-width: 0;
+}
+
+.readiness-title {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-body);
+  font-weight: 600;
+}
+
+.readiness-row.error .readiness-icon {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.readiness-row.warning .readiness-icon {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+/* A check that is still running is progress, not a problem: neutral border, spinner, no buttons. */
+.readiness-row.progress {
+  border-left-color: var(--alysis-border);
+}
+
+.readiness-row.progress .readiness-title {
+  font-weight: 500;
+  color: var(--alysis-muted);
+}
+
+.progress-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: progress-spin 0.9s linear infinite;
+}
+
+@keyframes progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.readiness-detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.readiness-actions,
+.error-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.error-card-actions {
+  margin-top: 9px;
+}
+
+.recovery-button {
+  padding: 4px 9px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.recovery-button:hover {
+  background: var(--alysis-hover);
+}
+
+.recovery-button.primary {
+  border-color: var(--alysis-green);
+  background: var(--alysis-green);
+  color: var(--alysis-on-green);
+  font-weight: 600;
+}
+
+.recovery-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Typed error cards and the rate-limit countdown.
+   --------------------------------------------------------------------------- */
+
+.message.error-card .message-author {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--vscode-foreground);
+}
+
+.message.error-card.error .error-card-icon {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.message.error-card.notice {
+  border: 1px solid var(--alysis-subtle-border);
+  border-left: 2px solid var(--alysis-border);
+  border-radius: 5px;
+  background: transparent;
+  padding: 10px 11px;
+  color: var(--alysis-muted);
+}
+
+.error-countdown {
+  margin: 8px 0 0;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+   Jump to latest.
+   --------------------------------------------------------------------------- */
+
+.conversation {
+  position: relative;
+}
+
+.jump-to-latest {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 13px;
+  background: var(--vscode-editorWidget-background, var(--alysis-surface));
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 22%);
+  animation: jump-rise 140ms ease-out;
+}
+
+.jump-to-latest:hover {
+  background: var(--alysis-hover);
+}
+
+.jump-to-latest:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+@keyframes jump-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Code blocks: language label, copy/insert/apply, and highlighted tokens.
+   --------------------------------------------------------------------------- */
+
+.code-block {
+  margin: 9px 0 11px;
+  overflow: hidden;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+}
+
+.code-block-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+}
+
+.code-block-language {
+  overflow: hidden;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.code-block-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.code-action {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-caption);
+}
+
+.code-action:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.code-action:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tok-comment {
+  color: var(--vscode-editorLineNumber-foreground, var(--alysis-muted));
+  font-style: italic;
+}
+
+.tok-string {
+  color: var(--vscode-debugTokenExpression-string, var(--vscode-symbolIcon-stringForeground, var(--vscode-textPreformat-foreground)));
+}
+
+.tok-number {
+  color: var(--vscode-debugTokenExpression-number, var(--vscode-symbolIcon-numberForeground, var(--vscode-charts-blue)));
+}
+
+.tok-keyword {
+  color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-debugTokenExpression-name, var(--vscode-charts-purple)));
+}
+
+.tok-function {
+  color: var(--vscode-symbolIcon-functionForeground, var(--vscode-charts-yellow));
+}
+
+.tok-type,
+.tok-tag {
+  color: var(--vscode-symbolIcon-classForeground, var(--vscode-charts-orange));
+}
+
+.tok-attr {
+  color: var(--vscode-symbolIcon-propertyForeground, var(--vscode-charts-blue));
+}
+
+/* ---------------------------------------------------------------------------
+   Richer message content: tables, quotes, links, and file mentions.
+   --------------------------------------------------------------------------- */
+
+.message-body ol {
+  margin: 5px 0 10px;
+  padding-left: 22px;
+}
+
+.message-body ul ul,
+.message-body ol ol,
+.message-body ul ol,
+.message-body ol ul {
+  margin: 3px 0 0;
+}
+
+.message-body blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--alysis-border);
+  color: var(--alysis-muted);
+}
+
+.message-body hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--alysis-subtle-border);
+}
+
+.message-body del {
+  color: var(--alysis-muted);
+}
+
+.md-table {
+  display: block;
+  max-width: 100%;
+  margin: 8px 0 11px;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--alysis-font-small);
+}
+
+.md-table th,
+.md-table td {
+  padding: 4px 8px;
+  border: 1px solid var(--alysis-subtle-border);
+  text-align: left;
+}
+
+.md-table th {
+  background: var(--alysis-surface);
+  font-weight: 600;
+}
+
+.md-link {
+  color: var(--alysis-link);
+  text-decoration: none;
+}
+
+.md-link:hover {
+  text-decoration: underline;
+}
+
+.file-mention {
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+  color: var(--alysis-link);
+  cursor: pointer;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.94em;
+}
+
+.file-mention:hover {
+  background: var(--alysis-hover);
+  text-decoration: underline;
+}
+
+.file-mention:focus-visible,
+.md-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/* ---------------------------------------------------------------------------
+   Swarm review information and composer image attachments.
+   --------------------------------------------------------------------------- */
+
+.swarm-untracked {
+  display: flex;
+  gap: 7px;
+  margin: 6px 0 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--alysis-border);
+  border-left: 2px solid var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+  border-radius: 4px;
+  background: var(--alysis-surface);
+}
+
+.swarm-untracked-icon {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.swarm-untracked-title {
+  display: block;
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+}
+
+.swarm-untracked-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--alysis-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--alysis-font-caption);
+}
+
+.swarm-untracked-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.image-basket {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.image-basket-label {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.image-chip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  max-width: 160px;
+  padding: 2px 7px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 10px;
+  background: var(--alysis-surface);
+  font-size: var(--alysis-font-caption);
+}
+
+.image-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-basket-clear {
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-caption);
+  text-decoration: underline;
+}
+
+.task-composer.drop-target .composer-box {
+  border-color: var(--alysis-green-line);
+  background: var(--alysis-green-soft);
+}
+
+@keyframes soft-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* Conversation chrome and progressive review: persistent controls stay outside the scroller. */
+.session-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px var(--alysis-chat-gutter);
+  border-bottom: 1px solid var(--alysis-subtle-border);
+}
+
+.session-heading { min-width: 0; }
+.session-heading h1 { margin: 0 0 3px; overflow: hidden; font-size: 1em; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.session-status { display: flex; align-items: center; gap: 6px; color: var(--alysis-muted); font-size: var(--alysis-font-small); }
+.session-status::before { width: 5px; height: 5px; border-radius: 50%; background: var(--alysis-muted); content: ""; }
+.session-status[data-state="working"]::before { background: var(--alysis-link); animation: soft-pulse 1.4s ease-in-out infinite; }
+.session-status[data-state="attention"]::before { background: var(--vscode-editorWarning-foreground); }
+.welcome-subtitle {
+  margin: 10px 0 5px;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--vscode-foreground);
+}
+.welcome-description { max-width: 280px; margin: 0; color: var(--alysis-muted); font-size: var(--alysis-font-body); line-height: 1.6; }
+.starter-prompts strong, .starter-prompts small { display: block; }
+.starter-prompts strong { color: var(--vscode-foreground); font-size: var(--alysis-font-body); font-weight: 500; }
+.starter-prompts small { margin-top: 3px; color: var(--alysis-muted); font-size: var(--alysis-font-small); }
+.starter-icon { display: grid; place-items: center; }
+.starter-arrow { opacity: 0; }
+.starter-prompts button:hover .starter-arrow, .starter-prompts button:focus-visible .starter-arrow { opacity: 1; }
+.welcome-shortcuts {
+  width: 100%;
+  max-width: 420px;
+  margin: 12px auto auto;
+  padding-bottom: 4px;
+  text-align: center;
+}
+.welcome-shortcuts .quiet-link { display: inline-flex; align-items: center; gap: 4px; padding: 4px; }
+.message-actions {
+  display: flex;
+  margin-top: 4px;
+  min-height: 22px;
+}
+.message-actions button {
+  opacity: 0.5;
+}
+.message:hover .message-actions button, .message:focus-within .message-actions button { opacity: 1; }
+.review-attention {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground) 45%, var(--alysis-border));
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--alysis-surface));
+  color: var(--vscode-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.review-attention:hover { background: var(--alysis-hover); border-color: var(--vscode-focusBorder); }
+.review-attention > .sy-icon { flex-shrink: 0; color: var(--vscode-editorWarning-foreground); }
+.review-attention-copy { flex: 1; min-width: 0; }
+.review-attention-copy strong, .review-attention-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-attention-copy strong { font-size: var(--alysis-font-body); font-weight: 600; }
+.review-attention-copy small { margin-top: 3px; font-size: var(--alysis-font-small); color: var(--alysis-muted); }
+.review-attention-action { display: inline-flex; align-items: center; flex-shrink: 0; gap: 3px; font-size: var(--alysis-font-small); color: var(--alysis-link); }
+.forge-open .review-attention { display: none; }
+.approval-evidence { margin-top: 8px; }
+.approval-evidence > summary { width: fit-content; color: var(--alysis-muted); font-size: var(--alysis-font-small); cursor: pointer; }
+.approval-evidence[open] > summary { margin-bottom: 10px; }
+.diff-summary { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-bottom: 1px solid var(--alysis-subtle-border); color: var(--alysis-muted); font-size: var(--alysis-font-small); }
+.diff-summary-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-summary .file-mention { padding: 0; background: transparent; border: 0; text-align: left; font-family: var(--vscode-editor-font-family, monospace); font-size: var(--alysis-font-small); }
+.diff-stat { font-family: var(--vscode-editor-font-family, monospace); font-variant-numeric: tabular-nums; }
+.diff-stat.added { color: var(--vscode-gitDecoration-addedResourceForeground, var(--alysis-success)); }
+.diff-stat.removed { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-errorForeground)); }
+.diff-pre:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; }
+.message-body .diff-pre { margin: 0; padding: 6px 0; border: 0; border-radius: 0; font-size: var(--alysis-font-small); }
+.approval-card .message-header { align-items: flex-start; flex-wrap: wrap; row-gap: 3px; }
+.approval-card .message-author { flex: 1 1 190px; font-size: var(--alysis-font-body); line-height: 1.5; }
+.approval-expiry { padding-top: 2px; }
+.composer-models {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+}
+.composer-models .model-button { min-height: 26px; line-height: 18px; }
+.composer-models .persona-button {
+  flex: 0 1 auto;
+  max-width: 40%;
+  justify-content: flex-start;
+  margin: 0;
+  color: var(--vscode-foreground);
+}
+.composer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 0 0;
+}
+.composer-hint { color: var(--alysis-muted); font-size: var(--alysis-font-caption); white-space: nowrap; }
+.composer-hint kbd { font: inherit; }
+.permission-option { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px 10px; background: transparent; color: var(--vscode-foreground); text-align: left; cursor: pointer; }
+.permission-option:hover, .permission-option:focus-visible { background: var(--alysis-hover); }
+.permission-option > span:nth-child(2) { flex: 1; min-width: 0; }
+.permission-option strong, .permission-option small { display: block; }
+.permission-option strong { font-size: var(--alysis-font-body); font-weight: 500; }
+.permission-option small { margin-top: 3px; font-size: var(--alysis-font-small); color: var(--alysis-muted); }
+.permission-option[aria-checked="false"] .permission-check { visibility: hidden; }
+.history-search { display: flex; align-items: center; gap: 8px; margin: 3px 0 10px; padding: 0 10px; border: 1px solid var(--alysis-border); border-radius: 4px; background: var(--vscode-input-background); color: var(--alysis-muted); }
+.history-search:focus-within { border-color: var(--vscode-focusBorder); }
+.history-search input { width: 100%; min-width: 0; min-height: 34px; padding: 7px 0; border: 0; outline: none; background: transparent; color: var(--vscode-input-foreground); }
+.history-search input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.history-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: var(--alysis-font-small); color: var(--alysis-muted); }
+.history-toolbar .quiet-link { padding: 4px 7px; border: 1px solid transparent; border-radius: 4px; }
+.history-toolbar [aria-pressed="true"] { color: var(--alysis-link); background: var(--alysis-green-soft); border-color: var(--alysis-border); }
+.empty-history { justify-items: center; text-align: center; padding: 40px 12px; }
+.empty-history .empty-icon { width: 28px; height: 28px; margin-bottom: 10px; }
+.empty-history .secondary-action { margin-top: 12px; width: auto; }
+
+@container (max-width: 330px) {
+  .welcome-scroll { padding-left: 14px; padding-right: 14px; }
+  .welcome-subtitle { font-size: 17px; }
+  .approval-card .message-header { flex-wrap: wrap; }
+  .review-attention-action { font-size: 0; }
+  .composer-models .persona-button { max-width: 36%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
+}
+
+body.vscode-high-contrast .work-progress,
+body.vscode-high-contrast .composer-box,
+body.vscode-high-contrast .task-card,
+body.vscode-high-contrast .approval-card,
+body.vscode-high-contrast .review-attention,
+body.vscode-high-contrast .send-task,
+body.vscode-high-contrast-light .work-progress,
+body.vscode-high-contrast-light .composer-box,
+body.vscode-high-contrast-light .task-card,
+body.vscode-high-contrast-light .approval-card,
+body.vscode-high-contrast-light .review-attention,
+body.vscode-high-contrast-light .send-task { border-color: var(--vscode-contrastBorder, currentColor); }
+
+body.vscode-high-contrast .session-status::before,
+body.vscode-high-contrast-light .session-status::before { background: var(--vscode-foreground); }
+
+body.vscode-high-contrast .work-progress.running .work-progress-marker::after,
+body.vscode-high-contrast-light .work-progress.running .work-progress-marker::after {
+  border-color: transparent;
+  border-top-color: var(--vscode-foreground);
+  border-right-color: var(--vscode-foreground);
+}
+
+@media (max-width: 285px) {
+  :root {
+    --alysis-chat-gutter: 8px;
+  }
+  .welcome-scroll {
+    padding-inline: 10px;
+  }
+
+  .permission-detail,
+  .persona-chip {
+    display: none;
+  }
+
+}
+
+@media (max-height: 620px) {
+  .welcome-scroll {
+    padding-top: 24px;
+  }
+
+  .recent-block,
+  .starter-prompts {
+    margin-top: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jump-to-latest {
+    animation: none;
+  }
+
+  .composer-box {
+    transition: none;
+  }
+
+  .work-progress-chevron {
+    transition: none;
+  }
+
+  .work-progress.running .work-progress-marker::after,
+  .work-step.running .work-step-glyph::after,
+  .forge-live-dot {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Models surface: your connections, the provider catalog, and the composer
+   model picker.
+
+   Every colour here resolves to a VS Code theme token, so the surface follows
+   light, dark, and high-contrast themes instead of carrying its own palette.
+   --------------------------------------------------------------------------- */
+
+.models-surface {
+  /* Two semantic colours for the whole surface, both resolved from the active theme. */
+  --models-accent: var(--vscode-focusBorder);
+  --models-warning: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-editorWarning-foreground, var(--vscode-inputValidation-warningBorder)));
+  overflow-y: auto;
+}
+
+/* Third column so the Reload action sits beside the heading instead of wrapping below it. */
+.models-header {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  margin-bottom: 14px;
+}
+
+.models-notice {
+  margin: 0 12px 12px;
+  padding: 8px 9px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 5px;
+  background: var(--alysis-surface);
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.models-group {
+  padding: 0 0 16px;
+}
+
+/* The connections you already have are the point of the screen; the catalog is the errand. */
+.connections-group {
+  padding-bottom: 22px;
+}
+
+.catalog-group {
+  padding-top: 16px;
+  border-top: 1px solid var(--alysis-subtle-border);
+}
+
+.models-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.models-group h2 {
+  margin: 0 0 10px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.catalog-group h2 {
+  margin-bottom: 8px;
+}
+
+.models-count {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.models-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: var(--alysis-surface);
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+}
+
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connection-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  background: var(--alysis-surface);
+}
+
+/*
+ * The connection in use leads the list and says so with a border and a tick. Deliberately no
+ * background tint: tinting the card pushed its own secondary text to the 4.5:1 floor in dark
+ * themes, and the border plus the tick already carry the state.
+ */
+.connection-card.active {
+  border-color: var(--models-accent);
+}
+
+/* A connection that cannot run outranks every other state on the card. */
+.connection-card.needs-key {
+  border-color: var(--models-warning);
+}
+
+.connection-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.connection-check {
+  color: var(--models-accent);
+  font-size: var(--alysis-font-body);
+  line-height: 1;
+}
+
+.connection-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--alysis-font-body);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-chip {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 10px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  white-space: nowrap;
+}
+
+/*
+ * The warning hue lives in the fill and the border, not in the label. A theme's warning colour is
+ * a mid-tone yellow, which as text on a light theme's near-white surface measures well under
+ * 4.5:1 — so the words stay at foreground contrast and the hue signals around them instead.
+ */
+.connection-chip.warn {
+  border-color: var(--models-warning);
+  background: color-mix(in srgb, var(--models-warning) 18%, transparent);
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.connection-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.connection-detail {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  overflow-wrap: anywhere;
+}
+
+.connection-model {
+  display: block;
+}
+
+.connection-model-select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: var(--vscode-dropdown-background, var(--alysis-surface));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  font-size: var(--alysis-font-small);
+}
+
+.connection-model-select:disabled {
+  border-color: var(--alysis-subtle-border);
+  color: var(--alysis-muted);
+  opacity: 1;
+}
+
+.connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-action {
+  padding: 4px 8px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.connection-action:hover:not(:disabled) {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.connection-action:disabled {
+  cursor: default;
+}
+
+.connection-primary {
+  flex: 1 1 auto;
+  padding: 5px 10px;
+  background: var(--alysis-surface);
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.connection-primary:hover:not(:disabled) {
+  background: var(--alysis-hover);
+}
+
+/*
+ * The one loud control on the surface: the fix for a connection that cannot run. It is filled
+ * rather than outlined so it outranks every other button, and it borrows the same warning colour
+ * as the chip and the card border so the three read as one problem instead of three decorations.
+ */
+.connection-primary.attention {
+  border-color: var(--models-warning);
+  background: color-mix(in srgb, var(--models-warning) 16%, transparent);
+  color: var(--vscode-foreground);
+}
+
+.connection-primary.attention:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--models-warning) 26%, transparent);
+}
+
+.connection-primary.quiet,
+.connection-primary.quiet:disabled {
+  border-color: var(--alysis-subtle-border);
+  background: transparent;
+  color: var(--alysis-muted);
+  font-weight: 500;
+}
+
+.connection-overflow {
+  position: relative;
+  flex: none;
+}
+
+.connection-more {
+  padding: 4px 8px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-body);
+  line-height: 1;
+}
+
+.connection-more:hover:not(:disabled) {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.connection-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  min-width: 154px;
+  padding: 3px;
+  border: 1px solid var(--vscode-menu-border, var(--alysis-border));
+  border-radius: 5px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+
+.connection-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+  text-align: left;
+}
+
+.connection-menu-item:hover {
+  background: var(--vscode-menu-selectionBackground, var(--alysis-hover));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+}
+
+.connection-busy {
+  flex: 1 1 100%;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+/* Inline narration for the connect flow, so native prompts opening elsewhere are explained. */
+.provider-busy-phase {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.4;
+  margin-top: 6px;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The catalog recedes: no card fill, a hairline divider, and weight only on hover or expand. */
+.provider-card {
+  border: 1px solid transparent;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.provider-card:has(.provider-form) {
+  border-color: var(--alysis-subtle-border);
+  background: var(--alysis-surface);
+}
+
+.provider-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 8px 9px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.provider-head:hover {
+  background: var(--alysis-hover);
+}
+
+.provider-label {
+  overflow: hidden;
+  font-size: var(--alysis-font-body);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The only badge left in the catalog: the transport that is not the default. */
+.provider-tag {
+  align-self: center;
+  padding: 1px 5px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 3px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  white-space: nowrap;
+}
+
+.provider-host {
+  grid-column: 1 / span 2;
+  overflow: hidden;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-toggle {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.catalog-toggle:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+.provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+  border-top: 1px solid var(--alysis-subtle-border);
+}
+
+.provider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.provider-field-label {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.provider-input {
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background, var(--alysis-surface));
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+}
+
+.provider-notes,
+.provider-key-note,
+.provider-transport-note,
+.provider-warning {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.5;
+}
+
+.provider-transport-note {
+  margin-top: 2px;
+}
+
+.provider-warning {
+  padding: 6px 8px;
+  border: 1px solid var(--models-warning);
+  border-radius: 4px;
+}
+
+.provider-form .primary-action {
+  width: 100%;
+}
+
+.connect-first {
+  margin-top: 22px;
+  padding: 0 4px;
+  text-align: center;
+}
+
+.connect-first h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.connect-first p {
+  margin: 0 auto 12px;
+  max-width: 280px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.55;
+}
+
+.connect-first h2 .connect-first-spinner {
+  width: 13px;
+  height: 13px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  color: var(--alysis-muted);
+}
+
+.connect-first.progress h2 {
+  font-weight: 500;
+  color: var(--alysis-muted);
+}
+
+.connect-first-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-first .primary-action {
+  margin-inline: auto;
+}
+
+.connect-first .quiet-link {
+  margin-top: 0;
+}
+
+.model-palette #modelFilter,
+.persona-palette #personaFilter {
+  width: calc(100% - 8px);
+  margin: 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background, var(--alysis-surface));
+  color: var(--vscode-foreground);
+  font-size: var(--alysis-font-small);
+}
+
+#modelList,
+#mentionList,
+#personaList {
+  max-height: min(300px, 42vh);
+  min-height: 0;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.command-row.current .command-category {
+  color: var(--alysis-link);
+}
+
+.palette-footer-action {
+  width: 100%;
+  padding: 7px 9px;
+  border-top: 1px solid var(--alysis-subtle-border);
+  background: transparent;
+  color: var(--alysis-muted);
+  cursor: pointer;
+  font-size: var(--alysis-font-caption);
+  text-align: left;
+}
+
+.palette-footer-action:hover {
+  background: var(--alysis-hover);
+  color: var(--vscode-foreground);
+}
+
+/* Browser Cockpit: compact, public-only controls for the agent-shared session. */
+.browser-surface {
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.browser-status {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 6px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.45;
+}
+
+.browser-status.error {
+  border-color: var(--vscode-inputValidation-errorBorder, var(--alysis-border));
+  color: var(--vscode-errorForeground, var(--vscode-foreground));
+}
+
+.browser-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 7px;
+  background: var(--alysis-surface);
+}
+
+.browser-card h2,
+.browser-card p {
+  margin: 0;
+}
+
+.browser-card h2 {
+  font-size: var(--alysis-font-body);
+  font-weight: 600;
+}
+
+.browser-card > label,
+.browser-inspect-controls > label {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.browser-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.browser-card-heading p,
+.browser-help {
+  margin-top: 3px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  line-height: 1.45;
+}
+
+.browser-phase {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 999px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+.browser-card input[type="text"],
+.browser-card input[type="url"],
+.browser-card textarea,
+.browser-card select {
+  min-width: 0;
+  width: 100%;
+  padding: 6px 7px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--vscode-input-background, var(--alysis-surface));
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  font: inherit;
+  font-size: var(--alysis-font-small);
+}
+
+.browser-card textarea {
+  resize: vertical;
+}
+
+.browser-card input:focus-visible,
+.browser-card textarea:focus-visible,
+.browser-card select:focus-visible,
+.browser-card button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.browser-inline-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.browser-actions,
+.browser-inspect-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-actions button,
+.browser-inspect-controls button,
+.browser-card > button,
+.browser-inline-control button,
+.browser-preview button {
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--alysis-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: var(--alysis-font-small);
+}
+
+.browser-card button:hover:not(:disabled) {
+  background: var(--alysis-hover);
+}
+
+.browser-card button:disabled,
+.browser-card input:disabled,
+.browser-card textarea:disabled,
+.browser-card select:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.browser-actions .danger-action {
+  margin-left: auto;
+}
+
+.browser-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+  text-transform: none;
+}
+
+.browser-facts {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.browser-facts > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.browser-facts dt,
+.browser-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--alysis-font-small);
+}
+
+.browser-facts dt {
+  color: var(--alysis-muted);
+}
+
+.browser-preview {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.browser-preview img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  border: 1px solid var(--alysis-subtle-border);
+  border-radius: 5px;
+  object-fit: contain;
+  background: var(--vscode-editor-background);
+}
+
+.browser-preview figcaption,
+.browser-details summary {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-small);
+}
+
+.browser-details {
+  border-top: 1px solid var(--alysis-subtle-border);
+  padding-top: 7px;
+}
+
+.browser-details summary {
+  cursor: pointer;
+}
+
+.browser-details pre,
+.browser-diagnostic-preview {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.browser-details pre {
+  max-height: 320px;
+  margin: 7px 0 0;
+  overflow: auto;
+  font-size: var(--alysis-font-caption);
+}
+
+.browser-diagnostic {
+  display: grid;
+  gap: 3px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--alysis-subtle-border);
+}
+
+.browser-diagnostic-title {
+  font-size: var(--alysis-font-small);
+  font-weight: 600;
+}
+
+.browser-diagnostic-preview {
+  color: var(--alysis-muted);
+  font-size: var(--alysis-font-caption);
+}
+
+@media (max-width: 285px) {
+  .browser-inline-control,
+  .browser-facts > div {
+    grid-template-columns: 1fr;
+  }
+
+  .browser-actions .danger-action {
+    margin-left: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .browser-card,
+  .browser-status,
+  .browser-preview img,
+  .browser-phase {
+    border-color: CanvasText;
+  }
+}
+.composer-error {
+  margin: 4px 10px;
+  color: var(--vscode-errorForeground, #f48771);
+  font-size: var(--alysis-font-body);
+  overflow-wrap: anywhere;
+}
+
+/* Shared rhythm and discoverable actions across the finished UI. */
+.starter-prompts { gap: 8px; margin-top: 24px; }
+.starter-prompts button { padding: 11px 10px; border-color: var(--alysis-subtle-border); border-radius: 7px; }
+.starter-icon { width: 20px; height: 24px; color: var(--alysis-link); }
+.starter-arrow { opacity: 0.65; }
+.starter-prompts small { line-height: 1.45; }
+.welcome-mark { width: 42px; height: 42px; margin-bottom: 12px; }
+.welcome-mark img { width: 36px; height: 36px; }
+.welcome-subtitle { font-size: max(20px, calc(var(--vscode-font-size, 13px) + 7px)); font-weight: 600; line-height: 1.3; }
+.welcome-shortcuts { margin-top: 18px; }
+.recent-block { margin-top: 24px; }
+.task-card { padding: 9px 8px; }
+.task-action { color: var(--alysis-muted); }
+.task-card:hover .task-action { color: var(--alysis-link); }
+.task-title { line-height: 1.5; }
+.composer-actions > button { min-height: 28px; height: 28px; }
+.composer-keyboard-hint { margin: 3px 0 0; text-align: center; color: var(--alysis-muted); font-size: var(--alysis-font-caption); }
+.composer-keyboard-hint kbd { font: inherit; }
+.composer-keyboard-hint span { margin-inline: 4px; }
+.settings-filtered { display: none !important; }
+.settings-search { margin-bottom: 18px; }
+.search-status { margin: -6px 0 14px; color: var(--alysis-muted); font-size: var(--alysis-font-small); }
+.settings-group h2, .models-group h2 { text-transform: none; letter-spacing: 0; color: var(--vscode-foreground); }
+.settings-row { border-radius: 4px; }
+.settings-row > span:first-child { min-width: 0; }
+.settings-row:disabled, .header-action:disabled, .primary-action:disabled, .secondary-action:disabled { opacity: 0.55; cursor: default; }
+.provider-head { grid-template-columns: minmax(0, 1fr) 16px; padding: 11px 10px; }
+.provider-label { grid-column: 1; grid-row: 1; }
+.provider-host { grid-column: 1; grid-row: 2; }
+.provider-tag { grid-column: 1; grid-row: 3; justify-self: start; margin-top: 4px; }
+.provider-chevron { grid-column: 2; grid-row: 1 / span 3; align-self: center; color: var(--alysis-muted); }
+.provider-card { border-color: var(--alysis-subtle-border); }
+.provider-head[aria-expanded="true"] { background: var(--alysis-hover); }
+.provider-input, .models-search { min-height: 32px; }
+.provider-field-label { text-transform: none; letter-spacing: 0; }
+.browser-card { margin-bottom: 12px; }
+.browser-card:last-child { margin-bottom: 0; }
+.browser-card .primary-action { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+.browser-advanced > :not(summary) { margin-top: 8px; }
+.browser-advanced > label { display: block; font-size: var(--alysis-font-small); }
+.browser-advanced > button { min-height: 30px; padding: 5px 9px; border: 1px solid var(--alysis-border); border-radius: 4px; background: transparent; cursor: pointer; }
+.surface-header h1:focus { outline: none; }
+.message-actions button { opacity: 1; }
+.code-block-actions { flex-wrap: wrap; }
+.primary-action:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, var(--alysis-green-strong)); }
+body.vscode-high-contrast :is(.approval-button, .primary-action, .secondary-action, .starter-prompts button, .provider-card),
+body.vscode-high-contrast-light :is(.approval-button, .primary-action, .secondary-action, .starter-prompts button, .provider-card) {
+  border-color: var(--vscode-contrastBorder, currentColor);
+}
+@container (max-width: 330px) {
+  .composer-keyboard-hint { display: none; }
+  .welcome-subtitle { font-size: 19px; }
+  .composer-meta { flex-wrap: wrap; }
+  .composer-tools { margin-left: auto; }
+}
+@media (max-height: 480px) {
+  .forge-logo { width: 32px; height: 32px; margin-bottom: 8px; }
+  .forge-logo img { width: 30px; height: 30px; }
+  .forge-empty { flex-shrink: 1; justify-content: flex-start; padding-top: 8px; }
+}
+.session-workspace-bar {
+  flex: 0 0 auto;
+  padding: 7px 12px 6px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, .2));
+}
+.session-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; }
+.session-workspace-actions button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 28px; padding: 3px 5px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--vscode-descriptionForeground); font: inherit; font-size: 11px;
+  white-space: nowrap; cursor: pointer;
+}
+.session-workspace-actions button:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.session-workspace-actions button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.session-workspace-actions button:disabled { opacity: .45; cursor: default; }
+.session-workspace-actions svg { width: 13px; height: 13px; }
+.session-workspace-actions .workspace-diff-stats { margin-left: auto; gap: 5px; font-variant-numeric: tabular-nums; }
+.workspace-diff-stats .added { color: var(--vscode-gitDecoration-addedResourceForeground, #68cf92); }
+.workspace-diff-stats .removed { color: var(--vscode-gitDecoration-deletedResourceForeground, #f48787); }
+.session-workspace-detail { margin: 1px 5px 0; color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 440px) {
+  .session-workspace-actions { display: grid; grid-template-columns: 1fr auto; gap: 0 4px; }
+  .session-workspace-actions button { justify-content: flex-start; }
+  .session-workspace-actions #barNewWorktree, .session-workspace-actions #barGitChanges { justify-content: flex-end; }
+}

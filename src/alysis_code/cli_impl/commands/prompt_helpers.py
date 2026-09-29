@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 
+from ...cancellation import InteractiveCancellationToken
 from .cli_common import *
 
 
@@ -189,11 +190,27 @@ def _apply_chat_prompt_escape_sequence_timeout(prompt_session: Any) -> None:
     app.ttimeoutlen = _CHAT_PROMPT_ESCAPE_SEQUENCE_TIMEOUT_S
 
 
+def _cancel_interactive_turn(token: InteractiveCancellationToken) -> None:
+    cancel_nonblocking = getattr(token, "cancel_nonblocking", None)
+    if callable(cancel_nonblocking):
+        cancel_nonblocking()
+        return
+    token.cancel()
+
+
 @contextmanager
-def _chat_turn_interrupt_monitor() -> Any:
+def _chat_turn_interrupt_monitor(
+    *,
+    cancellation_token: InteractiveCancellationToken | None = None,
+) -> Any:
+    token = cancellation_token or InteractiveCancellationToken()
     # Only enable raw-key monitoring while a turn is running in interactive POSIX terminals.
     if not (sys.stdin.isatty() and os.name == "posix"):
-        yield
+        try:
+            yield token
+        except KeyboardInterrupt:
+            _cancel_interactive_turn(token)
+            raise
         return
     try:
         import select
@@ -201,7 +218,11 @@ def _chat_turn_interrupt_monitor() -> Any:
         import termios
         import tty
     except Exception:
-        yield
+        try:
+            yield token
+        except KeyboardInterrupt:
+            _cancel_interactive_turn(token)
+            raise
         return
 
     stop_event = threading.Event()
@@ -257,6 +278,10 @@ def _chat_turn_interrupt_monitor() -> Any:
                     return
                 if chunk != b"\x1b":
                     continue
+                # Publish cancellation before raising SIGINT in the main
+                # thread so AgentSession's finally block can cancel accepted
+                # child runs through the existing coordinator path.
+                _cancel_interactive_turn(token)
                 try:
                     os.kill(os.getpid(), signal.SIGINT)
                 except Exception:
@@ -275,7 +300,10 @@ def _chat_turn_interrupt_monitor() -> Any:
     )
     watcher.start()
     try:
-        yield
+        yield token
+    except KeyboardInterrupt:
+        _cancel_interactive_turn(token)
+        raise
     finally:
         stop_event.set()
         watcher.join(timeout=0.25)

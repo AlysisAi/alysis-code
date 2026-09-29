@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -10,11 +13,13 @@ from ..diff_paths import iter_patch_paths
 from ..failure_category import FailureCategory, is_infra_unavailable_error
 from ..language_policy import normalize_language_name
 from ..runtime_kind import RuntimeKind
+from ..sandbox_runner import HostShellRunner, LazyShellRunner
 from ..tools.availability import is_tool_unavailable_result
 from ..verification_command_analysis import (
     analyze_verification_command,
     is_benign_non_execution_reason,
 )
+from ..verification_contract import VerificationCommandProvenance, VerificationCommandRequirement
 from ..verify_gate import (
     ResolvedVerifyCommands,
     assess_verification_command_execution,
@@ -23,14 +28,18 @@ from ..verify_gate import (
     is_authoritative_verify_command_selection,
     is_toolchain_unavailable_verification_output,
     resolve_task_aware_verify_command_selection,
+    resolve_verify_sandbox_mode,
     verification_selection_payload,
 )
 from ..verify_gate import run_task_verification as run_task_verification
 from .acceptance_contract import (
     AcceptanceContract,
+    AcceptanceCriterionKind,
     acceptance_contract_problem_payload,
     extract_explicit_acceptance_commands,
+    invalidate_acceptance_evidence,
     record_acceptance_tool_effect,
+    record_consumer_profile_observation,
 )
 from .blast_radius import (
     MAX_SCOPE_RUNS,
@@ -57,9 +66,7 @@ from .prompt_context import (
     _normalize_repo_relative_hint_path,
     _paths_require_verification,
     _session_repo_scan,
-    _session_task_brief_content,
     _session_verify_command_selection,
-    _task_brief_lines_from_text,
     _verification_commands_apply_to_paths,
     refresh_session_environment_context_message,
 )
@@ -89,6 +96,7 @@ from .reproduction_first import (
     match_repro_artifacts,
     repro_blocks_finalization,
 )
+from .task_state import SessionTaskState
 from .turn_contract import (
     AdvisoryCompletion,
     DispositionRecord,
@@ -98,6 +106,7 @@ from .turn_contract import (
     assess_expectations,
     match_expectation_evidence,
 )
+from .turn_path import greenfield_verification_bootstrap_enabled
 from .verification_commands import (
     _matching_effective_verification_commands,
     _normalize_shell_command_for_match,
@@ -110,6 +119,7 @@ from .verification_evidence import (
 )
 
 if TYPE_CHECKING:
+    from ..config import AppConfig
     from .turn_path import _OneShotRepoTurnIntent
 
 
@@ -189,21 +199,20 @@ _SHELL_REDIRECTION_RE = re.compile(
     r"\s+(?:\d*>&\d+|\d*(?:>>?|<)\s*[^\s]+)(?=\s|$)",
 )
 SUPPLEMENTAL_VERIFICATION_ADVISORY = (
-    "Note: every passing check so far was authored during this session. "
-    "Self-written tests verify your interpretation, not the task's. Re-read the "
-    "task's exact requirements (output path, format, names, values) and confirm "
-    "your deliverable against the spec itself before finalizing."
+    "The recorded passing checks are supplemental; no accepted verification evidence "
+    "is recorded yet. Confirm the deliverable against the task's exact requirements "
+    "and address any remaining verification requirements before finalizing."
 )
-# One-shot advisory emitted at the first verification-relevant edit when no
-# baseline exists for any known verification-contract command. Advisory only -
+# Advisory emitted at the first verification-relevant edit when no
+# usable pre-edit baseline exists. Advisory only -
 # it never blocks the edit; it teaches the baseline-first protocol so failures
 # can later be attributed to the change vs pre-existing breakage.
 REGRESSION_BASELINE_PRE_EDIT_ADVISORY = (
     "Baseline advisory: this is your first change to a verifiable surface and no "
-    "pre-edit test run is recorded. To let me tell failures your change causes "
-    "apart from ones already present in the repo, run the relevant test command "
-    "(your verification command) once before further edits. Advisory only - this "
-    "does not block your edit."
+    "usable pre-edit test baseline is recorded. This edit has already landed; "
+    "later test runs cannot retroactively establish the pre-edit state. Verify "
+    "the changed code and report any limits on attributing failures to your "
+    "change. Advisory only - this does not block your edit."
 )
 # One-shot advisory emitted the first time a material edit lands inside a
 # generated or vendored tree (node_modules, vendor, externals, third_party, ...).
@@ -436,6 +445,18 @@ _RUNTIME_MESSAGE_CATALOG: dict[str, dict[str, str]] = {
 }
 
 
+@dataclass(frozen=True)
+class _ObservedVerificationFailure:
+    snippet: str
+    category: str
+    was_test_run: bool
+    command: str
+    generation: int
+    reported_category: str = ""
+    provenance: str = ""
+    requirement: str = ""
+
+
 @dataclass
 class TurnExecutionState:
     execution_requested: bool
@@ -448,11 +469,17 @@ class TurnExecutionState:
     touched_repo_paths: set[str] = field(default_factory=set)
     last_diff_review_generation: int | None = None
     verification_attempt_count: int = 0
+    consumer_profile_observations: list[dict[str, Any]] = field(default_factory=list)
     verification_tools: set[str] = field(default_factory=set)
     last_verification_passed: bool | None = None
     last_verification_failure_snippet: str = ""
     last_verification_failure_category: str = ""
     failed_verification_command_snippets: dict[str, str] = field(default_factory=dict)
+    # Execution outcomes are separate from coverage of required commands. Keys
+    # fingerprint exact command/context; unknown contexts cannot be superseded.
+    observed_verification_failures: dict[str, _ObservedVerificationFailure] = field(
+        default_factory=dict
+    )
     verification_relevant_edit_generation: int = 0
     last_successful_verification_generation: int | None = None
     verification_evidence_counts: dict[str, int] = field(default_factory=dict)
@@ -547,6 +574,9 @@ class TurnExecutionState:
     def note_verification_relevant_edit(self) -> None:
         self.verification_relevant_edit_generation += 1
         self.refresh_verification_coverage()
+        invalidate_acceptance_evidence(
+            self.acceptance_contract, generation=self.verification_relevant_edit_generation
+        )
 
     def note_material_edit(self) -> None:
         self.material_edit_count += 1
@@ -579,6 +609,56 @@ class TurnExecutionState:
                 continue
             clean_snippet = str(snippet or "").strip()
             self.failed_verification_command_snippets[clean_command] = clean_snippet
+
+    def verification_failure_diagnostic(self) -> str:
+        """Describe recorded outcomes without changing coverage or failure resolution."""
+        lines: list[str] = []
+        failed_commands = set(self.failed_verification_commands())
+        for command in sorted(failed_commands):
+            snippet = self.failed_verification_command_snippets[command]
+            lines.append(f"- Unresolved required check `{command}`: {snippet or 'failed'}.")
+        for failure in self.observed_verification_failures.values():
+            failed_commands.add(failure.command)
+            metadata = []
+            if failure.requirement:
+                metadata.append(f"selected requirement: {failure.requirement}")
+            if failure.provenance:
+                metadata.append(f"selection provenance: {failure.provenance}")
+            diagnosis = failure.reported_category or failure.category
+            if diagnosis:
+                metadata.append(f"reported diagnosis: {diagnosis}")
+            if failure.generation != self.verification_relevant_edit_generation:
+                metadata.append("observed before the latest relevant edit")
+            detail = f" ({'; '.join(metadata)})" if metadata else ""
+            command = f"`{failure.command}`" if failure.command else "command identity unavailable"
+            lines.append(f"- Unresolved check {command}{detail}: {failure.snippet or 'failed'}.")
+        if not lines:
+            return ""
+        passed_commands = sorted(
+            {
+                str(item.get("normalized_command") or "")
+                for item in self.executed_verification_evidence
+                if item.get("generation") == self.verification_relevant_edit_generation
+                and item.get("real_execution") is True
+                and item.get("observed_exit_code") == 0
+                and item.get("observed_output") is True
+                and item.get("normalized_command")
+                and item.get("normalized_command") not in failed_commands
+            }
+        )
+        if passed_commands:
+            lines.append(
+                "- Separately recorded successful executions after the latest relevant edit: "
+                + ", ".join(f"`{command}`" for command in passed_commands)
+                + ". These results remain recorded; they do not resolve the checks above."
+            )
+        lines.append(
+            "- Address each unresolved check on its own evidence, or report its remaining "
+            "limitation honestly. Repeating a different unchanged passing check cannot resolve "
+            "it. A reported diagnosis alone does not establish whether tests executed, and "
+            "does not waive a real failure or a required check."
+        )
+        return "\n".join(lines)
 
     def record_verification_evidence(
         self,
@@ -655,13 +735,16 @@ class TurnExecutionState:
         if cleaned:
             self.agent_created_paths.add(cleaned)
 
-    def has_baseline_for_any(self, commands: list[str] | tuple[str, ...] | set[str] | None) -> bool:
-        """True when a usable baseline exists for any of ``commands``."""
-        for command in commands or []:
-            record = self.test_baselines.get(baseline_command_key(str(command)))
-            if record is not None and record.usable:
-                return True
-        return False
+    def has_usable_pre_edit_baseline(self) -> bool:
+        """Whether a usable test baseline predates verification-relevant edits.
+
+        This only controls the missing-baseline advisory. A failing run can
+        supply baseline facts without satisfying verification, and existence
+        does not establish coverage or comparability for another test selection.
+        """
+        return any(
+            record.edit_generation == 0 and record.usable for record in self.test_baselines.values()
+        )
 
     def note_test_execution(
         self,
@@ -832,6 +915,9 @@ class TurnExecutionState:
         command: str,
         report: Any,
         duration_seconds: float | None = None,
+        workspace_root: Path | None = None,
+        working_directory: str | None = None,
+        environment_known: bool = True,
     ) -> None:
         """Record one observed test run for the blast-radius diff (step 6).
 
@@ -850,10 +936,17 @@ class TurnExecutionState:
         )
         run = ScopeRun(
             command=cleaned,
-            selectors=command_path_selectors(cleaned),
+            selectors=command_path_selectors(
+                cleaned,
+                workspace_root=workspace_root,
+                working_directory=working_directory,
+                environment_known=environment_known,
+            ),
             phase=phase,
             report=report,
             duration_seconds=duration_seconds,
+            agent_created_paths=tuple(sorted(self.agent_created_paths)),
+            generation=self.verification_relevant_edit_generation,
         )
         self.blast_radius_runs.append(run)
         self.blast_radius_runs[:] = self.blast_radius_runs[-MAX_SCOPE_RUNS:]
@@ -862,11 +955,33 @@ class TurnExecutionState:
     def has_blast_radius_baseline(self) -> bool:
         """True when a usable clean-tree run already covers the selected scope."""
         paths = self.blast_radius_scope.paths
-        if not paths:
-            return False
-        return any(
-            run.phase == ScopePhase.BASELINE and run.usable and run.covers(paths)
-            for run in self.blast_radius_runs
+        return bool(paths) and set(paths) <= set(self.blast_radius_baseline_covered_paths())
+
+    def blast_radius_baseline_covered_paths(self) -> tuple[str, ...]:
+        """Do not project an earlier selection onto tests created after that run."""
+        return tuple(
+            path
+            for path in self.blast_radius_scope.paths
+            if any(
+                run.phase == ScopePhase.BASELINE
+                and run.usable
+                and run.covers((path,))
+                and (path not in self.agent_created_paths or path in run.agent_created_paths)
+                for run in self.blast_radius_runs
+            )
+        )
+
+    def blast_radius_baseline_command(self) -> str:
+        """Reuse an observed covering command without guessing the test framework."""
+        return next(
+            (
+                run.command
+                for run in reversed(self.blast_radius_runs)
+                if run.phase == ScopePhase.BASELINE
+                and run.usable
+                and run.covers(self.blast_radius_scope.paths)
+            ),
+            "",
         )
 
     def compute_blast_radius_assessment(
@@ -886,6 +1001,7 @@ class TurnExecutionState:
             applicable=applicable,
             policy=self.blast_radius_policy,
             agent_created_paths=self.agent_created_paths,
+            current_generation=self.verification_relevant_edit_generation,
         )
         self.latest_blast_radius_assessment = (
             assessment.as_payload() if assessment.applicable else {}
@@ -1055,6 +1171,7 @@ class TurnExecutionState:
             "last_verification_passed": self.last_verification_passed,
             "last_verification_failure_snippet": self.last_verification_failure_snippet,
             "last_verification_failure_category": self.last_verification_failure_category,
+            "unresolved_observed_verification_failures": len(self.observed_verification_failures),
             "failed_verification_commands": sorted(self.failed_verification_commands()),
             "verification_relevant_edit_generation": self.verification_relevant_edit_generation,
             "last_successful_verification_generation": self.last_successful_verification_generation,
@@ -1241,13 +1358,18 @@ def _extract_touched_repo_paths(
     elif normalized_tool == "git_apply_patch":
         patch = str(arguments.get("patch") or "")
         raw_paths.extend(iter_patch_paths(patch))
-    elif normalized_tool == "subagent_run":
+    elif normalized_tool in {"subagent_run", "subagent_wait"}:
         touched_paths = result.get(
             "material_touched_repo_paths",
             result.get("touched_repo_paths"),
         )
         if isinstance(touched_paths, list):
             raw_paths.extend(str(item) for item in touched_paths if isinstance(item, str))
+    elif normalized_tool == "subagent_apply":
+        if result.get("ok") is True and result.get("semantic_no_progress") is not True:
+            applied_paths = result.get("applied_paths")
+            if isinstance(applied_paths, list):
+                raw_paths.extend(str(item) for item in applied_paths if isinstance(item, str))
     elif normalized_tool in _COMMAND_LIKE_MUTATION_TOOL_NAMES:
         touched_paths = result.get("touched_repo_paths")
         if isinstance(touched_paths, list):
@@ -1324,8 +1446,16 @@ def _verification_attempt_passed(
     return False
 
 
-def _verification_relevant_material_paths(paths: set[str]) -> set[str]:
-    if not paths or not _paths_require_verification(paths):
+def _verification_relevant_material_paths(
+    paths: set[str], *, root: Path | None = None, contract: AcceptanceContract | None = None
+) -> set[str]:
+    if not paths or not (
+        _paths_require_verification(paths)
+        or (
+            root is not None
+            and _acceptance_artifact_changed(root=root, contract=contract, touched_paths=paths)
+        )
+    ):
         return set()
     return set(paths)
 
@@ -1551,44 +1681,323 @@ def _verification_evidence_note(
     if evidence.category == VerificationEvidenceCategory.NOT_VERIFICATION:
         return ""
     if evidence.supplemental_only:
+        if evidence.reason == "supplemental_only_contract_selection_differs":
+            return (
+                "Additional verification execution; its selection does not establish "
+                "coverage of the resolved verification command."
+            )
         return (
-            "evidence origin: SELF_AUTHORED "
-            "(supplemental - cannot independently confirm spec compliance)"
+            "Additional task-check execution; it does not establish coverage "
+            "of the resolved verification command."
         )
     result_payload = result if isinstance(result, dict) else {}
     command_specs = result_payload.get("verification_command_specs")
-    if isinstance(command_specs, list) and any(
-        isinstance(item, dict) and item.get("provenance") == "PREEXISTING_REPO_NATIVE"
-        for item in command_specs
+    # Specs describe the resolved selection, which may include checks absent
+    # from this result. Use only identities already matched by the classifier;
+    # neither contract type nor coverage establishes check authorship.
+    matched_commands = set(evidence.covered_verification_commands)
+    if evidence.matched_command:
+        matched_commands.add(evidence.matched_command)
+    provenance_by_command: dict[str, set[str]] = {}
+    if isinstance(command_specs, list):
+        for item in command_specs:
+            if not isinstance(item, dict):
+                continue
+            command = item.get("original_text")
+            if not isinstance(command, str) or command not in matched_commands:
+                continue
+            try:
+                provenance = VerificationCommandProvenance(item.get("provenance"))
+            except (ValueError, TypeError):
+                continue
+            provenance_by_command.setdefault(command, set()).add(provenance.value)
+    if matched_commands and matched_commands == provenance_by_command.keys():
+        origins = sorted({origin for values in provenance_by_command.values() for origin in values})
+        return "Matched command provenance: " + ", ".join(origins) + "."
+    return "Verification command provenance is unconfirmed."
+
+
+@dataclass(frozen=True)
+class _ObservedVerificationEvidence:
+    """A classified check bound to the result occurrence that produced it."""
+
+    evidence: VerificationEvidence
+    observed_exit_code: int | None
+    observed_output: bool
+    command_result_index: int | None = None
+
+
+def _verification_outcome_key(
+    *,
+    root: Path,
+    command: str,
+    working_directory: object,
+    environment_known: bool,
+) -> str | None:
+    """Identify the actual execution, without equating different selections.
+
+    Keep argv spelling/assignments intact and never export environment values.
+    A custom/sandbox environment or opaque shell wrapper has no comparable key.
+    """
+    if not environment_known or not command.strip() or not isinstance(working_directory, str):
+        return None
+    analysis = analyze_verification_command(command, trusted=True, workspace_root=root)
+    if (
+        analysis.rejection_reason
+        or analysis.shell_control_flow not in {"none", "safe_cd_and"}
+        or analysis.unwrapped_command != analysis.normalized_command
     ):
-        return "evidence origin: PREEXISTING_REPO_NATIVE (independent)"
-    if result_payload.get("verification_contract_type") == "repo_native":
-        return "evidence origin: PREEXISTING_REPO_NATIVE (independent)"
-    if evidence.category == VerificationEvidenceCategory.AUTHORITATIVE:
-        return "evidence origin: USER_EXPLICIT (independent)"
-    if evidence.category == VerificationEvidenceCategory.REPO_NATIVE:
-        return "evidence origin: PREEXISTING_REPO_NATIVE (independent)"
-    if evidence.category == VerificationEvidenceCategory.TASK_ACCEPTANCE:
-        return "evidence origin: DIRECT_BLACK_BOX (independent)"
-    return ""
+        return None
+    try:
+        cwd = (root / working_directory).resolve()
+        if analysis.cd_target is not None:
+            cwd = (cwd / analysis.cd_target).resolve()
+        context = (command.strip(), str(cwd), sorted(os.environ.items()))
+        return hashlib.sha256(json.dumps(context, ensure_ascii=True).encode()).hexdigest()
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
-def _verify_run_evidence_records(
+def _record_observed_verification_outcomes(
+    *,
+    root: Path,
+    state: TurnExecutionState,
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    observations: list[_ObservedVerificationEvidence],
+    attempt_passed: bool,
+    environment_known: bool,
+) -> bool:
+    """Retire only a failed execution that a later comparable pass supersedes."""
+    resolved = False
+    failed_in_this_attempt: set[str] = set()
+    command_results = result.get("command_results")
+    for index, observation in enumerate(observations):
+        evidence = observation.evidence
+        item = result
+        bound_to_execution = evidence.category != VerificationEvidenceCategory.NOT_VERIFICATION
+        if tool_name == "verify_run":
+            result_index = observation.command_result_index
+            if (
+                result_index is None
+                or not isinstance(command_results, list)
+                or not isinstance(command_results[result_index], dict)
+            ):
+                # A legacy aggregate cannot bind a result to one execution.
+                bound_to_execution = False
+            else:
+                item = command_results[result_index]
+        command = str(
+            item.get("effective_command")
+            or item.get("effective_cmd")
+            or item.get("command")
+            or item.get("cmd")
+            or arguments.get("cmd")
+            or ""
+        )
+        cwd = item.get(
+            "verification_working_directory",
+            item.get(
+                "cwd",
+                result.get(
+                    "verification_working_directory", result.get("cwd", arguments.get("cwd", "."))
+                ),
+            ),
+        )
+        key = (
+            _verification_outcome_key(
+                root=root,
+                command=command,
+                working_directory=cwd,
+                environment_known=environment_known,
+            )
+            if bound_to_execution
+            else None
+        )
+        code = observation.observed_exit_code
+        if (
+            attempt_passed
+            and code == 0
+            and evidence.real_execution is True
+            and observation.observed_output
+        ):
+            if (
+                key is not None
+                and key not in failed_in_this_attempt
+                and key in state.observed_verification_failures
+            ):
+                del state.observed_verification_failures[key]
+                resolved = True
+        elif (
+            code is not None
+            and code != 0
+            and not state.expected_verification_commands.intersection(
+                evidence.covered_verification_commands
+            )
+        ):
+            # Required-command failures already have their own reconciliation
+            # map, including the verifier's sandbox/legacy result contracts.
+            # A matched recommendation is not necessarily required, so its
+            # observed failure still needs exact execution/context tracking.
+            failure_key = key or f"unknown:{state.verification_attempt_count}:{index}"
+            failed_in_this_attempt.add(failure_key)
+            # Reinsert so the last outstanding failure supplies the diagnostic.
+            state.observed_verification_failures.pop(failure_key, None)
+            category_result = item
+            if (
+                tool_name == "verify_run"
+                and bound_to_execution
+                and isinstance(command_results, list)
+                and len(command_results) == 1
+                and not item.get("failure_category")
+            ):
+                # A single execution can inherit its aggregate diagnosis. A
+                # batch diagnosis cannot identify which command caused it.
+                category_result = {**item, "failure_category": result.get("failure_category")}
+            provenance = ""
+            requirement = ""
+            specs = result.get("verification_command_specs")
+            matching_specs = [
+                spec
+                for spec in (specs if isinstance(specs, list) else [])
+                if isinstance(spec, dict)
+                and str(spec.get("original_text") or "").strip() == command.strip()
+                and spec.get("working_directory", ".") == cwd
+            ]
+            if len(matching_specs) == 1:
+                try:
+                    provenance = VerificationCommandProvenance(
+                        matching_specs[0]["provenance"]
+                    ).value
+                    requirement = VerificationCommandRequirement(
+                        matching_specs[0]["requirement"]
+                    ).value
+                except (KeyError, ValueError, TypeError):
+                    provenance = ""
+                    requirement = ""
+            state.observed_verification_failures[failure_key] = _ObservedVerificationFailure(
+                snippet=_verification_command_result_snippet(item),
+                category=_verification_failure_category_for_tool_result(
+                    tool_name=tool_name, arguments=arguments, result=item
+                ),
+                # Aggregate diagnoses enrich reporting only. The existing
+                # per-command category also controls explicit blocker admission.
+                reported_category=_verification_failure_category_for_tool_result(
+                    tool_name=tool_name, arguments=arguments, result=category_result
+                ),
+                was_test_run=command_is_test_runner(command),
+                command=command,
+                generation=state.verification_relevant_edit_generation,
+                provenance=provenance,
+                requirement=requirement,
+            )
+    # No execution/exit observation is not a failed execution. It also cannot
+    # retire an older failure or establish a passing attempt.
+    return resolved
+
+
+def _verification_evidence_in_workspace(
+    evidence: VerificationEvidence,
+    *,
+    root: Path,
+    cwd: Any,
+) -> VerificationEvidence:
+    """A command's targets refer to its cwd, not merely its command text.
+
+    Configured checks are relative to the workspace root. A check launched in
+    a different directory can be useful evidence, but cannot claim that check's
+    coverage without an explicit equivalent command rooted there.
+    """
+
+    if cwd is None or cwd == "":
+        return evidence
+    try:
+        actual = Path(cwd)
+        if not actual.is_absolute():
+            actual = root / actual
+        matches = actual.resolve() == root.resolve()
+    except (OSError, TypeError, ValueError):
+        matches = False
+    if matches:
+        return evidence
+    return replace(
+        evidence,
+        allowed_to_satisfy_contract=False,
+        covered_verification_commands=(),
+        reason="verification_cwd_mismatch",
+    )
+
+
+def _classify_acceptance_aware_verification_evidence(
+    command: str,
+    *,
+    acceptance_contract: AcceptanceContract | None,
+    known_verification_commands: list[str] | None,
+    authoritative: bool,
+    **kwargs: Any,
+) -> VerificationEvidence:
+    """Accepted user checks coexist with configured checks without replacing them."""
+    explicit_commands = (
+        [
+            command
+            for criterion in acceptance_contract.criteria
+            if criterion.kind == AcceptanceCriterionKind.EXPLICIT_COMMAND_IO
+            for command in criterion.commands
+        ]
+        if acceptance_contract is not None
+        else []
+    )
+    explicit_only = bool(
+        _matching_effective_verification_commands(
+            observed_command=command,
+            effective_verification_commands=explicit_commands,
+        )
+    ) and not _matching_effective_verification_commands(
+        observed_command=command,
+        effective_verification_commands=known_verification_commands,
+    )
+    evidence = classify_verification_evidence(
+        command,
+        known_verification_commands=(
+            [*(known_verification_commands or []), *explicit_commands]
+            if explicit_only
+            else known_verification_commands
+        ),
+        authoritative=authoritative and not explicit_only,
+        **kwargs,
+    )
+    if explicit_only and evidence.category != VerificationEvidenceCategory.NOT_VERIFICATION:
+        evidence = replace(evidence, category=VerificationEvidenceCategory.TASK_ACCEPTANCE)
+    if acceptance_contract is not None and not acceptance_contract.baseline_available:
+        evidence = replace(
+            evidence,
+            allowed_to_satisfy_contract=False,
+            covered_verification_commands=(),
+            supplemental_only=True,
+            reason="acceptance_baseline_unavailable",
+        )
+    return evidence
+
+
+def _verify_run_evidence_observations(
     *,
     result: dict[str, Any],
     known_verification_commands: list[str] | None,
+    required_verification_commands: set[str],
     verification_authoritative: bool,
     material_touched_paths: set[str],
     root: Path,
     evidence_v2: bool = True,
-) -> list[VerificationEvidence]:
+    acceptance_contract: AcceptanceContract | None = None,
+) -> list[_ObservedVerificationEvidence]:
     command_results = result.get("command_results")
     verification_relevant_touched_paths = _verification_relevant_material_paths(
-        material_touched_paths
+        material_touched_paths, root=root, contract=acceptance_contract
     )
-    records: list[VerificationEvidence] = []
+    records: list[_ObservedVerificationEvidence] = []
     if isinstance(command_results, list):
-        for item in command_results:
+        for index, item in enumerate(command_results):
             if not isinstance(item, dict):
                 continue
             command = str(item.get("command") or item.get("effective_command") or "")
@@ -1596,9 +2005,11 @@ def _verify_run_evidence_records(
                 continue
             exit_code_raw = item.get("exit_code")
             exit_code = exit_code_raw if isinstance(exit_code_raw, int) else None
-            record = classify_verification_evidence(
+            record = _classify_acceptance_aware_verification_evidence(
                 command,
+                acceptance_contract=acceptance_contract,
                 known_verification_commands=known_verification_commands,
+                required_verification_commands=required_verification_commands,
                 authoritative=verification_authoritative,
                 material_touched_paths=verification_relevant_touched_paths,
                 exit_code=exit_code,
@@ -1612,34 +2023,62 @@ def _verify_run_evidence_records(
                 root=root,
                 evidence_v2=evidence_v2,
             )
-            if (
-                _verification_command_result_is_benign_skip(item)
-                and record.category != VerificationEvidenceCategory.NOT_VERIFICATION
-                and record.covered_verification_commands
-            ):
-                record = replace(
-                    record,
-                    allowed_to_satisfy_contract=True,
-                    reason=str(item.get("non_execution_reason") or "verification_skipped"),
+            # A benign skip is useful lifecycle information, but cannot prove
+            # that a required suite executed. Keep the classifier's rejection
+            # for zero tests and other non-execution results.
+            record = _verification_evidence_in_workspace(
+                record, root=root, cwd=item.get("cwd", result.get("cwd"))
+            )
+            # The batch aggregate may be rejected while an independent sibling
+            # check is valid. Acceptance consumes each command's own decision.
+            item["verification_evidence_allowed"] = record.allowed_to_satisfy_contract
+            item["verification_evidence_category"] = record.category.value
+            item["verification_evidence_reason"] = record.reason
+            item["verification_evidence_covered_commands"] = list(
+                record.covered_verification_commands
+            )
+            observed_exit_code, observed_output = _verification_evidence_observation(
+                tool_name="verify_run", result={"command_results": [item]}
+            )
+            records.append(
+                _ObservedVerificationEvidence(
+                    evidence=record,
+                    observed_exit_code=observed_exit_code,
+                    observed_output=observed_output,
+                    command_result_index=index,
                 )
-            records.append(record)
+            )
         return records
 
     commands = result.get("commands")
     if isinstance(commands, list):
-        all_passed = result.get("all_passed")
-        exit_code = 0 if all_passed is True else 1 if all_passed is False else None
+        run_status = str(result.get("status") or "")
+        if run_status:
+            # Tri-state: not_run maps to "no observation", never to failure.
+            exit_code = 0 if run_status == "passed" else 1 if run_status == "failed" else None
+        else:
+            all_passed = result.get("all_passed")
+            exit_code = 0 if all_passed is True else 1 if all_passed is False else None
+        observed_exit_code, observed_output = _verification_evidence_observation(
+            tool_name="verify_run", result=result
+        )
         for command in commands:
             records.append(
-                classify_verification_evidence(
-                    str(command),
-                    known_verification_commands=known_verification_commands,
-                    authoritative=verification_authoritative,
-                    material_touched_paths=verification_relevant_touched_paths,
-                    exit_code=exit_code,
-                    output=_verification_output_text(result),
-                    root=root,
-                    evidence_v2=evidence_v2,
+                _ObservedVerificationEvidence(
+                    evidence=_classify_acceptance_aware_verification_evidence(
+                        str(command),
+                        acceptance_contract=acceptance_contract,
+                        known_verification_commands=known_verification_commands,
+                        required_verification_commands=required_verification_commands,
+                        authoritative=verification_authoritative,
+                        material_touched_paths=verification_relevant_touched_paths,
+                        exit_code=exit_code,
+                        output=_verification_output_text(result),
+                        root=root,
+                        evidence_v2=evidence_v2,
+                    ),
+                    observed_exit_code=observed_exit_code,
+                    observed_output=observed_output,
                 )
             )
     return records
@@ -1666,26 +2105,40 @@ def _shell_verification_evidence(
         and all(isinstance(item, int) for item in stage_status_raw)
         else None
     )
-    return classify_verification_evidence(
+    evidence = _classify_acceptance_aware_verification_evidence(
         command,
+        acceptance_contract=state.acceptance_contract,
         known_verification_commands=known_verification_commands,
+        required_verification_commands=state.expected_verification_commands,
         authoritative=verification_authoritative,
         changed_paths=state.touched_repo_paths,
-        material_touched_paths=_verification_relevant_material_paths(material_touched_paths),
+        material_touched_paths=_verification_relevant_material_paths(
+            material_touched_paths, root=root, contract=state.acceptance_contract
+        ),
         exit_code=exit_code,
         output=_verification_output_text(result),
         root=root,
         stage_status=stage_status,
         evidence_v2=evidence_v2,
+        working_directory=str(
+            result.get("verification_working_directory")
+            or result.get("cwd")
+            or arguments.get("cwd")
+            or "."
+        ),
+    )
+    return _verification_evidence_in_workspace(
+        evidence, root=root, cwd=result.get("cwd", arguments.get("cwd"))
     )
 
 
 def _verification_evidence_observation(
     *,
     tool_name: str,
-    evidence: VerificationEvidence,
     result: dict[str, Any],
 ) -> tuple[int | None, bool]:
+    """Read one result occurrence; a batch cannot identify a single observation."""
+
     def _observed_output_capture(payload: dict[str, Any]) -> bool:
         if any(
             key in payload and isinstance(payload.get(key), str)
@@ -1706,27 +2159,21 @@ def _verification_evidence_observation(
     if normalized_tool == "verify_run":
         command_results = result.get("command_results")
         if isinstance(command_results, list):
-            evidence_command = _normalize_shell_command_for_match(evidence.normalized_command)
-            for raw_item in command_results:
-                if not isinstance(raw_item, dict):
-                    continue
-                command = str(raw_item.get("command") or raw_item.get("effective_command") or "")
-                effective_command = str(
-                    raw_item.get("effective_command") or raw_item.get("command") or ""
-                )
-                normalized_candidates = {
-                    _normalize_shell_command_for_match(command),
-                    _normalize_shell_command_for_match(effective_command),
-                }
-                if evidence_command not in normalized_candidates:
-                    continue
-                exit_code = raw_item.get("exit_code")
-                return (
-                    exit_code if isinstance(exit_code, int) else None,
-                    _observed_output_capture(raw_item),
-                )
-        all_passed = result.get("all_passed")
-        exit_code = 0 if all_passed is True else 1 if all_passed is False else None
+            if len(command_results) != 1 or not isinstance(command_results[0], dict):
+                return None, False
+            item = command_results[0]
+            exit_code = item.get("exit_code")
+            return (
+                exit_code if isinstance(exit_code, int) else None,
+                _observed_output_capture(item),
+            )
+        run_status = str(result.get("status") or "")
+        if run_status:
+            # Tri-state: not_run maps to "no observation", never to failure.
+            exit_code = 0 if run_status == "passed" else 1 if run_status == "failed" else None
+        else:
+            all_passed = result.get("all_passed")
+            exit_code = 0 if all_passed is True else 1 if all_passed is False else None
         return (
             exit_code,
             _observed_output_capture(result),
@@ -1745,14 +2192,14 @@ def _unmasked_shell_verification_command(command: str) -> str:
     analysis = analyze_verification_command(analysis_candidate, trusted=True)
     if analysis.command_family is None:
         return ""
-    return _normalize_shell_command_for_match(analysis_candidate)
+    # Stripping wrappers is only for recognizing the runner. Retained evidence
+    # must still identify the actual directory, redirects and arguments used.
+    return _normalize_shell_command_for_match(command)
 
 
 def _tool_effect_has_qualifying_execution(
     *,
-    tool_name: str,
-    evidence_records: list[VerificationEvidence],
-    result: dict[str, Any],
+    observations: list[_ObservedVerificationEvidence],
 ) -> bool:
     """True when a real test/execution run (pass or fail) is observed.
 
@@ -1762,7 +2209,8 @@ def _tool_effect_has_qualifying_execution(
     static checks (ast.parse, py_compile, mypy, ruff check) and non-executions
     (no-tests collected, vacuous commands). Used only for the ordering rule.
     """
-    for record in evidence_records:
+    for observation in observations:
+        record = observation.evidence
         if record.category == VerificationEvidenceCategory.NOT_VERIFICATION:
             continue
         if record.real_execution is False:
@@ -1771,11 +2219,7 @@ def _tool_effect_has_qualifying_execution(
             continue
         if record.real_execution is True:
             return True
-        observed_exit_code, _observed_output = _verification_evidence_observation(
-            tool_name=tool_name,
-            evidence=record,
-            result=result,
-        )
+        observed_exit_code = observation.observed_exit_code
         if observed_exit_code is not None and observed_exit_code != 0:
             return True
     return False
@@ -1788,25 +2232,25 @@ def _regression_capture_timestamp() -> str:
         return ""
 
 
-def _iter_executed_test_commands(
+def _iter_executed_test_command_results(
     *,
     tool_name: str,
     arguments: dict[str, Any],
     result: dict[str, Any],
-) -> list[tuple[str, str]]:
-    """Yield ``(command, output)`` pairs for executed test-runner commands.
+) -> list[tuple[str, dict[str, Any]]]:
+    """Keep each test-runner command paired with its own result occurrence.
 
     Only commands whose meaningful first stage is pytest or unittest/Django are
     returned — the runners the parsers understand. Other qualifying executions
     (validation scripts, linters) emit no per-test ids and are out of scope.
     """
-    pairs: list[tuple[str, str]] = []
+    pairs: list[tuple[str, dict[str, Any]]] = []
     if tool_name == "shell_run":
         command = str(
             result.get("effective_cmd") or result.get("cmd") or arguments.get("cmd") or ""
         )
         if command and command_is_test_runner(command):
-            pairs.append((command, _verification_output_text(result)))
+            pairs.append((command, result))
         return pairs
     if tool_name == "verify_run":
         command_results = result.get("command_results")
@@ -1816,8 +2260,22 @@ def _iter_executed_test_commands(
                     continue
                 command = str(item.get("command") or item.get("effective_command") or "")
                 if command and command_is_test_runner(command):
-                    pairs.append((command, _verification_output_text(item)))
+                    pairs.append((command, item))
     return pairs
+
+
+def _iter_executed_test_commands(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+) -> list[tuple[str, str]]:
+    return [
+        (command, _verification_output_text(item))
+        for command, item in _iter_executed_test_command_results(
+            tool_name=tool_name, arguments=arguments, result=result
+        )
+    ]
 
 
 def _iter_executed_commands_with_outcome(
@@ -1921,16 +2379,35 @@ def _capture_repro_artifact_edits(
     state.note_repro_artifact_edited_after_fix(edited_artifacts)
 
 
+def scope_environment_is_host(runner: Any, *, verification_config: AppConfig | None = None) -> bool:
+    """Only the standard observed host runner has this process's environment.
+
+    Do not instantiate a lazy runner or infer a custom/container environment.
+    Inline shell assignments are accounted for by command selection analysis.
+    """
+    if verification_config is not None:
+        # verify_run chooses its own runner, independently of the shell tool.
+        try:
+            return resolve_verify_sandbox_mode(verification_config) == "off"
+        except (TypeError, ValueError, RuntimeError):
+            return False
+    if type(runner) is LazyShellRunner:
+        runner = runner._runner
+    return type(runner) is HostShellRunner
+
+
 def _capture_regression_test_runs(
     *,
+    root: Path,
     state: TurnExecutionState,
     tool_name: str,
     arguments: dict[str, Any],
     result: dict[str, Any],
     elapsed_ms: int | None = None,
+    environment_known: bool = True,
 ) -> None:
     timestamp = _regression_capture_timestamp()
-    pairs = _iter_executed_test_commands(
+    pairs = _iter_executed_test_command_results(
         tool_name=tool_name,
         arguments=arguments,
         result=result,
@@ -1943,14 +2420,19 @@ def _capture_regression_test_runs(
             duration_seconds = max(0.0, float(elapsed_ms) / 1000.0)
         except (TypeError, ValueError):
             duration_seconds = None
-    for command, output in pairs:
-        report = parse_test_report(output)
-        if tool_name == "verify_run":
-            report = _structured_verify_test_report(
-                result=result,
-                command=command,
-                parsed_report=report,
-            )
+    for command, item in pairs:
+        if tool_name == "verify_run" and "host_test_report" in item:
+            # This report came from the wrapper's full command output. Explicit
+            # unknown/incomplete evidence must not become a pass via its preview.
+            report = TestReport.from_payload(item["host_test_report"]) or TestReport()
+        else:
+            report = parse_test_report(_verification_output_text(item))
+            if tool_name == "verify_run":
+                report = _structured_verify_test_report(
+                    command_result=item,
+                    all_passed=result.get("all_passed") is True,
+                    parsed_report=report,
+                )
         state.note_test_execution(command=command, report=report, timestamp=timestamp)
         # Blast radius (step 6) reads the same parsed reports but keys them by what
         # each run selected rather than by command identity, so a clean whole-suite
@@ -1959,45 +2441,42 @@ def _capture_regression_test_runs(
             command=command,
             report=report,
             duration_seconds=duration_seconds,
+            workspace_root=root,
+            working_directory=(
+                str(result.get("cwd") or arguments.get("cwd") or ".")
+                if tool_name == "shell_run"
+                else None  # verify_run executes from the bound workspace root.
+            ),
+            environment_known=environment_known,
         )
 
 
 def _structured_verify_test_report(
     *,
-    result: dict[str, Any],
-    command: str,
+    command_result: dict[str, Any],
+    all_passed: bool,
     parsed_report: TestReport,
 ) -> TestReport:
     """Prefer host-recorded verify success; raw output only adds parsed detail."""
-    command_key = baseline_command_key(command)
-    command_results = result.get("command_results")
-    if not isinstance(command_results, list):
+    exit_code = command_result.get("exit_code")
+    structured_passed = command_result.get("ok") is True or (all_passed and exit_code == 0)
+    if not structured_passed or command_result.get("real_execution") is False:
         return parsed_report
-    for raw_item in command_results:
-        if not isinstance(raw_item, dict):
-            continue
-        observed_command = str(raw_item.get("effective_command") or raw_item.get("command") or "")
-        if baseline_command_key(observed_command) != command_key:
-            continue
-        exit_code = raw_item.get("exit_code")
-        structured_passed = raw_item.get("ok") is True or (
-            result.get("all_passed") is True and exit_code == 0
+    runner = parsed_report.runner
+    if runner == "unknown":
+        observed_command = str(
+            command_result.get("effective_command") or command_result.get("command") or ""
         )
-        if not structured_passed or raw_item.get("real_execution") is False:
-            return parsed_report
-        runner = parsed_report.runner
-        if runner == "unknown":
-            lowered = observed_command.casefold()
-            runner = "pytest" if "pytest" in lowered else "unittest"
-        return TestReport(
-            runner=runner,
-            passed=parsed_report.passed,
-            failed=0,
-            skipped=parsed_report.skipped,
-            errors=0,
-            counts_known=True,
-        )
-    return parsed_report
+        lowered = observed_command.casefold()
+        runner = "pytest" if "pytest" in lowered else "unittest"
+    return TestReport(
+        runner=runner,
+        passed=parsed_report.passed,
+        failed=0,
+        skipped=parsed_report.skipped,
+        errors=0,
+        counts_known=True,
+    )
 
 
 def _capture_expectation_run_outputs(
@@ -2066,6 +2545,30 @@ def _verification_attempt_executed_test_runner(
     )
 
 
+def _acceptance_artifact_changed(
+    *, root: Path, contract: AcceptanceContract | None, touched_paths: set[str]
+) -> bool:
+    """Declared artifacts remain verification-relevant regardless of suffix.
+
+    The general code classifier intentionally ignores documentation/data edits.
+    A task that explicitly checks such an artifact still needs fresh evidence
+    when it changes; unrelated documentation keeps the existing behavior.
+    """
+
+    if contract is None or not touched_paths:
+        return False
+    declared = {
+        ref.workspace_relative_path for ref in contract.path_refs if ref.workspace_relative_path
+    } | contract.allowed_output_paths
+    for touched in touched_paths:
+        changed = (root / touched).resolve()
+        for path in declared:
+            target = (root / path).resolve()
+            if changed == target or target in changed.parents or changed in target.parents:
+                return True
+    return False
+
+
 def _record_tool_effect(
     *,
     root: Path,
@@ -2078,9 +2581,21 @@ def _record_tool_effect(
     verification_authoritative: bool = False,
     evidence_v2: bool = True,
     elapsed_ms: int | None = None,
+    scope_environment_known: bool = True,
 ) -> None:
     if is_tool_unavailable_result(result):
         return
+    # Required commands are also known identities, including direct callers
+    # that supplied the expected set without a separate recommendation list.
+    if state.expected_verification_commands:
+        known_verification_commands = list(
+            dict.fromkeys(
+                [
+                    *(known_verification_commands or []),
+                    *sorted(state.expected_verification_commands),
+                ]
+            )
+        )
     normalized_tool = tool_name.strip().lower()
     touched_paths: set[str] = set()
     benign_runtime_paths: set[str] = set()
@@ -2112,7 +2627,7 @@ def _record_tool_effect(
             arguments=arguments,
             result=result,
         )
-    elif normalized_tool == "subagent_run":
+    elif normalized_tool in {"subagent_run", "subagent_wait", "subagent_apply"}:
         touched_paths = _extract_touched_repo_paths(
             root=root,
             tool_name=normalized_tool,
@@ -2125,33 +2640,70 @@ def _record_tool_effect(
         # signal (agent_authored), not a regression. touched_paths already holds
         # the normalized repo-relative path for fs_write.
         for created_path in touched_paths:
-            state.note_agent_created_path(created_path)
+            # Recreating a previously touched/deleted existing file does not
+            # turn it into an agent-authored artifact or erase its obligations.
+            if (
+                created_path not in state.touched_repo_paths
+                or created_path in state.agent_created_paths
+            ):
+                state.note_agent_created_path(created_path)
 
     # Reproduction-first guardrail (step 5): the reproduction is only evidence
     # while it stays the one that failed before the fix. Editing a recorded
     # artifact once product code has already changed is recorded and surfaced.
-    if status != "failed" and normalized_tool in _MATERIAL_EDIT_TOOL_NAMES:
+    if status != "failed" and (
+        normalized_tool in _MATERIAL_EDIT_TOOL_NAMES
+        or normalized_tool in {"subagent_wait", "subagent_apply"}
+    ):
         _capture_repro_artifact_edits(state=state, touched_paths=touched_paths)
 
     if (status != "failed" and normalized_tool in _MATERIAL_EDIT_TOOL_NAMES) or (
-        normalized_tool == "subagent_run" and touched_paths
+        normalized_tool in {"subagent_run", "subagent_wait", "subagent_apply"} and touched_paths
     ):
         state.note_material_edit()
         state.material_edit_tools.add(normalized_tool)
         state.touched_repo_paths.update(touched_paths)
-        if _paths_require_verification(touched_paths):
+        if _paths_require_verification(touched_paths) or _acceptance_artifact_changed(
+            root=root, contract=state.acceptance_contract, touched_paths=touched_paths
+        ):
             state.note_verification_relevant_edit()
     elif normalized_tool in _COMMAND_LIKE_MUTATION_TOOL_NAMES and touched_paths:
         state.note_material_edit()
         state.material_edit_tools.add(normalized_tool)
         state.touched_repo_paths.update(touched_paths)
-        if _paths_require_verification(touched_paths):
+        if _paths_require_verification(touched_paths) or _acceptance_artifact_changed(
+            root=root, contract=state.acceptance_contract, touched_paths=touched_paths
+        ):
             state.note_verification_relevant_edit()
     elif status != "failed" and normalized_tool == "git_diff":
         state.record_diff_review()
 
+    if normalized_tool == "verify_run" and isinstance(result.get("consumer_profile_report"), dict):
+        report = result["consumer_profile_report"]
+        report["task_id"] = state.acceptance_contract.task_id if state.acceptance_contract else ""
+        report["generation"] = state.verification_relevant_edit_generation
+        report["authority"] = "supplemental"
+        if touched_paths:
+            report["passed"] = False
+            report["status"] = "failed"
+            report["workspace_changed_during_probe"] = True
+            result["profile_passed"] = False
+        state.consumer_profile_observations.append(dict(report))
+        state.consumer_profile_observations[:] = state.consumer_profile_observations[-8:]
+        record_consumer_profile_observation(
+            contract=state.acceptance_contract,
+            report=report,
+            generation=state.verification_relevant_edit_generation,
+        )
+        result["verification_evidence_allowed"] = False
+        result["verification_evidence_supplemental_only"] = True
+        # Proposed checks do not overwrite the outcome or coverage of the
+        # separately executed host/user verification contract, pass or fail.
+        return
+
     verification_attempt = False
     evidence_records: list[VerificationEvidence] = []
+    evidence_observations: list[_ObservedVerificationEvidence] = []
     evidence = VerificationEvidence(
         category=VerificationEvidenceCategory.NOT_VERIFICATION,
         normalized_command=str(arguments.get("cmd") or ""),
@@ -2159,14 +2711,17 @@ def _record_tool_effect(
     )
     if normalized_tool == "verify_run":
         verification_attempt = True
-        evidence_records = _verify_run_evidence_records(
+        evidence_observations = _verify_run_evidence_observations(
             result=result,
             known_verification_commands=known_verification_commands,
+            required_verification_commands=state.expected_verification_commands,
             verification_authoritative=verification_authoritative,
             material_touched_paths=touched_paths,
             root=root,
             evidence_v2=evidence_v2,
+            acceptance_contract=state.acceptance_contract,
         )
+        evidence_records = [observation.evidence for observation in evidence_observations]
         evidence = _aggregate_verification_evidence(evidence_records)
     elif normalized_tool == "shell_run":
         evidence = _shell_verification_evidence(
@@ -2180,6 +2735,16 @@ def _record_tool_effect(
             evidence_v2=evidence_v2,
         )
         evidence_records = [evidence]
+        observed_exit_code, observed_output = _verification_evidence_observation(
+            tool_name=normalized_tool, result=result
+        )
+        evidence_observations = [
+            _ObservedVerificationEvidence(
+                evidence=evidence,
+                observed_exit_code=observed_exit_code,
+                observed_output=observed_output,
+            )
+        ]
         verification_attempt = evidence.category != VerificationEvidenceCategory.NOT_VERIFICATION
     if normalized_tool in _COMMAND_LIKE_MUTATION_TOOL_NAMES:
         result["verification_evidence_category"] = evidence.category.value
@@ -2190,8 +2755,6 @@ def _record_tool_effect(
         verification_note = _verification_evidence_note(evidence, result=result)
         if verification_note:
             result["verification_note"] = verification_note
-        if evidence.supplemental_only:
-            result["verification_supplemental_only_note"] = SUPPLEMENTAL_VERIFICATION_ADVISORY
     record_acceptance_tool_effect(
         contract=state.acceptance_contract,
         root=root,
@@ -2204,6 +2767,8 @@ def _record_tool_effect(
         verification_authoritative=verification_authoritative,
         evidence_category=evidence.category.value,
         evidence_allowed=evidence.allowed_to_satisfy_contract,
+        generation=state.verification_relevant_edit_generation,
+        task_id=state.acceptance_contract.task_id if state.acceptance_contract else None,
     )
     # Baseline-first regression protocol (step 3): capture parsed per-test
     # outcomes for baseline/attribution. Runs for every executed test-runner
@@ -2212,11 +2777,13 @@ def _record_tool_effect(
     # regardless of the kill-switch (capture is telemetry; only the gate policy
     # is gated).
     _capture_regression_test_runs(
+        root=root,
         state=state,
         tool_name=normalized_tool,
         arguments=arguments,
         result=result,
         elapsed_ms=elapsed_ms,
+        environment_known=scope_environment_known,
     )
     # Turn-contract v2 (step 4): capture post-edit run output for the expected-output
     # evidence linker. Like the regression capture above, this is unconditional
@@ -2245,7 +2812,6 @@ def _record_tool_effect(
         normalized_command = _unmasked_shell_verification_command(raw_command)
         observed_exit_code, observed_output = _verification_evidence_observation(
             tool_name=normalized_tool,
-            evidence=evidence,
             result=result,
         )
         if normalized_command and observed_exit_code == 0 and observed_output:
@@ -2272,26 +2838,35 @@ def _record_tool_effect(
         attempt_physically_passed and not any_allowed_evidence and all_evidence_is_supplemental
     )
     # A successful supplemental check is additional telemetry, not a newer contract
-    # verdict. Preserve the last decisive outcome and its paired metadata; a failed
-    # supplemental check still contradicts an earlier pass below.
+    # verdict. A nonzero result must remain a failure: exit codes and diagnostic
+    # text cannot prove that the program never launched. In particular, a program
+    # that executed can itself return 126/127. A successful later attempt can
+    # establish a newer verdict; retain individual accepted observations for audit.
     if not preserve_prior_verification_outcome:
         state.last_verification_passed = bool(attempt_physically_passed and any_allowed_evidence)
-    for record in evidence_records:
-        observed_exit_code, observed_output = _verification_evidence_observation(
-            tool_name=normalized_tool,
-            evidence=record,
-            result=result,
-        )
+    for observation in evidence_observations:
+        record = observation.evidence
+        observed_exit_code = observation.observed_exit_code
+        observed_output = observation.observed_output
         state.record_verification_evidence(
             record,
-            accepted=bool(attempt_physically_passed and record.allowed_to_satisfy_contract),
+            accepted=bool(
+                record.allowed_to_satisfy_contract
+                and (
+                    attempt_physically_passed
+                    or (
+                        normalized_tool == "verify_run"
+                        and record.real_execution is True
+                        and observed_exit_code == 0
+                        and observed_output
+                    )
+                )
+            ),
             observed_exit_code=observed_exit_code,
             observed_output=observed_output,
         )
     if evidence_v2 and _tool_effect_has_qualifying_execution(
-        tool_name=normalized_tool,
-        evidence_records=evidence_records,
-        result=result,
+        observations=evidence_observations,
     ):
         # Ordering rule: stamp that a real execution run happened after the most
         # recent material edit, so finalization can require post-edit evidence.
@@ -2322,6 +2897,82 @@ def _record_tool_effect(
             evidence=evidence,
         )
 
+    resolved_observed_failure = _record_observed_verification_outcomes(
+        root=root,
+        state=state,
+        tool_name=normalized_tool,
+        arguments=arguments,
+        result=result,
+        observations=evidence_observations,
+        attempt_passed=attempt_physically_passed,
+        environment_known=scope_environment_known,
+    )
+    complete_execution_observations = bool(evidence_observations) and all(
+        observation.evidence.real_execution is True
+        and observation.observed_exit_code == 0
+        and observation.observed_output
+        for observation in evidence_observations
+    )
+    if normalized_tool == "verify_run":
+        commands = result.get("commands")
+        command_results = result.get("command_results")
+        complete_execution_observations = bool(
+            complete_execution_observations
+            and isinstance(commands, list)
+            and isinstance(command_results, list)
+            and len(commands) == len(command_results) == len(evidence_observations)
+            and all(item.command_result_index is not None for item in evidence_observations)
+        )
+    if (
+        attempt_physically_passed
+        and complete_execution_observations
+        and any(
+            item.evidence.allowed_to_satisfy_contract
+            and (
+                item.evidence.covered_verification_commands
+                or not any(str(command).strip() for command in (known_verification_commands or []))
+            )
+            for item in evidence_observations
+        )
+    ):
+        # Preserve the existing accepted-pass policy for contexts we cannot
+        # compare (e.g. the strict verifier), including no-contract sessions.
+        # This does not prove an unknown supplemental command itself passed.
+        # Comparable failures still require their own successful rerun.
+        # Newly accepted independent checks beside recommendations must not
+        # broaden this legacy recovery policy to different unknown failures.
+        for key in tuple(state.observed_verification_failures):
+            if key.startswith("unknown:"):
+                del state.observed_verification_failures[key]
+    if state.observed_verification_failures:
+        failure = next(reversed(state.observed_verification_failures.values()))
+        state.last_verification_passed = False
+        state.last_verification_failure_snippet = failure.snippet
+        state.last_verification_failure_category = failure.category
+        state.last_verification_attempt_was_test_run = failure.was_test_run
+        return
+    if (
+        (
+            resolved_observed_failure
+            or (preserve_prior_verification_outcome and state.last_verification_passed is not True)
+        )
+        and attempt_physically_passed
+        and complete_execution_observations
+        and all(
+            record.allowed_to_satisfy_contract or record.supplemental_only
+            for record in evidence_records
+        )
+        and not state.failed_verification_commands()
+    ):
+        # A real supplemental success is an execution outcome, not coverage of
+        # a wider command. With no outstanding failure it can supersede an
+        # inconclusive/non-executing attempt; missing/stale coverage is checked
+        # independently.
+        state.last_verification_passed = True
+        state.last_verification_attempt_was_test_run = _verification_attempt_executed_test_runner(
+            tool_name=normalized_tool, arguments=arguments, result=result
+        )
+        preserve_prior_verification_outcome = False
     if preserve_prior_verification_outcome:
         return
     if state.last_verification_passed is True:
@@ -2445,6 +3096,32 @@ def _completion_gate_problems(
         verification_expected=verification_expected,
     )
     regression_diff = state.compute_regression_diff(enabled=regression_baseline_enabled)
+    # A newer attributed test cannot dispose of a different retained failure.
+    # Reuse existing per-run attribution only for the same current observation;
+    # old/unknown contexts and multiple contexts for one command stay unresolved.
+    retained_failures_attributable = True
+    current_runs = {run.command: run for run in state.current_post_edit_test_runs()}
+    retained_commands: set[str] = set()
+    for key, failure in state.observed_verification_failures.items():
+        run = current_runs.get(failure.command)
+        if (
+            key.startswith("unknown:")
+            or not failure.was_test_run
+            or failure.command in retained_commands
+            or failure.generation != state.verification_relevant_edit_generation
+            or run is None
+        ):
+            retained_failures_attributable = False
+            break
+        retained_commands.add(failure.command)
+        attribution = classify_regression_diff(
+            post_report=run.report,
+            baseline=state.test_baselines.get(run.command_key),
+            agent_created_paths=state.agent_created_paths,
+        )
+        if not (attribution.regressions or attribution.unattributed or attribution.pre_existing):
+            retained_failures_attributable = False
+            break
     # Let attribution supersede a non-contract "last attempt failed" block only
     # when that last attempt was itself a test run AND the diff attributes at
     # least one failure as pre-existing/regression/unattributed. The test-run
@@ -2454,6 +3131,7 @@ def _completion_gate_problems(
     regression_attribution_supersedes_last_failure = bool(
         regression_baseline_enabled
         and state.last_verification_attempt_was_test_run
+        and retained_failures_attributable
         and (
             regression_diff.regressions
             or regression_diff.unattributed
@@ -2462,7 +3140,18 @@ def _completion_gate_problems(
     )
     certificate = evaluate_completion_certificate(
         CompletionCertificateInput(
-            contract=state.acceptance_contract,
+            # Acceptance criteria are enforcement for execute work. A turn the
+            # gate explicitly classifies non-execute produced nothing the
+            # contract could bind to, so it is not enforced - mirroring how
+            # verification, expectations, repro, and blast-radius checks
+            # de-apply above. An unspecified intent keeps enforcement
+            # (fail-safe toward the gate).
+            contract=(
+                None
+                if str(turn_intent or "")
+                in {"read_only", "advisory_non_execution", "plan_or_analysis_only"}
+                else state.acceptance_contract
+            ),
             final_text=final_text,
             blocked=blocked,
             blocker_valid=blocked,
@@ -2609,11 +3298,12 @@ def _completion_gate_nudge_message(
     *,
     prefix_key: str = "completion_gate_nudge_prefix",
     verification_failure_snippet: str = "",
+    verification_outcome_context: str = "",
     missing_verification_commands: list[str] | None = None,
     verification_coverage_stale: bool = False,
     anchor_paths: list[str] | None = None,
     has_material_edits: bool = False,
-    all_verification_evidence_self_authored: bool = False,
+    has_only_supplemental_verification_evidence: bool = False,
     diff_review_stale: bool = False,
     language: str = "",
     explicit_language_override: bool = False,
@@ -2660,7 +3350,12 @@ def _completion_gate_nudge_message(
     blast_radius_deficit = bool(
         problem_set & {"blast_radius_regressions", "blast_radius_unverified"}
     )
-    lines = ["Finalization check - one pass before you finish:"]
+    lines = [
+        "Finalization check - one pass before you finish:",
+        "Continue the current user request. Revise your preceding draft as needed to address "
+        "these checks; retain its supported implementation and verification results, and state "
+        "any remaining limitation.",
+    ]
     if "no_material_edits" in problem_set:
         lines.append(
             "- No file changes are recorded yet. If the task required creating/modifying "
@@ -2669,11 +3364,14 @@ def _completion_gate_nudge_message(
         )
     snippet = extract_actionable_failure_snippet(verification_failure_snippet)
     if "verification_failed" in problem_set:
-        failure_detail = snippet or "the latest verification attempt did not pass"
-        lines.append(
-            f"- Your last verification failed: {failure_detail}. Fix and re-run, or explain "
-            "why the failure is expected/out of scope."
-        )
+        if verification_outcome_context:
+            lines.append(verification_outcome_context)
+        else:
+            failure_detail = snippet or "a verification attempt did not pass"
+            lines.append(
+                f"- An unresolved verification failure is recorded: {failure_detail}. "
+                "Identify the affected check. Fix and re-run it, or explain its remaining limitation."
+            )
     if missing_verification_commands and (
         "verification_not_attempted" in problem_set or "verification_incomplete" in problem_set
     ):
@@ -2730,7 +3428,7 @@ def _completion_gate_nudge_message(
         blast_radius_line = build_blast_radius_nudge_line(blast_radius_assessment)
         if blast_radius_line:
             lines.append(blast_radius_line)
-    if all_verification_evidence_self_authored:
+    if has_only_supplemental_verification_evidence:
         lines.append(f"- {SUPPLEMENTAL_VERIFICATION_ADVISORY}")
     if has_material_edits and diff_review_stale:
         lines.append(
@@ -2772,16 +3470,18 @@ def _build_interactive_turn_verify_task(
     session: Any,
     instruction: str,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    task_paths = _extract_workspace_relation_paths_from_text(root=session.root, text=instruction)
-    task_brief = _session_task_brief_content(session)
-    if task_brief:
-        for path in _extract_workspace_relation_paths_from_text(root=session.root, text=task_brief):
+    state = getattr(session, "task_state", None)
+    task_texts = (
+        [state.objective, *reversed(state.amendments)]
+        if isinstance(state, SessionTaskState)
+        else [str(instruction or "").strip()]
+    )
+    task_texts = [text for text in task_texts if text]
+    task_paths: list[str] = []
+    for text in task_texts:
+        for path in _extract_workspace_relation_paths_from_text(root=session.root, text=text):
             if path not in task_paths:
                 task_paths.append(path)
-    task_texts = [str(instruction or "").strip()]
-    if task_brief:
-        task_texts.extend(_task_brief_lines_from_text(task_brief, max_lines=6))
-    task_texts = [text for text in task_texts if text]
     if not task_paths and not task_texts:
         return None, []
     task: dict[str, Any] = {}
@@ -2816,6 +3516,12 @@ def _refresh_execute_turn_verification_selection(
         instruction=instruction,
     )
     current = _session_verify_command_selection(session)
+    # Task-derived selections are projections of the accepted requirements.
+    # Recompute them when those requirements change (including a new task),
+    # instead of inheriting a previous task's command as permanent authority.
+    selection = (
+        None if current is not None and current.source.startswith("task_refinement.") else current
+    )
     resolved = resolve_task_aware_verify_command_selection(
         cfg=session.cfg,
         verify_cmd=None,
@@ -2823,10 +3529,9 @@ def _refresh_execute_turn_verification_selection(
         root=session.root,
         repo_scan=repo_scan,
         plan_requirements=plan_requirements,
-        selection=current,
+        selection=selection,
     )
     explicit_commands = extract_explicit_acceptance_commands(
-        instruction,
         *[str(item) for item in plan_requirements],
     )
     if (
@@ -2840,6 +3545,18 @@ def _refresh_execute_turn_verification_selection(
             reason="explicit user command is the task-native verification contract",
             contract_type="task_acceptance",
         )
+    if (
+        greenfield_verification_bootstrap_enabled(getattr(session, "cfg", None))
+        and str(getattr(session, "verification_selection_source", "")).startswith(
+            "agent_authored_bootstrap"
+        )
+        and resolved.contract_type in {"unavailable", "generic_fallback", ""}
+    ):
+        # An agent-authored best-effort contract, earned by a passing suite
+        # this session, is not re-downgraded by a repo scan that cannot see it.
+        # Anything stronger (repo-native, task acceptance, explicit user command)
+        # still replaces it above.
+        return
     if (
         current is not None
         and current.commands == resolved.commands
@@ -2889,3 +3606,191 @@ def _refresh_interactive_turn_verification_selection(
         instruction=instruction,
         route_execution_posture=route_execution_posture,
     )
+
+
+# ---------------------------------------------------------------------------
+# Greenfield governance: agent-authored contract bootstrap and the
+# zero-coverage advisory for newly created modules.
+# ---------------------------------------------------------------------------
+
+
+AGENT_BOOTSTRAP_SOURCE = "agent_authored_bootstrap.passing_suite"
+AGENT_BOOTSTRAP_REASON = (
+    "agent-authored test suite executed and passed in this session; adopted as "
+    "the best-effort verification contract for subsequent edits"
+)
+
+
+def maybe_bootstrap_agent_verification_contract(
+    session: Any,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Promote an ``unavailable`` contract when an agent-authored suite passes.
+
+    The selection heuristics refuse a generic fallback on projects with no
+    pre-existing test surface — which a greenfield project cannot have, so its
+    contract stayed ``unavailable`` and the completion gate had nothing to
+    demand (the greenfield governance gap). Observed execution breaks that circularity: once
+    a test run demonstrably passed in this session, that command is a real,
+    runnable check, and later edits are held to re-running it.
+
+    Adopts, in order of preference: the commands of a fully ``passed``
+    ``verify_run``; or a passing ``shell_run`` whose command is a recognized
+    test runner. Never overrides an authoritative or already-bootstrapped
+    selection; kill switch ``ALYSIS_GREENFIELD_VERIFY_BOOTSTRAP``.
+    """
+    if not greenfield_verification_bootstrap_enabled(getattr(session, "cfg", None)):
+        return
+    if not bool(getattr(session, "verification_enabled", True)):
+        return
+    if bool(getattr(session, "one_shot_execution", False)):
+        # One-shot/Forge runs resolve their contracts up front and manage their
+        # own verification lifecycle; mid-run contract swaps are interactive-only
+        # (same scoping as the zero-activity downgrade).
+        return
+    if (
+        getattr(session, "runtime_kind", RuntimeKind.INTERACTIVE_CHAT)
+        != RuntimeKind.INTERACTIVE_CHAT
+    ):
+        return
+    if getattr(session, "authoritative_verification_commands", None) is not None:
+        return
+    contract_type = str(getattr(session, "verification_contract_type", "") or "")
+    if contract_type not in {"unavailable", ""}:
+        return
+    if is_tool_unavailable_result(result):
+        return
+
+    normalized_tool = str(tool_name or "").strip().lower()
+    commands: list[str] = []
+    if normalized_tool == "verify_run":
+        if str(result.get("status") or "") != "passed":
+            return
+        raw_commands = result.get("commands")
+        if isinstance(raw_commands, list):
+            commands = [str(item).strip() for item in raw_commands if str(item).strip()]
+    elif normalized_tool == "shell_run":
+        exit_code = result.get("exit_code")
+        if not isinstance(exit_code, int) or exit_code != 0:
+            return
+        commands = [
+            command
+            for command, _output in _iter_executed_test_commands(
+                tool_name=normalized_tool,
+                arguments=arguments,
+                result=result,
+            )
+        ]
+    if not commands:
+        return
+
+    resolved = ResolvedVerifyCommands(
+        commands=tuple(dict.fromkeys(commands)),
+        source=AGENT_BOOTSTRAP_SOURCE,
+        reason=AGENT_BOOTSTRAP_REASON,
+        contract_type="best_effort",
+        best_effort=True,
+    )
+    current = _session_verify_command_selection(session)
+    previous_payload = (
+        verification_selection_payload(
+            current,
+            authoritative=is_authoritative_verify_command_selection(current),
+        )
+        if current is not None
+        else None
+    )
+    session.effective_verification_commands = list(resolved.commands)
+    session.verification_selection_source = resolved.source
+    session.verification_selection_reason = resolved.reason
+    session.verification_contract_type = resolved.contract_type
+    session.verification_authoritative = False
+    session.verification_best_effort = True
+    refresh_session_environment_context_message(session)
+    payload: dict[str, Any] = {
+        "trigger_tool": normalized_tool,
+        **verification_selection_payload(resolved, authoritative=False),
+    }
+    if previous_payload is not None:
+        payload["previous"] = previous_payload
+    store = getattr(session, "store", None)
+    if store is not None:
+        store.append("verification_contract_updated", payload)
+
+
+ZERO_COVERAGE_MARKER_PREFIX = "\n\n---\n⚠️ New modules without detected test references: "
+
+_ZERO_COVERAGE_MAX_TEST_FILES = 40
+_ZERO_COVERAGE_MAX_BYTES_PER_FILE = 65536
+_ZERO_COVERAGE_EXEMPT_BASENAMES = {"__init__.py", "conftest.py", "setup.py"}
+
+
+def _zero_coverage_is_testish_path(path: str) -> bool:
+    parts = [part.casefold() for part in Path(path).parts]
+    basename = parts[-1] if parts else ""
+    if any(part in {"tests", "test"} for part in parts[:-1]):
+        return True
+    return basename.startswith("test_") or basename.endswith("_test.py")
+
+
+def build_zero_coverage_marker(modules: list[str]) -> str:
+    joined = ", ".join(modules)
+    return (
+        f"{ZERO_COVERAGE_MARKER_PREFIX}{joined} — a bounded text scan found no "
+        "references; this does not measure executed coverage."
+    )
+
+
+def uncovered_new_agent_modules(root: Path, state: TurnExecutionState) -> list[str]:
+    """Retained agent-created ``.py`` modules that no test file mentions by stem.
+
+    Cheap textual heuristic (would have caught the QA run's greenfield defect: both of that session's tests
+    never referenced the parser module). Bounded reads; failures return [] —
+    the advisory must never break finalization.
+    """
+    try:
+        # Creation history also includes temporary files later removed. Inspect
+        # the final candidate without erasing that history: a recreated file
+        # remains newly created and must still be checked.
+        modules = sorted(
+            path
+            for path in state.agent_created_paths
+            if path.endswith(".py")
+            and Path(path).name not in _ZERO_COVERAGE_EXEMPT_BASENAMES
+            and not _zero_coverage_is_testish_path(path)
+            and (root / path).is_file()
+        )
+        if not modules:
+            return []
+        test_files: list[Path] = []
+        for candidate in sorted(root.rglob("*.py")):
+            relative = candidate.relative_to(root).as_posix()
+            if any(part in {".git", ".alysis", "__pycache__"} for part in candidate.parts):
+                continue
+            if not _zero_coverage_is_testish_path(relative):
+                continue
+            test_files.append(candidate)
+            if len(test_files) >= _ZERO_COVERAGE_MAX_TEST_FILES:
+                break
+        haystack_parts: list[str] = []
+        for test_file in test_files:
+            try:
+                haystack_parts.append(
+                    test_file.read_text(encoding="utf-8", errors="replace")[
+                        :_ZERO_COVERAGE_MAX_BYTES_PER_FILE
+                    ]
+                )
+            except OSError:
+                continue
+        haystack = "\n".join(haystack_parts)
+    except OSError:
+        return []
+    uncovered: list[str] = []
+    for module in modules:
+        stem = Path(module).stem
+        if stem and stem not in haystack:
+            uncovered.append(module)
+    return uncovered

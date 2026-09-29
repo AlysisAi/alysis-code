@@ -74,12 +74,21 @@ Malformed skills are skipped and reported as discovery issues instead of crashin
 
 When `skills_enabled=true`, Alysis Code advertises discovered skill names and short descriptions to the session. Full skill bodies are not injected by default.
 
-With `skills_auto_invoke=true`, an isolated, reasoning-off model call compares the current text
-request with the advertised catalog and returns one opaque primary candidate ID or `NONE`. Alysis Code maps
-that response back to the current registry and requires the main agent to read the selected
-`SKILL.md` entrypoint before other task tools. The selector never uses a fixed skill-name or
-keyword routing table, never executes tools, and fails open to the ordinary model-led decision if
-the selector is unavailable. Explicit skill attachment and image-bearing turns skip this selector.
+With `skills_auto_invoke=true`, the working agent chooses relevant skills from this catalog
+using its conversation and current evidence. This applies to parent agents and subagents,
+in chat and one-shot runs. There is no separate selection model call or preliminary
+recommendation. The working model keeps its configured reasoning settings.
+
+The agent compares descriptions with the requested workflow, honors explicit requests and
+exclusions, and chooses the narrowest fit or proceeds directly. It reads a chosen skill's
+`SKILL.md` before relying on its workflow; instructions already in context can be reused.
+Skill choice does not use a host keyword table, grant tool permissions, or require a
+fixed tool sequence.
+
+With `skills_auto_invoke=false`, the catalog and `skill_read` remain available for manual
+use, without proactive skill-choice guidance. Setting `skills_enabled=false` disables
+skill discovery and the skill tool. Neither setting needs to change to remove the former
+selector call.
 
 The model can read a skill on demand with the read-only built-in tool:
 
@@ -226,14 +235,14 @@ Defaults:
 - `skills_auto_invoke = true`
 - `bundled_skills_enabled = true`
 
-Set `skills_enabled=false` to disable skill discovery, advertisement, automatic matching, and
+Set `skills_enabled=false` to disable skill discovery, advertisement, automatic skill choice, and
 `skill_read` registration in both the parent session and every delegated child. This master switch
 also suppresses bundled skills even when `bundled_skills_enabled=true`; subagents remain available
 when enabled because delegation and skills are independent capabilities. Set
 `skills_auto_invoke=false` for manual discovery and explicit `/skill` or `$` usage. Set
 `bundled_skills_enabled=false` to hide only the packaged starter pack while other skill roots remain
-enabled. Automatic selection adds one short model request to eligible text turns; that request is
-reasoning-off and has a 15-second transport and stream-progress ceiling.
+enabled. Automatic skill choice happens in the working model's normal request, without an
+additional selector request or a separate reasoning setting.
 
 ## Bundled Pack Evaluation
 

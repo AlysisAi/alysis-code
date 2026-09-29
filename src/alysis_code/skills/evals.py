@@ -1045,10 +1045,22 @@ def evaluate_skills_launch_readiness(
         },
     }
 
+    # On-demand runs have no preliminary selector. Do not invent a missing
+    # selector failure or a perfect selection score; retain historical gates
+    # only for reports that actually recorded selector events.
+    if automatic_selection_gates_enabled and automatic_selection_runs == 0:
+        for name in ("automatic_selection_exact_match_rate", "selector_unavailable_runs"):
+            gates[name] = {
+                **gates[name],
+                "actual": None,
+                "status": "not_applicable",
+                "description": "No preliminary selector events were recorded; activation is evaluated from observed skill usage.",
+            }
+
     failing_gates = [
         gate_name
         for gate_name, payload in gates.items()
-        if str(payload.get("status") or "") != "pass"
+        if str(payload.get("status") or "") not in {"pass", "not_applicable"}
     ]
     passing_gates = sorted(
         gate_name
@@ -1777,7 +1789,7 @@ def _launch_runtime_summary(records: Sequence[SkillsEvalRecord]) -> dict[str, ob
 
 def _skill_selection_summary(records: Sequence[SkillsEvalRecord]) -> dict[str, object]:
     executed = [record for record in records if record.status != "skipped"]
-    automatic = [record for record in executed if record.automatic_selection_required]
+    automatic = [record for record in executed if record.selector_available() is not None]
     exact_count = sum(1 for record in automatic if record.automatic_selection_exact_match() is True)
     available_count = sum(1 for record in automatic if record.selector_available() is True)
     unavailable_count = len(automatic) - available_count

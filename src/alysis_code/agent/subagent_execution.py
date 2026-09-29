@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import os
 import re
@@ -35,6 +36,7 @@ from ..internal_artifacts import (
     subagent_report_is_internal,
 )
 from ..model_router import ROLE_CODING, resolve_model_for_role
+from ..run_outcome import task_outcome_fields
 from ..runtime_kind import RuntimeKind
 from ..safety.subagent_report import sanitize_subagent_report, subagent_report_evidence_text
 from ..session_store import SessionStore, read_session_events
@@ -83,12 +85,19 @@ from .turn.snapshot import (
 )
 
 _AUTHORITATIVE_SUBAGENT_FINAL_TEXT_SOURCES = frozenset({"store_final", "surface_assistant_done"})
+_COMPLETION_NOTIFICATION_REPORT_MAX_CHARS = 4000
 _FORCED_FINAL_TERMINATION_EVENT_TYPES = frozenset(
     {"forced_final_summary_completed", "forced_final_summary_fallback"}
 )
 _EXHAUSTION_TERMINATION_KINDS = frozenset(
     {"deadline_exhausted", "run_budget_exhausted", "step_budget_exhausted"}
 )
+_SUBAGENT_REPORT_EXPECTATIONS = """Child result expectations:
+- Answer the assigned task with relevant findings or completed work, not just an acknowledgement.
+- Include source references or observed checks when they support the result. State uncertainty,
+  remaining work, and blockers honestly; do not invent evidence or claim checks you did not run.
+- A final child report is evidence for the parent to assess and integrate, not independent proof
+  that the user's whole request is complete. Keep the report focused on your assignment."""
 
 
 def _latest_subagent_store_final_text(sub_session: Any) -> tuple[str, bool, dict[str, Any]]:
@@ -298,10 +307,12 @@ def _subagent_final_report_problem(*, text: str, source: str) -> str | None:
     if source not in _AUTHORITATIVE_SUBAGENT_FINAL_TEXT_SOURCES:
         return "missing_final_report_signal"
     evidence_text = subagent_report_evidence_text(text)
-    acknowledgement = re.sub(r"[\W_]+", "", evidence_text).casefold()
-    if not acknowledgement:
-        return "non_substantive_final_report"
-    if acknowledgement in {"complete", "completed", "done", "ok", "okay"}:
+    # The host can establish that a final report exists and survives screening.
+    # Its usefulness depends on the assignment and language; that judgement
+    # belongs to the child/parent models, not a vocabulary of acknowledgements.
+    if not evidence_text.strip() or (
+        evidence_text != text and not any(character.isalnum() for character in evidence_text)
+    ):
         return "non_substantive_final_report"
     return None
 
@@ -501,6 +512,18 @@ def _child_resume_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]
             content = payload.get("display_content") or payload.get("content")
             if isinstance(content, str) and content.strip():
                 _append_conversation_message({"role": "user", "content": content})
+        elif event_type == "subagent_resume_notice":
+            # Replay only this typed host context, never old system/bootstrap
+            # messages. It is not an actual user request or permission event.
+            notice = payload.get("message")
+            if (
+                isinstance(notice, dict)
+                and set(notice) == {"role", "content"}
+                and notice.get("role") == "user"
+                and isinstance(notice.get("content"), str)
+                and notice["content"].strip()
+            ):
+                _append_conversation_message(notice)
         elif event_type == "assistant_message":
             stored_message = payload.get("message")
             if isinstance(stored_message, dict):
@@ -556,7 +579,6 @@ _SUBAGENT_PREASSIGNED_RUN_ID_ARG = object()
 _ROUTING_MODE_CODE_ONLY = "code_only"
 _EXTERNAL_RESEARCH_CAPABILITY = "external_research"
 _EXTERNAL_RESEARCH_WEB_TOOLS = frozenset({"web_fetch", "web_search"})
-_NO_CHANGE_OUTCOME_MARKER = "status=no_change_needed"
 _DEFAULT_CANCEL_JOIN_TIMEOUT_S = 1.0
 ChildRunState = Literal[
     "spawned",
@@ -574,6 +596,163 @@ _CHILD_STATE_SUMMARY_ORDER = (
     "joined",
     "cancelled",
 )
+
+
+_SUBAGENT_PARENT_RESULT_KEYS = frozenset(
+    {
+        # Identity and outcome.
+        "run_id",
+        "subagent",
+        "subagent_session_id",
+        "status",
+        "state",
+        "exit_code",
+        "wait_interrupted",
+        "wake_reason",
+        "wake_reasons",
+        "wake_run_id",
+        "pending_run_ids",
+        # Reports and screened continuation material.
+        "result",
+        "result_source",
+        "final_text",
+        "final_text_source",
+        "final_report_problem",
+        "partial_report",
+        "report_safety",
+        "report_artifact",
+        "report_artifact_reader",
+        "incomplete_reason",
+        "stop_reason",
+        "resume_affordance",
+        "resumed_from",
+        # Actionable failures and recovery choices.
+        "error",
+        "error_code",
+        "failure_category",
+        "batch_failure",
+        "deferred_call_not_started",
+        "offending_runs",
+        "message",
+        "guidance",
+        "resolution",
+        "requires_new_session",
+        "available_subagents",
+        "unavailable_reason",
+        "unavailable_allowed_tools",
+        "missing_required_tools",
+        "smallest_sufficient_mode",
+        "requested_mode",
+        "resolved_mode",
+        "effective_mode",
+        "mode_clamped",
+        "use_tool",
+        # Effects, retained workspace material and evidence.
+        "effects",
+        "touched_repo_paths",
+        "material_touched_repo_paths",
+        "workspace",
+        "workspace_view",
+        "workspace_run_id",
+        "patch",
+        "patch_artifact",
+        "patch_summary",
+        "material_identity",
+        "material_identity_sha256",
+        "patch_capture_status",
+        "material_patch_complete",
+        "capture_reason_codes",
+        "omitted_material_paths",
+        "retained_ignored_paths",
+        "ignored_outputs_integrated",
+        "retention_note",
+        "semantic_no_progress",
+        "duplicate_of",
+        "canonical_run_id",
+        "canonical_state",
+        "already_integrated",
+        "candidate_worktree_retained",
+        "physical_worktree_removed",
+        "cleanup_pending",
+        "cleanup_pending_run_ids",
+        "cleanup_warning",
+        "artifact_evidence",
+        "capability_evidence",
+        "artifact_requirement_problem",
+        "observed_success_event_types",
+        "missing_success_event_types",
+        "observed_success_tool_names",
+        # Cost-free progress facts useful to the parent.
+        "elapsed_ms",
+        "steps_completed",
+        "steps_used",
+    }
+)
+
+_SUBAGENT_WAIT_PARENT_ENVELOPE_KEYS = frozenset(
+    {
+        "results",
+        "pending_run_ids",
+        "pending_children",
+        "wait_pending",
+        "summary",
+        "message",
+        "status",
+        "wait_interrupted",
+        "selected_run_ids",
+        "wake_reason",
+        "wake_reasons",
+        "wake_run_id",
+        "run_id",
+        "error",
+        "error_code",
+    }
+)
+
+
+def _project_single_subagent_parent_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the stable, compact result that a parent model needs.
+
+    Child execution and lifecycle APIs retain the complete result.  This
+    projection is deliberately a protocol boundary: transport, accounting,
+    sandbox and helper diagnostics stay in durable child events instead of
+    being copied into the parent prompt.
+    """
+
+    return {
+        key: copy.deepcopy(value)
+        for key, value in result.items()
+        if key in _SUBAGENT_PARENT_RESULT_KEYS
+    }
+
+
+def project_subagent_parent_result(
+    tool_name: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Project raw subagent tool output into the parent transcript protocol."""
+
+    normalized_name = str(tool_name or "").strip().casefold()
+    if normalized_name == "subagent_run":
+        return _project_single_subagent_parent_result(result)
+    if normalized_name != "subagent_wait":
+        return result
+    projected = {
+        key: copy.deepcopy(value)
+        for key, value in result.items()
+        if key in _SUBAGENT_WAIT_PARENT_ENVELOPE_KEYS
+    }
+    raw_results = result.get("results")
+    if isinstance(raw_results, dict):
+        projected["results"] = {
+            str(run_id): (
+                _project_single_subagent_parent_result(child_result)
+                if isinstance(child_result, dict)
+                else copy.deepcopy(child_result)
+            )
+            for run_id, child_result in raw_results.items()
+        }
+    return projected
 
 
 def _children_state_summary(children: list[dict[str, Any]]) -> str:
@@ -833,9 +1012,16 @@ def _resume_launch_args(source_args: dict[str, Any]) -> dict[str, Any]:
 class _ChildResumeContext:
     resumed_from: str
     history_messages: tuple[dict[str, Any], ...]
+    provider_session_id: str | None = None
     workspace_run_id: str | None = None
     patch_artifact: str = ""
     read_ledger_snapshot: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Task identity replayed from the source child's own log (see
+    # ``agent.task_state.recover_task_state_from_events``). The resumed child
+    # keeps that task unless the caller supplied a replacement task.
+    task_state: Any | None = None
+    source_session_id: str | None = None
+    task_overridden: bool = False
 
 
 class SubagentLauncher:
@@ -932,6 +1118,7 @@ class SubagentLauncher:
         self._helper_run_names: list[str] = []
         self._helper_run_steps = 0
         self._helper_usage_totals: dict[str, int | float] = {}
+        self.subagent_coordinator: SubagentCoordinator | None = None
         self.child_scheduler: ChildScheduler | None = None
 
     def helper_runs_summary(self) -> dict[str, Any]:
@@ -1049,6 +1236,65 @@ class SubagentLauncher:
         )
         return selected_model, ROLE_CODING
 
+    @staticmethod
+    def _resolve_subagent_config(
+        definition: SubagentDefinition,
+        cfg: AppConfig,
+        *,
+        api_key: str | None = None,
+    ) -> tuple[AppConfig, str | None, str]:
+        """Select an explicit saved profile without changing parent configuration.
+
+        A model ID never chooses a provider. Cross-profile static credentials
+        must belong to the selected profile; global/legacy fallback is unsafe.
+        This is configuration/credential resolution only, with no model calls.
+        """
+        from ..config import _is_profile_scoped_api_key_source, resolve_api_key
+        from ..profiles import get_active_profile, get_profile, set_active_profile
+
+        child_cfg = cfg.model_copy(deep=True)
+        child_api_key = str(api_key or "").strip() or None
+        if definition.profile:
+            parent_profile = get_active_profile(child_cfg)
+            child_profile = get_profile(child_cfg, definition.profile)
+            if child_profile is None:
+                raise ConfigError(f"Profile not found: {definition.profile}")
+            if child_profile.name != parent_profile.name:
+                set_active_profile(child_cfg, child_profile.name)
+                if not child_profile.base_url:
+                    raise ConfigError(
+                        f"Subagent profile '{child_profile.name}' needs an explicit base URL; "
+                        "the parent endpoint is not inherited across profiles."
+                    )
+                # A foreign profile with unset defaults must not borrow the
+                # parent's provider-specific model or reasoning configuration.
+                if not child_profile.default_model:
+                    child_cfg.model = ""
+                if child_profile.reasoning_effort is None:
+                    child_cfg.llm_reasoning_effort = None
+                    child_cfg.llm_enable_thinking = None
+                child_api_key = None
+                if not child_profile.auth_provider:
+                    resolved = resolve_api_key(child_cfg)
+                    if not resolved.key or not _is_profile_scoped_api_key_source(resolved.source):
+                        raise ConfigError(
+                            f"Subagent profile '{child_profile.name}' needs its own stored key "
+                            "or profile-scoped API-key environment variable; parent and legacy "
+                            "credentials are not reused across profiles."
+                        )
+                    child_api_key = resolved.key
+        active_child_profile = get_active_profile(child_cfg)
+        if not child_api_key and not active_child_profile.auth_provider:
+            raise ConfigError(
+                f"Subagent profile '{active_child_profile.name}' needs an API key "
+                "or provider authentication."
+            )
+        selected_model, temperature_role = SubagentLauncher._resolve_subagent_model(
+            definition, child_cfg
+        )
+        child_cfg.model = selected_model
+        return child_cfg, child_api_key, temperature_role
+
     def background_spawn_preflight(
         self,
         args: dict[str, Any],
@@ -1061,15 +1307,7 @@ class SubagentLauncher:
             return None, {"error": "Subagents are disabled for this session."}
         if self.subagent_depth > 0:
             return None, {"error": "Subagents cannot invoke subagents (nesting is blocked)."}
-        provider_auth_available = False
-        if cfg is not None and not self.api_key:
-            try:
-                from ..profiles import get_active_profile
-
-                provider_auth_available = bool(get_active_profile(cfg).auth_provider)
-            except Exception:
-                provider_auth_available = False
-        if cfg is None or (not self.api_key and not provider_auth_available):
+        if cfg is None:
             return None, {"error": "Subagent execution unavailable: missing session configuration."}
 
         raw_name = str(args.get("name", "")).strip()
@@ -1093,7 +1331,11 @@ class SubagentLauncher:
             )
             return None, {
                 "error": f"Subagent unavailable: {capability_unavailability.name}",
-                "error_code": "subagent_capability_unavailable",
+                "error_code": (
+                    "subagent_disabled"
+                    if capability_unavailability.reason_code == "subagent_disabled"
+                    else "subagent_capability_unavailable"
+                ),
                 "unavailable_reason": capability_unavailability.reason,
                 "resolution": capability_unavailability.resolution,
                 "requires_new_session": capability_unavailability.requires_new_session,
@@ -1110,6 +1352,14 @@ class SubagentLauncher:
                 "error": f"Unknown subagent: {raw_name}",
                 "error_code": "unknown_subagent",
                 "available_subagents": available,
+            }
+
+        try:
+            self._resolve_subagent_config(definition, cfg, api_key=self.api_key)
+        except ConfigError as exc:
+            return None, {
+                "error": f"Subagent profile/model resolution failed: {exc}",
+                "error_code": "subagent_profile_resolution_failed",
             }
 
         mode_override = str(args.get("mode", "") or "").strip()
@@ -1142,6 +1392,18 @@ class SubagentLauncher:
                 requested_mode=requested_mode,
                 resolved_mode=resolved_mode,
             )
+        if workspace_view == "isolated" and not bool(
+            getattr(
+                getattr(cfg, "subagent_orchestration", None),
+                "workspace_isolation_enabled",
+                True,
+            )
+        ):
+            return None, {
+                "error": "Isolated subagent workspaces are disabled for this session.",
+                "error_code": "workspace_isolation_disabled",
+                "subagent": definition.name,
+            }
         if workspace_view == "isolated" and self.workspace_provider is None:
             return None, {
                 "error": "Isolated subagent workspace storage is unavailable.",
@@ -1194,7 +1456,7 @@ class SubagentLauncher:
 
         child_deadline = derive_subagent_deadline(
             self.execution_deadline,
-            float(cfg.subagent_timeout_s),
+            cfg.subagent_timeout_s,
         )
         if not check_deadline:
             return (
@@ -1221,7 +1483,7 @@ class SubagentLauncher:
                 "deadline_prevented_launch": True,
                 "remaining_seconds": child_deadline.remaining_seconds(),
                 "deadline_start_decision": deadline_decision,
-                "subagent_timeout_s": float(cfg.subagent_timeout_s),
+                "subagent_timeout_s": cfg.subagent_timeout_s,
                 "resolved_timeout_s": child_deadline.remaining_seconds(),
                 "resolved_deadline_source": str(
                     child_deadline.telemetry_snapshot().get("source") or "unknown"
@@ -1328,6 +1590,9 @@ class SubagentLauncher:
                                 self._helper_usage_totals.get(key, 0) + value
                             )
                 return result
+        coordinator = self.subagent_coordinator
+        if coordinator is not None:
+            return coordinator.run_foreground(args, launcher=self)
         return self._run(args)
 
     def _run(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1335,9 +1600,21 @@ class SubagentLauncher:
         completed_result: dict[str, Any] | None = None
         execution_error: BaseException | None = None
         preassigned_run_id = str(args.get(_SUBAGENT_PREASSIGNED_RUN_ID_ARG) or "").strip()
+        parent_cancellation_token = args.get(_SUBAGENT_CANCELLATION_TOKEN_ARG)
+        child_cancellation_token = (
+            parent_cancellation_token
+            if isinstance(parent_cancellation_token, _ChildCancellationToken)
+            else (
+                _ChildCancellationToken(parent=parent_cancellation_token)
+                if parent_cancellation_token is not None
+                else None
+            )
+        )
         public_args = {
             key: value for key, value in args.items() if key is not _SUBAGENT_PREASSIGNED_RUN_ID_ARG
         }
+        if child_cancellation_token is not None:
+            public_args[_SUBAGENT_CANCELLATION_TOKEN_ARG] = child_cancellation_token
         try:
             result = self._run_sync(
                 public_args,
@@ -1386,6 +1663,7 @@ class SubagentLauncher:
         parent_message_provider: Callable[[], list[str]] | None,
         parent_message_delivery_observer: Callable[[int], None] | None,
         on_session_started: Callable[[Any, NestedSubagentSurface], None],
+        on_terminal_event: Callable[[], None] | None = None,
         resume_context: _ChildResumeContext | None = None,
     ) -> dict[str, Any]:
         tracker = _ChildRunTracker(run_id=run_id)
@@ -1400,6 +1678,7 @@ class SubagentLauncher:
                 parent_message_provider=parent_message_provider,
                 parent_message_delivery_observer=parent_message_delivery_observer,
                 on_session_started=on_session_started,
+                on_terminal_event=on_terminal_event,
                 resume_context=resume_context,
             )
             result = self._annotate_helper_runs_result(tracker=tracker, result=result)
@@ -1488,6 +1767,7 @@ class SubagentLauncher:
         enriched["workspace"] = {
             "view": "isolated",
             "base_commit": record.base_commit,
+            "parent_head_commit": record.parent_head_commit,
             "parent_dirty_paths": list(record.parent_dirty_paths),
             **({"resumed_workspace_from": capture_run_id} if capture_run_id != run_id else {}),
         }
@@ -1504,33 +1784,72 @@ class SubagentLauncher:
             return enriched
         no_changes = bool(captured.get("no_changes"))
         enriched["workspace"]["no_changes"] = no_changes
+        for key in (
+            "material_identity",
+            "patch_capture_status",
+            "material_patch_complete",
+            "capture_reason_codes",
+            "omitted_material_paths",
+            "retained_ignored_paths",
+            "ignored_outputs_integrated",
+            "retention_note",
+            "material_identity_sha256",
+            "semantic_no_progress",
+            "duplicate_of",
+            "canonical_run_id",
+            "canonical_state",
+            "already_integrated",
+            "candidate_worktree_retained",
+            "physical_worktree_removed",
+            "cleanup_pending",
+            "cleanup_pending_run_ids",
+            "cleanup_warning",
+        ):
+            if key not in captured:
+                continue
+            value = copy.deepcopy(captured[key])
+            enriched[key] = value
+            enriched["workspace"][key] = value
+        if captured.get("material_patch_complete") is False and "error" not in enriched:
+            enriched.update(
+                {
+                    "status": "degraded",
+                    "error": "The isolated workspace contains changes without a complete patch; inspect the retained candidate before integration.",
+                    "failure_category": "workspace_capture",
+                    "error_code": "incomplete_workspace_patch",
+                }
+            )
         enriched["patch_summary"] = {
             "files": list(captured.get("paths") or []),
             "insertions": int(captured.get("insertions") or 0),
             "deletions": int(captured.get("deletions") or 0),
             "patch_artifact": str(captured.get("patch_artifact") or ""),
             "sha256": str(captured.get("sha256") or ""),
+            **{
+                key: copy.deepcopy(captured[key])
+                for key in (
+                    "retained_ignored_paths",
+                    "ignored_outputs_integrated",
+                    "retention_note",
+                )
+                if key in captured
+            },
+            **(
+                {"material_identity_sha256": captured["material_identity_sha256"]}
+                if captured.get("material_identity_sha256")
+                else {}
+            ),
         }
         definition = self._resolve_subagent_definition(str(args.get("name") or ""))
-        final_report = str(enriched.get("result") or enriched.get("final_text") or "")
         if (
             no_changes
             and definition is not None
             and definition.allow_workspace_writes is not False
             and "error" not in enriched
-            and _NO_CHANGE_OUTCOME_MARKER not in final_report.casefold()
         ):
-            enriched.update(
-                {
-                    "error": (
-                        f"Subagent '{definition.name}' reported a completed change, but "
-                        "the isolated workspace contained no material delta."
-                    ),
-                    "status": "degraded",
-                    "failure_category": "final_report",
-                    "final_report_problem": "workspace_evidence_mismatch",
-                }
-            )
+            # The workspace is authoritative. No model-authored phrase is
+            # required to make a no-delta result safe and machine-readable.
+            enriched["status"] = "no_changes"
         return enriched
 
     def _run_sync(
@@ -1544,6 +1863,7 @@ class SubagentLauncher:
         parent_message_provider: Callable[[], list[str]] | None = None,
         parent_message_delivery_observer: Callable[[int], None] | None = None,
         on_session_started: Callable[[Any, NestedSubagentSurface], None] | None = None,
+        on_terminal_event: Callable[[], None] | None = None,
         resume_context: _ChildResumeContext | None = None,
     ) -> dict[str, Any]:
         allow_write_globs = self.allow_write_globs
@@ -1575,12 +1895,18 @@ class SubagentLauncher:
         managed_browser_service = self.managed_browser_service
         managed_browser_owner_id = self.managed_browser_owner_id
         managed_browser_cancel_check = self.managed_browser_cancel_check
+        child_route_metadata: dict[str, Any] = {}
 
         def _helper_runs_fields() -> dict[str, Any]:
             provider = child_run_tracker.helper_runs_provider
             if provider is None:
                 return {}
             return {"helper_runs": provider()}
+
+        def _record_subagent_end(payload: dict[str, Any]) -> None:
+            store.append("subagent_end", {**child_route_metadata, **payload})
+            if on_terminal_event is not None:
+                on_terminal_event()
 
         if self.helper_only:
             unexpected = sorted(
@@ -1617,15 +1943,7 @@ class SubagentLauncher:
             return {"error": "Subagents are disabled for this session."}
         if subagent_depth > 0 and not (self.helper_only and subagent_depth == 1):
             return {"error": "Subagents cannot invoke subagents (nesting is blocked)."}
-        provider_auth_available = False
-        if cfg is not None and not api_key:
-            try:
-                from ..profiles import get_active_profile
-
-                provider_auth_available = bool(get_active_profile(cfg).auth_provider)
-            except Exception:
-                provider_auth_available = False
-        if cfg is None or (not api_key and not provider_auth_available):
+        if cfg is None:
             return {"error": "Subagent execution unavailable: missing session configuration."}
 
         raw_name = str(args.get("name", "")).strip()
@@ -1658,7 +1976,11 @@ class SubagentLauncher:
             )
             return {
                 "error": f"Subagent unavailable: {capability_unavailability.name}",
-                "error_code": "subagent_capability_unavailable",
+                "error_code": (
+                    "subagent_disabled"
+                    if capability_unavailability.reason_code == "subagent_disabled"
+                    else "subagent_capability_unavailable"
+                ),
                 "unavailable_reason": capability_unavailability.reason,
                 "resolution": capability_unavailability.resolution,
                 "requires_new_session": capability_unavailability.requires_new_session,
@@ -1708,7 +2030,7 @@ class SubagentLauncher:
                 "tools": list(tool_names),
             }
 
-        configured_subagent_timeout_s = float(
+        configured_subagent_timeout_s = (
             cfg.subagent_orchestration.helper_timeout_s
             if self.helper_only
             else cfg.subagent_timeout_s
@@ -1798,8 +2120,7 @@ class SubagentLauncher:
                     },
                     durable=True,
                 )
-            store.append(
-                "subagent_end",
+            _record_subagent_end(
                 {
                     "name": definition.name,
                     "subagent_session_id": None,
@@ -1826,14 +2147,25 @@ class SubagentLauncher:
             )
         )
 
-        subagent_cfg = cfg.model_copy(deep=True)
         try:
-            selected_model, temperature_role = self._resolve_subagent_model(
-                definition, subagent_cfg
+            subagent_cfg, child_api_key, temperature_role = self._resolve_subagent_config(
+                definition, cfg, api_key=api_key
             )
         except ConfigError as e:
-            return {"error": f"Subagent model resolution failed: {e}"}
-        subagent_cfg.model = selected_model
+            return {
+                "error": f"Subagent profile/model resolution failed: {e}",
+                "error_code": "subagent_profile_resolution_failed",
+            }
+        selected_model = subagent_cfg.model
+        from ..profiles import get_active_profile
+
+        child_profile = get_active_profile(subagent_cfg)
+        child_route_metadata = {
+            "model": selected_model,
+            "profile_name": child_profile.name,
+            "protocol": child_profile.protocol,
+            "auth_provider": child_profile.auth_provider,
+        }
         subagent_cfg.routing_mode = _ROUTING_MODE_CODE_ONLY
         # Skills are an independent session capability, not an implicit part of
         # delegation. Preserve the parent's resolved master switch explicitly;
@@ -1853,14 +2185,15 @@ class SubagentLauncher:
             parent_turn_budget = max(1, int(cfg.max_steps))
         explicit_subagent_max_steps = args.get("max_steps") if "max_steps" in args else None
         if self.helper_only:
-            helper_max_steps = int(cfg.subagent_orchestration.helper_max_steps)
-            if explicit_subagent_max_steps is None:
-                explicit_subagent_max_steps = helper_max_steps
-            else:
-                explicit_subagent_max_steps = min(
-                    max(1, int(explicit_subagent_max_steps)),
-                    helper_max_steps,
-                )
+            helper_max_steps = cfg.subagent_orchestration.helper_max_steps
+            if helper_max_steps is not None:
+                if explicit_subagent_max_steps is None:
+                    explicit_subagent_max_steps = helper_max_steps
+                else:
+                    explicit_subagent_max_steps = min(
+                        max(1, int(explicit_subagent_max_steps)),
+                        helper_max_steps,
+                    )
         resolution = resolve_step_budget(
             StepBudgetRequest(
                 kind="subagent",
@@ -1891,6 +2224,7 @@ class SubagentLauncher:
                     "subagent_session_id": subagent_session_id,
                     "mode": resolved_mode,
                     "model": selected_model,
+                    **child_route_metadata,
                     "temperature_role": temperature_role,
                     "temperature": resolved_temperature,
                     "max_steps": effective_subagent_max_steps,
@@ -1950,6 +2284,8 @@ class SubagentLauncher:
                     run_id=subagent_run_id,
                     definition_name=definition.name,
                     args=args,
+                    launcher=self,
+                    cancellation_token=cancellation_token,
                 )
         child_root = root
         if resume_context is not None and resume_context.workspace_run_id:
@@ -1961,7 +2297,7 @@ class SubagentLauncher:
                     "resumed_from": resume_context.resumed_from,
                 }
             retained = self.workspace_provider.get(resume_context.workspace_run_id)
-            if retained is None or retained.state in {"applied", "discarded"}:
+            if retained is None or retained.state in {"applied", "discarded", "duplicate"}:
                 return {
                     "error": "The retained subagent worktree was already released.",
                     "error_code": "subagent_resume_worktree_released",
@@ -1991,7 +2327,7 @@ class SubagentLauncher:
             )
             if not bool(pinned.get("ok")):
                 return pinned
-            child_run_tracker.pinned_source_run_id = workspace_from_run
+            child_run_tracker.pinned_source_run_id = str(pinned.get("run_id") or workspace_from_run)
             child_root = Path(str(pinned["worktree_path"]))
         elif workspace_view == "isolated":
             isolation_enabled = bool(
@@ -2030,7 +2366,7 @@ class SubagentLauncher:
             )
         )
         child_deny_write_prefixes = deny_write_prefixes
-        trusted_prompt_parts: list[str] = []
+        trusted_prompt_parts: list[str] = [_SUBAGENT_REPORT_EXPECTATIONS]
         if definition.prompt_trust == "trusted":
             trusted_prompt_parts.append(definition.system_prompt)
         trusted_prompt_append = "\n\n".join(trusted_prompt_parts) or None
@@ -2060,7 +2396,7 @@ class SubagentLauncher:
                 yes=yes,
                 max_steps=effective_subagent_max_steps,
                 no_log=no_log,
-                api_key_override=api_key or None,
+                api_key_override=child_api_key,
                 console=None,
                 deny_write_prefixes=child_deny_write_prefixes,
                 allow_write_globs=allow_write_globs,
@@ -2068,6 +2404,11 @@ class SubagentLauncher:
                 non_interactive=non_interactive,
                 session_log_dir_override=session_log_dir_override,
                 prompt_cache_parent_session_id=self.prompt_cache_parent_session_id,
+                **(
+                    {"provider_session_id": resume_context.provider_session_id}
+                    if resume_context is not None
+                    else {}
+                ),
                 surface=subagent_surface,
                 usage_role=f"{usage_role}:subagent:{definition.name}",
                 trusted_system_prompt_append=trusted_prompt_append,
@@ -2095,29 +2436,39 @@ class SubagentLauncher:
             subagent_session_id = str(
                 getattr(getattr(sub_session, "store", None), "session_id", "") or ""
             )
+            parent_session_id = str(getattr(self.store, "session_id", "") or "").strip() or None
+            try:
+                # Stamped on the child's task state so its saved identity can
+                # only ever be restored under the parent that delegated it.
+                sub_session.task_parent_session_id = parent_session_id
+            except Exception:  # noqa: BLE001 - lightweight child doubles may be read-only
+                pass
             if parent_message_provider is not None:
                 sub_session.step_system_message_provider = parent_message_provider
             if parent_message_delivery_observer is not None:
                 sub_session.step_system_message_delivery_observer = parent_message_delivery_observer
+            resumed_task_state: Any | None = None
             if resume_context is not None:
                 target_ledger = getattr(sub_session, "read_ledger", None)
                 seed_ledger = getattr(target_ledger, "seed_from_snapshot", None)
                 if callable(seed_ledger):
-                    seed_ledger(resume_context.read_ledger_snapshot)
-                if isinstance(getattr(sub_session, "messages", None), list):
-                    sub_session.messages.extend(
-                        copy.deepcopy(list(resume_context.history_messages))
+                    seed_ledger(
+                        resume_context.read_ledger_snapshot,
+                        retained_messages=list(resume_context.history_messages),
                     )
-                    context_lines = [
-                        f"This child resumes background run {resume_context.resumed_from}.",
-                        "Continue from the restored conversation; re-check stale assumptions.",
-                    ]
-                    if resume_context.patch_artifact:
-                        context_lines.append(
-                            "Original patch artifact: " + resume_context.patch_artifact
-                        )
-                    sub_session.messages.append(
-                        {"role": "system", "content": "\n".join(context_lines)}
+                if resume_context.task_state is not None:
+                    from .task_state import restore_session_task_state
+
+                    # The child's task identity comes from its own saved log and
+                    # is attached only when that log belongs to the source child
+                    # and to this parent; anything else is refused and the
+                    # resumed child starts from the delegated task instead.
+                    resumed_task_state = restore_session_task_state(
+                        sub_session,
+                        resume_context.task_state,
+                        source_session_id=resume_context.source_session_id,
+                        expected_session_id=resume_context.source_session_id,
+                        expected_parent_session_id=parent_session_id,
                     )
             if not subagent_session_id:
                 try:
@@ -2148,8 +2499,7 @@ class SubagentLauncher:
                     error=f"Failed to initialize subagent session: {e}",
                 )
             )
-            store.append(
-                "subagent_end",
+            _record_subagent_end(
                 {
                     "name": definition.name,
                     "subagent_session_id": None,
@@ -2201,32 +2551,15 @@ class SubagentLauncher:
                 subagent_surface=subagent_surface,
             )
         _record_subagent_start(subagent_session_id)
-        if (
-            workspace_view == "isolated"
-            and definition.allow_workspace_writes is not False
-            and isinstance(getattr(sub_session, "messages", None), list)
-        ):
-            sub_session.messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "If no material repository change is needed, include the exact "
-                        "marker status=no_change_needed in the final report; otherwise do "
-                        "not use that marker."
-                    ),
-                }
-            )
         allowed_names = list(tool_scope.allowed_names)
         unavailable_allowed_tools = list(tool_scope.unavailable_allowed_tools)
-        is_custom_allowlist = definition.prompt_trust != "trusted" and any(
-            str(name).strip() for name in definition.allow_tools
-        )
-        if is_custom_allowlist and unavailable_allowed_tools:
+        if definition.allow_tools_explicit and unavailable_allowed_tools:
             sub_session.close()
             elapsed_ms = int((perf_counter() - subagent_started_at) * 1000)
             error_message = (
                 f"Subagent '{definition.name}' requested unavailable allowlist tools: "
-                f"{', '.join(unavailable_allowed_tools)}."
+                f"{', '.join(unavailable_allowed_tools)}. "
+                "Correct the configured allowlist or the child's tool availability before retrying."
             )
             requested_allowed_tools = [
                 str(name).strip() for name in definition.allow_tools if str(name).strip()
@@ -2250,7 +2583,7 @@ class SubagentLauncher:
                 "steps_completed": subagent_surface.steps_completed,
                 **_child_deadline_telemetry_fields(),
             }
-            store.append("subagent_end", failure_payload)
+            _record_subagent_end(failure_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -2320,8 +2653,7 @@ class SubagentLauncher:
                     error="No tools available after allow/deny sandboxing.",
                 )
             )
-            store.append(
-                "subagent_end",
+            _record_subagent_end(
                 {
                     "name": definition.name,
                     "subagent_session_id": subagent_session_id,
@@ -2341,6 +2673,28 @@ class SubagentLauncher:
         tool_catalog_message = _subagent_exact_tool_catalog_message(filtered_tools)
         if isinstance(getattr(sub_session, "messages", None), list):
             sub_session.messages.append({"role": "system", "content": tool_catalog_message})
+            if resume_context is not None:
+                # Finish rebuilding the current startup context before adding
+                # retained dialogue. Keeping the catalog before history matches
+                # the fresh-child layout without restoring stale permissions
+                # or tools from an earlier run.
+                sub_session.messages.extend(copy.deepcopy(list(resume_context.history_messages)))
+                context_lines = [
+                    "Host continuation context, not a new user request.",
+                    f"This child resumes background run {resume_context.resumed_from}.",
+                    "Continue from the restored conversation; re-check stale assumptions.",
+                ]
+                if resume_context.patch_artifact:
+                    context_lines.append(
+                        "Original patch artifact: " + resume_context.patch_artifact
+                    )
+                # Continuation metadata belongs with its dialogue. System-role
+                # notices are hoisted by some adapters and discarded on replay.
+                notice = {"role": "user", "content": "\n".join(context_lines)}
+                sub_session.messages.append(notice)
+                append_notice = getattr(getattr(sub_session, "store", None), "append", None)
+                if callable(append_notice):
+                    append_notice("subagent_resume_notice", {"message": notice})
         store.append(
             "subagent_tool_catalog",
             {
@@ -2377,7 +2731,7 @@ class SubagentLauncher:
                 "sandbox": _sandbox_payload(filtered_tools),
                 **_helper_runs_fields(),
             }
-            store.append("subagent_end", degraded_payload)
+            _record_subagent_end(degraded_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -2484,6 +2838,9 @@ class SubagentLauncher:
             if touched_repo_paths:
                 mutation_metadata["material_touched_repo_paths"] = material_paths
             child_workspace_effect_payload = {
+                **task_outcome_fields(
+                    getattr(sub_session, "last_turn_outcome", None), exit_code=exit_code
+                ),
                 "effects": [
                     "delegate",
                     "write_workspace" if material_paths else "read_workspace",
@@ -2530,6 +2887,14 @@ class SubagentLauncher:
             elapsed_ms = int((perf_counter() - subagent_started_at) * 1000)
             error_message = "Subagent cancelled by the parent turn."
             workspace_effects = _reconcile_child_workspace_effects()
+            workspace_effects["task_outcome"] = {
+                **workspace_effects["task_outcome"],
+                "outcome": "cancelled",
+                "verified_success": False,
+                "reason": "cancelled",
+                "exit_code": 130,
+            }
+            workspace_effects["verified_success"] = False
             cancellation_report_text, _report_source = _resolve_subagent_final_text(
                 sub_session=sub_session,
                 subagent_surface=subagent_surface,
@@ -2565,7 +2930,7 @@ class SubagentLauncher:
                 **report_payload,
                 **_helper_runs_fields(),
             }
-            store.append("subagent_end", cancelled_payload)
+            _record_subagent_end(cancelled_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -2608,10 +2973,44 @@ class SubagentLauncher:
             }
 
         try:
-            if cancellation_token is None:
-                exit_code = sub_session.run_turn(task)
-            else:
-                exit_code = sub_session.run_turn(task, cancellation_token=cancellation_token)
+            try:
+                run_turn_signature = inspect.signature(sub_session.run_turn)
+                run_turn_parameters = run_turn_signature.parameters.values()
+                accepts_var_keyword = any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in run_turn_parameters
+                )
+                accepts_cancellation_token = (
+                    "cancellation_token" in run_turn_signature.parameters or accepts_var_keyword
+                )
+                accepts_task_relation = (
+                    "task_relation" in run_turn_signature.parameters or accepts_var_keyword
+                )
+            except (TypeError, ValueError):
+                # Runtime session methods support cancellation; opaque wrappers
+                # that cannot be inspected get the capable path as well.
+                accepts_cancellation_token = True
+                accepts_task_relation = True
+            child_turn_kwargs: dict[str, Any] = {}
+            if cancellation_token is not None and accepts_cancellation_token:
+                child_turn_kwargs["cancellation_token"] = cancellation_token
+            if accepts_task_relation:
+                # The delegated task is the child's own objective. It is
+                # installed on the child session only; the parent's task
+                # identity is never touched by delegation or by the result. A
+                # resumed child that restored its saved task continues it; a
+                # resume with a replacement task, or without restorable state,
+                # starts a new task on the child.
+                child_turn_kwargs["task_relation"] = (
+                    "continuation"
+                    if (
+                        resume_context is not None
+                        and resumed_task_state is not None
+                        and not resume_context.task_overridden
+                    )
+                    else "new_task"
+                )
+            exit_code = sub_session.run_turn(task, **child_turn_kwargs)
             if _cancellation_requested():
                 raise RuntimeError("cancelled_by_user")
             raw_final_text, final_text_source = _resolve_subagent_final_text(
@@ -2640,8 +3039,7 @@ class SubagentLauncher:
             safe_execution_error = sanitize_subagent_report(f"Subagent execution failed: {e}")
             report_safety_payload = safe_execution_error.metadata()
             workspace_effects = _reconcile_child_workspace_effects()
-            store.append(
-                "subagent_end",
+            _record_subagent_end(
                 {
                     "name": definition.name,
                     "subagent_session_id": subagent_session_id,
@@ -2712,6 +3110,18 @@ class SubagentLauncher:
         incomplete_report_text = raw_final_text if stopped_for_exhaustion else internal_report_text
 
         if internal_report_text or stopped_for_exhaustion:
+            outcome = workspace_effects["task_outcome"]
+            if deadline_exhausted or outcome["outcome"] in {
+                "verified_success",
+                "completed_unverified",
+            }:
+                workspace_effects["task_outcome"] = {
+                    **outcome,
+                    "outcome": "deadline_exceeded" if deadline_exhausted else "incomplete",
+                    "verified_success": False,
+                    "reason": "deadline_exhausted" if deadline_exhausted else "subagent_incomplete",
+                }
+                workspace_effects["verified_success"] = False
             # The child produced a runtime stop report, not a deliverable. The
             # report is kept as an internal artifact and the parent is handed a
             # structured status to act on, so half-finished internal state can
@@ -2808,8 +3218,7 @@ class SubagentLauncher:
                 partial_report_safety=partial_report_safety,
             )
             store.append("subagent_incomplete", incomplete_status.telemetry_payload())
-            store.append(
-                "subagent_end",
+            _record_subagent_end(
                 {
                     "name": definition.name,
                     "subagent_session_id": subagent_session_id,
@@ -2913,7 +3322,7 @@ class SubagentLauncher:
                     error=(final_text or f"Subagent '{definition.name}' failed."),
                 )
             )
-            store.append("subagent_end", error_payload)
+            _record_subagent_end(error_payload)
             if crash_diagnostics is not None:
                 crash_diagnostics.event(
                     "subagent_completed",
@@ -2978,7 +3387,7 @@ class SubagentLauncher:
                 **workspace_effects,
                 **_helper_runs_fields(),
             }
-            store.append("subagent_end", degraded_payload)
+            _record_subagent_end(degraded_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -3030,27 +3439,13 @@ class SubagentLauncher:
             text=final_text,
             source=final_text_source,
         )
-        if (
-            final_report_problem is None
-            and workspace_view == "isolated"
-            and definition.allow_workspace_writes is not False
-            and not workspace_effects.get("material_touched_repo_paths")
-            and _NO_CHANGE_OUTCOME_MARKER not in final_text.casefold()
-        ):
-            final_report_problem = "workspace_evidence_mismatch"
         if final_report_problem is not None:
             _try_replay_subagent_usage_once()
             elapsed_ms = int((perf_counter() - subagent_started_at) * 1000)
-            if final_report_problem == "workspace_evidence_mismatch":
-                error_message = (
-                    f"Subagent '{definition.name}' reported a completed change, but the "
-                    "isolated workspace contained no material delta."
-                )
-            else:
-                error_message = (
-                    f"Subagent '{definition.name}' did not produce a substantive final "
-                    f"report ({final_report_problem})."
-                )
+            error_message = (
+                f"Subagent '{definition.name}' did not produce a substantive final "
+                f"report ({final_report_problem})."
+            )
             degraded_payload: dict[str, Any] = {
                 "name": definition.name,
                 "subagent_session_id": subagent_session_id,
@@ -3073,7 +3468,7 @@ class SubagentLauncher:
             }
             if final_text:
                 degraded_payload["final_text"] = final_text
-            store.append("subagent_end", degraded_payload)
+            _record_subagent_end(degraded_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -3119,9 +3514,6 @@ class SubagentLauncher:
                 **workspace_effects,
                 **_helper_runs_fields(),
             }
-            if final_report_problem == "workspace_evidence_mismatch":
-                degraded_result["result"] = final_text
-                degraded_result["result_source"] = final_text_source
             return degraded_result
 
         required_success_event_types = set(
@@ -3194,7 +3586,7 @@ class SubagentLauncher:
                 **workspace_effects,
                 **_helper_runs_fields(),
             }
-            store.append("subagent_end", degraded_payload)
+            _record_subagent_end(degraded_payload)
             subagent_surface.on_subagent_end(
                 SubagentEndEvent(
                     name=definition.name,
@@ -3263,53 +3655,12 @@ class SubagentLauncher:
             "artifact_evidence" if materializes_artifacts else "capability_evidence"
         )
 
-        store.append(
-            "subagent_end",
-            {
-                "name": definition.name,
-                "subagent_session_id": subagent_session_id,
-                "status": "success",
-                "exit_code": exit_code,
-                "usage": usage_payload,
-                "elapsed_ms": elapsed_ms,
-                "steps_completed": subagent_surface.steps_completed,
-                **workspace_effects,
-                "final_text_source": final_text_source,
-                "deadline_exhausted": deadline_exhausted,
-                "deadline_prevented_launch": False,
-                **deadline_observability,
-                **_child_deadline_telemetry_fields(),
-                "report_safety": report_safety_payload,
-                **({evidence_result_key: capability_evidence} if capability_evidence else {}),
-                **_helper_runs_fields(),
-            },
-        )
-        subagent_surface.on_subagent_end(
-            SubagentEndEvent(
-                name=definition.name,
-                mode=resolved_mode,
-                status="success",
-                elapsed_ms=elapsed_ms,
-                steps_completed=subagent_surface.steps_completed,
-                subagent_session_id=subagent_session_id,
-            )
-        )
-        if crash_diagnostics is not None:
-            crash_diagnostics.event(
-                "subagent_completed",
-                {
-                    "subagent": definition.name,
-                    "subagent_session_id": subagent_session_id,
-                    "status": "success",
-                    "exit_code": exit_code,
-                    "duration_ms": elapsed_ms,
-                    "steps_completed": subagent_surface.steps_completed,
-                    **_child_deadline_telemetry_fields(),
-                },
-            )
         success_result = {
             "subagent": definition.name,
+            "model": selected_model,
+            **child_route_metadata,
             "subagent_session_id": subagent_session_id,
+            "status": "success",
             "result": final_text,
             "result_source": final_text_source,
             "usage": usage_payload,
@@ -3324,6 +3675,76 @@ class SubagentLauncher:
         }
         if capability_evidence is not None:
             success_result[evidence_result_key] = capability_evidence
+        success_result = self._capture_isolated_workspace_result(
+            args=args,
+            tracker=child_run_tracker,
+            result=success_result,
+            workspace_run_id=(resume_context.workspace_run_id if resume_context else None),
+        )
+        terminal_status = str(success_result["status"])
+        workspace_capture_evidence = {
+            key: success_result[key]
+            for key in (
+                "workspace",
+                "patch_summary",
+                "patch_capture_status",
+                "material_patch_complete",
+                "capture_reason_codes",
+                "omitted_material_paths",
+                "retained_ignored_paths",
+                "ignored_outputs_integrated",
+                "retention_note",
+                "candidate_worktree_retained",
+                "failure_category",
+                "error_code",
+                "error",
+            )
+            if key in success_result
+        }
+        _record_subagent_end(
+            {
+                "name": definition.name,
+                "subagent_session_id": subagent_session_id,
+                "status": terminal_status,
+                "exit_code": exit_code,
+                "usage": usage_payload,
+                "elapsed_ms": elapsed_ms,
+                "steps_completed": subagent_surface.steps_completed,
+                **workspace_effects,
+                **workspace_capture_evidence,
+                "final_text_source": final_text_source,
+                "deadline_exhausted": deadline_exhausted,
+                "deadline_prevented_launch": False,
+                **deadline_observability,
+                **_child_deadline_telemetry_fields(),
+                "report_safety": report_safety_payload,
+                **({evidence_result_key: capability_evidence} if capability_evidence else {}),
+                **_helper_runs_fields(),
+            },
+        )
+        subagent_surface.on_subagent_end(
+            SubagentEndEvent(
+                name=definition.name,
+                mode=resolved_mode,
+                status=terminal_status,
+                elapsed_ms=elapsed_ms,
+                steps_completed=subagent_surface.steps_completed,
+                subagent_session_id=subagent_session_id,
+            )
+        )
+        if crash_diagnostics is not None:
+            crash_diagnostics.event(
+                "subagent_completed",
+                {
+                    "subagent": definition.name,
+                    "subagent_session_id": subagent_session_id,
+                    "status": terminal_status,
+                    "exit_code": exit_code,
+                    "duration_ms": elapsed_ms,
+                    "steps_completed": subagent_surface.steps_completed,
+                    **_child_deadline_telemetry_fields(),
+                },
+            )
         return success_result
 
 
@@ -3331,13 +3752,75 @@ class _ChildCancellationToken:
     def __init__(self, *, parent: Any | None = None) -> None:
         self._event = Event()
         self._parent = parent
+        self._abort_lock = RLock()
+        self._abort_callback: Callable[[], None] | None = None
+        self._unsubscribe_parent: Callable[[], None] | None = None
+        subscribe = getattr(parent, "subscribe", None)
+        if callable(subscribe):
+            unsubscribe = subscribe(self.cancel)
+            with self._abort_lock:
+                if self._event.is_set():
+                    unsubscribe_now = unsubscribe
+                else:
+                    self._unsubscribe_parent = unsubscribe
+                    unsubscribe_now = None
+            if unsubscribe_now is not None:
+                unsubscribe_now()
 
     @property
     def is_cancelled(self) -> bool:
         return self._event.is_set() or bool(getattr(self._parent, "is_cancelled", False))
 
+    def belongs_to_parent(self, parent: Any) -> bool:
+        """Return whether this child was accepted by ``parent``'s turn."""
+
+        return self._parent is parent
+
     def cancel(self) -> None:
-        self._event.set()
+        with self._abort_lock:
+            if self._event.is_set():
+                return
+            self._event.set()
+            abort_callback = self._abort_callback
+            self._abort_callback = None
+            unsubscribe_parent = self._unsubscribe_parent
+            self._unsubscribe_parent = None
+        if unsubscribe_parent is not None:
+            unsubscribe_parent()
+        if abort_callback is not None:
+            try:
+                abort_callback()
+            except Exception:
+                # Cancellation is best-effort and must remain observable even
+                # when a transport's close hook has already failed or closed.
+                pass
+
+    def set_abort_callback(self, callback: Callable[[], None]) -> None:
+        abort_now = False
+        with self._abort_lock:
+            if self.is_cancelled:
+                abort_now = True
+            else:
+                self._abort_callback = callback
+        if abort_now:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def clear_abort_callback(self) -> None:
+        with self._abort_lock:
+            self._abort_callback = None
+
+    def close(self) -> None:
+        """Detach a completed child from its parent turn token."""
+
+        with self._abort_lock:
+            unsubscribe_parent = self._unsubscribe_parent
+            self._unsubscribe_parent = None
+            self._abort_callback = None
+        if unsubscribe_parent is not None:
+            unsubscribe_parent()
 
     def throw_if_cancelled(self, reason: str = "cancelled_by_user") -> None:
         parent_throw = getattr(self._parent, "throw_if_cancelled", None)
@@ -3346,9 +3829,20 @@ class _ChildCancellationToken:
         if self.is_cancelled:
             raise CooperativeCancellationError(reason)
 
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait until this child is cancelled without polling."""
+
+        if bool(getattr(self._parent, "is_cancelled", False)):
+            self.cancel()
+        return self._event.wait(timeout)
+
 
 @dataclass
 class _ScheduledChild:
+    # A launch context is immutable for the lifetime of a queued/running child.
+    # Permission/tool-surface rebuilds bind a new launcher for future children
+    # without changing the authority or configuration of work already accepted.
+    launcher: SubagentLauncher
     run_id: str
     definition_name: str
     args: dict[str, Any]
@@ -3361,6 +3855,10 @@ class _ScheduledChild:
     sub_session: Any | None = None
     subagent_surface: NestedSubagentSurface | None = None
     executor_future: Future[Any] | None = None
+    # Executor futures become ``done`` before their callbacks necessarily
+    # finish. Cleanup waits on this signal so terminal state and rollup writes
+    # complete before the workspace provider and parent store are closed.
+    worker_bookkeeping_completion: Future[None] = field(default_factory=Future)
     inbox: deque[str] = field(default_factory=deque)
     inbox_lock: RLock = field(default_factory=RLock)
     pending_delivery_batches: deque[tuple[int, int]] = field(default_factory=deque)
@@ -3368,9 +3866,11 @@ class _ScheduledChild:
     messages_delivered: int = 0
     collected: bool = False
     resume_context: _ChildResumeContext | None = None
+    continuation_run_id: str | None = None
     last_event_monotonic: float = field(default_factory=perf_counter)
     last_event_kind: str = "lifecycle"
     inactivity_signal_sent: bool = False
+    launcher_terminal_event_emitted: bool = False
 
     def drain_parent_messages(self) -> list[str]:
         with self.inbox_lock:
@@ -3407,8 +3907,22 @@ class _ChildRollup:
     kind: Literal["batch", "chain"]
 
 
-class ChildScheduler:
-    """Session-owned executor and lifecycle manager for subagent children."""
+_BACKGROUND_OWNERSHIP_NOTE = (
+    "Keep the assigned work with this child and advance different useful work. "
+    "An independent review should test a distinct uncertainty. "
+    "Completed reports arrive automatically at a parent boundary; wait when the result "
+    "is a dependency. Avoid progress polling and filler work."
+)
+
+
+class SubagentCoordinator:
+    """Session-owned executor and lifecycle manager for subagent children.
+
+    The coordinator, registry, workspace provider and executor belong to one
+    logical parent session.  A tool-surface rebuild may bind a fresh launcher
+    for future submissions, while each accepted child retains the launcher
+    context it was validated with.
+    """
 
     def __init__(
         self,
@@ -3427,29 +3941,100 @@ class ChildScheduler:
             max_workers=max(self.max_background_children, self.batch_parallel_cap),
             thread_name_prefix="subagent-child",
         )
+        self._executor_worker_capacity = max(
+            self.max_background_children,
+            self.batch_parallel_cap,
+        )
+        self._retired_executors: list[ThreadPoolExecutor] = []
         self._children: dict[str, _ScheduledChild] = {}
         self._background_queue: deque[str] = deque()
         self._active_background = 0
         self._batch_slots = BoundedSemaphore(self.batch_parallel_cap)
         self._lock = RLock()
         self._closed = False
+        self._workspace_cleanup_attempt_in_progress = False
+        self._workspace_cleanup_attempted = False
+        self._workspace_cleanup_succeeded = False
+        self._workspace_cleanup_attempt_count = 0
+        self._workspace_cleanup_summary: dict[str, Any] | None = None
+        self._workspace_cleanup_callbacks: list[Callable[[], None]] = []
         self._rollups: dict[str, _ChildRollup] = {}
         self._rollup_sequence = 0
         self._lifecycle_listener: Callable[[dict[str, Any]], None] | None = None
         self._lifecycle_last: dict[str, tuple[str, bool, str]] = {}
+        # A parent token is unique to one turn.  Its cancellation grace is a
+        # boundary, not a retry budget: subagent_wait, the next turn checkpoint,
+        # and session finalization may all observe the same request, but only the
+        # first observer is allowed to join children.  Children retain their
+        # parent token, so keeping identity keys here cannot collide with a later
+        # turn while an old child remains registered.
+        self._parent_cancellation_wait_claimed: set[int] = set()
+        launcher.subagent_coordinator = self
         launcher.child_scheduler = self
+
+    @property
+    def scheduler(self) -> SubagentCoordinator:
+        """Return the stable engine under the legacy scheduler-facing API."""
+
+        return self
+
+    @property
+    def workspace_provider(self) -> SubagentWorkspaceProvider | None:
+        return self.launcher.workspace_provider
+
+    def bind_launcher(
+        self,
+        launcher: SubagentLauncher,
+        *,
+        max_background_children: int,
+        parent_steer_inbox: SteerInbox | None,
+    ) -> None:
+        """Bind launch policy for future children without replacing runtime state."""
+
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Subagent coordinator is closed.")
+            if launcher.child_run_registry is not self.registry:
+                raise ValueError("A rebound launcher must reuse the session child registry.")
+            if launcher.workspace_provider is not self.launcher.workspace_provider:
+                raise ValueError("A rebound launcher must reuse the session workspace provider.")
+            if launcher.store is not self.launcher.store:
+                raise ValueError("A rebound launcher must belong to the same logical session.")
+            resolved_background_cap = max(1, int(max_background_children))
+            required_worker_capacity = max(
+                resolved_background_cap,
+                self.batch_parallel_cap,
+            )
+            if required_worker_capacity > self._executor_worker_capacity:
+                replacement_executor = ThreadPoolExecutor(
+                    max_workers=required_worker_capacity,
+                    thread_name_prefix="subagent-child",
+                )
+                self._retired_executors.append(self._executor)
+                self._executor = replacement_executor
+                self._executor_worker_capacity = required_worker_capacity
+            self.launcher = launcher
+            self.max_background_children = resolved_background_cap
+            self.parent_steer_inbox = parent_steer_inbox
+            launcher.subagent_coordinator = self
+            launcher.child_scheduler = self
+            self._start_queued_background_locked()
 
     def set_parent_steer_inbox(self, inbox: SteerInbox | None) -> None:
         """Bind the parent wake channel after a live tool-surface rebuild."""
         self.parent_steer_inbox = inbox
 
     def _track_completion_clock(self, child: _ScheduledChild) -> None:
-        child.completion.add_done_callback(
-            lambda _future, run_id=child.run_id: self.registry.mark_finished(
-                run_id,
+        def _record_completion(_future: Future[dict[str, Any]]) -> None:
+            self.registry.mark_finished(
+                child.run_id,
                 finished_monotonic=perf_counter(),
             )
-        )
+            close_cancellation = getattr(child.cancellation_token, "close", None)
+            if callable(close_cancellation):
+                close_cancellation()
+
+        child.completion.add_done_callback(_record_completion)
 
     def _consume_parent_wait_signals(self) -> list[dict[str, str]]:
         inbox = self.parent_steer_inbox
@@ -3491,7 +4076,8 @@ class ChildScheduler:
             "elapsed_ms": int(payload.get("elapsed_ms") or 0),
             "total_tokens": int(payload.get("total_tokens") or 0),
         }
-        self.launcher.store.append("subagent_repetition_signal", event_payload)
+        launch_context = child.launcher if child is not None else self.launcher
+        launch_context.store.append("subagent_repetition_signal", event_payload)
         inbox = self.parent_steer_inbox
         if not active or inbox is None:
             return False
@@ -3499,11 +4085,6 @@ class ChildScheduler:
         return True
 
     def _signal_inactive_children(self, children: list[_ScheduledChild]) -> None:
-        orchestration = getattr(self.launcher.cfg, "subagent_orchestration", None)
-        threshold_s = max(
-            0.001,
-            float(getattr(orchestration, "inactivity_signal_after_s", 180.0)),
-        )
         now = perf_counter()
         signals: list[dict[str, Any]] = []
         with self._lock:
@@ -3516,6 +4097,11 @@ class ChildScheduler:
                     or record.state != "running"
                 ):
                     continue
+                orchestration = getattr(child.launcher.cfg, "subagent_orchestration", None)
+                threshold_s = max(
+                    0.001,
+                    float(getattr(orchestration, "inactivity_signal_after_s", 180.0)),
+                )
                 age_s = max(0.0, now - child.last_event_monotonic)
                 if age_s < threshold_s:
                     continue
@@ -3530,7 +4116,9 @@ class ChildScheduler:
                 )
         inbox = self.parent_steer_inbox
         for payload in signals:
-            self.launcher.store.append("subagent_inactivity_signal", payload)
+            child = self._children.get(str(payload["run_id"]))
+            launch_context = child.launcher if child is not None else self.launcher
+            launch_context.store.append("subagent_inactivity_signal", payload)
             if inbox is not None:
                 inbox.signal_waiters(
                     reason="child_inactive",
@@ -3587,9 +4175,13 @@ class ChildScheduler:
         run_id: str,
         definition_name: str,
         args: dict[str, Any],
+        launcher: SubagentLauncher | None = None,
+        cancellation_token: Any | None = None,
     ) -> None:
         """Expose an already-registered synchronous run through scheduler tools."""
+        launch_context = launcher or self.launcher
         child = _ScheduledChild(
+            launcher=launch_context,
             run_id=run_id,
             definition_name=definition_name,
             args={key: value for key, value in args.items() if isinstance(key, str)},
@@ -3597,7 +4189,7 @@ class ChildScheduler:
                 args.get("task"),
                 requested_run_id=args.get("run_id"),
             ),
-            cancellation_token=_ChildCancellationToken(parent=None),
+            cancellation_token=(cancellation_token or _ChildCancellationToken()),
             completion=Future(),
             usage_lock=RLock(),
             background=False,
@@ -3607,6 +4199,107 @@ class ChildScheduler:
                 raise ValueError(f"Child run already tracked: {run_id}")
             self._children[run_id] = child
             self._track_completion_clock(child)
+
+    def run_foreground(
+        self,
+        args: dict[str, Any],
+        *,
+        launcher: SubagentLauncher | None = None,
+    ) -> dict[str, Any]:
+        """Run one direct child through the session-owned lifecycle engine.
+
+        Return the synchronous outcome with its stable run ID so the parent can
+        follow up using the same child context. Raised exceptions stay unchanged.
+        """
+
+        launch_context = launcher or self.launcher
+        parent_cancellation_token = args.get(_SUBAGENT_CANCELLATION_TOKEN_ARG)
+        requested_run_id = str(args.get(_SUBAGENT_PREASSIGNED_RUN_ID_ARG) or "").strip()
+        dispatch_args = {key: value for key, value in args.items() if isinstance(key, str)}
+        raw_name = str(dispatch_args.get("name") or "").strip()
+        definition = launch_context._resolve_subagent_definition(raw_name)
+        definition_name = definition.name if definition is not None else raw_name
+        deadline_snapshot: dict[str, Any] = {}
+        if launch_context.cfg is not None:
+            deadline_snapshot = derive_subagent_deadline(
+                launch_context.execution_deadline,
+                launch_context.cfg.subagent_timeout_s,
+            ).telemetry_snapshot()
+        child = _ScheduledChild(
+            launcher=launch_context,
+            run_id=requested_run_id or uuid.uuid4().hex,
+            definition_name=definition_name,
+            args=dispatch_args,
+            label=subagent_task_label(dispatch_args.get("task")),
+            cancellation_token=_ChildCancellationToken(parent=parent_cancellation_token),
+            completion=Future(),
+            usage_lock=RLock(),
+            background=False,
+        )
+        # Direct calls use a one-shot worker: the coordinator can observe
+        # parent cancellation while the provider is blocked, and callers that
+        # only retain a build_tools result do not accumulate a persistent
+        # foreground executor after the synchronous call returns.
+        foreground_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="subagent-foreground",
+        )
+        with self._lock:
+            if self._closed:
+                foreground_executor.shutdown(wait=False, cancel_futures=True)
+                return {"error": "Subagent coordinator is closed."}
+            if child.run_id in self._children:
+                foreground_executor.shutdown(wait=False, cancel_futures=True)
+                return {
+                    "error": f"Subagent run already exists: {child.run_id}",
+                    "error_code": "duplicate_subagent_run_id",
+                }
+            self._record_registered_child(
+                run_id=child.run_id,
+                definition_name=definition_name,
+                deadline_snapshot=deadline_snapshot,
+                launcher=launch_context,
+            )
+            self._children[child.run_id] = child
+            self._track_completion_clock(child)
+            child.executor_future = foreground_executor.submit(
+                self._execute_child,
+                child,
+            )
+            child.executor_future.add_done_callback(
+                lambda future, child_run_id=child.run_id: self._worker_done(
+                    child_run_id,
+                    background=False,
+                    worker_future=future,
+                )
+            )
+
+        try:
+            while not (
+                child.completion.done()
+                and child.executor_future is not None
+                and child.executor_future.done()
+            ):
+                if bool(getattr(parent_cancellation_token, "is_cancelled", False)):
+                    child.cancellation_token.cancel()
+                # This is only an observation interval; it never terminates the
+                # child. The child owns its configured deadline, if any.
+                observed_future = (
+                    child.executor_future
+                    if child.completion.done() and child.executor_future is not None
+                    else child.completion
+                )
+                wait((observed_future,), timeout=0.05)
+        except BaseException:
+            child.cancellation_token.cancel()
+            foreground_executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        foreground_executor.shutdown(wait=True, cancel_futures=False)
+        with self._lock:
+            self._complete_child_state_locked(child)
+            child.collected = True
+        self._notify_lifecycle(child.run_id)
+        return {**child.completion.result(), "run_id": child.run_id}
 
     def attach_synchronous_session(
         self,
@@ -3648,6 +4341,7 @@ class ChildScheduler:
         deadline_snapshot: dict[str, Any],
         depends_on: tuple[str, ...] = (),
         resumed_from: str | None = None,
+        launcher: SubagentLauncher | None = None,
     ) -> None:
         record = self.registry.register(
             run_id=run_id,
@@ -3657,7 +4351,7 @@ class ChildScheduler:
             depends_on=depends_on,
             resumed_from=resumed_from,
         )
-        self.launcher._record_child_run_state(run_id=run_id, record=record)
+        (launcher or self.launcher)._record_child_run_state(run_id=run_id, record=record)
 
     def _transition(
         self,
@@ -3666,7 +4360,9 @@ class ChildScheduler:
         *,
         child_session_id: str | None = None,
     ) -> ChildRunRecord:
-        record = self.launcher._transition_child_run(
+        child = self._children.get(run_id)
+        launch_context = child.launcher if child is not None else self.launcher
+        record = launch_context._transition_child_run(
             run_id=run_id,
             state=state,
             child_session_id=child_session_id,
@@ -3742,7 +4438,7 @@ class ChildScheduler:
         try:
             context = nullcontext() if child.background else self._batch_slots
             with context:
-                result = self.launcher.run_registered(
+                result = child.launcher.run_registered(
                     child.args,
                     run_id=child.run_id,
                     cancellation_token=child.cancellation_token,
@@ -3754,21 +4450,77 @@ class ChildScheduler:
                         session,
                         surface,
                     ),
+                    on_terminal_event=lambda: self._mark_launcher_terminal_event(child),
                     resume_context=child.resume_context,
                 )
         except BaseException as exc:
             if child.cancellation_token.is_cancelled:
-                child.completion.set_result(self._queued_cancelled_result(child))
-            else:
+                with self._lock:
+                    cancelled_result = self._queued_cancelled_result(child)
+                    if child.launcher_terminal_event_emitted:
+                        if not child.completion.done():
+                            child.completion.set_result(cancelled_result)
+                    else:
+                        self._complete_synthetic_result_locked(
+                            child,
+                            cancelled_result,
+                            source="execution_cancelled",
+                        )
+            elif not child.completion.done():
                 child.completion.set_exception(exc)
         else:
-            child.completion.set_result(result)
+            if not child.completion.done():
+                if child.launcher_terminal_event_emitted:
+                    child.completion.set_result(result)
+                else:
+                    with self._lock:
+                        self._complete_synthetic_result_locked(
+                            child,
+                            result,
+                            source="launcher_result_without_terminal_event",
+                        )
         finally:
             self._release_resume_workspace_pin(child)
 
+    def _mark_launcher_terminal_event(self, child: _ScheduledChild) -> None:
+        # The launcher worker is the sole writer; readers only need to know
+        # whether its terminal append happened before the launcher returned.
+        child.launcher_terminal_event_emitted = True
+
+    def _complete_synthetic_result_locked(
+        self,
+        child: _ScheduledChild,
+        result: dict[str, Any],
+        *,
+        source: str,
+    ) -> bool:
+        """Durably record and complete one coordinator-fabricated result.
+
+        Launcher-executed children already write their own terminal event, so
+        this helper is intentionally reserved for work that never produced a
+        normal launcher result (dependency rejection, queued cancellation, or
+        executor cancellation).
+        """
+
+        if child.completion.done():
+            return False
+        terminal_payload = copy.deepcopy(result)
+        terminal_payload.setdefault("name", child.definition_name)
+        terminal_payload["run_id"] = child.run_id
+        terminal_payload["coordinator_synthesized"] = True
+        terminal_payload["terminal_source"] = source
+        try:
+            child.launcher.store.append("subagent_end", terminal_payload)
+        except Exception:
+            # Lifecycle persistence must not strand the completion future when
+            # logging itself is unavailable during teardown.
+            pass
+        child.completion.set_result(result)
+        return True
+
     def _release_resume_workspace_pin(self, child: _ScheduledChild) -> None:
         resume_context = child.resume_context
-        provider = self.launcher.workspace_provider
+        provider = child.launcher.workspace_provider
         if resume_context is None or not resume_context.workspace_run_id or provider is None:
             return
         provider.release_pin(
@@ -3780,7 +4532,7 @@ class ChildScheduler:
     def _result_succeeded(result: dict[str, Any]) -> bool:
         status = str(result.get("status") or "").strip().lower()
         if status:
-            return status == "success"
+            return status in {"success", "no_changes"}
         return not bool(result.get("error"))
 
     def _complete_child_state_locked(self, child: _ScheduledChild) -> bool:
@@ -3856,27 +4608,31 @@ class ChildScheduler:
                         failed_dependency = dependency_id
                         break
                 if failed_dependency is not None:
-                    child.completion.set_result(
+                    self._complete_synthetic_result_locked(
+                        child,
                         self._dependency_failure_result(
                             child=child,
                             failed_dependency=failed_dependency,
-                        )
+                        ),
+                        source="dependency_failed",
                     )
                     self._transition(child.run_id, "cancelled")
                     made_progress = True
                     continue
                 if not all_succeeded:
                     continue
-                _preflight, launch_error = self.launcher.background_spawn_preflight(
+                _preflight, launch_error = child.launcher.background_spawn_preflight(
                     child.args,
                     defer_dependency_workspace=False,
                 )
                 if launch_error is not None:
-                    child.completion.set_result(
+                    self._complete_synthetic_result_locked(
+                        child,
                         self._deferred_launch_error_result(
                             child=child,
                             error=launch_error,
-                        )
+                        ),
+                        source="deferred_launch_rejected",
                     )
                     self._transition(child.run_id, "cancelled")
                     made_progress = True
@@ -3944,7 +4700,7 @@ class ChildScheduler:
         if not child.completion.done():
             return ""
         status = cls._result_status(child)
-        if status == "success":
+        if status in {"success", "no_changes"}:
             return "finished"
         if status == "cancelled":
             return "cancelled"
@@ -4010,13 +4766,38 @@ class ChildScheduler:
             self._emit_completed_rollups_locked()
             self._start_queued_background_locked()
 
+    def _worker_done(
+        self,
+        run_id: str,
+        *,
+        background: bool,
+        worker_future: Future[Any],
+    ) -> None:
+        with self._lock:
+            child = self._children.get(run_id)
+        try:
+            if worker_future.cancelled():
+                with self._lock:
+                    if child is not None:
+                        self._complete_synthetic_result_locked(
+                            child,
+                            self._queued_cancelled_result(child),
+                            source="executor_cancelled",
+                        )
+                        self._release_resume_workspace_pin(child)
+            self._child_done(run_id, background=background)
+        finally:
+            if child is not None and not child.worker_bookkeeping_completion.done():
+                child.worker_bookkeeping_completion.set_result(None)
+
     def _submit_background_locked(self, child: _ScheduledChild) -> None:
         self._active_background += 1
         child.executor_future = self._executor.submit(self._execute_child, child)
         child.executor_future.add_done_callback(
-            lambda _future, run_id=child.run_id: self._child_done(
+            lambda future, run_id=child.run_id: self._worker_done(
                 run_id,
                 background=True,
+                worker_future=future,
             )
         )
 
@@ -4112,6 +4893,7 @@ class ChildScheduler:
         with self._lock:
             if self._closed:
                 return {"error": "Background subagent scheduler is closed."}
+            launch_context = self.launcher
             if run_id in self._children:
                 return {
                     "error": f"Background subagent run already exists: {run_id}",
@@ -4124,12 +4906,13 @@ class ChildScheduler:
             )
         if dependency_error is not None:
             return dependency_error
-        preflight, error = self.launcher.background_spawn_preflight(args)
+        preflight, error = launch_context.background_spawn_preflight(args)
         if error is not None:
             return error
         if preflight is None:
             return {"error": "Background subagent preflight failed."}
         child = _ScheduledChild(
+            launcher=launch_context,
             run_id=run_id,
             definition_name=preflight.definition.name,
             args=dict(args),
@@ -4151,6 +4934,7 @@ class ChildScheduler:
                 definition_name=preflight.definition.name,
                 deadline_snapshot=preflight.deadline_snapshot,
                 depends_on=dependencies,
+                launcher=launch_context,
             )
             self._children[run_id] = child
             self._track_completion_clock(child)
@@ -4182,9 +4966,10 @@ class ChildScheduler:
             "subagent_session_id": child_session_id,
             "state": state,
             "summary": summary,
+            "orchestration_note": _BACKGROUND_OWNERSHIP_NOTE,
         }
 
-    def _resume_history(self, child: _ScheduledChild) -> tuple[dict[str, Any], ...]:
+    def _resume_source_events(self, child: _ScheduledChild) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         child_store = getattr(getattr(child.sub_session, "store", None), "events_snapshot", None)
         if callable(child_store):
@@ -4196,19 +4981,72 @@ class ChildScheduler:
                 events = []
         record = self.registry.get(child.run_id)
         if not events and record is not None and record.child_session_id:
-            log_path = self.launcher.store.sessions_dir / f"{record.child_session_id}.jsonl"
+            log_path = child.launcher.store.sessions_dir / f"{record.child_session_id}.jsonl"
             try:
                 events = [event for event in read_session_events(log_path)]
             except (OSError, UnicodeDecodeError, ValueError):
                 events = []
+        return events
+
+    def _resume_source_session_id(self, child: _ScheduledChild) -> str | None:
+        record = self.registry.get(child.run_id)
+        recorded = str(getattr(record, "child_session_id", "") or "").strip()
+        if recorded:
+            return recorded
+        live = str(getattr(getattr(child.sub_session, "store", None), "session_id", "") or "")
+        return live.strip() or None
+
+    def _resume_task_state(
+        self,
+        child: _ScheduledChild,
+        events: list[dict[str, Any]],
+        *,
+        source_session_id: str | None,
+    ) -> Any | None:
+        """Replay the source child's own log for its task identity.
+
+        Returns ``None`` when the log never recorded a task (lightweight child
+        doubles, or logs written before task state existed and holding no
+        user turn), so the resumed child simply accepts the delegated task.
+        """
+
+        if not events:
+            return None
+        from .task_state import recover_task_state_from_events
+
+        recovered = recover_task_state_from_events(events, session_id=source_session_id)
+        if recovered.state is None and recovered.recovery != "unrecoverable":
+            return None
+        return recovered
+
+    def _resume_history(
+        self,
+        child: _ScheduledChild,
+        events: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        if events is None:
+            events = self._resume_source_events(child)
         restored = _child_resume_messages(events)
         if not restored:
+            session_messages = getattr(child.sub_session, "messages", [])
+            prefix_len = getattr(child.sub_session, "pinned_prefix_len", 0)
+            if not isinstance(prefix_len, int) or prefix_len < 0:
+                prefix_len = 0
             restored = [
                 copy.deepcopy(message)
-                for message in getattr(child.sub_session, "messages", [])
+                for message in session_messages[prefix_len:]
                 if isinstance(message, dict)
                 and str(message.get("role") or "").strip() in {"user", "assistant", "tool"}
             ]
+            if child.resume_context is not None:
+                retained = list(child.resume_context.history_messages)
+                if restored[: len(retained)] == retained:
+                    return tuple(restored)
+        if child.resume_context is not None:
+            # A fresh child log contains only its new turn. Carry prior history
+            # forward once, including when initialization fails before history
+            # can be seeded into the new session.
+            restored = [*copy.deepcopy(child.resume_context.history_messages), *restored]
         return tuple(restored)
 
     @staticmethod
@@ -4236,6 +5074,7 @@ class ChildScheduler:
         parent_cancellation_token: Any | None = None,
     ) -> dict[str, Any]:
         source_run_id = str(args.get("run_id") or "").strip()
+        task_override = str(args.get("task") or "").strip()
         with self._lock:
             source = self._children.get(source_run_id)
             source_record = self.registry.get(source_run_id)
@@ -4260,18 +5099,33 @@ class ChildScheduler:
                 record=source_record,
                 result=source_result,
             )
-            if source_status not in {"failed", "incomplete", "cancelled"}:
+            if source_status not in {
+                "success",
+                "no_changes",
+                "degraded",
+                "failed",
+                "incomplete",
+                "cancelled",
+            }:
                 return {
                     "error": (
-                        "Only failed, incomplete, or cancelled background runs can be resumed."
+                        "Only terminal successful, degraded, failed, incomplete, or cancelled runs can be continued."
                     ),
                     "error_code": "subagent_resume_not_allowed",
                     "run_id": source_run_id,
                     "status": source_status,
                 }
+            if source.continuation_run_id:
+                return self._already_continued_result(source)
+            if source_status in {"success", "no_changes", "degraded"} and not task_override:
+                return {
+                    "error": "A successful or degraded child needs an explicit follow-up task.",
+                    "error_code": "subagent_followup_requires_task",
+                    "run_id": source_run_id,
+                    "status": source_status,
+                }
 
         resumed_args = _resume_launch_args(source.args)
-        task_override = str(args.get("task") or "").strip()
         if task_override:
             resumed_args["task"] = task_override
         workspace_view_override = str(args.get("workspace_view") or "").strip().lower()
@@ -4290,8 +5144,26 @@ class ChildScheduler:
 
         reattach_requested = bool(args.get("reattach_workspace", True))
         workspace_run_id: str | None = None
+        source_workspace = source_result.get("workspace")
+        if (
+            reattach_requested
+            and original_workspace_view == "isolated"
+            and workspace_record is None
+            and isinstance(source_workspace, dict)
+            and source_workspace.get("view") == "isolated"
+        ):
+            return {
+                "error": "The source isolated workspace record is unavailable; refusing to silently start from a fresh tree.",
+                "error_code": "subagent_resume_worktree_unavailable",
+                "run_id": source_run_id,
+                "patch_artifact": patch_artifact or None,
+            }
         if original_workspace_view == "isolated" and workspace_record is not None:
-            if reattach_requested and workspace_record.state in {"applied", "discarded"}:
+            if reattach_requested and workspace_record.state in {
+                "applied",
+                "discarded",
+                "duplicate",
+            }:
                 return {
                     "error": (
                         f"Isolated workspace {source_run_id} was already {workspace_record.state}."
@@ -4304,11 +5176,13 @@ class ChildScheduler:
             if reattach_requested:
                 workspace_run_id = source_run_id
 
-        preflight, preflight_error = self.launcher.background_spawn_preflight(resumed_args)
+        with self._lock:
+            launch_context = self.launcher
+        preflight, preflight_error = launch_context.background_spawn_preflight(resumed_args)
         if preflight_error is not None:
             if preflight_error.get("error_code") == "background_subagent_requires_readonly":
                 isolated_args = {**resumed_args, "workspace_view": "isolated"}
-                isolated_preflight, _isolated_error = self.launcher.background_spawn_preflight(
+                isolated_preflight, _isolated_error = launch_context.background_spawn_preflight(
                     isolated_args,
                     check_deadline=False,
                 )
@@ -4335,58 +5209,119 @@ class ChildScheduler:
             return {"error": "Background subagent resume preflight failed."}
 
         new_run_id = uuid.uuid4().hex
-        if workspace_run_id and provider is not None:
-            with self._lock:
-                if self._closed:
-                    return {"error": "Background subagent scheduler is closed."}
-            reattached = provider.reattach_for_resume(
-                workspace_run_id,
-                new_run_id,
-            )
-            if not bool(reattached.get("ok")):
-                return {
-                    **reattached,
-                    "resumed_from": source_run_id,
-                }
-            workspace_run_id = new_run_id
+        source_events = self._resume_source_events(source)
+        source_session_id = self._resume_source_session_id(source)
         resume_context = _ChildResumeContext(
             resumed_from=source_run_id,
-            history_messages=self._resume_history(source),
+            history_messages=self._resume_history(source, source_events),
+            provider_session_id=(
+                getattr(source.sub_session, "provider_session_id", None)
+                or (
+                    source.resume_context.provider_session_id
+                    if source.resume_context is not None
+                    else None
+                )
+                or getattr(getattr(source.sub_session, "store", None), "session_id", None)
+            ),
             workspace_run_id=workspace_run_id,
             patch_artifact=patch_artifact,
+            task_state=self._resume_task_state(
+                source, source_events, source_session_id=source_session_id
+            ),
+            source_session_id=source_session_id,
+            task_overridden=bool(task_override),
             read_ledger_snapshot=(
                 source.sub_session.read_ledger.snapshot()
                 if callable(
                     getattr(getattr(source.sub_session, "read_ledger", None), "snapshot", None)
                 )
-                else {}
+                else (
+                    copy.deepcopy(source.resume_context.read_ledger_snapshot)
+                    if source.resume_context is not None
+                    else {}
+                )
             ),
-        )
-        child = _ScheduledChild(
-            run_id=new_run_id,
-            definition_name=preflight.definition.name,
-            args=resumed_args,
-            label=subagent_task_label(
-                resumed_args.get("task"),
-                requested_run_id=resumed_args.get("run_id"),
-            ),
-            cancellation_token=_ChildCancellationToken(parent=parent_cancellation_token),
-            completion=Future(),
-            usage_lock=RLock(),
-            background=True,
-            resume_context=resume_context,
         )
         with self._lock:
             if self._closed:
-                self._release_resume_workspace_pin(child)
                 return {"error": "Background subagent scheduler is closed."}
-            self._record_registered_child(
+            # A continuation is linear, not a fork. Check again after preflight
+            # so concurrent requests cannot transfer the same retained candidate
+            # twice or silently restart from a fresh tree after it has moved.
+            if source.continuation_run_id:
+                return self._already_continued_result(source)
+            child = _ScheduledChild(
+                launcher=launch_context,
                 run_id=new_run_id,
                 definition_name=preflight.definition.name,
-                deadline_snapshot=preflight.deadline_snapshot,
-                resumed_from=source_run_id,
+                args=resumed_args,
+                label=subagent_task_label(resumed_args.get("task")),
+                cancellation_token=_ChildCancellationToken(parent=parent_cancellation_token),
+                completion=Future(),
+                usage_lock=RLock(),
+                background=True,
+                resume_context=resume_context,
             )
+            try:
+                if workspace_run_id and provider is not None:
+                    reattached = provider.reattach_for_resume(workspace_run_id, new_run_id)
+                    if not bool(reattached.get("ok")):
+                        child.cancellation_token.close()
+                        return {**reattached, "resumed_from": source_run_id}
+                    child.resume_context = replace(resume_context, workspace_run_id=new_run_id)
+                self._record_registered_child(
+                    run_id=new_run_id,
+                    definition_name=preflight.definition.name,
+                    deadline_snapshot=preflight.deadline_snapshot,
+                    resumed_from=source_run_id,
+                    launcher=launch_context,
+                )
+            except Exception as exc:
+                # Neither workspace transfer nor durable registration launches a
+                # worker. Restore ownership before allowing a retry of the source.
+                rollback_error = ""
+                if (
+                    workspace_run_id
+                    and provider is not None
+                    and provider.get(new_run_id) is not None
+                ):
+                    try:
+                        rolled_back = provider.reattach_for_resume(new_run_id, source_run_id)
+                        if not rolled_back.get("ok"):
+                            rollback_error = str(
+                                rolled_back.get("error") or "Workspace rollback failed."
+                            )
+                    except Exception as rollback_exc:
+                        # An event append can fail after an in-memory transfer;
+                        # inspect ownership instead of assuming work was lost.
+                        rollback_error = str(rollback_exc)
+                child.cancellation_token.close()
+                failed_record = self.registry.get(new_run_id)
+                if failed_record is not None and failed_record.state == "spawned":
+                    # The durable append just failed, so do not retry that same
+                    # sink while containing the unlaunched registration.
+                    self.registry.transition(new_run_id, state="cancelled")
+                retained_id = (
+                    source_run_id
+                    if provider is not None and provider.get(source_run_id) is not None
+                    else new_run_id
+                    if provider is not None and provider.get(new_run_id) is not None
+                    else None
+                )
+                return {
+                    "error": f"Subagent continuation setup failed: {sanitize_subagent_report(str(exc)).text}",
+                    "error_code": "subagent_resume_setup_failed",
+                    "run_id": source_run_id,
+                    "retained_worktree_run_id": retained_id,
+                    "source_workspace_restored": retained_id == source_run_id,
+                    **(
+                        {"workspace_rollback_error": sanitize_subagent_report(rollback_error).text}
+                        if rollback_error
+                        else {}
+                    ),
+                }
             self._children[new_run_id] = child
+            source.continuation_run_id = new_run_id
             self._track_completion_clock(child)
             if self._active_background < self.max_background_children:
                 self._submit_background_locked(child)
@@ -4401,6 +5336,16 @@ class ChildScheduler:
             "subagent_session_id": (record.child_session_id if record is not None else None),
             "state": record.state if record is not None else "spawned",
             "resumed_from": source_run_id,
+            "orchestration_note": _BACKGROUND_OWNERSHIP_NOTE,
+        }
+
+    @staticmethod
+    def _already_continued_result(source: _ScheduledChild) -> dict[str, Any]:
+        return {
+            "error": "This child already has a continuation; use its current run ID.",
+            "error_code": "subagent_already_continued",
+            "run_id": source.run_id,
+            "continuation_run_id": source.continuation_run_id,
         }
 
     def _register_batch_child(
@@ -4409,26 +5354,24 @@ class ChildScheduler:
         *,
         parent_cancellation_token: Any | None,
     ) -> _ScheduledChild:
+        launch_context = self.launcher
         raw_name = str(args.get("name") or "").strip()
-        definition = self.launcher._resolve_subagent_definition(raw_name)
+        definition = launch_context._resolve_subagent_definition(raw_name)
         definition_name = definition.name if definition is not None else raw_name
         run_id = uuid.uuid4().hex
         deadline_snapshot: dict[str, Any] = {}
-        if self.launcher.cfg is not None:
+        if launch_context.cfg is not None:
             deadline_snapshot = derive_subagent_deadline(
-                self.launcher.execution_deadline,
-                float(self.launcher.cfg.subagent_timeout_s),
+                launch_context.execution_deadline,
+                launch_context.cfg.subagent_timeout_s,
             ).telemetry_snapshot()
         child = _ScheduledChild(
+            launcher=launch_context,
             run_id=run_id,
             definition_name=definition_name,
             args=dict(args),
             label=subagent_task_label(args.get("task")),
-            cancellation_token=(
-                parent_cancellation_token
-                if parent_cancellation_token is not None
-                else _ChildCancellationToken()
-            ),
+            cancellation_token=_ChildCancellationToken(parent=parent_cancellation_token),
             completion=Future(),
             usage_lock=RLock(),
             background=False,
@@ -4437,14 +5380,16 @@ class ChildScheduler:
             run_id=run_id,
             definition_name=definition_name,
             deadline_snapshot=deadline_snapshot,
+            launcher=launch_context,
         )
         self._children[run_id] = child
         self._track_completion_clock(child)
         child.executor_future = self._executor.submit(self._execute_child, child)
         child.executor_future.add_done_callback(
-            lambda _future, child_run_id=run_id: self._child_done(
+            lambda future, child_run_id=run_id: self._worker_done(
                 child_run_id,
                 background=False,
+                worker_future=future,
             )
         )
         return child
@@ -4482,7 +5427,7 @@ class ChildScheduler:
                     )
                 break
             result = collected["results"][run_id]
-            results.append({key: value for key, value in result.items() if key != "run_id"})
+            results.append({**result, "run_id": run_id})
         return results
 
     def submit_readonly_batch(
@@ -4533,13 +5478,13 @@ class ChildScheduler:
         if child.sub_session is None:
             return
         try:
-            self.launcher.replay_registered_usage(
+            child.launcher.replay_registered_usage(
                 run_id=child.run_id,
                 sub_session=child.sub_session,
                 usage_lock=child.usage_lock,
             )
         except Exception as exc:  # noqa: BLE001 - status must remain best-effort
-            self.launcher.store.append(
+            child.launcher.store.append(
                 "warning",
                 {
                     "warning": "subagent_usage_replay_failed",
@@ -4571,13 +5516,104 @@ class ChildScheduler:
             child_session_id=str(result.get("subagent_session_id") or "") or None,
         )
 
+    @staticmethod
+    def _completed_child_result(child: _ScheduledChild) -> dict[str, Any]:
+        try:
+            return child.completion.result()
+        except BaseException as exc:
+            return {
+                "status": "failed",
+                "subagent": child.definition_name,
+                "error_code": "subagent_execution_failed",
+                "error": sanitize_subagent_report(str(exc)).text,
+            }
+
+    def pending_completion_notifications(self, *, max_items: int = 8) -> list[dict[str, Any]]:
+        """Peek at finished background results without consuming their delivery.
+
+        The parent persists these bounded, untrusted reports at a safe model
+        boundary, then acknowledges the returned run IDs. A failed append can
+        retry this read without losing a result. Explicit wait/collection also
+        satisfies delivery; the full result remains retrievable in either case.
+        Only the session's parent turn consumes notifications.
+        """
+        limit = max(0, int(max_items))
+        with self._lock:
+            children = [
+                child
+                for child in self._children.values()
+                if child.background and not child.collected and child.completion.done()
+            ][:limit]
+        notifications: list[dict[str, Any]] = []
+        for child in children:
+            self._refresh_usage(child)
+            result = self._completed_child_result(child)
+            partial = result.get("partial_report")
+            report_text = str(result.get("result") or result.get("final_text") or "")
+            if not report_text and isinstance(partial, dict):
+                report_text = str(partial.get("excerpt") or "")
+            report = sanitize_subagent_report(report_text)
+            notification: dict[str, Any] = {
+                "run_id": child.run_id,
+                "subagent": child.definition_name,
+                "status": self._result_status(child),
+                "status_scope": "child_execution",
+                "report": report.text[:_COMPLETION_NOTIFICATION_REPORT_MAX_CHARS],
+                "report_truncated": (
+                    len(report.text) > _COMPLETION_NOTIFICATION_REPORT_MAX_CHARS
+                    or (isinstance(partial, dict) and bool(partial.get("truncated")))
+                ),
+                "report_safety": report.metadata(),
+                "full_result": {
+                    "tool": "subagent_wait",
+                    "arguments": {"run_id": child.run_id},
+                },
+            }
+            for key in ("error", "error_code", "stop_reason", "report_artifact", "resumed_from"):
+                value = result.get(key)
+                if value:
+                    notification[key] = sanitize_subagent_report(str(value)).text[:1000]
+            workspace = result.get("workspace")
+            if isinstance(workspace, dict):
+                notification["workspace_view"] = workspace.get("view")
+                notification["candidate_worktree_retained"] = bool(
+                    result.get("candidate_worktree_retained")
+                    or workspace.get("candidate_worktree_retained")
+                )
+            with self._lock:
+                if not child.collected:
+                    notifications.append(notification)
+        return notifications
+
+    def acknowledge_completion_notifications(self, run_ids: list[str]) -> None:
+        """Acknowledge reports already persisted in the parent's transcript."""
+        acknowledged: list[str] = []
+        with self._lock:
+            for run_id in dict.fromkeys(run_ids):
+                child = self._children.get(run_id)
+                if child is None or child.collected or not child.completion.done():
+                    continue
+                result = self._completed_child_result(child)
+                self._finish_state_from_result(child=child, result=result)
+                child.collected = True
+                acknowledged.append(run_id)
+        for run_id in acknowledged:
+            self._notify_lifecycle(run_id)
+
     def collect(
         self,
         *,
         run_id: str | list[str] | None = "all",
         timeout_s: float | None = None,
         cancellation_token: Any | None = None,
+        consume_delivery: bool = True,
     ) -> dict[str, Any]:
+        """Join selected children, optionally leaving their reports pending delivery.
+
+        Explicit waits return reports to the parent and consume delivery by default.
+        Host cleanup instead persists completion notifications before acknowledging
+        them, so a failed transcript write can retry without losing the reports.
+        """
         selected = self._selected_run_ids(run_id)
         if isinstance(run_id, str) and run_id != "all" and not selected:
             return {
@@ -4597,7 +5633,10 @@ class ChildScheduler:
             remaining_futures = set(pending_futures)
             while remaining_futures:
                 if bool(getattr(cancellation_token, "is_cancelled", False)):
-                    self.cancel(run_id=selected, wait_for_running=True)
+                    self.cancel_parent_turn(
+                        parent_cancellation_token=cancellation_token,
+                        wait_for_running=True,
+                    )
                     # Cooperative children now have terminal cancellation results.
                     # Return those to the turn loop so every assistant tool call is
                     # paired with a tool result before its next cancellation
@@ -4625,10 +5664,12 @@ class ChildScheduler:
             if not child.completion.done():
                 pending_run_ids.append(child.run_id)
                 continue
-            result = child.completion.result()
-            self._finish_state_from_result(child=child, result=result)
-            child.collected = True
-            self._notify_lifecycle(child.run_id)
+            result = self._completed_child_result(child)
+            if consume_delivery:
+                with self._lock:
+                    self._finish_state_from_result(child=child, result=result)
+                    child.collected = True
+                self._notify_lifecycle(child.run_id)
             results[child.run_id] = {"run_id": child.run_id, **result}
         payload: dict[str, Any] = {
             "results": results,
@@ -4642,7 +5683,11 @@ class ChildScheduler:
                     interrupted=False,
                 )
                 if pending_run_ids
-                else "All selected background children are joined."
+                else (
+                    "All selected background children are joined."
+                    if consume_delivery
+                    else "All selected background children completed; reports await delivery."
+                )
             ),
         }
         if wait_signals and pending_run_ids:
@@ -4691,7 +5736,7 @@ class ChildScheduler:
                 child.messages_queued += 1
             state_at_send = record.state
             subagent_surface = child.subagent_surface
-        self.launcher.store.append(
+        child.launcher.store.append(
             "subagent_message",
             {
                 "run_id": run_id,
@@ -4699,7 +5744,7 @@ class ChildScheduler:
                 "state_at_send": state_at_send,
             },
         )
-        emit_info = getattr(subagent_surface or self.launcher.surface, "emit_info", None)
+        emit_info = getattr(subagent_surface or child.launcher.surface, "emit_info", None)
         if callable(emit_info):
             if subagent_surface is not None:
                 emit_info("Message sent.")
@@ -4771,8 +5816,12 @@ class ChildScheduler:
                     already_finished_run_ids.append(candidate)
                     continue
                 if child.completion.done():
-                    result = child.completion.result()
-                    self._finish_state_from_result(child=child, result=result)
+                    try:
+                        result = child.completion.result()
+                    except BaseException:
+                        self._transition(candidate, "joined")
+                    else:
+                        self._finish_state_from_result(child=child, result=result)
                     already_finished_run_ids.append(candidate)
                     continue
                 cancel_child = getattr(child.cancellation_token, "cancel", None)
@@ -4780,7 +5829,11 @@ class ChildScheduler:
                     cancel_child()
                 if record.state in {"waiting", "queued"}:
                     result = self._queued_cancelled_result(child)
-                    child.completion.set_result(result)
+                    self._complete_synthetic_result_locked(
+                        child,
+                        result,
+                        source="queued_cancelled",
+                    )
                     self._transition(candidate, "cancelled")
                     self._release_resume_workspace_pin(child)
                 else:
@@ -4814,12 +5867,13 @@ class ChildScheduler:
                         child_session_id=str(result.get("subagent_session_id") or "") or None,
                     )
         with self._lock:
-            collected_run_ids: list[str] = []
+            completed_run_ids: list[str] = []
             for candidate in selected:
                 child = self._children[candidate]
                 if child.completion.done():
-                    child.collected = True
-                    collected_run_ids.append(candidate)
+                    # Cancellation returns status, not the child's report. Keep
+                    # its evidence pending explicit collection or durable delivery.
+                    completed_run_ids.append(candidate)
             cancelled_run_ids: list[str] = []
             for candidate in selected:
                 if candidate in already_finished_run_ids:
@@ -4829,7 +5883,7 @@ class ChildScheduler:
                     cancelled_run_ids.append(candidate)
                 elif record is not None and record.state == "joined":
                     already_finished_run_ids.append(candidate)
-        for candidate in collected_run_ids:
+        for candidate in completed_run_ids:
             self._notify_lifecycle(candidate)
         states = self.status(run_id=selected)
         return {
@@ -4840,6 +5894,63 @@ class ChildScheduler:
             "already_finished_run_ids": already_finished_run_ids,
             "unknown_run_ids": unknown_run_ids,
             "children": states["children"],
+        }
+
+    def cancel_parent_turn(
+        self,
+        *,
+        parent_cancellation_token: Any,
+        wait_for_running: bool = True,
+        wait_timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Cancel only children accepted under one parent-turn token.
+
+        A cancelled wait returns to the turn loop before its next cancellation
+        checkpoint.  Both sites therefore observe the same request.  Claim the
+        bounded join once per parent token while still making every observation
+        signal all children owned by that turn.  This prevents a second caller
+        from renewing the default join grace and avoids session-wide cancellation
+        of children accepted by another turn.
+        """
+
+        with self._lock:
+            selected: list[str] = []
+            for run_id, child in self._children.items():
+                child_token = child.cancellation_token
+                belongs_to_parent = child_token is parent_cancellation_token or (
+                    isinstance(child_token, _ChildCancellationToken)
+                    and child_token.belongs_to_parent(parent_cancellation_token)
+                )
+                if not belongs_to_parent:
+                    continue
+                record = self.registry.get(run_id)
+                if record is None or record.state in {"joined", "cancelled"}:
+                    continue
+                if child.completion.done():
+                    continue
+                selected.append(run_id)
+
+            token_identity = id(parent_cancellation_token)
+            claimed = getattr(self, "_parent_cancellation_wait_claimed", None)
+            if claimed is None:
+                # Compatibility for narrowly constructed coordinator test doubles.
+                claimed = set()
+                self._parent_cancellation_wait_claimed = claimed
+            cancellation_wait_started = bool(
+                wait_for_running and selected and token_identity not in claimed
+            )
+            if cancellation_wait_started:
+                claimed.add(token_identity)
+
+        result = self.cancel(
+            run_id=selected,
+            wait_for_running=cancellation_wait_started,
+            wait_timeout_s=(wait_timeout_s if cancellation_wait_started else None),
+        )
+        return {
+            **result,
+            "parent_scoped_run_ids": selected,
+            "cancellation_wait_started": cancellation_wait_started,
         }
 
     def status(self, *, run_id: str | list[str] | None = None) -> dict[str, Any]:
@@ -4871,7 +5982,7 @@ class ChildScheduler:
                 0.001,
                 float(
                     getattr(
-                        getattr(self.launcher.cfg, "subagent_orchestration", None),
+                        getattr(child.launcher.cfg, "subagent_orchestration", None),
                         "model_response_activity_after_s",
                         15.0,
                     )
@@ -4958,7 +6069,7 @@ class ChildScheduler:
                 result = {"error": str(exc)}
             else:
                 status = self._result_status(child)
-        if status == "success":
+        if status in {"success", "no_changes"}:
             return {"allowed": True}
 
         stop_reason = str(
@@ -5170,15 +6281,233 @@ class ChildScheduler:
                 pending.append(run_id)
             return pending
 
-    def shutdown(self, *, cancel_pending: bool = True) -> None:
+    def shutdown(
+        self,
+        *,
+        cancel_pending: bool = True,
+        wait_for_running: bool = True,
+    ) -> None:
+        """Close the coordinator under an explicit child-join policy."""
+
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        if cancel_pending:
-            self.cancel(run_id="all", wait_for_running=True)
+            executors = [
+                executor
+                for executor in (
+                    self._executor,
+                    *self._retired_executors,
+                )
+                if executor is not None
+            ]
+            self._retired_executors = []
         try:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+            if cancel_pending:
+                self.cancel(run_id="all", wait_for_running=wait_for_running)
         finally:
-            if self.launcher.workspace_provider is not None:
-                self.launcher.workspace_provider.close()
+            try:
+                for executor in executors:
+                    executor.shutdown(wait=wait_for_running, cancel_futures=True)
+            finally:
+                self._close_workspace_provider_after_workers()
+
+    def run_after_shutdown_cleanup_attempt(self, callback: Callable[[], None]) -> None:
+        """Run ``callback`` after workers exit and cleanup has been attempted.
+
+        Readiness and success are deliberately separate: a failed filesystem
+        cleanup must not keep the parent store open forever, and it must not be
+        reported as successful either. Callers can inspect
+        :meth:`workspace_cleanup_status` and explicitly retry when appropriate.
+        """
+
+        with self._lock:
+            if getattr(self, "_workspace_cleanup_attempted", False):
+                run_now = True
+            else:
+                callbacks = getattr(self, "_workspace_cleanup_callbacks", None)
+                if callbacks is None:
+                    callbacks = []
+                    self._workspace_cleanup_callbacks = callbacks
+                callbacks.append(callback)
+                run_now = False
+        if run_now:
+            callback()
+
+    def run_after_shutdown_cleanup(self, callback: Callable[[], None]) -> None:
+        """Compatibility alias for cleanup-attempt completion callbacks."""
+
+        self.run_after_shutdown_cleanup_attempt(callback)
+
+    def workspace_cleanup_status(self) -> dict[str, Any]:
+        """Return cleanup readiness, success and the latest provider summary."""
+
+        with self._lock:
+            return {
+                "attempted": bool(getattr(self, "_workspace_cleanup_attempted", False)),
+                "succeeded": bool(getattr(self, "_workspace_cleanup_succeeded", False)),
+                "in_progress": bool(getattr(self, "_workspace_cleanup_attempt_in_progress", False)),
+                "attempt_count": int(getattr(self, "_workspace_cleanup_attempt_count", 0)),
+                "summary": copy.deepcopy(getattr(self, "_workspace_cleanup_summary", None)),
+            }
+
+    def retry_workspace_cleanup(self) -> dict[str, Any]:
+        """Explicitly retry one failed cleanup after every worker has exited."""
+
+        with self._lock:
+            if not self._closed:
+                return {
+                    "ok": False,
+                    "error_code": "workspace_cleanup_retry_before_shutdown",
+                    "error": "Workspace cleanup can be retried only after shutdown begins.",
+                }
+            if not self._workspace_workers_idle_locked():
+                return {
+                    "ok": False,
+                    "error_code": "workspace_cleanup_retry_not_ready",
+                    "error": "Workspace cleanup cannot be retried while a child is running.",
+                }
+            if getattr(self, "_workspace_cleanup_attempt_in_progress", False):
+                return {
+                    "ok": False,
+                    "error_code": "workspace_cleanup_in_progress",
+                    "error": "Workspace cleanup is already in progress.",
+                }
+            if getattr(self, "_workspace_cleanup_succeeded", False):
+                summary = copy.deepcopy(getattr(self, "_workspace_cleanup_summary", None))
+                return summary if isinstance(summary, dict) else {"ok": True}
+        return self._attempt_workspace_provider_close(explicit_retry=True)
+
+    def _close_workspace_provider_after_workers(self) -> None:
+        """Close workspaces after workers and their terminal bookkeeping finish."""
+
+        with self._lock:
+            waiters: list[Future[Any]] = []
+            for child in self._children.values():
+                worker_future = child.executor_future
+                if worker_future is not None:
+                    bookkeeping_completion = getattr(
+                        child,
+                        "worker_bookkeeping_completion",
+                        worker_future,
+                    )
+                    if not bookkeeping_completion.done():
+                        waiters.append(bookkeeping_completion)
+                    continue
+                if not child.background and not child.completion.done():
+                    waiters.append(child.completion)
+        if not waiters:
+            self._finalize_workspace_provider_close()
+            return
+        for future in waiters:
+            future.add_done_callback(
+                lambda _future: self._finalize_workspace_provider_close_if_idle()
+            )
+        # A worker may have completed between the snapshot and callback
+        # registration. Recheck once so that race cannot strand cleanup.
+        self._finalize_workspace_provider_close_if_idle()
+
+    def _finalize_workspace_provider_close_if_idle(self) -> None:
+        with self._lock:
+            if not self._workspace_workers_idle_locked():
+                return
+        self._finalize_workspace_provider_close()
+
+    def _workspace_workers_idle_locked(self) -> bool:
+        for child in self._children.values():
+            worker_future = child.executor_future
+            if worker_future is not None:
+                bookkeeping_completion = getattr(
+                    child,
+                    "worker_bookkeeping_completion",
+                    worker_future,
+                )
+                if not bookkeeping_completion.done():
+                    return False
+            if worker_future is None and not child.background and not child.completion.done():
+                return False
+        return True
+
+    def _finalize_workspace_provider_close(self) -> None:
+        self._attempt_workspace_provider_close(explicit_retry=False)
+
+    def _attempt_workspace_provider_close(
+        self,
+        *,
+        explicit_retry: bool,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if getattr(self, "_workspace_cleanup_attempt_in_progress", False):
+                status = self.workspace_cleanup_status()
+                return {
+                    "ok": False,
+                    "error_code": "workspace_cleanup_in_progress",
+                    "error": "Workspace cleanup is already in progress.",
+                    **status,
+                }
+            if getattr(self, "_workspace_cleanup_attempted", False) and not explicit_retry:
+                summary = copy.deepcopy(getattr(self, "_workspace_cleanup_summary", None))
+                return summary if isinstance(summary, dict) else {"ok": True}
+            self._workspace_cleanup_attempt_in_progress = True
+            workspace_provider = self.launcher.workspace_provider
+            attempt = int(getattr(self, "_workspace_cleanup_attempt_count", 0)) + 1
+            self._workspace_cleanup_attempt_count = attempt
+        summary: dict[str, Any]
+        try:
+            if workspace_provider is not None:
+                raw_summary = workspace_provider.close()
+                summary = (
+                    copy.deepcopy(raw_summary) if isinstance(raw_summary, dict) else {"ok": True}
+                )
+            else:
+                summary = {"ok": True}
+        except Exception as exc:  # noqa: BLE001 - teardown must release store ownership
+            summary = {
+                "ok": False,
+                "cleanup_pending_run_ids": [],
+                "failures": [
+                    {
+                        "error": str(exc),
+                        "error_code": "workspace_cleanup_exception",
+                    }
+                ],
+            }
+        succeeded = bool(summary.get("ok"))
+        if not succeeded:
+            try:
+                self.launcher.store.append(
+                    "warning",
+                    {
+                        "warning": "subagent_workspace_cleanup_incomplete",
+                        "attempt": attempt,
+                        "cleanup_pending_run_ids": list(
+                            summary.get("cleanup_pending_run_ids") or []
+                        ),
+                        "failures": copy.deepcopy(summary.get("failures") or []),
+                    },
+                )
+            except Exception:
+                pass
+        with self._lock:
+            first_attempt = not getattr(self, "_workspace_cleanup_attempted", False)
+            self._workspace_cleanup_attempt_in_progress = False
+            self._workspace_cleanup_attempted = True
+            self._workspace_cleanup_succeeded = succeeded
+            self._workspace_cleanup_summary = copy.deepcopy(summary)
+            callbacks = (
+                list(getattr(self, "_workspace_cleanup_callbacks", [])) if first_attempt else []
+            )
+            if first_attempt:
+                self._workspace_cleanup_callbacks = []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+        return summary
+
+
+# Compatibility name for callers and extensions that still describe the stable
+# session coordinator by its original scheduling responsibility.  Both names
+# intentionally identify the same object; there is no proxy or dynamic dispatch.
+ChildScheduler = SubagentCoordinator

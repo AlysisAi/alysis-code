@@ -76,6 +76,19 @@ def test_isolated_subagent_has_marker_in_badge_and_status() -> None:
     assert events[-1] is None
 
 
+def test_general_worker_has_builtin_identity_and_report_attribution() -> None:
+    from alysis_code.cli_impl.tui.subagent_identity import subagent_identity
+
+    events: list[str | None] = []
+    transcript, surface = _tui_surface(events)
+    surface.on_subagent_start(_start_event(name="general", mode="review"))
+    assert events == ["general"]
+    assert any("↪ general · review" in text for _role, text in transcript.entries)
+    assert subagent_identity("general").color == "#f0883e"
+    surface.on_subagent_end(_end_event(name="general", mode="review"))
+    assert events[-1] is None
+
+
 def test_custom_subagent_start_does_not_narrate_its_definition() -> None:
     events: list[str | None] = []
     t, s = _tui_surface(events)
@@ -177,6 +190,48 @@ def test_nested_tool_failures_keep_their_error_line_with_attribution() -> None:
     # The argument preview survives so the user can tell WHICH invocation
     # failed when the agent retries the same tool with different arguments.
     assert "auth flow" in errors[0]
+
+
+def test_nested_remote_site_outcome_stays_out_of_the_transcript() -> None:
+    # A site that refused the subagent's fetch is not a failure: like a nested
+    # success it only updates the live status (with what the site did), and
+    # never paints a red ✗ line.
+    from alysis_code.surface.types import ToolEndEvent, ToolStartEvent
+
+    events: list[str | None] = []
+    t, s = _tui_surface(events)
+    s.on_subagent_start(_start_event())
+    s.on_tool_start(
+        ToolStartEvent(
+            tool_call_id="sub:fetch",
+            name="web_fetch",
+            args={"url": "https://www.wsj.com/"},
+            step=1,
+            subagent_name="explorer",
+            subagent_mode="readonly",
+            nesting_depth=1,
+        )
+    )
+    s.on_tool_end(
+        ToolEndEvent(
+            tool_call_id="sub:fetch",
+            name="web_fetch",
+            status="failed",
+            elapsed_ms=10,
+            meta={
+                "error": "HTTP error 401 while fetching 'https://www.wsj.com/': …",
+                "blocked_by_remote_site": True,
+                "remote_site_reason": "site requires sign-in",
+            },
+            subagent_name="explorer",
+            subagent_mode="readonly",
+            nesting_depth=1,
+        )
+    )
+    assert not any(role in ("error", "warn", "trace") for role, _ in t.entries)
+    assert t.status is not None
+    assert "site requires sign-in" in t.status
+    assert "failed" not in t.status
 
 
 def test_trace_off_keeps_nested_activity_quiet() -> None:
@@ -415,6 +470,7 @@ def test_subagent_activity_elapsed_uses_child_start_not_parent_turn_start() -> N
     assert (
         _activity_elapsed_seconds(
             turn_started=2.0,
+            cancellation_started=0.0,
             active_subagent="code-reviewer",
             subagent_started_at=started_at,
             now=923.0,
@@ -424,6 +480,7 @@ def test_subagent_activity_elapsed_uses_child_start_not_parent_turn_start() -> N
     assert (
         _activity_elapsed_seconds(
             turn_started=2.0,
+            cancellation_started=0.0,
             active_subagent="",
             subagent_started_at=started_at,
             now=923.0,
@@ -436,6 +493,26 @@ def test_subagent_activity_elapsed_uses_child_start_not_parent_turn_start() -> N
         23,
         elapsed_is_run_time=True,
     )[0][-1][1].endswith("\u00b7 run time 23s")
+
+
+def test_cancellation_activity_uses_its_own_clock() -> None:
+    from alysis_code.cli_impl.tui.app import _activity_elapsed_seconds, _activity_rows
+
+    elapsed = _activity_elapsed_seconds(
+        turn_started=2.0,
+        cancellation_started=918.5,
+        active_subagent="explorer",
+        subagent_started_at={"explorer": 800.0},
+        now=923.0,
+    )
+
+    assert elapsed == 4
+    assert _activity_rows(
+        "x",
+        "Cancelling current turn…",
+        elapsed,
+        elapsed_is_run_time=False,
+    )[0][-1][1].endswith(" 4s")
 
 
 def test_concurrent_subagents_keep_the_badge_and_status_honest() -> None:

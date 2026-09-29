@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import inspect
+import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .config import ConfigError, resolve_run_deadline
 from .execution_deadline import ExecutionDeadline
+from .managed_host_deadline import (
+    MANAGED_HOST_DEADLINE_UNIX_ENV,
+    ManagedHostDeadlineError,
+    clamp_to_managed_host_deadline,
+)
 
 if TYPE_CHECKING:
     from .config import AppConfig
@@ -54,7 +62,6 @@ from .agent.prompt_context import (  # noqa: F401
     SYSTEM_PROMPT,
     PreparedSessionPromptContext,
     _build_plugin_activation_index,
-    _build_repo_task_brief_message,
     _build_user_message,
     _build_workspace_grounding_descriptor,
     _clean_workspace_hint,
@@ -81,6 +88,7 @@ from .agent.prompt_context import (  # noqa: F401
     _PluginActivationIndex,
     _read_workspace_hint_text,
     _recent_visible_non_repo_history,
+    _render_task_brief_from_state,
     _render_task_brief_message,
     _repo_conventions_context,
     _repo_summary_data,
@@ -102,6 +110,7 @@ from .agent.prompt_context import (  # noqa: F401
     _skill_plugin_id,
     _subagent_context_message,
     _task_brief_content_is_placeholder,
+    _task_relation_from_turn_semantics,
     _task_brief_lines_from_text,
     _truncate_non_repo_history_content,
     _untrusted_prompt_prelude_message,
@@ -123,6 +132,22 @@ from .agent.prompt_context import (  # noqa: F401
     resolve_session_active_workdir_relpath,
     resolve_workdir_relpath_within_workspace,
     set_session_active_workdir,
+)
+
+# task identity re-exports
+from .agent.task_state import (  # noqa: F401
+    TASK_STATE_EVENT,
+    RecoveredTaskState,
+    SessionTaskState,
+    TaskPersistenceError,
+    TaskTransition,
+    accept_session_task,
+    clear_session_task,
+    instruction_is_task_candidate,
+    recover_task_state_from_events,
+    restore_session_task_state,
+    transition_task_state,
+    validate_task_relation,
 )
 
 # turn_path re-exports
@@ -241,7 +266,7 @@ from .budget_policy import (  # noqa: F401
     resolve_budget_grace_seconds,
     resolve_run_budget_seconds,
 )
-from .cancellation import CooperativeCancellationError
+from .cancellation import CombinedCancellationToken, CooperativeCancellationError
 
 # execution deadline re-exports
 from .execution_deadline import (  # noqa: F401
@@ -288,7 +313,7 @@ from .agent.turn import (  # noqa: F401
     _PHASE_BUDGET_VERIFICATION_SYSTEM_PROMPT_TEMPLATE,
     _SUBAGENT_REQUIRED_NUDGE_TEMPLATE,
     _SAME_BATCH_FS_READ_DEFAULT_MAX_BYTES,
-    _SAME_BATCH_FS_READ_LINES_DEFAULT_MAX_LINES,
+    _SAME_BATCH_READ_WINDOW_DEFAULT_MAX_LINES,
     _SAME_BATCH_READ_CACHE_SAFE_TOOL_NAMES,
     _UNEXECUTED_TOOL_CALL_MARKUP_MARKERS,
     MAX_EDIT_NUDGES_PER_TURN,
@@ -303,10 +328,10 @@ from .agent.turn import (  # noqa: F401
     MAX_RECENT_EXPLORATION_PATHS,
     MAX_SUBAGENT_REQUIRED_NUDGES_PER_TURN,
     _append_recent_exploration_path,
-    _build_fs_read_lines_result_from_cached_range,
-    _build_fs_read_lines_result_from_full_fs_read,
+    _build_read_window_result_from_cached_range,
+    _build_read_window_result_from_full_read,
     _build_post_explore_bootstrap_nudge,
-    _coerce_fs_read_lines_request,
+    _coerce_read_window_request,
     _coerce_fs_read_request,
     _edit_similarity_key,
     _emit_surface_error,
@@ -324,7 +349,7 @@ from .agent.turn import (  # noqa: F401
     _remember_same_batch_read_result,
     _same_batch_read_cache_should_invalidate,
     _same_batch_read_path_key,
-    _SameBatchFsReadLinesRecord,
+    _SameBatchReadWindowRecord,
     _SameBatchFsReadRecord,
     _SameBatchReadReuseCache,
     _SubagentTurnPolicy,
@@ -426,7 +451,7 @@ from .tools.availability import (  # noqa: F401
 )
 
 # tools.fs re-exports
-from .tools.fs import fs_list, fs_read, fs_read_lines  # noqa: F401
+from .tools.fs import fs_list, fs_read  # noqa: F401
 
 # tools.search re-exports
 from .tools.search import search_rg  # noqa: F401
@@ -441,6 +466,27 @@ from .tools.symbols import symbol_search  # noqa: F401
 from .tools.web import web_fetch  # noqa: F401
 
 # isort: on
+
+
+def _run_turn_accepts_keyword(run_turn: Callable[..., Any], keyword: str) -> bool:
+    """Whether a session's ``run_turn`` takes ``keyword`` (legacy embedders may not)."""
+
+    try:
+        signature = inspect.signature(run_turn)
+    except (TypeError, ValueError):
+        # Opaque callables (C wrappers, mocks without signatures) get the
+        # capable path, matching the runtime session they normally wrap.
+        return True
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if (
+            parameter.kind
+            in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+            and parameter.name == keyword
+        ):
+            return True
+    return False
 
 
 def _emit_required_run_deadline_missing(
@@ -477,6 +523,7 @@ def run_agent(
     cfg: AppConfig,
     root: Path,
     instruction: str,
+    acceptance_instruction: str | None = None,
     image_paths: list[str] | None = None,
     mode: str,
     yes: bool,
@@ -591,6 +638,17 @@ def run_agent(
             "or configure run_deadline_seconds."
         )
 
+    managed_host_anchor_record: dict[str, Any] | None = None
+    if require_run_deadline and execution_deadline is not None:
+        host_anchor = os.environ.get(MANAGED_HOST_DEADLINE_UNIX_ENV)
+        if host_anchor is not None:
+            try:
+                managed_host_anchor_record = clamp_to_managed_host_deadline(
+                    execution_deadline, host_anchor
+                )
+            except ManagedHostDeadlineError as exc:
+                raise ConfigError(str(exc)) from exc
+
     session = create_session(
         cfg=cfg,
         root=root,
@@ -633,22 +691,31 @@ def run_agent(
         session_source_metadata=session_source_metadata,
         tool_dispatch_guard=tool_dispatch_guard,
     )
+    if managed_host_anchor_record is not None:
+        session.store.append("managed_host_deadline_anchor", managed_host_anchor_record)
+        if session.crash_diagnostics is not None:
+            session.crash_diagnostics.event(
+                "managed_host_deadline_anchor", managed_host_anchor_record, durable=True
+            )
+    if acceptance_instruction is not None:
+        session.acceptance_instruction = acceptance_instruction
     # Arm the run-budget stop gate. Every deadline check inside the engine is a
     # *start* gate evaluated between operations; nothing re-reads the clock
     # while an operation is in flight, so a blocking call that does not bound
     # itself by the deadline can outlive the budget indefinitely -- which is
     # how runs that had already recorded exhausted:true kept going for hours.
-    # This daemon timer trips a cancellation event at deadline + grace, which
+    # This daemon timer trips a cancellation event at the hard deadline, which
     # unblocks the cooperative checkpoints (step loop, mid-stream LLM read,
-    # subagent joins) no matter where the run is parked. Skipped when a caller
-    # already supplied a token, because that surface owns its own cancellation.
+    # subagent joins) no matter where the run is parked. Caller cancellation is
+    # composed with the deadline: supplying a UI token must not disable it.
     watchdog: BudgetWatchdog | None = None
-    if cancellation_token is None and execution_deadline is not None and execution_deadline.enabled:
+    if execution_deadline is not None and execution_deadline.enabled:
 
         def _record_budget_watchdog_fired() -> None:
             payload = {
                 "reason": STOP_REASON_RUN_BUDGET_EXHAUSTED,
-                "grace_seconds": resolve_budget_grace_seconds(),
+                "grace_seconds": 0.0,
+                "requested_grace_seconds": resolve_budget_grace_seconds(),
                 "deadline": execution_deadline.telemetry_snapshot(),
             }
             session.store.append("run_budget_watchdog_fired", payload)
@@ -661,17 +728,22 @@ def run_agent(
 
         watchdog = BudgetWatchdog(
             # Remaining, not configured: session construction happens after the
-            # clock starts, so this fires at the real deadline plus the grace.
+            # clock starts. Grace must not extend the effective host deadline.
             budget_seconds=float(execution_deadline.remaining_seconds() or 0.0),
-            grace_seconds=resolve_budget_grace_seconds(),
+            grace_seconds=0.0,
             on_fire=_record_budget_watchdog_fired,
         )
-        cancellation_token = BudgetCancellationToken(
+        budget_token = BudgetCancellationToken(
             watchdog.event,
             # The engine's existing handlers catch CooperativeCancellationError;
             # the token attributes the stop to the budget via its reason, which
             # is what makes it finalize as a clean exit instead of an abort.
             error_class=CooperativeCancellationError,
+        )
+        cancellation_token = (
+            budget_token
+            if cancellation_token is None
+            else CombinedCancellationToken(cancellation_token, budget_token)
         )
         watchdog.arm()
     try:
@@ -679,6 +751,12 @@ def run_agent(
             "image_paths": image_paths,
             "cancellation_token": cancellation_token,
         }
+        if _run_turn_accepts_keyword(session.run_turn, "task_relation"):
+            # A run is one accepted task on a fresh session: declare it so the
+            # host installs the objective before the first model request
+            # instead of relying on the conservative default. Legacy embedder
+            # sessions without the keyword keep their exact call shape.
+            turn_kwargs["task_relation"] = "new_task"
         if ephemeral_system_messages:
             turn_kwargs["ephemeral_system_messages"] = list(ephemeral_system_messages)
         if ephemeral_user_messages:
@@ -687,5 +765,7 @@ def run_agent(
     finally:
         if watchdog is not None:
             watchdog.disarm()
-        # Budget stops retain their machine-readable reason in session.stop_reason.
+        # close() is left with its default reason on purpose: `status` feeds
+        # the agentbox error flag, and a budget stop is not an error. The
+        # machine-readable marker travels as session.stop_reason instead.
         session.close()

@@ -1102,7 +1102,12 @@ def test_supplemental_check_after_silent_authoritative_verify_finalizes_once(
     assert not any(
         event.get("type") == "completion_gate_accepted_with_open_problems" for event in events
     )
-    assert _final_text(tmp_path / "sessions", session_id) == final_text
+    delivered = _final_text(tmp_path / "sessions", session_id)
+    assert delivered.startswith(final_text + "\n\nPreserved verified checkpoint:")
+    assert session.last_turn_outcome["verified_success"] is True
+    checkpoint = session.last_turn_outcome["best_verified_checkpoint"]
+    assert checkpoint["archive_path"] in delivered
+    assert Path(checkpoint["archive_path"]).is_file()
 
 
 def test_scripted_run_without_reproduction_engagement_binds_no_repro_gate(

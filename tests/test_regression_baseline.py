@@ -21,11 +21,11 @@ from alysis_code.agent.regression_baseline import (
 )
 from alysis_code.agent.verification import (
     HONEST_UNVERIFIED_FINALIZATION_MARKER,
-    REGRESSION_BASELINE_PRE_EDIT_ADVISORY,
     TurnExecutionState,
     _completion_gate_nudge_message,
     _completion_gate_problems,
     _completion_gate_repair_stage,
+    _record_tool_effect,
     build_regressions_unresolved_marker,
     build_unattributed_failures_marker,
 )
@@ -113,6 +113,23 @@ def test_unittest_ok_run() -> None:
     assert report.failed == 0
     assert report.errors == 0
     assert report.counts_known is True
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "Ran 3 tests in 0.001s\n",
+        "OK\nRan 3 tests in 0.001s\n",
+        "Ran 2 tests in 0.001s\nOK\nRan 3 tests in 0.001s\n",
+    ],
+)
+def test_unittest_missing_terminal_verdict_stays_unknown(output: str) -> None:
+    report = parse_test_report("FAIL: test_value (tests.Example)\n" + output)
+    assert report.runner == "unittest"
+    assert report.failed_ids == ("test_value (tests.Example)",)
+    assert report.failed is None and report.errors is None
+    assert report.counts_known is False
+    assert report.usable_as_baseline is False
 
 
 def test_truncated_pytest_ids_incomplete_not_usable_as_baseline() -> None:
@@ -738,26 +755,138 @@ def test_nudge_unattributed_asks_to_establish_attribution() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: pre-edit nudge (advisory; fires only when no contract baseline exists)
+# Test 5: pre-edit nudge (baseline existence, not successful contract evidence)
 # ---------------------------------------------------------------------------
 
 
-def test_has_baseline_for_any() -> None:
+def test_has_usable_pre_edit_baseline_does_not_claim_contract_coverage() -> None:
     state = TurnExecutionState(execution_requested=True)
-    assert state.has_baseline_for_any(["pytest -q"]) is False
+    assert state.has_usable_pre_edit_baseline() is False
     state.note_test_execution(
         command="pytest -q",
         report=_report("==== 3 passed in 1s ===="),
     )
-    assert state.has_baseline_for_any(["pytest -q"]) is True
-    # Pipe-invariant contract match.
-    assert state.has_baseline_for_any(["pytest -q | tail -5"]) is True
-    assert state.has_baseline_for_any(["pytest other"]) is False
+    state.expected_verification_commands = {"pytest other"}
+    state.note_verification_relevant_edit()
+    assert state.has_usable_pre_edit_baseline() is True
+    assert state.missing_verification_commands() == {"pytest other"}
+    assert not state.accepted_verification_evidence
 
 
-def test_pre_edit_advisory_is_advisory_and_nonblocking() -> None:
-    assert "Advisory only" in REGRESSION_BASELINE_PRE_EDIT_ADVISORY
-    assert "does not block" in REGRESSION_BASELINE_PRE_EDIT_ADVISORY
+@pytest.mark.parametrize("tool_name", ["verify_run", "shell_run"])
+@pytest.mark.parametrize("passed", [True, False])
+def test_pre_edit_baseline_survives_failed_verification(tmp_path, tool_name, passed) -> None:
+    """Replay the host report and unknown-execution shape of a failed live run."""
+    command = "python3 -m unittest discover -s tests -v"
+    known = "python -m unittest discover"
+    output = "Ran 1 test in 0.01s\n\nOK\n" if passed else _UNITTEST_MIXED
+    exit_code = 0 if passed else 1
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_existing.py").write_text("import unittest\n")
+    state = TurnExecutionState(execution_requested=True, expected_verification_commands={known})
+    if tool_name == "verify_run":
+        arguments = {"commands": [command]}
+        result = {
+            "all_passed": passed,
+            "executed_count": 1,
+            "command_results": [
+                {
+                    "command": command,
+                    "effective_command": command,
+                    "exit_code": exit_code,
+                    "ok": passed,
+                    "real_execution": True if passed else None,
+                    "output_preview": output[:100],
+                    "output_chars": len(output),
+                    "host_test_report": parse_test_report(output).as_payload(),
+                }
+            ],
+        }
+    else:
+        arguments = {"cmd": command}
+        result = {
+            "cmd": command,
+            "exit_code": exit_code,
+            "stdout": output,
+            "stderr": "",
+            "real_execution": True if passed else None,
+        }
+    _record_tool_effect(
+        root=tmp_path,
+        state=state,
+        tool_name=tool_name,
+        arguments=arguments,
+        status="success" if passed else "failed",
+        result=result,
+        known_verification_commands=[known],
+        verification_authoritative=True,
+    )
+    assert baseline_command_key(known) not in state.test_baselines
+    assert state.test_baselines[baseline_command_key(command)].usable
+    # The advisory runs after the first edit; the baseline must still refer to gen 0.
+    state.note_verification_relevant_edit()
+    assert state.has_usable_pre_edit_baseline() is True
+    if not passed:
+        assert state.test_baselines[baseline_command_key(command)].failing_ids
+        assert state.last_verification_passed is False
+        assert not state.accepted_verification_evidence
+        assert not state.executed_verification_evidence
+        evidence = state.supplemental_verification_evidence[-1]
+        assert evidence["real_execution"] is None
+        assert evidence["allowed_to_satisfy_contract"] is False
+        assert evidence["observed_exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["", "unparseable", "2 failed in 0.1s", _UNITTEST_MIXED[:100]],
+)
+def test_pre_edit_baseline_requires_complete_report(output) -> None:
+    state = TurnExecutionState(execution_requested=True)
+    state.note_test_execution(
+        command="pytest tests/test_existing.py -q",
+        report=parse_test_report(output),
+    )
+    state.note_verification_relevant_edit()
+    assert state.has_usable_pre_edit_baseline() is False
+
+
+def test_post_edit_report_does_not_retroactively_establish_baseline() -> None:
+    state = TurnExecutionState(execution_requested=True)
+    state.note_verification_relevant_edit()
+    state.note_test_execution(command="pytest tests", report=parse_test_report(_PYTEST_MIXED))
+    assert state.post_edit_test_runs
+    assert state.has_usable_pre_edit_baseline() is False
+
+
+def test_pre_edit_baseline_query_rejects_later_generation_record() -> None:
+    state = TurnExecutionState(execution_requested=True)
+    command = "pytest tests"
+    state.test_baselines[baseline_command_key(command)] = BaselineRecord(
+        command=command,
+        command_key=baseline_command_key(command),
+        report=parse_test_report(_PYTEST_MIXED),
+        edit_generation=1,
+    )
+    assert state.has_usable_pre_edit_baseline() is False
+
+
+def test_baseline_existence_does_not_merge_regression_commands() -> None:
+    state = TurnExecutionState(execution_requested=True)
+    baseline_command = "pytest tests/test_existing.py -q"
+    state.note_test_execution(command=baseline_command, report=_rep("1 passed in 0.1s"))
+    state.note_verification_relevant_edit()
+    assert state.has_usable_pre_edit_baseline() is True
+    # Existence alone does not make a distinct test selection comparable to the
+    # actual baseline for regression attribution.
+    state.note_test_execution(
+        command="pytest tests/test_other.py -q",
+        report=_rep("1 failed in 0.1s", failed=("tests/test_other.py::test_other",)),
+    )
+    diff = state.compute_regression_diff(enabled=True)
+    assert diff.unattributed == ("tests/test_other.py::test_other",)
+    assert diff.regressions == ()
+    assert set(state.test_baselines) == {baseline_command_key(baseline_command)}
 
 
 # ---------------------------------------------------------------------------

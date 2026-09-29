@@ -68,7 +68,6 @@ TURN_MUTATING_COMMANDS = [
 ]
 
 DEFERRED_COMMANDS = [
-    "/stream off",
     "/model",
     "/model gpt-5",
     "/permissions",
@@ -966,6 +965,7 @@ def test_old_mid_turn_sent_system_line_is_removed_from_runtime_source() -> None:
     [
         "docs/architecture.md",
         "docs/personas.md",
+        "docs/personas_manual_qa.md",
         "docs/quickstart.md",
         "docs/security_model.md",
     ],
@@ -1245,11 +1245,25 @@ def test_deferred_command_cannot_start_a_turn() -> None:
 
 
 @pytest.mark.parametrize("command", ["/persona", "/persona ask", "/cd src", "/persona architect"])
-def test_next_message_commands_apply_at_idle_before_the_next_turn(command: str) -> None:
+def test_next_message_commands_apply_at_idle_before_the_next_turn(
+    command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alysis_code.cli_impl.tui.transcript import TuiTranscript
+
     first_started = threading.Event()
     release_first = threading.Event()
     applied = threading.Event()
+    staged = threading.Event()
     events: list[str] = []
+    staged_label = f"{deferred_display_label(command)} - next message"
+    original_append = TuiTranscript.append
+
+    def observe_append(transcript: TuiTranscript, role: str, text: str) -> None:
+        original_append(transcript, role, text)
+        if role == "system" and text == staged_label:
+            staged.set()
+
+    monkeypatch.setattr(TuiTranscript, "append", observe_append)
 
     class BlockingSession:
         def __init__(self, surface: Any) -> None:
@@ -1277,7 +1291,7 @@ def test_next_message_commands_apply_at_idle_before_the_next_turn(command: str) 
         pipe.send_text("work\r")
         assert first_started.wait(timeout=2)
         pipe.send_text(command + "\r")
-        time.sleep(0.05)
+        assert staged.wait(timeout=2)
         assert not applied.is_set()
         release_first.set()
         assert applied.wait(timeout=2)
@@ -1291,9 +1305,7 @@ def test_next_message_commands_apply_at_idle_before_the_next_turn(command: str) 
 
     assert result == "/exit"
     assert events.index(f"command:{command}") > events.index("turn:work")
-    assert any(
-        text == f"{deferred_display_label(command)} - next message" for _role, text in transcript
-    )
+    assert any(text == staged_label for _role, text in transcript)
 
 
 def test_staged_persona_mid_turn_echoes_exact_compact_label() -> None:
@@ -1441,7 +1453,7 @@ def test_tui_echoes_the_truncated_text_that_was_actually_steered() -> None:
         def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
             _ = text, cancellation_token
             started.set()
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
                 inbox = steer_inbox_for(self)
                 if inbox is not None and inbox.pending_count():
@@ -1456,8 +1468,10 @@ def test_tui_echoes_the_truncated_text_that_was_actually_steered() -> None:
     def feed(pipe: Any) -> None:
         pipe.send_text("work\r")
         assert started.wait(timeout=2)
+        # Large synthetic key streams take longer on Windows terminals. Keep
+        # the truncation assertions independent of input parsing throughput.
         pipe.send_text(oversized + "\r")
-        assert received.wait(timeout=2)
+        assert received.wait(timeout=10)
         time.sleep(0.05)
         pipe.send_text("/exit\r")
 

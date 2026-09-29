@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -23,6 +25,7 @@ from .execution_budget import (
     compute_execution_prompt_budget_inputs,
 )
 from .execution_context import (
+    ExecutionContextBudgetError,
     build_task_context_pack,
     build_task_context_pack_result,
     select_relevant_assets,
@@ -497,6 +500,7 @@ def _apply_startup_headroom_preflight(
     leading_sections: list[str] | None,
     relevant_assets_section: str | None,
     initial_pack_result: Any,
+    instruction_token_counter: Callable[[str], int],
 ) -> tuple[Any, StartupHeadroomTelemetry]:
     compaction_budget_tokens, compaction_trigger_tokens, startup_target_tokens = (
         _resolve_startup_headroom_target(
@@ -524,14 +528,31 @@ def _apply_startup_headroom_preflight(
             startup_headroom_adjustment_reason=None,
         )
 
-    empty_instruction_request_tokens = _estimate_initial_execution_request_tokens(
-        root=root,
-        prefix_messages=prefix_messages,
-        tool_list=tool_list,
-        instruction="",
-        image_paths=image_paths,
+    target_instruction_budget = max(
+        0,
+        min(
+            budget.final_instruction_budget,
+            startup_target_tokens
+            - budget.pinned_prefix_token_estimate
+            - budget.tool_schema_token_estimate,
+        ),
     )
-    if empty_instruction_request_tokens >= startup_target_tokens:
+    try:
+        adjusted_pack_result = build_task_context_pack_result(
+            cfg=effective_cfg,
+            plan=plan,
+            task=task,
+            role_model=effective_model,
+            model_registry=model_registry,
+            instruction_token_budget=target_instruction_budget,
+            leading_sections=leading_sections,
+            relevant_assets_section=relevant_assets_section,
+            prefer_startup_headroom_reduction=True,
+            instruction_token_counter=instruction_token_counter,
+        )
+    except ExecutionContextBudgetError:
+        # The startup target is softer than the hard context limit. Never
+        # discard a complete, fitting instruction to create compaction slack.
         return initial_pack_result, StartupHeadroomTelemetry(
             initial_request_token_estimate=initial_request_token_estimate,
             initial_request_token_estimate_before_adjustment=None,
@@ -541,108 +562,17 @@ def _apply_startup_headroom_preflight(
             startup_headroom_tokens=startup_target_tokens - initial_request_token_estimate,
             startup_headroom_adjustment_applied=False,
             startup_headroom_adjustment_reason=(
-                "deterministic startup overhead already exceeds the startup target, so task-pack "
-                "reduction would not recover enough headroom"
+                "the startup headroom target cannot fit the required instructions and fixed "
+                "overhead; retained complete instructions within the hard context budget"
             ),
         )
-
-    adjusted_pack_result = initial_pack_result
-    adjusted_request_token_estimate = initial_request_token_estimate
-    for _attempt in range(3):
-        if adjusted_request_token_estimate <= startup_target_tokens:
-            break
-
-        current_instruction_request_tokens = max(
-            0,
-            adjusted_request_token_estimate - empty_instruction_request_tokens,
-        )
-        current_instruction_budget = adjusted_pack_result.instruction_token_estimate
-        if current_instruction_budget <= 0:
-            break
-
-        overflow_tokens = adjusted_request_token_estimate - startup_target_tokens
-        target_instruction_request_tokens = max(
-            0,
-            current_instruction_request_tokens - overflow_tokens,
-        )
-        if current_instruction_request_tokens > 0:
-            adjusted_instruction_budget = int(
-                current_instruction_budget
-                * target_instruction_request_tokens
-                / current_instruction_request_tokens
-            )
-        else:
-            adjusted_instruction_budget = 0
-        adjusted_instruction_budget = min(
-            budget.final_instruction_budget,
-            current_instruction_budget,
-            max(0, adjusted_instruction_budget),
-        )
-        if adjusted_instruction_budget >= current_instruction_budget:
-            adjusted_instruction_budget = max(
-                0,
-                current_instruction_budget - max(64, overflow_tokens),
-            )
-        if adjusted_instruction_budget == current_instruction_budget:
-            break
-
-        # Rebuild with a tighter managed-exec-only budget so the context pack
-        # shrinks in proportion to the instruction's measured request footprint.
-        adjusted_pack_result = build_task_context_pack_result(
-            cfg=effective_cfg,
-            plan=plan,
-            task=task,
-            role_model=effective_model,
-            model_registry=model_registry,
-            instruction_token_budget=adjusted_instruction_budget,
-            leading_sections=leading_sections,
-            relevant_assets_section=relevant_assets_section,
-            prefer_startup_headroom_reduction=True,
-        )
-        adjusted_request_token_estimate = _estimate_initial_execution_request_tokens(
-            root=root,
-            prefix_messages=prefix_messages,
-            tool_list=tool_list,
-            instruction=adjusted_pack_result.content,
-            image_paths=image_paths,
-        )
-
-    if adjusted_request_token_estimate > startup_target_tokens:
-        fallback_instruction_budget = min(
-            adjusted_pack_result.instruction_token_estimate,
-            128,
-        )
-        if fallback_instruction_budget < adjusted_pack_result.instruction_token_estimate:
-            adjusted_pack_result = build_task_context_pack_result(
-                cfg=effective_cfg,
-                plan=plan,
-                task=task,
-                role_model=effective_model,
-                model_registry=model_registry,
-                instruction_token_budget=fallback_instruction_budget,
-                leading_sections=leading_sections,
-                relevant_assets_section=relevant_assets_section,
-                prefer_startup_headroom_reduction=True,
-            )
-            adjusted_request_token_estimate = _estimate_initial_execution_request_tokens(
-                root=root,
-                prefix_messages=prefix_messages,
-                tool_list=tool_list,
-                instruction=adjusted_pack_result.content,
-                image_paths=image_paths,
-            )
-
-    adjustment_reason: str | None
-    if adjusted_request_token_estimate <= startup_target_tokens:
-        adjustment_reason = (
-            "reduced the managed-execution context pack so the first request starts below the "
-            "execution compaction trigger"
-        )
-    else:
-        adjustment_reason = (
-            "reduced the managed-execution context pack to the minimal startup profile, but "
-            "deterministic startup overhead still exceeds the startup target"
-        )
+    adjusted_request_token_estimate = _estimate_initial_execution_request_tokens(
+        root=root,
+        prefix_messages=prefix_messages,
+        tool_list=tool_list,
+        instruction=adjusted_pack_result.content,
+        image_paths=image_paths,
+    )
     return adjusted_pack_result, StartupHeadroomTelemetry(
         initial_request_token_estimate=adjusted_request_token_estimate,
         initial_request_token_estimate_before_adjustment=initial_request_token_estimate,
@@ -651,8 +581,20 @@ def _apply_startup_headroom_preflight(
         startup_target_tokens=startup_target_tokens,
         startup_headroom_tokens=startup_target_tokens - adjusted_request_token_estimate,
         startup_headroom_adjustment_applied=True,
-        startup_headroom_adjustment_reason=adjustment_reason,
+        startup_headroom_adjustment_reason=(
+            "reduced supplementary context so the first request starts below the execution "
+            "compaction trigger while retaining required instructions"
+        ),
     )
+
+
+def build_task_acceptance_instruction(task: dict[str, Any]) -> str:
+    """Keep task requirements separate from generated guidance, assets, and plan context."""
+    parts = [str(task.get(key) or "").strip() for key in ("title", "description")]
+    criteria = task.get("acceptance_criteria") or []
+    if isinstance(criteria, list):
+        parts.extend(str(item).strip() for item in criteria if str(item).strip())
+    return "\n\n".join(part for part in parts if part)
 
 
 def build_task_execution_instruction_bundle(
@@ -722,6 +664,21 @@ def build_task_execution_instruction_bundle(
         image_count=len(task_image_paths or []),
     )
     budget = budget_inputs.budget
+
+    def instruction_token_counter(instruction: str) -> int:
+        return max(
+            0,
+            _estimate_initial_execution_request_tokens(
+                root=root,
+                prefix_messages=budget_inputs.prefix_messages,
+                tool_list=budget_inputs.tool_list,
+                instruction=instruction,
+                image_paths=tuple(task_image_paths or ()),
+            )
+            - budget.pinned_prefix_token_estimate
+            - budget.tool_schema_token_estimate,
+        )
+
     effective_leading_sections = list(leading_sections or [])
     authoritative_verification_section = (
         _authoritative_verification_context_section(
@@ -743,6 +700,7 @@ def build_task_execution_instruction_bundle(
         instruction_token_budget=budget.final_instruction_budget,
         leading_sections=effective_leading_sections,
         relevant_assets_section=relevant_assets_section,
+        instruction_token_counter=instruction_token_counter,
     )
     startup_headroom: StartupHeadroomTelemetry | None = None
     if managed_execution_startup_headroom:
@@ -757,9 +715,10 @@ def build_task_execution_instruction_bundle(
             prefix_messages=budget_inputs.prefix_messages,
             tool_list=budget_inputs.tool_list,
             image_paths=tuple(task_image_paths or ()),
-            leading_sections=leading_sections,
+            leading_sections=effective_leading_sections,
             relevant_assets_section=relevant_assets_section,
             initial_pack_result=pack_result,
+            instruction_token_counter=instruction_token_counter,
         )
     return PreparedTaskExecutionInstruction(
         instruction=pack_result.content,
@@ -1106,7 +1065,33 @@ def snapshot_runtime_tree(root: Path) -> dict[str, str]:
         if is_plan_asset or stat.st_size > _SNAPSHOT_HASH_MAX_BYTES:
             snapshot[rel] = f"meta:{stat.st_size}:{stat.st_mtime_ns}"
             continue
-        digest = sha256(p.read_bytes()).hexdigest()
+        content = p.read_bytes()
+        parts = rel_norm.split("/")
+        is_execution_lock = (
+            rel_norm == ".alysis/workspace_execution/active_execution.lock.json"
+            or (
+                len(parts) == 4
+                and parts[:2] == [".alysis", "runs"]
+                and parts[-1] == "active_execution.lock.json"
+            )
+        )
+        if is_execution_lock:
+            try:
+                lock = json.loads(content)
+            except (ValueError, UnicodeDecodeError):
+                lock = None
+            if (
+                isinstance(lock, dict)
+                and lock.get("schema_version") == 2
+                and lock.get("pid") == os.getpid()
+                and lock.get("hostname") == socket.gethostname()
+                and lock.get("owner_token")
+            ):
+                # Our guard refreshes this timestamp during long tasks. Keep
+                # hashing ownership and every other field so tampering is detected.
+                lock.pop("last_heartbeat_at", None)
+                content = json.dumps(lock, sort_keys=True).encode("utf-8")
+        digest = sha256(content).hexdigest()
         snapshot[rel] = f"sha256:{digest}"
     return snapshot
 
@@ -1811,11 +1796,29 @@ def write_exec_log_artifacts(
     before_logs: set[Path] | None,
     sessions_dir: Path | None = None,
     expected_session_id: str | None = None,
+    session_started: bool = True,
 ) -> ExecutionLogArtifactsResult:
     ensure_execution_dirs(paths)
     safe_task = safe_task_file_component(task_id)
     log_copy_path = paths.execution_logs_dir / f"{safe_task}.jsonl"
     pointer_path = paths.execution_logs_dir / f"{safe_task}.log.json"
+    if not session_started:
+        result = ExecutionLogArtifactsResult(
+            log_copy_path=log_copy_path,
+            pointer_path=pointer_path,
+            logging_enabled=not no_log,
+            log_retained=False,
+            session_artifacts_retained=False,
+            copied_log_path=None,
+            source_log_path=None,
+            session_id=None,
+            session_artifact_dir=None,
+            note="Execution was rejected before an agent session started; no session log was produced.",
+        )
+        pointer_payload = result.pointer_payload(workspace_root=paths.root)
+        pointer_payload["task_id"] = task_id
+        pointer_path.write_text(json.dumps(pointer_payload, indent=2) + "\n", encoding="utf-8")
+        return result
     retained_session_artifact_dir = task_execution_session_artifact_dir(
         run_paths=paths,
         task_id=task_id,

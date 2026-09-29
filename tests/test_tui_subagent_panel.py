@@ -771,6 +771,9 @@ def test_runtime_panel_elapsed_freezes_across_polls_and_evict_readd(
     class _Store:
         session_id = "panel-parent"
 
+        def configure_web_fetch_trusted_domains(self, domains: Any) -> tuple[str, ...]:
+            return tuple(domains or ())
+
         def __init__(self) -> None:
             self.events: list[tuple[str, dict[str, Any]]] = []
 
@@ -926,6 +929,9 @@ def test_navigation_keeps_one_formatted_terminal_child_outcome(
         session_id = "main-session"
         artifact_persistence_enabled = False
         sessions_dir = tmp_path / "sessions"
+
+        def configure_web_fetch_trusted_domains(self, domains: Any) -> tuple[str, ...]:
+            return tuple(domains or ())
 
         def append(self, _event_type: str, _payload: dict[str, Any]) -> None:
             return

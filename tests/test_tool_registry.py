@@ -188,6 +188,13 @@ def test_background_subagent_tool_metadata_and_spawn_schema() -> None:
     }
 
     assert background_names.issubset(metadata_by_name)
+    spawn_description = metadata_by_name["subagent_spawn"].description
+    assert "bounded child assignment while you do distinct work" in spawn_description
+    assert "Completed reports arrive at parent model boundaries" in spawn_description
+    assert "depends_on only for real dependencies" in spawn_description
+    wait_description = metadata_by_name["subagent_wait"].description
+    assert "when a needed result is still outstanding" in wait_description
+    assert "Automatically delivered completed reports need no recollection" in wait_description
     spawn_properties = metadata_by_name["subagent_spawn"].parameters["properties"]
     run_properties = metadata_by_name["subagent_run"].parameters["properties"]
     assert set(run_properties).issubset(spawn_properties)
@@ -559,8 +566,9 @@ def test_web_tool_metadata_discourages_invented_urls() -> None:
     )
 
     assert "do not guess or invent URLs" in web_fetch_spec.description
-    assert "user-provided URL or one returned by web_search" in web_fetch_spec.description
-    assert "user provided or web_search returned" in web_search_spec.description
+    assert "user-provided URL, one returned by web_search" in web_fetch_spec.description
+    assert "configured trusted domain" in web_fetch_spec.description
+    assert "user provided, one web_search returned" in web_search_spec.description
     assert "user-provided direct public URL" in web_search_spec.rich.fallback_hint
 
 
@@ -588,11 +596,11 @@ def test_built_in_subagent_exposure_matches_catalog_policy() -> None:
     assert "web_search" not in expected
     assert registry["explorer"].allow_tools == expected
     assert registry["code-reviewer"].allow_tools == tuple(
-        name for name in expected if name not in {"fs_read", "git_history"}
+        name for name in expected if name != "git_history"
     )
     assert registry["debugger"].allow_tools == (*expected, "shell_run", "verify_run")
-    assert registry["implementer"].allow_tools == ()
-    assert registry["implementer"].deny_tools == ("image_generate",)
+    assert registry["general"].allow_tools == ()
+    assert registry["general"].deny_tools == ("image_generate",)
     assert registry["frontend-engineer"].allow_tools == ()
     assert registry["frontend-engineer"].deny_tools == ("image_generate",)
     assert registry["visual-designer"].allow_tools == (*expected, "image_generate")
@@ -1343,6 +1351,115 @@ def test_build_tools_web_fetch_blocks_guessed_public_url(
     # Nothing has been searched/provided, so there is nothing to offer.
     assert "fetchable_urls" not in result
     assert "Run web_search first" in result["guidance"]
+
+
+def test_build_tools_web_fetch_allows_trusted_registry_domain_without_prior_search(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Reproduces the dependency-scout incident: a fresh (sub)session with an
+    # empty provenance store fetches package-registry JSON endpoints. Search
+    # engines never index these, so search-mediated recovery cannot authorize
+    # them; the default trusted-domain allowlist must.
+    observed: dict[str, object] = {}
+
+    def fake_web_fetch(
+        *, url: str, max_chars: object, transport: object | None = None
+    ) -> dict[str, object]:
+        observed["url"] = url
+        return {"url": url, "final_url": url, "status_code": 200}
+
+    monkeypatch.setattr(agent_loop_mod, "web_fetch", fake_web_fetch)
+    tools = build_tools(
+        root=tmp_path,
+        console=Console(file=io.StringIO()),
+        store=_store(tmp_path),
+        mode="auto",
+        yes=True,
+        non_interactive=True,
+        verification_enabled=True,
+        subagents_enabled=True,
+        subagent_registry={},
+    )
+
+    result = tools["web_fetch"].run({"url": "https://registry.npmjs.org/vite/latest"})
+
+    assert observed["url"] == "https://registry.npmjs.org/vite/latest"
+    assert result["status_code"] == 200
+    assert "error_code" not in result
+
+
+def test_build_tools_web_fetch_trusted_domains_config_replaces_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called_urls: list[str] = []
+
+    def fake_web_fetch(
+        *, url: str, max_chars: object, transport: object | None = None
+    ) -> dict[str, object]:
+        called_urls.append(url)
+        return {"url": url, "final_url": url, "status_code": 200}
+
+    monkeypatch.setattr(agent_loop_mod, "web_fetch", fake_web_fetch)
+    tools = build_tools(
+        root=tmp_path,
+        console=Console(file=io.StringIO()),
+        store=_store(tmp_path),
+        mode="auto",
+        yes=True,
+        cfg=AppConfig(
+            model="test-model",
+            web_fetch_trusted_domains=["internal-registry.example.com"],
+        ),
+        non_interactive=True,
+        verification_enabled=True,
+        subagents_enabled=True,
+        subagent_registry={},
+    )
+
+    # Subdomain of the configured host is authorized.
+    ok = tools["web_fetch"].run({"url": "https://api.internal-registry.example.com/pkg"})
+    assert ok["status_code"] == 200
+    assert called_urls == ["https://api.internal-registry.example.com/pkg"]
+    # The curated defaults are replaced, not merged: npm registry now blocks.
+    blocked = tools["web_fetch"].run({"url": "https://registry.npmjs.org/vite/latest"})
+    assert blocked["error_code"] == "web_fetch_provenance_required"
+    assert "trusted_domain_allowlist" in blocked["allowed_provenance"]
+    assert called_urls == ["https://api.internal-registry.example.com/pkg"]
+
+
+def test_build_tools_web_fetch_trusted_domains_env_disable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def fake_web_fetch(
+        *, url: str, max_chars: object, transport: object | None = None
+    ) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {"url": url, "final_url": url, "status_code": 200}
+
+    monkeypatch.setattr(agent_loop_mod, "web_fetch", fake_web_fetch)
+    monkeypatch.setenv("ALYSIS_WEB_FETCH_TRUSTED_DOMAINS", "none")
+    tools = build_tools(
+        root=tmp_path,
+        console=Console(file=io.StringIO()),
+        store=_store(tmp_path),
+        mode="auto",
+        yes=True,
+        non_interactive=True,
+        verification_enabled=True,
+        subagents_enabled=True,
+        subagent_registry={},
+    )
+
+    result = tools["web_fetch"].run({"url": "https://registry.npmjs.org/vite/latest"})
+
+    assert called is False
+    assert result["error_code"] == "web_fetch_provenance_required"
 
 
 def test_build_tools_web_fetch_rejection_lists_fetchable_search_sources(

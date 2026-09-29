@@ -186,14 +186,16 @@ class SkillsEvalRecord:
         if not expected:
             return False
         if self.automatic_selection_required:
-            if not self.automatic_selection_exact_match():
+            if self.automatic_selection_exact_match() is False:
                 return False
             loaded = {name.casefold() for name in self.successful_skill_read_names}
             return loaded == expected
         return any(name.casefold() in expected for name in self.observed_skill_names())
 
     def automatic_selection_exact_match(self) -> bool | None:
-        if not self.automatic_selection_required:
+        # Selector events exist only in historical runs; current activation is
+        # observed through successful skill_read results.
+        if not self.automatic_selection_required or self.skill_selection_call_count == 0:
             return None
         if self.skill_selection_call_count != 1:
             return False
@@ -204,7 +206,9 @@ class SkillsEvalRecord:
         return self.skill_selection_status == "no_match" and not selected
 
     def selector_available(self) -> bool | None:
-        if not self.automatic_selection_required:
+        # Selector events exist only in historical runs; current activation is
+        # observed through successful skill_read results.
+        if not self.automatic_selection_required or self.skill_selection_call_count == 0:
             return None
         return self.skill_selection_call_count == 1 and self.skill_selection_status in {
             "selected",

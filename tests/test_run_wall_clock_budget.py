@@ -404,21 +404,22 @@ def test_negative_cli_budget_is_rejected(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_run_cli_forwards_the_budget_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
     import os
 
     from typer.testing import CliRunner
 
     from alysis_code import cli as cli_mod
     from alysis_code.cli import app as alysis_app
+    from alysis_code.cli_impl.chat.loop import run as run_command
 
     captured: dict[str, Any] = {}
+    run_signature = inspect.signature(run_command)
 
-    def fake_run_impl(_cli_mod: Any, *args: Any, **_kwargs: Any) -> int:
-        # Positional order in the root wrapper: ..., deadline_seconds,
-        # no_deadline, require_deadline, diagnostic_log.
-        captured["deadline_seconds"] = args[20]
-        captured["no_deadline"] = args[21]
-        captured["require_deadline"] = args[22]
+    def fake_run_impl(_cli_mod: Any, *args: Any, **kwargs: Any) -> int:
+        forwarded = run_signature.bind(*args, **kwargs).arguments
+        for name in ("deadline_seconds", "no_deadline", "require_deadline"):
+            captured[name] = forwarded[name]
         return 0
 
     monkeypatch.setattr(cli_mod, "run_impl", fake_run_impl, raising=False)
@@ -633,13 +634,14 @@ def test_expiry_without_persisted_work_still_exits_zero(tmp_path: Path) -> None:
     assert _event_payloads(log_path, "final")[-1]["stop_reason"] == "run_budget_exhausted"
 
 
-def test_expiry_before_the_turn_starts_exits_cleanly(tmp_path: Path) -> None:
+@pytest.mark.parametrize("chat_only", [False, True], ids=["normal", "chat-only"])
+def test_expiry_before_the_turn_starts_exits_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_only: bool
+) -> None:
     clock = _FakeClock()
     deadline = ExecutionDeadline.from_duration(10.0, clock=clock, source="explicit_cli")
     clock.advance(20.0)
     session = create_session(
-        # Auto routing reaches the deadline check before the turn has built any
-        # of the state salvage reads, so this path must not depend on it.
         cfg=AppConfig(model="test-model", routing_mode="auto", stream=False),
         root=tmp_path,
         mode="auto",
@@ -654,19 +656,24 @@ def test_expiry_before_the_turn_starts_exits_cleanly(tmp_path: Path) -> None:
         verification_enabled=False,
     )
 
+    def unexpected_model_call(**_kwargs: Any) -> LLMResponse:
+        pytest.fail("An expired turn must not dispatch a model request")
+
+    monkeypatch.setattr(session.client, "chat", unexpected_model_call)
     try:
-        exit_code = session.run_turn("Do something.")
+        exit_code = session.run_turn("Do something.", chat_only=chat_only)
         log_path = session.store.path
     finally:
         session.close()
 
-    # Nothing ran, so the initialized salvage path records that no material work
-    # persisted; the budget stop itself remains a clean outcome.
+    # Both entry paths stop before model/tool work. The normal path has already
+    # built salvage state; explicit chat stops before that state exists.
     assert exit_code == 0
     assert _event_payloads(log_path, "deadline_exhausted")
-    salvage = _event_payloads(log_path, "run_budget_salvage")
-    assert salvage[-1]["material_work_persisted"] is False
-    assert salvage[-1]["exit_code"] == 1
+    assert not _event_payloads(log_path, "run_budget_salvage")
+    outcome = _event_payloads(log_path, "turn_outcome")[-1]
+    assert outcome["outcome"] == "deadline_exceeded"
+    assert outcome["verified_success"] is False
 
 
 def test_phase_transitions_are_recorded_in_the_session_log(tmp_path: Path) -> None:

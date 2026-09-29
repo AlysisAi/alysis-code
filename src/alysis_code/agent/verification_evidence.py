@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -372,6 +373,7 @@ def classify_verification_evidence(
     command: str,
     *,
     known_verification_commands: list[str] | tuple[str, ...] | None = None,
+    required_verification_commands: Collection[str] | None = None,
     authoritative: bool = False,
     changed_paths: set[str] | list[str] | tuple[str, ...] | None = None,
     material_touched_paths: set[str] | list[str] | tuple[str, ...] | None = None,
@@ -381,6 +383,7 @@ def classify_verification_evidence(
     root: Path | None = None,
     stage_status: list[int] | tuple[int, ...] | None = None,
     evidence_v2: bool = True,
+    working_directory: str | None = None,
 ) -> VerificationEvidence:
     """Classify an observed command as verification evidence.
 
@@ -391,8 +394,10 @@ def classify_verification_evidence(
     pipeline's real first-stage code rather than being rejected for containing a
     ``|``. When per-stage status is unavailable the pipeline is treated as
     unverified (``pipeline_stage_status_unavailable``) so it can never be
-    silently accepted. With ``evidence_v2`` off, the legacy string-shape
-    classifier runs unchanged.
+    silently accepted. With ``evidence_v2`` off, legacy string-shape
+    classification applies. In both modes a supplied required-command collection
+    separates mandatory selections from recommendations. ``None`` preserves
+    conservative behavior for callers that only know the selected commands' text.
     """
     if evidence_v2:
         first_stage = pipeline_meaningful_stage(command)
@@ -402,15 +407,18 @@ def classify_verification_evidence(
                 first_stage=first_stage,
                 stage_status=list(stage_status) if stage_status is not None else None,
                 known_verification_commands=known_verification_commands,
+                required_verification_commands=required_verification_commands,
                 authoritative=authoritative,
                 changed_paths=changed_paths,
                 material_touched_paths=material_touched_paths,
                 output=output,
                 root=root,
+                working_directory=working_directory,
             )
     return _classify_verification_evidence_legacy(
         command,
         known_verification_commands=known_verification_commands,
+        required_verification_commands=required_verification_commands,
         authoritative=authoritative,
         changed_paths=changed_paths,
         material_touched_paths=material_touched_paths,
@@ -418,6 +426,7 @@ def classify_verification_evidence(
         output=output,
         real_execution=real_execution,
         root=root,
+        working_directory=working_directory,
     )
 
 
@@ -427,11 +436,13 @@ def _classify_pipeline_evidence(
     first_stage: str,
     stage_status: list[int] | None,
     known_verification_commands: list[str] | tuple[str, ...] | None,
+    required_verification_commands: Collection[str] | None,
     authoritative: bool,
     changed_paths: set[str] | list[str] | tuple[str, ...] | None,
     material_touched_paths: set[str] | list[str] | tuple[str, ...] | None,
     output: str,
     root: Path | None,
+    working_directory: str | None,
 ) -> VerificationEvidence:
     normalized = _normalize_shell_command_for_match(command)
     if not stage_status:
@@ -447,6 +458,7 @@ def _classify_pipeline_evidence(
     evidence = _classify_verification_evidence_legacy(
         first_stage,
         known_verification_commands=known_verification_commands,
+        required_verification_commands=required_verification_commands,
         authoritative=authoritative,
         changed_paths=changed_paths,
         material_touched_paths=material_touched_paths,
@@ -454,6 +466,7 @@ def _classify_pipeline_evidence(
         output=output,
         real_execution=None,
         root=root,
+        working_directory=working_directory,
     )
     # Keep the observed (piped) command as the normalized command for telemetry;
     # the covered contract commands already reflect the matched contract text.
@@ -464,6 +477,7 @@ def _classify_verification_evidence_legacy(
     command: str,
     *,
     known_verification_commands: list[str] | tuple[str, ...] | None = None,
+    required_verification_commands: Collection[str] | None = None,
     authoritative: bool = False,
     changed_paths: set[str] | list[str] | tuple[str, ...] | None = None,
     material_touched_paths: set[str] | list[str] | tuple[str, ...] | None = None,
@@ -471,6 +485,7 @@ def _classify_verification_evidence_legacy(
     output: str = "",
     real_execution: bool | None = None,
     root: Path | None = None,
+    working_directory: str | None = None,
 ) -> VerificationEvidence:
     normalized = _normalize_shell_command_for_match(command)
     if not normalized:
@@ -489,7 +504,26 @@ def _classify_verification_evidence_legacy(
         )
         real_execution = assessment.real_execution
 
-    known = [str(item) for item in (known_verification_commands or []) if str(item).strip()]
+    known = list(
+        dict.fromkeys(
+            str(item)
+            for item in [
+                *(known_verification_commands or []),
+                *(required_verification_commands or []),
+            ]
+            if str(item).strip()
+        )
+    )
+    matching_command = command
+    if working_directory and working_directory != ".":
+        same_root = False
+        if root is not None:
+            try:
+                same_root = (root / working_directory).resolve() == root.resolve()
+            except (OSError, RuntimeError, ValueError):
+                pass
+        if not same_root:
+            matching_command = f"cd {shlex.quote(working_directory)} && {command}"
     analysis = analyze_verification_command(
         command,
         trusted=authoritative or bool(known),
@@ -503,7 +537,7 @@ def _classify_verification_evidence_legacy(
     )
     mutation_reason = "mutated_material_paths" if material_touched else ""
     trusted_shell_matches = _matching_trusted_shell_expressions(
-        observed_command=command,
+        observed_command=matching_command,
         known_verification_commands=known,
         authoritative=authoritative,
     )
@@ -553,7 +587,7 @@ def _classify_verification_evidence_legacy(
         )
 
     matches = _matching_effective_verification_commands(
-        observed_command=normalized,
+        observed_command=matching_command,
         effective_verification_commands=known,
     )
     if matches:
@@ -611,7 +645,13 @@ def _classify_verification_evidence_legacy(
         changed_paths={str(item) for item in (changed_paths or []) if str(item).strip()},
         root=root,
     )
-    if known:
+    # A different selection cannot cover a required command. Recommendations
+    # alone do not make an independent real check supplemental: retain exact
+    # matching above, but assess unmatched checks on their execution facts.
+    exclusive_commands = (
+        known if required_verification_commands is None else required_verification_commands
+    )
+    if exclusive_commands:
         if task_reason:
             return VerificationEvidence(
                 category=VerificationEvidenceCategory.TASK_ACCEPTANCE,
@@ -619,6 +659,18 @@ def _classify_verification_evidence_legacy(
                 real_execution=real_execution,
                 allowed_to_satisfy_contract=False,
                 reason="supplemental_only_contract_exists",
+                supplemental_only=True,
+            )
+        if (
+            analysis.evidentiary_capability == VerificationCommandEvidentiaryCapability.ASSERTIVE
+            and not analysis.rejection_reason
+        ):
+            return VerificationEvidence(
+                category=VerificationEvidenceCategory.REPO_NATIVE,
+                normalized_command=normalized,
+                real_execution=real_execution,
+                allowed_to_satisfy_contract=False,
+                reason="supplemental_only_contract_selection_differs",
                 supplemental_only=True,
             )
         return VerificationEvidence(

@@ -17,6 +17,7 @@ transcript entries; progress updates remain ephemeral status text.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 
 from ...llm_error_display import friendly_llm_error_message
@@ -31,6 +32,7 @@ from ...surface.types import (
     ToolEndEvent,
     ToolOutputEvent,
     ToolStartEvent,
+    remote_site_outcome,
 )
 from .forge_status import FORGE_RUNNING_STATES, forge_status_counts
 from .transcript import TuiTranscript
@@ -106,6 +108,11 @@ def _truncate(text: str, *, limit: int = 160) -> str:
     return clean[: limit - 1] + "…"
 
 
+def _unavailable_detail(meta: dict[str, object]) -> str:
+    cause = str(meta.get("unavailable_reason") or "")
+    return f": {_truncate(cause)}" if cause else ""
+
+
 class TuiSurface:
     """Surface implementation backed by a :class:`TuiTranscript`."""
 
@@ -126,6 +133,16 @@ class TuiSurface:
         self._t = transcript
         self._approval_ui = request_approval_ui
         self._trace_level = "compact"
+        # Session approval grants. The classic Rich surface has
+        # kept these since the beginning; the TUI surface never had a store,
+        # so the modal's "[a] always" decision was returned upstream and then
+        # forgotten - every identical approval prompted again.
+        self._session_scope_grants: set[str] = set()
+        self._session_dir_grants: set[tuple[str, str]] = set()
+        # Cumulative milliseconds spent blocked on approval prompts. The
+        # turn loop snapshots this around each tool call and subtracts the
+        # delta, so human decision time stops being reported as tool runtime.
+        self.approval_wait_ms_total = 0
         # Argument previews captured at tool start, keyed by call id, so the
         # committed "✓ …" line can show what the tool actually worked on.
         self._tool_details: dict[str, str] = {}
@@ -538,15 +555,31 @@ class TuiSurface:
             label = f"{label} · {arg_detail}"
         elapsed = _format_ms(event.elapsed_ms)
         suffix = f" ({elapsed})" if elapsed else ""
+        # Disclose approval-wait separately instead of billing it to the tool.
+        approval_wait_ms = int(getattr(event, "approval_wait_ms", 0) or 0)
+        if approval_wait_ms > 0:
+            waited = _format_ms(approval_wait_ms)
+            suffix = f" ({elapsed} · approval {waited})" if elapsed else f" (approval {waited})"
+        meta = event.meta if isinstance(event.meta, dict) else {}
+        # A withdrawn optional tool reports "done" to the model but never ran.
+        unavailable = event.status == "done" and bool(meta.get("tool_unavailable"))
+        # A page the remote site refused, stalled, or dropped is an outcome of that
+        # source, not an agent failure: a neutral "◦" trace line, never a red ✗.
+        site_reason = remote_site_outcome(meta) if event.status != "done" else ""
         if event.subagent_name and self._trace_level != "full":
             # Nested subagent steps stay out of the transcript (minimal view) —
-            # except failures, which are real signal and keep their ✗ line,
-            # attributed to the agent that hit them. Successes just roll the
-            # live status back to "working" until the ↩ end line closes the run.
+            # except failures and withdrawn tools, which are real signal and keep
+            # their line, attributed to the agent that hit them. Successes and
+            # remote-site outcomes just roll the live status until the ↩ end line
+            # closes the run.
             display_name = self._current_subagent_display_name(str(event.subagent_name))
             followed_label = self._current_subagent_follow_label(str(event.subagent_name))
-            if event.status != "done":
-                meta = event.meta if isinstance(event.meta, dict) else {}
+            if unavailable:
+                self._t.append(
+                    "warn",
+                    f"⚠ {display_name} ▸ {label} unavailable{suffix}{_unavailable_detail(meta)}",
+                )
+            elif event.status != "done" and not site_reason:
                 verdict = "approval declined" if meta.get("approval_declined") else "failed"
                 err = str(meta.get("error") or "")
                 detail = f": {_truncate(err)}" if err else ""
@@ -557,39 +590,48 @@ class TuiSurface:
                 # None-after-every-tool-end behavior).
                 self._t.set_status(None)
             else:
-                outcome = "complete" if event.status == "done" else "failed"
+                if unavailable:
+                    outcome = "unavailable"
+                elif event.status == "done":
+                    outcome = "complete"
+                else:
+                    outcome = site_reason or "failed"
                 activity = _truncate(f"{label} · {outcome}", limit=64)
                 self._subagent_activity[display_name] = activity
                 self._t.set_status(f"↪ {followed_label} · {activity}…")
             self._maybe_refresh_hud()
             return
-        if event.status == "done" and self._trace_level != "off":
-            # Consecutive successes of the SAME tool group under one header:
-            #   ✓ Search Web · current date today (1.5s)
-            #     ↳ today's date (352ms)
-            # The adjacency check keeps grouping honest — anything else appended
-            # in between (a message, an error, another tool) restarts a full line.
-            entries = self._t.entries
-            grouped = (
-                arg_detail != ""
-                and self._last_tool_trace_name == event.name
-                and bool(entries)
-                and entries[-1][0] == "trace"
-                and (entries[-1][1].startswith("✓") or entries[-1][1].startswith("  ↳"))
-            )
-            if grouped:
-                self._t.append("trace", f"  ↳ {arg_detail}{suffix}")
-            else:
-                self._t.append("trace", f"✓ {label}{suffix}")
-            self._last_tool_trace_name = event.name
-        elif isinstance(event.meta, dict) and event.meta.get("approval_declined"):
-            err = str(event.meta.get("error") or "")
+        if unavailable:
+            self._t.append("warn", f"⚠ {label} unavailable{suffix}{_unavailable_detail(meta)}")
+        elif event.status == "done":
+            if self._trace_level != "off":
+                # Consecutive successes of the SAME tool group under one header:
+                #   ✓ Search Web · current date today (1.5s)
+                #     ↳ today's date (352ms)
+                # The adjacency check keeps grouping honest — anything else appended
+                # in between (a message, an error, another tool) restarts a full line.
+                entries = self._t.entries
+                grouped = (
+                    arg_detail != ""
+                    and self._last_tool_trace_name == event.name
+                    and bool(entries)
+                    and entries[-1][0] == "trace"
+                    and (entries[-1][1].startswith("✓") or entries[-1][1].startswith("  ↳"))
+                )
+                if grouped:
+                    self._t.append("trace", f"  ↳ {arg_detail}{suffix}")
+                else:
+                    self._t.append("trace", f"✓ {label}{suffix}")
+                self._last_tool_trace_name = event.name
+        elif meta.get("approval_declined"):
+            err = str(meta.get("error") or "")
             detail = f": {_truncate(err)}" if err else ""
             self._t.append("error", f"✗ {label} approval declined{suffix}{detail}")
+        elif site_reason:
+            if self._trace_level != "off":
+                self._t.append("trace", f"◦ {label} · {site_reason}{suffix}")
         else:
-            err = ""
-            if isinstance(event.meta, dict):
-                err = str(event.meta.get("error") or "")
+            err = str(meta.get("error") or "")
             detail = f": {_truncate(err)}" if err else ""
             self._t.append("error", f"✗ {label} failed{suffix}{detail}")
         self._t.set_status(None)
@@ -770,12 +812,54 @@ class TuiSurface:
         if _worker_cancelled():
             # The user interrupted this (now-abandoned) turn; deny without prompting.
             return ApprovalDecision(allow=False)
+        # Session grants: an earlier "[a] always" (exact scope) or "[d]
+        # always for this folder" decision auto-approves matching requests
+        # without re-prompting. Sensitive approvals never match (their scope is
+        # withheld and dir grants exclude allow_for_session_disabled requests).
+        from ...approval_scope import (
+            approval_dir_grant_candidate,
+            approval_session_scope_for_request,
+            request_matches_dir_grants,
+        )
+
+        scope_info = approval_session_scope_for_request(request)
+        if scope_info.key is not None and scope_info.key in self._session_scope_grants:
+            return ApprovalDecision(allow=True, allow_for_session=True)
+        if request_matches_dir_grants(request, self._session_dir_grants):
+            return ApprovalDecision(allow=True, allow_for_session=True)
         if self._approval_ui is not None:
+            wait_started = time.perf_counter()
             try:
                 decision = self._approval_ui(request)
             except Exception:
                 decision = None
+            finally:
+                self.approval_wait_ms_total += int((time.perf_counter() - wait_started) * 1000)
             if isinstance(decision, ApprovalDecision):
+                if decision.allow and getattr(decision, "allow_for_session_dir", False):
+                    directory = approval_dir_grant_candidate(request)
+                    if directory is not None:
+                        self._session_dir_grants.add((str(request.kind), directory))
+                        self._t.append(
+                            "trace",
+                            f"· always allowing {request.kind} under {directory} this session",
+                        )
+                        return ApprovalDecision(allow=True, allow_for_session=True)
+                    # No coverable directory: honor the allow, once.
+                    return ApprovalDecision(allow=True)
+                if decision.allow and decision.allow_for_session:
+                    if scope_info.supported and scope_info.key is not None:
+                        self._session_scope_grants.add(scope_info.key)
+                        return decision
+                    # "Always" cannot stick to this approval (no safe exact
+                    # scope). Downgrade to a one-time allow instead of leaking
+                    # allow_for_session=True into guards that reject it.
+                    self._t.append(
+                        "warn",
+                        scope_info.warning
+                        or "Always is unavailable for this approval; allowed once.",
+                    )
+                    return ApprovalDecision(allow=True)
                 return decision
         # No interactive approver reachable → fail closed.
         self._t.append(

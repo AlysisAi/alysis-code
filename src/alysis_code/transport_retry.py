@@ -2,14 +2,17 @@
 
 The defect this exists for
 --------------------------
-A transport can close a response before the complete body arrives::
+Across two Terminal-Bench trials the task ``regex-chess`` died identically in
+both, at the very first LLM call, with::
 
     Infrastructure error after retries: LLM request failed: peer closed
     connection without sending complete message body (incomplete chunked read)
 
-That failure happens with no usable response body. Retrying costs a bounded
-amount of time and does not repeat completed model work, while giving up
-immediately can fail an otherwise recoverable request.
+Two properties make that worth its own policy. It is *deterministic* -- the
+same task, the same point, both trials -- so it is a property of the route to
+the endpoint rather than bad luck. And it happens with **no work done**: the
+run had produced nothing, so retrying costs a few seconds of sleep and risks
+nothing, while giving up costs the entire task.
 
 The general provider retry budget is one retry, sized for a throttled or
 briefly unavailable endpoint. That is the right default for a call that might
@@ -40,8 +43,8 @@ from collections.abc import Iterator, Sequence
 
 # Machine-readable marker for "the transport kept dropping the connection and
 # the retry budget for that is spent". A genuine error -- no work was
-# possible, so it stays non-zero -- but a *named* one, so diagnostics can
-# distinguish a dead route from a model that failed the task.
+# possible, so it stays non-zero -- but a *named* one, so a campaign can tell
+# a dead route from a model that failed the task.
 STOP_REASON_TRANSPORT_CONNECTION_FAILURE = "transport_connection_failure"
 
 # Reason recorded on each retry of this class, distinct from the general

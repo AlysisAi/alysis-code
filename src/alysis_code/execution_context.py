@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 from .config import AppConfig
 from .knowledge_capture import render_execution_knowledge_capture_rules
 from .model_registry import ModelRegistry
-from .token_budget import compute_input_budget, estimate_tokens, trim_text_to_budget
+from .token_budget import compute_input_budget, estimate_tokens
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 _ASSET_FALLBACK_COUNT = 6
@@ -29,10 +30,6 @@ class _ExecutionPackReductionState:
     asset_count: int
     project_goal_chars: int
     summary_chars: int
-    task_description_chars: int
-    acceptance_criteria_count: int
-    estimated_files_count: int
-    write_scope_count: int
     relevant_assets_full_inline_count: int
     relevant_assets_focused_count: int
     relevant_assets_reference_count: int
@@ -49,6 +46,31 @@ class TaskContextPackResult:
     instruction_token_estimate: int
     truncated: bool
     truncation_strategy: str
+
+
+class ExecutionContextBudgetError(RuntimeError):
+    """No complete execution instruction can fit the declared instruction budget."""
+
+    error_code = "execution_context_budget_exceeded"
+
+    def __init__(self, *, available_tokens: int, required_tokens: int) -> None:
+        self.available_tokens = max(0, int(available_tokens))
+        self.required_tokens = max(0, int(required_tokens))
+        super().__init__(
+            "Execution context budget is too small: the complete task, scope, and execution "
+            f"instructions need {self.required_tokens} estimated tokens; "
+            f"only {self.available_tokens} are available. "
+            "Increase the context allowance or shorten the task/required context before retrying. "
+            "No shortened execution instruction was produced."
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "error_code": self.error_code,
+            "available_instruction_tokens": self.available_tokens,
+            "required_instruction_tokens": self.required_tokens,
+            "error": str(self),
+        }
 
 
 def _string_list(value: Any) -> list[str]:
@@ -247,19 +269,6 @@ def _truncate_value(text: str, max_chars: int) -> str:
     return raw[: max_chars - 3].rstrip() + "..."
 
 
-def _preview_list(items: list[str], *, limit: int, empty_label: str = "(none)") -> str:
-    normalized = [item.strip() for item in items if item and item.strip()]
-    if not normalized:
-        return empty_label
-    effective_limit = max(0, int(limit))
-    if effective_limit <= 0:
-        return "(omitted to fit budget)"
-    if len(normalized) <= effective_limit:
-        return ", ".join(normalized)
-    shown = ", ".join(normalized[:effective_limit])
-    return f"{shown}, ... (+{len(normalized) - effective_limit} more)"
-
-
 def _render_plan_lines(
     *,
     compact: dict[str, Any],
@@ -358,45 +367,23 @@ def _safe_int(value: Any, *, default: int = 0) -> int:
 def _render_task_lines(
     *,
     task: dict[str, Any],
-    state: _ExecutionPackReductionState,
 ) -> list[str]:
     task_lines: list[str] = [
         "## Task Specification",
         "",
         f"- ID: `{str(task.get('id') or '').strip()}`",
         f"- Title: {str(task.get('title') or '').strip() or '(none)'}",
-        (
-            "- Description: "
-            + (
-                _truncate_value(
-                    str(task.get("description") or ""),
-                    state.task_description_chars,
-                )
-                or "(none)"
-            )
-        ),
+        "- Description: " + (str(task.get("description") or "").strip() or "(none)"),
         (
             "- Acceptance Criteria: "
-            + _preview_list(
-                _string_list(task.get("acceptance_criteria")),
-                limit=state.acceptance_criteria_count,
-            )
+            + (", ".join(_string_list(task.get("acceptance_criteria"))) or "(none)")
         ),
         "- Dependencies: " + (", ".join(_string_list(task.get("dependencies"))) or "(none)"),
         (
             "- Estimated Files: "
-            + _preview_list(
-                _string_list(task.get("estimated_files")),
-                limit=state.estimated_files_count,
-            )
+            + (", ".join(_string_list(task.get("estimated_files"))) or "(none)")
         ),
-        (
-            "- Write Scope: "
-            + _preview_list(
-                _string_list(task.get("write_scope")),
-                limit=state.write_scope_count,
-            )
-        ),
+        ("- Write Scope: " + (", ".join(_string_list(task.get("write_scope"))) or "(none)")),
         f"- Branch: `{str(task.get('branch') or '').strip() or '(not set)'}`",
         f"- Status: `{str(task.get('status') or '').strip() or '(unknown)'}`",
     ]
@@ -552,6 +539,7 @@ def _render_execution_pack(
     note: str | None,
     leading_sections: list[str] | None = None,
     relevant_assets_section: str | None = None,
+    include_supplementary_context: bool = True,
 ) -> str:
     assets_lines = _render_assets_lines(
         selected_assets=selected_assets,
@@ -559,7 +547,7 @@ def _render_execution_pack(
         plan_schema_version=_safe_int(compact.get("schema_version"), default=1),
         uses_legacy_assets=bool(compact.get("uses_legacy_assets")),
     )
-    task_lines = _render_task_lines(task=task, state=state)
+    task_lines = _render_task_lines(task=task)
     plan_lines = _render_plan_lines(compact=compact, state=state)
     rules_lines: list[str] = [
         "## Execution Rules",
@@ -593,6 +581,10 @@ def _render_execution_pack(
         relevant_assets_section or "",
         state=state,
     )
+    if not include_supplementary_context:
+        assets_lines = []
+        plan_lines = []
+        relevant_assets_lines = []
 
     pack = (
         "\n".join(
@@ -620,7 +612,6 @@ def _reduction_candidates(
     *,
     compact: dict[str, Any],
     selected_assets: list[dict[str, Any]],
-    task: dict[str, Any],
     relevant_assets_section: str | None = None,
     prefer_startup_headroom_reduction: bool = False,
 ) -> list[_ExecutionPackReductionState]:
@@ -630,9 +621,6 @@ def _reduction_candidates(
     relevant_asset_count, relevant_full_count, relevant_focused_count = _relevant_asset_counts(
         relevant_assets_section
     )
-    acceptance_count = len(_string_list(task.get("acceptance_criteria")))
-    estimated_count = len(_string_list(task.get("estimated_files")))
-    scope_count = len(_string_list(task.get("write_scope")))
 
     def _cap(total: int, wanted: int, *, minimum_when_nonempty: int = 0) -> int:
         if total <= 0:
@@ -649,10 +637,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, _DEFAULT_EXECUTION_ASSET_COUNT, minimum_when_nonempty=1),
             project_goal_chars=240,
             summary_chars=600,
-            task_description_chars=1600,
-            acceptance_criteria_count=_cap(acceptance_count, 12),
-            estimated_files_count=_cap(estimated_count, 12),
-            write_scope_count=_cap(scope_count, 12),
             relevant_assets_full_inline_count=relevant_full_count,
             relevant_assets_focused_count=relevant_focused_count,
             relevant_assets_reference_count=relevant_asset_count,
@@ -666,10 +650,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, _DEFAULT_EXECUTION_ASSET_COUNT, minimum_when_nonempty=1),
             project_goal_chars=160,
             summary_chars=320,
-            task_description_chars=1200,
-            acceptance_criteria_count=_cap(acceptance_count, 8),
-            estimated_files_count=_cap(estimated_count, 8),
-            write_scope_count=_cap(scope_count, 8),
             relevant_assets_full_inline_count=relevant_full_count,
             relevant_assets_focused_count=relevant_focused_count,
             relevant_assets_reference_count=relevant_asset_count,
@@ -683,10 +663,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, 8, minimum_when_nonempty=1),
             project_goal_chars=96,
             summary_chars=160,
-            task_description_chars=800,
-            acceptance_criteria_count=_cap(acceptance_count, 5),
-            estimated_files_count=_cap(estimated_count, 6),
-            write_scope_count=_cap(scope_count, 6),
             relevant_assets_full_inline_count=relevant_full_count,
             relevant_assets_focused_count=relevant_focused_count,
             relevant_assets_reference_count=relevant_asset_count,
@@ -700,10 +676,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, 4, minimum_when_nonempty=1),
             project_goal_chars=64,
             summary_chars=96,
-            task_description_chars=400,
-            acceptance_criteria_count=_cap(acceptance_count, 3),
-            estimated_files_count=_cap(estimated_count, 4),
-            write_scope_count=_cap(scope_count, 4),
             relevant_assets_full_inline_count=0,
             relevant_assets_focused_count=relevant_focused_count,
             relevant_assets_reference_count=relevant_asset_count,
@@ -717,10 +689,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, 2, minimum_when_nonempty=1),
             project_goal_chars=0,
             summary_chars=0,
-            task_description_chars=240,
-            acceptance_criteria_count=_cap(acceptance_count, 2),
-            estimated_files_count=_cap(estimated_count, 3),
-            write_scope_count=_cap(scope_count, 3),
             relevant_assets_full_inline_count=0,
             relevant_assets_focused_count=0,
             relevant_assets_reference_count=relevant_asset_count,
@@ -734,10 +702,6 @@ def _reduction_candidates(
             asset_count=_cap(assets_count, 1, minimum_when_nonempty=1),
             project_goal_chars=0,
             summary_chars=0,
-            task_description_chars=160,
-            acceptance_criteria_count=_cap(acceptance_count, 1),
-            estimated_files_count=_cap(estimated_count, 2),
-            write_scope_count=_cap(scope_count, 2),
             relevant_assets_full_inline_count=0,
             relevant_assets_focused_count=0,
             relevant_assets_reference_count=min(relevant_asset_count, 1),
@@ -758,10 +722,6 @@ def _reduction_candidates(
                     asset_count=_cap(assets_count, 1, minimum_when_nonempty=1),
                     project_goal_chars=0,
                     summary_chars=0,
-                    task_description_chars=120,
-                    acceptance_criteria_count=_cap(acceptance_count, 1),
-                    estimated_files_count=_cap(estimated_count, 2),
-                    write_scope_count=_cap(scope_count, 2),
                     relevant_assets_full_inline_count=0,
                     relevant_assets_focused_count=0,
                     relevant_assets_reference_count=min(relevant_asset_count, 1),
@@ -775,10 +735,6 @@ def _reduction_candidates(
                     asset_count=0,
                     project_goal_chars=0,
                     summary_chars=0,
-                    task_description_chars=96,
-                    acceptance_criteria_count=_cap(acceptance_count, 1),
-                    estimated_files_count=_cap(estimated_count, 2),
-                    write_scope_count=_cap(scope_count, 2),
                     relevant_assets_full_inline_count=0,
                     relevant_assets_focused_count=0,
                     relevant_assets_reference_count=0,
@@ -792,10 +748,6 @@ def _reduction_candidates(
                     asset_count=0,
                     project_goal_chars=0,
                     summary_chars=0,
-                    task_description_chars=64,
-                    acceptance_criteria_count=0,
-                    estimated_files_count=_cap(estimated_count, 1),
-                    write_scope_count=_cap(scope_count, 1),
                     relevant_assets_full_inline_count=0,
                     relevant_assets_focused_count=0,
                     relevant_assets_reference_count=0,
@@ -844,6 +796,7 @@ def build_task_context_pack_result(
     leading_sections: list[str] | None = None,
     relevant_assets_section: str | None = None,
     prefer_startup_headroom_reduction: bool = False,
+    instruction_token_counter: Callable[[str], int] | None = None,
 ) -> TaskContextPackResult:
     if instruction_token_budget is None:
         registry = model_registry or ModelRegistry(cfg=cfg)
@@ -851,25 +804,24 @@ def build_task_context_pack_result(
         resolved_budget = compute_input_budget(meta)
     else:
         resolved_budget = max(0, int(instruction_token_budget))
+    # Bundled execution supplies the existing prepared-request estimator so
+    # message serialization overhead is charged to the instruction allowance.
+    count_tokens = instruction_token_counter or estimate_tokens
     compact = compact_plan_for_execution(plan)
     selected_assets = select_relevant_assets(plan, task)
 
     reduction_candidates = _reduction_candidates(
         compact=compact,
         selected_assets=selected_assets,
-        task=task,
         relevant_assets_section=relevant_assets_section,
         prefer_startup_headroom_reduction=prefer_startup_headroom_reduction,
     )
-    selected_pack = ""
-    selected_strategy = "execution_priority"
-    reduction_applied = False
     for idx, state in enumerate(reduction_candidates):
         note = None
         if idx > 0:
             note = (
                 "> NOTE: Context pack TRUNCATED using execution-priority reduction to preserve "
-                "Selected Assets, Task Specification, and Execution Rules."
+                "complete Task Specification, required context, and Execution Rules."
             )
         candidate = _render_execution_pack(
             role_model=role_model,
@@ -882,34 +834,45 @@ def build_task_context_pack_result(
             leading_sections=leading_sections,
             relevant_assets_section=relevant_assets_section,
         )
-        if estimate_tokens(candidate) <= resolved_budget:
-            selected_pack = candidate
-            selected_strategy = state.strategy
-            reduction_applied = idx > 0
-            break
-        if idx == len(reduction_candidates) - 1:
-            selected_pack = candidate
-            selected_strategy = state.strategy
-            reduction_applied = True
+        candidate_tokens = count_tokens(candidate)
+        if candidate_tokens <= resolved_budget:
+            return TaskContextPackResult(
+                content=candidate,
+                artifact_text=candidate,
+                instruction_token_budget=resolved_budget,
+                instruction_token_estimate=candidate_tokens,
+                truncated=idx > 0,
+                truncation_strategy=state.strategy,
+            )
 
-    trimmed, was_trimmed = trim_text_to_budget(selected_pack, resolved_budget)
-    was_truncated = reduction_applied or was_trimmed
-    truncation_strategy = (
-        f"{selected_strategy}_then_head_tail" if was_trimmed else selected_strategy
+    # Task/permission constraints cannot be reduced by their text or position.
+    # The last fallback drops whole supplementary sections, never required text.
+    mandatory_pack = _render_execution_pack(
+        role_model=role_model,
+        resolved_budget=resolved_budget,
+        compact=compact,
+        selected_assets=selected_assets,
+        task=task,
+        state=reduction_candidates[-1],
+        note=(
+            "> NOTE: Supplementary plan and asset context TRUNCATED to fit budget; "
+            "the task specification, required context, and execution rules are complete."
+        ),
+        leading_sections=leading_sections,
+        include_supplementary_context=False,
     )
-    if was_trimmed:
-        trimmed, _ = trim_text_to_budget(
-            "> NOTE: Context pack TRUNCATED using execution-priority reduction to preserve "
-            "Selected Assets, Task Specification, and Execution Rules."
-            "\n\n" + trimmed,
-            resolved_budget,
+    required_tokens = count_tokens(mandatory_pack)
+    if required_tokens > resolved_budget:
+        raise ExecutionContextBudgetError(
+            available_tokens=resolved_budget,
+            required_tokens=required_tokens,
         )
 
     return TaskContextPackResult(
-        content=trimmed,
-        artifact_text=selected_pack,
+        content=mandatory_pack,
+        artifact_text=mandatory_pack,
         instruction_token_budget=resolved_budget,
-        instruction_token_estimate=max(0, estimate_tokens(trimmed)),
-        truncated=was_truncated,
-        truncation_strategy=truncation_strategy,
+        instruction_token_estimate=required_tokens,
+        truncated=True,
+        truncation_strategy="execution_priority_mandatory_only",
     )

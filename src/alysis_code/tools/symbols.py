@@ -4,6 +4,7 @@ import ast
 import fnmatch
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,23 +24,33 @@ _MAX_INLINE_CHARS = 240
 _MAX_NOTE_PATHS = 3
 _DEFAULT_SKIP_DIRS = set(CODE_SCAN_SKIP_DIR_NAMES)
 _JS_TS_BLOCK_KEYWORDS = {"if", "for", "while", "switch", "catch", "function", "class"}
+# Capture whole lexical candidates, including combining marks, before validating
+# Unicode character classes. These declaration recognizers remain heuristics;
+# they do not decode escaped identifiers or replace a language parser.
+_IDENTIFIER_CHARACTER = r"(?:[A-Za-z0-9_$]|[^\x00-\x7f\s])"
+_IDENTIFIER_CANDIDATE = rf"{_IDENTIFIER_CHARACTER}+"
+_IDENTIFIER_END = rf"(?!{_IDENTIFIER_CHARACTER}|\\)"
 _JS_TS_FUNCTION_RE = re.compile(
-    r"^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("
+    rf"^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+({_IDENTIFIER_CANDIDATE})\s*\("
 )
-_JS_TS_CLASS_RE = re.compile(r"^(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][\w$]*)\b")
-_JS_TS_CONST_DECL_RE = re.compile(r"^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\b(.*)$")
+_JS_TS_CLASS_RE = re.compile(
+    rf"^(?:export\s+)?(?:default\s+)?class\s+({_IDENTIFIER_CANDIDATE}){_IDENTIFIER_END}"
+)
+_JS_TS_CONST_DECL_RE = re.compile(
+    rf"^(?:export\s+)?const\s+({_IDENTIFIER_CANDIDATE}){_IDENTIFIER_END}(.*)$"
+)
 _JS_TS_FUNCTION_EXPR_RE = re.compile(r"^(?:async\s+)?function\b")
 _JS_TS_METHOD_RE = re.compile(
     r"^(?:(?:public|private|protected|static|async|readonly|override|get|set)\s+)*"
-    r"(?:\*\s*)?([A-Za-z_$][\w$]*)\s*(?:<[^>{}]*>)?\s*\("
+    rf"(?:\*\s*)?({_IDENTIFIER_CANDIDATE})\s*(?:<[^>{{}}]*>)?\s*\("
 )
 _JS_TS_CLASS_FIELD_RE = re.compile(
     r"^(?:(?:public|private|protected|readonly|static|async|declare|override)\s+)*"
-    r"([A-Za-z_$][\w$]*)\s*(?:\?)?(.*)$"
+    rf"({_IDENTIFIER_CANDIDATE}){_IDENTIFIER_END}\s*(?:\?)?(.*)$"
 )
 _JS_TS_PENDING_ASSIGNMENT_MAX_LINES = 8
-_JAVA_IDENTIFIER = r"[A-Za-z_$][\w$]*"
-_JAVA_ANNOTATION_PREFIX = r"(?:@[A-Za-z_$][\w$.]*(?:\([^)]*\))?\s+)*"
+_JAVA_IDENTIFIER = _IDENTIFIER_CANDIDATE
+_JAVA_ANNOTATION_PREFIX = rf"(?:@{_JAVA_IDENTIFIER}(?:\.{_JAVA_IDENTIFIER})*(?:\([^)]*\))?\s+)*"
 _JAVA_MODIFIER_PREFIX = (
     r"(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp|"
     r"synchronized|native|default|transient|volatile)\s+)*"
@@ -48,11 +59,11 @@ _JAVA_GENERIC_METHOD_PREFIX = r"(?:<[^;{}()]+>\s+)?"
 _JAVA_DECL_PREFIX = _JAVA_ANNOTATION_PREFIX + _JAVA_MODIFIER_PREFIX
 _JAVA_TYPE_RE = re.compile(
     rf"^{_JAVA_DECL_PREFIX}(?P<kind>class|interface|enum|record)\s+"
-    rf"(?P<name>{_JAVA_IDENTIFIER})\b"
+    rf"(?P<name>{_JAVA_IDENTIFIER}){_IDENTIFIER_END}"
 )
 _JAVA_METHOD_RE = re.compile(
     rf"^{_JAVA_DECL_PREFIX}{_JAVA_GENERIC_METHOD_PREFIX}"
-    rf"(?P<return>[\w$<>\[\].?,\s]+?)\s+(?P<name>{_JAVA_IDENTIFIER})\s*\("
+    rf"(?P<return>[\w$\u0080-\U0010ffff<>\[\].?,\s]+?)\s+(?P<name>{_JAVA_IDENTIFIER})\s*\("
 )
 _JAVA_CONSTRUCTOR_RE = re.compile(rf"^{_JAVA_DECL_PREFIX}(?P<name>{_JAVA_IDENTIFIER})\s*\(")
 _JAVA_BLOCK_KEYWORDS = {
@@ -69,6 +80,51 @@ _JAVA_BLOCK_KEYWORDS = {
     "try",
     "while",
 }
+
+
+def _identifier_candidate_is_valid(name: str, *, java: bool) -> bool:
+    """Validate Unicode lexical candidates without normalizing their spelling.
+
+    Unicode letters/marks and identifier predicates cover scripts uniformly.
+    Language-specific punctuation follows identifier syntax, not a name/script
+    allowlist. Full syntax, escape processing and semantic resolution remain out
+    of scope for these heuristic backends.
+    """
+
+    if name.isascii():
+        return name.replace("$", "_").isidentifier()
+    for index, char in enumerate(name):
+        category = unicodedata.category(char)
+        starts = (
+            char in "_$"
+            or (not java and char.isidentifier())
+            or category.startswith("L")
+            or category == "Nl"
+            or (java and category in {"Sc", "Pc"})
+        )
+        if starts:
+            continue
+        if index == 0:
+            return False
+        if (
+            (not java and ("a" + char).isidentifier())
+            or category in {"Mn", "Mc", "Nd", "Pc"}
+            or (java and category == "Cf")
+            or (not java and char in "\u200c\u200d")
+        ):
+            continue
+        return False
+    return bool(name)
+
+
+def _match_identifier(
+    pattern: re.Pattern[str], text: str, *, java: bool = False
+) -> re.Match[str] | None:
+    match = pattern.match(text)
+    if match is None:
+        return None
+    name = match.group("name" if java else 1)
+    return match if _identifier_candidate_is_valid(name, java=java) else None
 
 
 @dataclass(frozen=True)
@@ -617,7 +673,7 @@ def _split_js_ts_assignment(value: str) -> tuple[str, str] | None:
 
 
 def _parse_js_ts_const_assignment(line: str) -> tuple[str, str] | None:
-    match = _JS_TS_CONST_DECL_RE.match(line)
+    match = _match_identifier(_JS_TS_CONST_DECL_RE, line)
     if match is None:
         return None
     assignment = _split_js_ts_assignment(match.group(2))
@@ -628,7 +684,7 @@ def _parse_js_ts_const_assignment(line: str) -> tuple[str, str] | None:
 
 
 def _parse_js_ts_class_field_assignment(line: str) -> tuple[str, str] | None:
-    match = _JS_TS_CLASS_FIELD_RE.match(line)
+    match = _match_identifier(_JS_TS_CLASS_FIELD_RE, line)
     if match is None:
         return None
     assignment = _split_js_ts_assignment(match.group(2))
@@ -815,7 +871,7 @@ def _extract_js_ts_symbols(*, root: Path, path: Path, text: str) -> list[_Symbol
                 consumed_by_pending = True
 
         if not consumed_by_pending and depth_before == 0:
-            function_match = _JS_TS_FUNCTION_RE.match(stripped)
+            function_match = _match_identifier(_JS_TS_FUNCTION_RE, stripped)
             if function_match:
                 function_name = function_match.group(1)
                 symbols.append(
@@ -830,7 +886,7 @@ def _extract_js_ts_symbols(*, root: Path, path: Path, text: str) -> list[_Symbol
                     )
                 )
             else:
-                class_match = _JS_TS_CLASS_RE.match(stripped)
+                class_match = _match_identifier(_JS_TS_CLASS_RE, stripped)
                 if class_match:
                     class_name = class_match.group(1)
                     symbols.append(
@@ -921,7 +977,7 @@ def _extract_js_ts_symbols(*, root: Path, path: Path, text: str) -> list[_Symbol
                         parent=class_name,
                     )
             if pending_assignment is None:
-                method_match = _JS_TS_METHOD_RE.match(stripped)
+                method_match = _match_identifier(_JS_TS_METHOD_RE, stripped)
                 if method_match:
                     method_name = method_match.group(1)
                     if method_name not in _JS_TS_BLOCK_KEYWORDS:
@@ -1023,7 +1079,7 @@ def _extract_java_symbols(*, root: Path, path: Path, text: str) -> list[_SymbolE
             pending_type_name = None
 
         source_signature = _clip_inline(raw_line.strip())
-        type_match = _JAVA_TYPE_RE.match(stripped)
+        type_match = _match_identifier(_JAVA_TYPE_RE, stripped, java=True)
         if type_match:
             type_name = type_match.group("name")
             symbols.append(
@@ -1044,7 +1100,7 @@ def _extract_java_symbols(*, root: Path, path: Path, text: str) -> list[_SymbolE
                 pending_type_name = type_name
         elif type_stack and depth_before == type_stack[-1].body_depth:
             class_name = type_stack[-1].name
-            method_match = _JAVA_METHOD_RE.match(stripped)
+            method_match = _match_identifier(_JAVA_METHOD_RE, stripped, java=True)
             method_name = method_match.group("name") if method_match else ""
             if method_name and method_name not in _JAVA_BLOCK_KEYWORDS:
                 qualified_name = f"{class_name}.{method_name}"
@@ -1061,7 +1117,7 @@ def _extract_java_symbols(*, root: Path, path: Path, text: str) -> list[_SymbolE
                     )
                 )
             elif not method_match:
-                constructor_match = _JAVA_CONSTRUCTOR_RE.match(stripped)
+                constructor_match = _match_identifier(_JAVA_CONSTRUCTOR_RE, stripped, java=True)
                 constructor_name = constructor_match.group("name") if constructor_match else ""
                 if constructor_name == class_name:
                     qualified_name = f"{class_name}.{constructor_name}"
@@ -1205,15 +1261,22 @@ def symbol_search(
     notes: list[str] = []
     truncated = False
     parsed_files = 0
+    examined_files = 0
+    heuristic_files = 0
+    unsupported_files = 0
+    large_or_unreadable_files = 0
+    unparsable_files = 0
     parsed_backends: set[str] = set()
     skipped_unsupported: list[str] = []
     skipped_large: list[str] = []
     skipped_unparsable: list[str] = []
 
     for path in candidate_files:
+        examined_files += 1
         rel_path = _rel_path(root, path)
         backend = symbol_search_backend_for_path(rel_path)
         if backend is None:
+            unsupported_files += 1
             if len(skipped_unsupported) < _MAX_NOTE_PATHS:
                 skipped_unsupported.append(rel_path)
             continue
@@ -1221,10 +1284,12 @@ def symbol_search(
         try:
             size = path.stat().st_size
         except OSError:
+            large_or_unreadable_files += 1
             if len(skipped_large) < _MAX_NOTE_PATHS:
                 skipped_large.append(rel_path)
             continue
         if size > _MAX_FILE_BYTES:
+            large_or_unreadable_files += 1
             if len(skipped_large) < _MAX_NOTE_PATHS:
                 skipped_large.append(rel_path)
             continue
@@ -1232,8 +1297,9 @@ def symbol_search(
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            if len(skipped_unparsable) < _MAX_NOTE_PATHS:
-                skipped_unparsable.append(rel_path)
+            large_or_unreadable_files += 1
+            if len(skipped_large) < _MAX_NOTE_PATHS:
+                skipped_large.append(rel_path)
             continue
         source_lines = text.splitlines()
         if include_snippet or include_references:
@@ -1243,12 +1309,15 @@ def symbol_search(
             try:
                 symbols = _extract_python_symbols(root=root, path=path, text=text)
             except SyntaxError:
+                unparsable_files += 1
                 if len(skipped_unparsable) < _MAX_NOTE_PATHS:
                     skipped_unparsable.append(rel_path)
                 continue
         elif backend == "js_ts_heuristic":
+            heuristic_files += 1
             symbols = _extract_js_ts_symbols(root=root, path=path, text=text)
         else:
+            heuristic_files += 1
             symbols = _extract_java_symbols(root=root, path=path, text=text)
 
         parsed_files += 1
@@ -1286,7 +1355,7 @@ def symbol_search(
         if truncated:
             break
 
-    if parsed_files == 0 and skipped_unsupported:
+    if skipped_unsupported:
         paths = ", ".join(skipped_unsupported)
         _add_note(
             notes,
@@ -1298,6 +1367,22 @@ def symbol_search(
     if skipped_unparsable:
         paths = ", ".join(skipped_unparsable)
         _add_note(notes, f"Skipped unparsable source file(s): {paths}")
+    if heuristic_files:
+        _add_note(
+            notes,
+            "JavaScript/TypeScript and Java symbol extraction is heuristic, not a complete "
+            "parser; valid declarations can be missed. Use search_rg for lexical fallback.",
+        )
+    if examined_files < len(candidate_files):
+        _add_note(
+            notes, "Result limit stopped scanning before all scoped candidate files were examined."
+        )
+    if skipped_unsupported or skipped_large or skipped_unparsable:
+        _add_note(
+            notes,
+            "Skipped paths are samples; coverage counts include all examined files. "
+            "No symbol match does not prove absence; use search_rg for lexical fallback.",
+        )
     if not candidate_files:
         _add_note(notes, "No files matched the requested scope.")
     elif parsed_files == 0 and not skipped_unsupported:
@@ -1312,7 +1397,7 @@ def symbol_search(
     elif parsed_backends:
         backend_name = "mixed_static"
     else:
-        backend_name = "python_ast"
+        backend_name = "none"
 
     root_abs = root.resolve()
     scope_display = "."
@@ -1347,4 +1432,13 @@ def symbol_search(
         "notes": notes,
         "backend": backend_name,
         "parsed_files": parsed_files,
+        "coverage": {
+            "candidate_files": len(candidate_files),
+            "examined_files": examined_files,
+            "heuristic_files": heuristic_files,
+            "unsupported_files": unsupported_files,
+            "large_or_unreadable_files": large_or_unreadable_files,
+            "unparsable_files": unparsable_files,
+            "unexamined_files": len(candidate_files) - examined_files,
+        },
     }

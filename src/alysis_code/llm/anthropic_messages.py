@@ -21,6 +21,11 @@ from .cache_control_blocks import (
     strip_cache_control_blocks,
 )
 from .cache_policy import merge_cache_policy_metadata
+from .http_cancellation import (
+    cancellable_httpx_request,
+    cancellable_httpx_send,
+    raise_if_cancelled,
+)
 from .metadata import (
     ANTHROPIC_MESSAGES_PROVIDER_METADATA_KEY,
     PROVIDER_METADATA_KEY,
@@ -39,7 +44,7 @@ from .provider_limits import (
     mark_provider_call_non_retryable,
     run_provider_limited_call,
 )
-from .request_plan import LLMRequestPlan, RequestCachePlan
+from .request_plan import LLMRequestPlan, RequestCachePlan, WireRequestDiagnostics
 from .request_shape import build_request_shape_report
 from .streaming import SSEFrame, iter_sse_frames, parse_sse_json_frame
 from .temperature_compat import documented_temperature_omit_reason
@@ -141,6 +146,8 @@ def _supports_disabled_thinking(model: str) -> bool:
     version = _claude_model_version(model)
     if version is None:
         return True
+    if version.family == "opus" and version.major == 5 and version.minor == 5:
+        return False
     return not (version.family in {"fable", "mythos"} and version.major >= 5)
 
 
@@ -230,6 +237,12 @@ def _anthropic_thinking_plan(
         raise LLMError(f"Anthropic Messages reasoning_effort is not supported: {effort}")
 
     if enable_thinking is False or effort == "none":
+        if _claude_model_version(model) == _ClaudeModelVersion("sonnet", 5, 5):
+            # Sonnet 5.5 replaces disabled with between_tools. This mode still
+            # produces signed progress blocks and never accepts forced tools.
+            return _AnthropicThinkingPlan(
+                config={"type": "between_tools"}, output_effort="high", active=True
+            )
         if not _supports_disabled_thinking(model):
             raise LLMError(f"Anthropic model {model!r} does not support disabling thinking")
         # output_effort stays None on purpose: Opus 5 accepts disabled thinking
@@ -487,12 +500,22 @@ def _anthropic_tools(
     *,
     mode: str,
     adapter: str,
+    provider_key: str | None = None,
 ) -> _AnthropicToolMapping:
     normalized_mode = str(mode or "off").strip().lower()
     normalized_adapter = (
         str(adapter or AUTO_WEB_SEARCH_ADAPTER).strip().lower() or AUTO_WEB_SEARCH_ADAPTER
     )
     raw_tools = [tool for tool in tools or [] if isinstance(tool, dict)]
+    if provider_key == "alysis":
+        if normalized_mode == "native" or any(
+            _is_anthropic_hosted_web_search_tool(tool) for tool in raw_tools
+        ):
+            raise LLMError(
+                "Hosted Sonnet does not support built-in web search; use external search"
+            )
+        if normalized_mode == "auto":
+            normalized_mode = "external"
     alysis_web_search_present = any(_is_alysis_web_search_function(tool) for tool in raw_tools)
     use_builtin_web_search = alysis_web_search_present and _anthropic_builtin_web_search_allowed(
         mode=normalized_mode,
@@ -963,6 +986,12 @@ def _parse_usage(raw: Any) -> LLMUsage | None:
 
     input_tokens = _as_non_negative_int(raw.get("input_tokens"))
     output_tokens = _as_non_negative_int(raw.get("output_tokens"))
+    output_details = raw.get("output_tokens_details")
+    reasoning_tokens = (
+        _as_non_negative_int(output_details.get("thinking_tokens"))
+        if isinstance(output_details, dict)
+        else None
+    )
     cache_read_input_tokens = _as_non_negative_int(raw.get("cache_read_input_tokens"))
     cache_creation = raw.get("cache_creation")
     cache_creation_5m_input_tokens: int | None = None
@@ -1006,6 +1035,8 @@ def _parse_usage(raw: Any) -> LLMUsage | None:
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_creation_5m_input_tokens=cache_creation_5m_input_tokens,
         cache_creation_1h_input_tokens=cache_creation_1h_input_tokens,
+        # Anthropic output_tokens already includes thinking; this is a subset.
+        reasoning_tokens=reasoning_tokens,
         raw_provider_usage=copy.deepcopy(raw),
     )
 
@@ -1465,6 +1496,9 @@ class AnthropicMessagesClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.supports_forced_tool_choice = _claude_model_version(model) != _ClaudeModelVersion(
+            "sonnet", 5, 5
+        )
         self.timeout_s = timeout_s
         self.temperature = temperature
         self.prompt_cache_key = str(prompt_cache_key or "").strip() or None
@@ -1511,11 +1545,16 @@ class AnthropicMessagesClient:
         self._input_token_count_available: bool | None = None
         self._temperature_omit_after_rejection = False
         self._thinking_display_supported: bool | None = None
+        self._wire_request_diagnostics = WireRequestDiagnostics()
 
     def _headers(self) -> dict[str, str]:
         headers = merge_canonical_headers(
             {
-                "x-api-key": self.api_key,
+                **(
+                    {"Authorization": "Bearer " + self.api_key}
+                    if self.provider_key == "alysis"
+                    else {"x-api-key": self.api_key}
+                ),
                 "anthropic-version": _DEFAULT_ANTHROPIC_VERSION,
                 "Content-Type": "application/json",
                 "User-Agent": "alysis-code/0.1.0",
@@ -1526,23 +1565,29 @@ class AnthropicMessagesClient:
 
     @staticmethod
     def _llm_error_from_response(response: httpx.Response) -> LLMError:
+        # Keep the structured envelope for shared error presentation. Extracting
+        # only the message loses hosted credit/RPM codes and mislabels all 429s
+        # as provider throttling. Preserve the existing readable exception text.
+        safe_body = sanitize_error_text_for_output(response.text)
         try:
             data = response.json()
         except Exception:
-            body = response.text
+            body = safe_body
             if len(body) > 1000:
                 body = body[:1000] + "...(truncated)"
-            return LLMError(
-                sanitize_error_text_for_output(f"LLM error {response.status_code}: {body}")
-            )
-        error_message = _extract_error_message(data)
-        if error_message:
-            return LLMError(
-                sanitize_error_text_for_output(f"LLM error {response.status_code}: {error_message}")
-            )
-        return LLMError(
-            sanitize_error_text_for_output(f"LLM error {response.status_code}: {data!r}")
+        else:
+            body = _extract_error_message(data) or repr(data)
+            raw_error = data.get("error") if isinstance(data, dict) else None
+            if isinstance(raw_error, dict) and isinstance(raw_error.get("code"), str):
+                # Surfaces and persisted errors can receive only str(error).
+                # Retain coded envelopes there as well as on the exception.
+                body = safe_body
+        error = LLMError(
+            sanitize_error_text_for_output(f"LLM error {response.status_code}: {body}")
         )
+        error.provider_status_code = response.status_code
+        error.provider_error_body = safe_body
+        return error
 
     def count_input_tokens(
         self,
@@ -1559,6 +1604,7 @@ class AnthropicMessagesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         payload: dict[str, Any] = {
             "model": self.model,
@@ -1653,6 +1699,7 @@ class AnthropicMessagesClient:
         on_reasoning_delta: Callable[[str], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        cancellation_token: Any | None = None,
         request_plan: LLMRequestPlan | None = None,
     ) -> LLMResponse:
         default_cache = RequestCachePlan(
@@ -1694,6 +1741,7 @@ class AnthropicMessagesClient:
             tools,
             mode=self.web_search_mode,
             adapter=self.web_search_adapter,
+            provider_key=self.provider_key,
         )
         effective_max_tokens = (
             int(max_tokens) if max_tokens is not None else self.default_max_tokens
@@ -1823,6 +1871,7 @@ class AnthropicMessagesClient:
                     "tool_choice_omit_reason": "anthropic_extended_thinking_forced_tool_unsupported",
                 }
             )
+        wire_diagnostics = self._wire_request_diagnostics.begin_request()
         request_plan_metadata = plan.request_plan_metadata(
             input_mode="full",
             continuation_strategy="full_replay",
@@ -1830,6 +1879,10 @@ class AnthropicMessagesClient:
             sent_provider_payload=_prompt_estimation_payload(payload),
             cache_policy_metadata=cache_policy,
             extra=request_plan_extra or None,
+        )
+
+        request_plan_metadata.update(
+            wire_diagnostics(payload, history_key="messages", instructions_key="system")
         )
 
         provider_key = self.provider_key or best_effort_provider_key(
@@ -1889,6 +1942,11 @@ class AnthropicMessagesClient:
                     "reasoning_summary_fallback_reason": reason,
                 },
             )
+            fallback_plan.update(
+                wire_diagnostics(
+                    downgraded_payload, history_key="messages", instructions_key="system"
+                )
+            )
             telemetry.set_request_plan(fallback_plan)
             telemetry.set_request_shape(
                 _request_shape_metadata(
@@ -1924,9 +1982,12 @@ class AnthropicMessagesClient:
                     thinking_display_retry_used = False
                     while True:
                         if stream:
-                            with client.stream(
-                                "POST",
-                                url,
+                            with cancellable_httpx_request(
+                                client=client,
+                                cancellation_token=cancellation_token,
+                                method="POST",
+                                url=url,
+                                stream=True,
                                 headers=self._headers(),
                                 json=request_payload,
                             ) as response:
@@ -1975,6 +2036,13 @@ class AnthropicMessagesClient:
                                                 "temperature_omit_reason": (temperature_rejection),
                                             },
                                         )
+                                        active_request_plan_metadata.update(
+                                            wire_diagnostics(
+                                                request_payload,
+                                                history_key="messages",
+                                                instructions_key="system",
+                                            )
+                                        )
                                         telemetry.set_request_plan(active_request_plan_metadata)
                                         telemetry.set_request_shape(
                                             _request_shape_metadata(
@@ -2019,6 +2087,13 @@ class AnthropicMessagesClient:
                                             cache_policy_metadata=cache_policy,
                                             extra={"fallback_used": True},
                                         )
+                                        active_request_plan_metadata.update(
+                                            wire_diagnostics(
+                                                request_payload,
+                                                history_key="messages",
+                                                instructions_key="system",
+                                            )
+                                        )
                                         telemetry.set_request_plan(active_request_plan_metadata)
                                         telemetry.set_request_shape(
                                             _request_shape_metadata(
@@ -2054,8 +2129,11 @@ class AnthropicMessagesClient:
                                     cache_policy,
                                     active_request_plan_metadata,
                                 )
-                        response = client.post(
-                            url,
+                        response = cancellable_httpx_send(
+                            client=client,
+                            cancellation_token=cancellation_token,
+                            method="POST",
+                            url=url,
                             headers=self._headers(),
                             json=request_payload,
                         )
@@ -2099,6 +2177,13 @@ class AnthropicMessagesClient:
                                     "temperature_omit_reason": temperature_rejection,
                                 },
                             )
+                            active_request_plan_metadata.update(
+                                wire_diagnostics(
+                                    request_payload,
+                                    history_key="messages",
+                                    instructions_key="system",
+                                )
+                            )
                             telemetry.set_request_plan(active_request_plan_metadata)
                             telemetry.set_request_shape(
                                 _request_shape_metadata(
@@ -2137,6 +2222,13 @@ class AnthropicMessagesClient:
                                 cache_policy_metadata=cache_policy,
                                 extra={"fallback_used": True},
                             )
+                            active_request_plan_metadata.update(
+                                wire_diagnostics(
+                                    request_payload,
+                                    history_key="messages",
+                                    instructions_key="system",
+                                )
+                            )
                             telemetry.set_request_plan(active_request_plan_metadata)
                             telemetry.set_request_shape(
                                 _request_shape_metadata(
@@ -2153,6 +2245,7 @@ class AnthropicMessagesClient:
                             continue
                         break
             except httpx.DecodingError as e:
+                raise_if_cancelled(cancellation_token)
                 err = LLMError(
                     f"Anthropic Messages decompression failed: {sanitize_error_text_for_output(e)}"
                 )
@@ -2160,6 +2253,7 @@ class AnthropicMessagesClient:
                     mark_provider_call_non_retryable(err)
                 raise err from e
             except Exception as e:  # noqa: BLE001
+                raise_if_cancelled(cancellation_token)
                 if isinstance(e, LLMError):
                     if stream and public_output_emitted:
                         mark_provider_call_non_retryable(e)
@@ -2199,6 +2293,7 @@ class AnthropicMessagesClient:
                         None,
                     ),
                     retry_deadline_allows=getattr(self, "_provider_retry_deadline_allows", None),
+                    cancellation_token=cancellation_token,
                 )
             ),
             self.route_identity,

@@ -38,6 +38,7 @@ def test_get_chat_specs_match_curated_visible_surface() -> None:
         "permissions",
         "persona",
         "ask",
+        "objective",
         "status",
         "subagents",
         "terminals",

@@ -69,7 +69,7 @@ The session runtime owns:
 - session logging and local artifacts
 
 `alysis chat` is interactive and supports commands such as `/status`,
-`/permissions`, `/persona`, `/pwd`, `/subagents`, and `/forge`.
+`/permissions`, `/persona`, `/objective`, `/pwd`, `/subagents`, and `/forge`.
 
 `alysis run` is the one-shot entrypoint. It is best for focused tasks that
 can be completed from a single instruction. For exploratory or highly iterative
@@ -425,8 +425,8 @@ See [MCP](mcp.md), [Skills](skills.md), [Plugins](plugins.md),
 [Subagents](subagents.md) for the user-facing contracts.
 
 Release work that touches completion-gate, verification-evidence,
-deadline, diagnostic, or compatibility behavior should include focused
-regression coverage and follow the project [release process](RELEASING.md).
+deadline, diagnostic, or compatibility behavior should also follow the
+[release checklist](release_checklist.md).
 
 ### Forge
 
@@ -488,4 +488,6 @@ and the rules that apply to them.
 - [Custom tools](custom_tools.md): trusted Python tools.
 - [Lifecycle hooks](hooks.md): command-based policy and automation.
 - [Release process](RELEASING.md): maintainer release steps.
+- [Release checklist](release_checklist.md): completion-gate regression and
+  compatibility checks.
 - [Server mode](server.md): HTTP API operation.

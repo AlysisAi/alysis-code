@@ -1,7 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+# Trace reason for results that only say the remote site blocked the call.
+DEFAULT_REMOTE_SITE_REASON = "site doesn't allow automated access"
+
+
+def remote_site_outcome(meta: Mapping[str, Any] | None) -> str:
+    """Trace reason when a failed tool call was the remote site's doing, else "".
+
+    A page the site refused, stalled, or dropped is an outcome of that source,
+    not an agent failure: surfaces show it as a neutral trace line rather than
+    an error. Approval declines are never softened.
+    """
+    if not isinstance(meta, Mapping) or meta.get("approval_declined"):
+        return ""
+    reason = " ".join(str(meta.get("remote_site_reason") or "").split())
+    if reason:
+        return reason
+    if meta.get("blocked_by_remote_site"):
+        return DEFAULT_REMOTE_SITE_REASON
+    return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +68,11 @@ class ToolEndEvent:
     subagent_name: str | None = None
     subagent_mode: str | None = None
     nesting_depth: int = 0
+    # Time spent waiting on a human approval prompt during this tool call.
+    # ``elapsed_ms`` is the tool's ACTIVE runtime (wait already subtracted);
+    # this field carries the wait so surfaces can disclose it separately
+    # instead of billing the user's decision time to the tool.
+    approval_wait_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,3 +124,9 @@ class ApprovalRequest:
 class ApprovalDecision:
     allow: bool
     allow_for_session: bool = False
+    # Folder-wide session grant: the user chose "always for this
+    # folder" - the surface stores an (operation, directory) grant and
+    # auto-approves later same-operation requests whose files all fall under
+    # it. Only offered where approval_scope.approval_dir_grant_candidate says
+    # so (fs_delete, single non-root directory, never sensitive approvals).
+    allow_for_session_dir: bool = False

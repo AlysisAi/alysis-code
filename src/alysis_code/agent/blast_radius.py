@@ -24,9 +24,9 @@ The protocol adds a scope the agent did not choose:
 
 Design invariants (identical in spirit to steps 2-5):
 
-* Everything here is pure except ``build_repo_test_index``, the single bounded
-  filesystem walk (mirroring ``reproduction_first.surviving_repro_artifacts`` and
-  ``acceptance_contract``'s bounded probes). It never raises.
+* The index uses one bounded filesystem walk. A narrow lifecycle probe also
+  checks indexed tests known to have been created during this turn; only
+  confirmed absence retires one from the current scope. Neither probe raises.
 * The host never runs anything. It selects the scope, tells the agent the scope,
   and observes what the agent actually ran -- the same observational contract the
   rest of the verification protocol keeps.
@@ -43,9 +43,14 @@ Design invariants (identical in spirit to steps 2-5):
 
 from __future__ import annotations
 
+import argparse
+import configparser
+import fnmatch
 import math
 import os
 import re
+import shlex
+import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
@@ -53,6 +58,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..branding import env_get
+from ..config import normalize_verify_module_invocation
+from ..verification_command_analysis import analyze_verification_command
 from .regression_baseline import TestReport, node_id_file_path
 
 # ---------------------------------------------------------------------------
@@ -467,6 +474,29 @@ class RepoTestIndex:
 EMPTY_REPO_TEST_INDEX = RepoTestIndex()
 
 
+def absent_agent_created_tests(
+    *, root: Path, index: RepoTestIndex, agent_created_paths: Iterable[str]
+) -> tuple[str, ...]:
+    """Retire only confirmed-absent tests authored during this turn.
+
+    Keep pre-existing deletions in scope. An unreadable path or a broken leaf
+    symlink is not proof of absence. The original index is retained by the caller
+    so a recreated test can enter the selection again.
+    """
+    created = set(agent_created_paths)
+    absent: list[str] = []
+    for path in index.test_files:
+        if path not in created:
+            continue
+        try:
+            (root / path).lstat()
+        except FileNotFoundError:
+            absent.append(path)
+        except OSError:
+            pass
+    return tuple(absent)
+
+
 def build_repo_test_index(
     root: Path,
     *,
@@ -625,13 +655,12 @@ class BlastRadiusScope:
         """
         if self.empty:
             return ""
-        joined = " ".join(self.paths)
-        if self.language == ScopeLanguage.PYTHON:
-            return f"python -m pytest {joined} -q"
         if self.language == ScopeLanguage.GO:
             packages = sorted({f"./{_parent_dir(path)}".rstrip("/") or "." for path in self.paths})
             return f"go test {' '.join(packages)}"
-        return joined
+        # A language does not identify a project's runner. Callers with observed
+        # command evidence can supply it; otherwise name the scope without guessing.
+        return ""
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -885,39 +914,412 @@ class ScopePhase(StrEnum):
     GATE = "gate"
 
 
-_COMMAND_TOKEN_SPLIT_RE = re.compile(r"[\s;|&()<>]+")
-_TOKEN_TRAILING_JUNK = ",;:'\"`)]}"
-_SELECTOR_EXTENSIONS = frozenset(_PY_EXTENSIONS | _JS_EXTENSIONS | _GO_EXTENSIONS)
+def _read_pytest_configuration(path: Path) -> dict[str, Any] | None:
+    """Read supported pytest configuration as data, never load its plugins."""
+    if path.stat().st_size > 262_144:
+        raise ValueError("pytest configuration exceeds selection scan limit")
+    body = path.read_text(encoding="utf-8")
+    if path.suffix == ".toml":
+        if path.name in {"pytest.toml", ".pytest.toml"}:
+            raise ValueError("version-dependent native pytest TOML selection")
+        data = tomllib.loads(body)
+        tool = data.get("tool", {})
+        if not isinstance(tool, dict):
+            raise ValueError("invalid pytest TOML configuration")
+        table = tool.get("pytest", {})
+        if not isinstance(table, dict):
+            raise ValueError("invalid pytest TOML configuration")
+        if any(key != "ini_options" for key in table):
+            raise ValueError("version-dependent native pytest TOML selection")
+        options = table.get("ini_options")
+        if options is not None and not isinstance(options, dict):
+            raise ValueError("invalid pytest options")
+        return options
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.read_string(body)
+    section = "tool:pytest" if path.suffix == ".cfg" else "pytest"
+    if parser.has_section(section):
+        return dict(parser[section])
+    return {} if path.name in {"pytest.ini", ".pytest.ini"} else None
 
 
-def command_path_selectors(command: str) -> tuple[str, ...]:
+def _pytest_path_selectors(
+    args: Sequence[str],
+    *,
+    workspace_root: Path | None,
+    cwd: Path,
+    primary_command: str,
+    environment_known: bool,
+) -> tuple[str, ...] | None:
+    """Supported declared pytest selection; filters or unknown defaults stay unknown."""
+    if workspace_root is None or not environment_known:
+        return None
+    root = workspace_root.resolve()
+    try:
+        cwd = cwd.resolve()
+        cwd.relative_to(root)
+        # Read only selection-related environment values, never serialize them.
+        environment = {
+            name: os.environ.get(name, "") for name in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")
+        }
+        prefix = shlex.split(primary_command)
+        while prefix:
+            if prefix[0] in {"env", "command"}:
+                prefix = prefix[1:]
+                continue
+            token = prefix[0]
+            name, separator, value = token.partition("=")
+            if not separator or not name.isidentifier():
+                break
+            if name in environment:
+                # Shell expansion is not reconstructed by this observer.
+                if "$" in value or "`" in value:
+                    return None
+                environment[name] = value
+            prefix = prefix[1:]
+        # Environment managers may add options unseen by the host process.
+        # Only a directly normalized pytest invocation has known defaults here.
+        normalized_prefix = normalize_verify_module_invocation(prefix)
+        if not normalized_prefix or Path(normalized_prefix[0]).name not in {"pytest", "py.test"}:
+            return None
+        if environment["PYTEST_PLUGINS"]:
+            return None
+        env_options = shlex.split(environment["PYTEST_ADDOPTS"])
+
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
+        for flags in (
+            ("-q", "--quiet"),
+            ("-v", "--verbose"),
+            ("-s",),
+            ("--disable-warnings", "--disable-pytest-warnings"),
+            ("--strict-markers",),
+            ("--strict-config",),
+        ):
+            parser.add_argument(*flags, action="store_true")
+        for flag in ("--capture", "--tb", "--color", "--durations", "--durations-min", "--assert"):
+            parser.add_argument(flag)
+        parser.add_argument("-r")
+        parser.add_argument("-c", "--config-file", dest="config_file")
+        parser.add_argument("targets", nargs="*")
+
+        def parse(options: Sequence[str]):
+            parsed, unknown = parser.parse_known_intermixed_args(list(options))
+            return None if unknown else parsed
+
+        parsed = parse([*env_options, *args])
+        if parsed is None or any("::" in value for value in parsed.targets):
+            return None
+        target_paths = [(cwd / value).resolve() for value in parsed.targets]
+        if any(not path.exists() for path in target_paths):
+            return None
+        for path in target_paths:
+            path.relative_to(root)
+        config: dict[str, Any] = {}
+        config_root = cwd
+        if parsed.config_file:
+            config_path = (cwd / parsed.config_file).resolve()
+            config_path.relative_to(root)
+            config = _read_pytest_configuration(config_path) or {}
+            config_root = config_path.parent
+        else:
+            directories = [path if path.is_dir() else path.parent for path in target_paths] or [cwd]
+            ancestor = Path(os.path.commonpath(directories))
+            found = False
+            origins = [ancestor]
+            if not any((parent / "setup.py").is_file() for parent in (ancestor, *ancestor.parents)):
+                origins.extend(directory for directory in directories if directory != ancestor)
+            for origin in origins:
+                first_pyproject: Path | None = None
+                for parent in (origin, *origin.parents):
+                    # These files have version-dependent precedence; do not
+                    # guess which pytest executable/version was observed.
+                    if any((parent / name).is_file() for name in ("pytest.toml", ".pytest.toml")):
+                        return None
+                    for name in (
+                        "pytest.ini",
+                        ".pytest.ini",
+                        "pyproject.toml",
+                        "tox.ini",
+                        "setup.cfg",
+                    ):
+                        config_path = parent / name
+                        if not config_path.is_file():
+                            continue
+                        if name == "pyproject.toml" and first_pyproject is None:
+                            first_pyproject = config_path
+                        loaded = _read_pytest_configuration(config_path)
+                        if loaded is not None:
+                            config, config_root, found = loaded, parent, True
+                            break
+                    if found:
+                        break
+                if not found and first_pyproject is not None:
+                    config_root, found = first_pyproject.parent, True
+                if found:
+                    break
+
+        def option_list(name: str, default: Sequence[str] = ()) -> list[str]:
+            value = config.get(name, list(default))
+            if isinstance(value, str):
+                return shlex.split(value)
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                return value
+            raise ValueError("invalid pytest selection configuration")
+
+        parsed = parse([*option_list("addopts"), *env_options, *args])
+        if parsed is None or any("::" in value for value in parsed.targets):
+            return None
+        # Non-default class/function collection is a partial-file selection.
+        if option_list("python_classes", ("Test",)) != ["Test"] or option_list(
+            "python_functions", ("test",)
+        ) != ["test"]:
+            return None
+        targets = parsed.targets
+        if not targets and config_root == cwd:
+            targets = option_list("testpaths")
+            if any(any(character in target for character in "*?[") for target in targets):
+                return None
+            targets = [target for target in targets if (cwd / target).exists()]
+        target_paths = [(cwd / value).resolve() for value in targets] if targets else [cwd]
+        for path in target_paths:
+            path.relative_to(root)
+            if not path.exists():
+                return None
+        patterns = option_list("python_files", ("test_*.py", "*_test.py"))
+        ignored = option_list(
+            "norecursedirs", (".*", "build", "dist", "CVS", "_darcs", "{arch}", "*.egg", "venv")
+        )
+        selected: list[str] = []
+        for path in target_paths:
+            if path.is_file():
+                if path.suffix != ".py":
+                    return None
+                selected.append(path.relative_to(root).as_posix())
+                continue
+            index = build_repo_test_index(path, max_import_scans=0)
+            if index.truncated:
+                return None
+            for item in index.test_files:
+                pure = PurePosixPath(item)
+                if pure.suffix != ".py" or not any(
+                    fnmatch.fnmatchcase(pure.name, pattern) for pattern in patterns
+                ):
+                    continue
+                if any(
+                    fnmatch.fnmatchcase(parent, pattern)
+                    for parent in pure.parent.parts
+                    for pattern in ignored
+                ):
+                    continue
+                candidate = (path / item).resolve()
+                candidate.relative_to(root)
+                selected.append(candidate.relative_to(root).as_posix())
+        return tuple(dict.fromkeys(selected)) or None
+    except (OSError, RuntimeError, ValueError, argparse.ArgumentError, configparser.Error):
+        return None
+
+
+def _unittest_path_selectors(
+    args: Sequence[str], *, workspace_root: Path | None, cd_target: str | None
+) -> tuple[str, ...] | None:
+    """Resolve unittest's declared selection without importing project code.
+
+    None is inconclusive, not whole-suite evidence. In particular a class,
+    method or name filter cannot establish that an entire test file ran.
+    """
+    if workspace_root is None:
+        return None
+    try:
+        root = Path(workspace_root).resolve()
+        cwd = (root / (cd_target or ".")).resolve()
+        cwd.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    # These are unittest CLI options, not inferred task or test-name rules.
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
+    for flags in (
+        ("-v", "--verbose"),
+        ("-q", "--quiet"),
+        ("-f", "--failfast"),
+        ("-c", "--catch"),
+        ("-b", "--buffer"),
+        ("--locals",),
+    ):
+        parser.add_argument(*flags, action="store_true")
+    parser.add_argument("--durations")
+    parser.add_argument("-k", action="append")
+    discovery = not args or args[0] == "discover"
+    if discovery:
+        parser.add_argument("-s", "--start-directory", dest="start")
+        parser.add_argument("-p", "--pattern")
+        parser.add_argument("-t", "--top-level-directory", dest="top")
+    parser.add_argument("targets", nargs="*")
+    try:
+        parsed, unknown = parser.parse_known_intermixed_args(
+            list(args[1:] if args and args[0] == "discover" else args)
+        )
+    except argparse.ArgumentError:
+        return None
+    if unknown or parsed.k:
+        return None
+    # unittest with only reporting options also invokes discovery.
+    discovery = discovery or not parsed.targets
+
+    def relative_file(path: Path) -> str | None:
+        try:
+            resolved = path.resolve()
+            relative = resolved.relative_to(root).as_posix()
+            return relative if resolved.is_file() else None
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    def resolve_module(parts: Sequence[str]) -> str | None:
+        if not parts or not all(part.isidentifier() for part in parts):
+            return None
+        # A namespace directory can lose import resolution to a regular package
+        # elsewhere on sys.path. Require the same regular package chain for
+        # explicit test names and import-based discovery roots, without imports.
+        if any(
+            relative_file(cwd.joinpath(*parts[:length], "__init__.py")) is None
+            for length in range(1, len(parts))
+            if cwd.joinpath(*parts[:length]).is_dir()
+        ):
+            return None
+        candidates: set[tuple[str, int]] = set()
+        for length in range(1, len(parts) + 1):
+            module = cwd.joinpath(*parts[:length])
+            for path in (module.with_suffix(".py"), module / "__init__.py"):
+                relative = relative_file(path)
+                if relative is not None:
+                    candidates.add((relative, length))
+        # Parent packages are normal, but file/package ambiguity and
+        # class/method suffixes do not establish a full-module selection.
+        files = {(path, length) for path, length in candidates if not path.endswith("/__init__.py")}
+        matches = files or {(path, length) for path, length in candidates if length == len(parts)}
+        if len(matches) != 1:
+            return None
+        path, length = next(iter(matches))
+        if length != len(parts) or any(
+            other_length == length and other_path != path for other_path, other_length in candidates
+        ):
+            return None
+        return path
+
+    if not discovery:
+        selected: list[str] = []
+        for target in parsed.targets:
+            if target.endswith(".py"):
+                if relative_file(cwd / target) is None:
+                    return None
+                # unittest converts a file operand to an import name; it does
+                # not execute that path directly. Apply the same ambiguity
+                # checks as for a dotted operand (a package can shadow a file).
+                try:
+                    relative = Path(os.path.abspath(cwd / target)).relative_to(cwd)
+                except ValueError:
+                    return None
+                parts = list(relative.with_suffix("").parts)
+            else:
+                parts = target.split(".")
+            path = resolve_module(parts)
+            if path is None:
+                return None
+            selected.append(path)
+        return tuple(dict.fromkeys(selected)) or None
+
+    positionals = parsed.targets
+    if len(positionals) > 3:
+        return None
+    start_arg = positionals[0] if positionals else getattr(parsed, "start", None) or "."
+    pattern = (
+        positionals[1] if len(positionals) > 1 else getattr(parsed, "pattern", None) or "test*.py"
+    )
+    top_arg = positionals[2] if len(positionals) > 2 else getattr(parsed, "top", None)
+    try:
+        start = (cwd / start_arg).resolve()
+        if not start.is_dir():
+            module = resolve_module(start_arg.split("."))
+            if module is None or not module.endswith("/__init__.py"):
+                return None
+            start = (root / module).parent
+        start.relative_to(root)
+        if top_arg is not None:
+            top = (cwd / top_arg).resolve()
+            top.relative_to(root)
+            start.relative_to(top)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not start.is_dir():
+        return None
+    # Reuse the bounded index without reading source text. Materialize the
+    # selected existing files, so discovery cannot baseline future new files.
+    index = build_repo_test_index(start, max_import_scans=0)
+    if index.truncated:
+        return None
+    selected = []
+    for path in index.test_files:
+        pure = PurePosixPath(path)
+        if pure.suffix != ".py" or not fnmatch.fnmatchcase(pure.name, pattern):
+            continue
+        parents = pure.parent.parts
+        if any(
+            "/".join(parents[:length]) not in index.package_dirs
+            for length in range(1, len(parents) + 1)
+        ):
+            continue
+        relative = relative_file(start / path)
+        if relative is not None:
+            selected.append(relative)
+    return tuple(selected) or None
+
+
+def command_path_selectors(
+    command: str,
+    *,
+    workspace_root: Path | None = None,
+    working_directory: str | None = None,
+    environment_known: bool = True,
+) -> tuple[str, ...] | None:
     """The test paths/directories a command explicitly selected.
 
-    An empty result means the command named no paths -- a whole-suite run, which
-    covers every scope. Node-id suffixes (``file.py::test``) reduce to their file,
-    and flag values (``-k expr``, ``--maxfail=2``) are not paths so they drop out.
+    None means unsupported or inconclusive selection. Supported runner selections
+    resolve to existing files; an explicit filter never becomes whole-file scope.
     """
-    selectors: list[str] = []
-    for raw in _COMMAND_TOKEN_SPLIT_RE.split(str(command or "")):
-        token = raw.strip().strip("`'\"").rstrip(_TOKEN_TRAILING_JUNK)
-        if not token or token.startswith("-"):
-            continue
-        token = token.split("::", 1)[0]
-        normalized = normalize_repo_path(token)
-        if not normalized:
-            continue
-        pure = PurePosixPath(normalized)
-        if pure.suffix.casefold() in _SELECTOR_EXTENSIONS:
-            selectors.append(normalized)
-        elif "/" in normalized and "." not in pure.name:
-            # A directory selector (``pytest tests/unit``). A bare word is not
-            # treated as one: it is far more likely a subcommand or an -k value.
-            selectors.append(normalized)
-    return tuple(dict.fromkeys(selectors))
+    analysis = analyze_verification_command(command, trusted=True)
+    if analysis.rejection_reason or analysis.shell_control_flow not in {"none", "safe_cd_and"}:
+        return None
+    try:
+        root = workspace_root.resolve() if workspace_root is not None else None
+        cwd = (root / (working_directory or ".")) if root is not None else Path(".")
+        cwd = (cwd / (analysis.cd_target or ".")).resolve()
+        if root is not None:
+            cwd.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if analysis.command_family == "pytest":
+        if analysis.normalized_command != analysis.unwrapped_command:
+            return None
+        return _pytest_path_selectors(
+            analysis.parts[1:],
+            workspace_root=root,
+            cwd=cwd,
+            primary_command=analysis.primary_command,
+            environment_known=environment_known,
+        )
+    if analysis.command_family == "unittest":
+        return _unittest_path_selectors(
+            analysis.parts[1:],
+            workspace_root=root,
+            cd_target=str(cwd) if root is not None else None,
+        )
+    return None
 
 
-def selection_covers(selectors: Sequence[str], path: str) -> bool:
+def selection_covers(selectors: Sequence[str] | None, path: str) -> bool:
     """True when ``path`` was inside what a run selected (no selectors = whole suite)."""
+    if selectors is None:
+        return False
     if not selectors:
         return True
     normalized = normalize_repo_path(path)
@@ -937,14 +1339,16 @@ class ScopeRun:
     """One observed test run, with what it selected and when it happened."""
 
     command: str
-    selectors: tuple[str, ...]
+    selectors: tuple[str, ...] | None
     phase: ScopePhase
     report: TestReport
     duration_seconds: float | None = None
+    agent_created_paths: tuple[str, ...] = ()
+    generation: int = 0
 
     @property
     def whole_suite(self) -> bool:
-        return not self.selectors
+        return self.selectors == ()
 
     @property
     def usable(self) -> bool:
@@ -957,10 +1361,13 @@ class ScopeRun:
     def as_payload(self) -> dict[str, Any]:
         return {
             "command": self.command,
-            "selectors": list(self.selectors),
+            "selectors": list(self.selectors) if self.selectors is not None else None,
+            "selection_known": self.selectors is not None,
             "whole_suite": self.whole_suite,
             "phase": self.phase.value,
+            "generation": self.generation,
             "duration_seconds": self.duration_seconds,
+            "agent_created_paths": list(self.agent_created_paths),
             "report": self.report.as_payload(),
         }
 
@@ -1103,11 +1510,13 @@ def assess_blast_radius(
     applicable: bool,
     policy: BlastRadiusPolicy | None = None,
     agent_created_paths: Iterable[str] = (),
+    current_generation: int | None = None,
 ) -> BlastRadiusAssessment:
     """Diff the scope's post-fix run against its clean-tree baseline. Deterministic.
 
     The comparison is by *coverage*, not by command equality. The gate run must cover
-    the whole scope -- that is what "run the scope" means. The baseline does not: every
+    the whole scope and, when supplied, the current relevant-edit generation.
+    An older run cannot validate a later edit or cleanup. The baseline does not: every
     clean-tree run observed the same unpatched tree, so their coverage and their
     failures compose into one baseline, and attribution is then decided per failing
     test against what that composite actually ran. A failure the baseline never
@@ -1124,16 +1533,19 @@ def assess_blast_radius(
 
     scope_paths = scope.paths
     usable = [run for run in runs if run.usable]
-    gate_runs = [run for run in usable if run.phase == ScopePhase.GATE and run.covers(scope_paths)]
+    current_gate_runs = [
+        run
+        for run in runs
+        if run.phase == ScopePhase.GATE
+        and (current_generation is None or run.generation == current_generation)
+        and run.covers(scope_paths)
+    ]
+    gate_runs = [run for run in current_gate_runs if run.usable]
     if not gate_runs:
         # Distinguish "never ran the scope" from "ran it, could not read the result".
         # Only the first is a deficit the agent can clear; nudging on the second
         # would loop forever against a runner whose output shape we cannot parse.
-        unreadable = [
-            run
-            for run in runs
-            if not run.usable and run.phase == ScopePhase.GATE and run.covers(scope_paths)
-        ]
+        unreadable = [run for run in current_gate_runs if not run.usable]
         if unreadable:
             return BlastRadiusAssessment(
                 status=BlastRadiusStatus.UNREADABLE,
@@ -1143,7 +1555,9 @@ def assess_blast_radius(
         return BlastRadiusAssessment(status=BlastRadiusStatus.GATE_MISSING, **common)
     gate = gate_runs[-1]
 
-    baseline_runs = [run for run in usable if run.phase == ScopePhase.BASELINE]
+    baseline_runs = [
+        run for run in usable if run.phase == ScopePhase.BASELINE and run.selectors is not None
+    ]
     baseline_whole_suite = any(run.whole_suite for run in baseline_runs)
     baseline_selectors: tuple[str, ...] = (
         ()
@@ -1244,11 +1658,25 @@ def build_blast_radius_scope_advisory(
     scope: BlastRadiusScope,
     *,
     has_baseline: bool,
+    baseline_covered_paths: tuple[str, ...] | None = None,
+    baseline_command: str = "",
+    agent_created_paths: Iterable[str] = (),
 ) -> str:
     """The concrete scope, emitted once the first change to existing code lands."""
     if scope.empty:
         return ""
-    command = scope.suggested_command()
+    command = baseline_command or scope.suggested_command()
+    covered = set(
+        baseline_covered_paths
+        if baseline_covered_paths is not None
+        else scope.paths
+        if has_baseline
+        else ()
+    )
+    uncovered = tuple(path for path in scope.paths if path not in covered)
+    created = set(agent_created_paths)
+    new_without_baseline = tuple(path for path in uncovered if path in created)
+    existing_without_baseline = tuple(path for path in uncovered if path not in created)
     listed = ", ".join(scope.paths[:MAX_LISTED_IDS])
     extra = len(scope.paths) - min(len(scope.paths), MAX_LISTED_IDS)
     if extra > 0:
@@ -1261,17 +1689,32 @@ def build_blast_radius_scope_advisory(
     ]
     if has_baseline:
         lines.append(
-            "A clean-tree run already covers this scope, so I can attribute failures. "
-            f"Re-run it after your fix (for example `{command}`) and make sure nothing "
-            "that passed then fails now."
+            "A recorded run before edits to existing files covers this scope. "
+            "Compare the results to that baseline; do not attribute a failure without "
+            "evidence that it passed before."
         )
-    else:
+    elif covered:
         lines.append(
-            "Nothing was run on the clean tree covering this scope, so failures here "
-            "cannot yet be told apart from breakage that was already in the repo. Run it "
-            f"after your fix anyway (for example `{command}`) and read the result against "
-            "what you know about the repo - do not assume a failure is pre-existing."
+            "The recorded baseline covers only: "
+            + _format_ids(tuple(path for path in scope.paths if path in covered))
+            + "."
         )
+    if new_without_baseline:
+        lines.append(
+            "Newly authored tests were not part of that baseline: "
+            + _format_ids(new_without_baseline)
+            + ". Assess their results against the task requirements, not as previously "
+            "passing tests."
+        )
+    if existing_without_baseline:
+        lines.append(
+            "No usable baseline covers: "
+            + _format_ids(existing_without_baseline)
+            + ". Failures there cannot yet be told apart from pre-existing breakage; "
+            "do not assume either attribution."
+        )
+    example = f" (for example `{command}`)" if command else ""
+    lines.append(f"Run the selected tests after your fix{example} and inspect the result.")
     lines.append(
         "Advisory only - this does not block your edit. Run any equivalent command; "
         "what matters is that these files are covered."
@@ -1296,7 +1739,7 @@ def build_blast_radius_nudge_line(assessment: BlastRadiusAssessment) -> str:
         command = assessment.scope.suggested_command()
         detail = f" (for example `{command}`)" if command else ""
         return (
-            "- You have not run the tests around what you changed: "
+            "- Current test coverage has not been established for the selected scope: "
             + _format_ids(assessment.scope.paths)
             + f". Run them now{detail} and confirm your change did not break them. A "
             "written explanation cannot clear this - only the run can."

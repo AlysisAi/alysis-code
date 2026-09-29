@@ -49,7 +49,8 @@ def test_adapter_command_includes_required_deadline_flags_and_separator() -> Non
     instruction = "--starts-with-dash\nquote 'x' and shell $(echo nope) unicode: Δοκιμή"
     parts, command = _split_command(_agent(), instruction)
 
-    assert parts[:2] == ["alysis", "run"]
+    assert parts[0].startswith("ALYSIS_MANAGED_HOST_DEADLINE_UNIX_SECONDS=")
+    assert parts[1:3] == ["alysis", "run"]
     assert parts.count("--deadline-seconds") == 1
     deadline_index = parts.index("--deadline-seconds")
     assert parts[deadline_index + 1] == "90"

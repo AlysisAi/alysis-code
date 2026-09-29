@@ -18,6 +18,7 @@ from ..branding import default_sandbox_docker_image, env_get
 from ..bwrap_etc import ensure_minimal_etc_dir
 from ..forge_events import EVENT_RUN_COMPLETED, is_terminal_event, parse_event_line
 from ..logging_redaction import redact_log_text
+from ..run_outcome import task_outcome_fields, task_outcome_record
 from .settings import ServerSettings
 from .store import JobPaths, RunPaths, ServerStore, ServerStoreError
 
@@ -331,6 +332,34 @@ class JobStatus:
     error: str | None
     status_source: str | None = None
     terminal_event: dict[str, object] | None = None
+    task_outcome: dict[str, object] | None = None
+
+
+def job_task_outcome(
+    *, status: str, exit_code: int | None, event: Mapping[str, object] | None
+) -> dict[str, object]:
+    """The worker command's accepted/exit status is distinct from task verification."""
+    if status not in _TERMINAL_JOB_STATUSES:
+        return task_outcome_record(exit_code=None, reason="running", terminal=False)
+    data = event.get("data") if isinstance(event, Mapping) else None
+    record = data.get("task_outcome") if isinstance(data, Mapping) else None
+    outcome = task_outcome_fields(
+        record, exit_code=exit_code, reason="worker_failed" if status == "failed" else "completed"
+    )["task_outcome"]
+    if status == "cancelled":
+        # Cancellation is the outer worker's authority, but it does not erase
+        # the host task identity or the artifacts recorded before cancellation.
+        outcome.update(
+            outcome="cancelled", verified_success=False, reason="cancelled", exit_code=exit_code
+        )
+    elif status == "failed" and outcome["outcome"] in {"verified_success", "completed_unverified"}:
+        outcome.update(
+            outcome="incomplete",
+            verified_success=False,
+            reason="worker_failed",
+            exit_code=exit_code or 1,
+        )
+    return outcome
 
 
 def job_status_from_terminal_event(event: Mapping[str, object] | None) -> str | None:
@@ -474,6 +503,9 @@ class JobRunner:
                 error=state.error,
                 status_source=state.status_source,
                 terminal_event=state.terminal_event,
+                task_outcome=job_task_outcome(
+                    status=status, exit_code=state.exit_code, event=state.terminal_event
+                ),
             )
 
     def read_logs(self, job_id: str) -> str:
@@ -653,5 +685,8 @@ class JobRunner:
             "started_at": state.started_at,
             "finished_at": state.finished_at,
             "terminal_event": state.terminal_event,
+            "task_outcome": job_task_outcome(
+                status=state.status, exit_code=state.exit_code, event=state.terminal_event
+            ),
         }
         atomic_write_json(job_paths.result_path, payload)

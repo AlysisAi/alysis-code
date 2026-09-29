@@ -6,6 +6,7 @@ import pytest
 
 from alysis_code.config import AppConfig
 from alysis_code.execution_context import (
+    ExecutionContextBudgetError,
     build_task_context_pack,
     build_task_context_pack_result,
     compact_plan_for_execution,
@@ -13,7 +14,7 @@ from alysis_code.execution_context import (
     select_relevant_image_paths,
 )
 from alysis_code.model_registry import ModelRegistry
-from alysis_code.token_budget import compute_input_budget, estimate_tokens
+from alysis_code.token_budget import compute_input_budget
 
 
 def _large_plan() -> dict:
@@ -140,15 +141,11 @@ def test_build_task_context_pack_huge_plan_stays_within_budget() -> None:
             }
         }
     }
-    pack = build_task_context_pack(
-        cfg=cfg,
-        plan=plan,
-        task=task,
-        role_model="tiny-budget",
-    )
     budget = compute_input_budget(ModelRegistry(cfg=cfg).get("tiny-budget"))
-    assert estimate_tokens(pack) <= budget
-    assert "TRUNCATED" in pack
+    with pytest.raises(ExecutionContextBudgetError) as caught:
+        build_task_context_pack(cfg=cfg, plan=plan, task=task, role_model="tiny-budget")
+    assert caught.value.available_tokens == budget
+    assert caught.value.required_tokens > budget
 
 
 def test_build_task_context_pack_respects_explicit_instruction_budget() -> None:
@@ -178,20 +175,16 @@ def test_build_task_context_pack_respects_explicit_instruction_budget() -> None:
     }
 
     implicit_budget = compute_input_budget(ModelRegistry(cfg=cfg).get("wide-budget"))
-    result = build_task_context_pack_result(
-        cfg=cfg,
-        plan=plan,
-        task=task,
-        role_model="wide-budget",
-        instruction_token_budget=700,
-    )
-
-    assert implicit_budget > result.instruction_token_budget
-    assert result.instruction_token_budget == 700
-    assert result.instruction_token_estimate <= 700
-    assert result.truncated is True
-    assert result.truncation_strategy.startswith("execution_priority")
-    assert "TRUNCATED" in result.content
+    with pytest.raises(ExecutionContextBudgetError) as caught:
+        build_task_context_pack_result(
+            cfg=cfg, plan=plan, task=task, role_model="wide-budget", instruction_token_budget=700
+        )
+    assert caught.value.available_tokens == 700
+    assert caught.value.required_tokens > 700
+    result = build_task_context_pack_result(cfg=cfg, plan=plan, task=task, role_model="wide-budget")
+    assert result.instruction_token_estimate <= implicit_budget
+    assert task["description"].strip() in result.content
+    assert all(value in result.content for value in task["acceptance_criteria"])
 
 
 def test_build_task_context_pack_prioritizes_assets_task_and_rules_when_budget_is_tight() -> None:
@@ -199,8 +192,7 @@ def test_build_task_context_pack_prioritizes_assets_task_and_rules_when_budget_i
     task = {
         "id": "T81",
         "title": "Implement spec_042 parser retry handling",
-        "description": "Need the attached spec and execution rules to survive startup trimming. "
-        * 80,
+        "description": "Need the attached spec and execution rules to survive startup trimming.",
         "acceptance_criteria": [f"criterion {i}" for i in range(20)],
         "dependencies": ["T10"],
         "estimated_files": ["src/execution_context.py", "src/parser.py"],

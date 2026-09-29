@@ -4,7 +4,7 @@ import io
 import json
 import threading
 from pathlib import Path
-from time import perf_counter, sleep
+from time import perf_counter
 from typing import Any
 
 import pytest
@@ -109,10 +109,12 @@ class _KeepaliveAwareScriptedClient(_ScriptedClient):
     def __init__(self, responses: list[LLMResponse]) -> None:
         super().__init__(responses)
         self.keepalive_requests: list[dict[str, Any]] = []
+        self.keepalive_received = threading.Event()
 
     def chat(self, **kwargs: Any) -> LLMResponse:
         if kwargs.get("max_tokens") == 16:
             self.keepalive_requests.append(dict(kwargs))
+            self.keepalive_received.set()
             return LLMResponse(content="ignored", tool_calls=[], raw={})
         kwargs.pop("cancellation_token", None)
         return super().chat(**kwargs)
@@ -294,7 +296,7 @@ def test_run_turn_streaming_assistant_text_emits_events_and_legacy(tmp_path: Pat
     assert surface.legacy_tokens == ["Hello ", "world."]
 
 
-def test_consecutive_turn_requests_keep_stable_history_before_volatile_suffix(
+def test_consecutive_turn_requests_preserve_context_order_and_refreshes(
     tmp_path: Path,
 ) -> None:
     surface = _RecordingEventSurface()
@@ -327,7 +329,10 @@ def test_consecutive_turn_requests_keep_stable_history_before_volatile_suffix(
             for message in session.messages
             if str(message.get("content") or "").startswith("<workspace_binding_context>")
         )
-        workspace_message["content"] = "<workspace_binding_context>\nroot: two\n"
+        session.messages[session.messages.index(workspace_message)] = {
+            **workspace_message,
+            "content": "<workspace_binding_context>\nroot: two\n",
+        }
         assert (
             session.run_turn(
                 "Second task.",
@@ -341,47 +346,20 @@ def test_consecutive_turn_requests_keep_stable_history_before_volatile_suffix(
 
     assert len(client.call_messages) == 2
     first, second = client.call_messages
-    volatile_markers = (
-        "<workspace_binding_context>",
-        "<task_brief>",
-        "<environment_context>",
-        "turn-system-",
-        "turn-user-",
-    )
-
-    def stable_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        first_volatile = next(
-            (
-                index
-                for index, message in enumerate(messages)
-                if str(message.get("content") or "").startswith(volatile_markers)
-            ),
-            len(messages),
-        )
-        return messages[:first_volatile]
-
-    first_stable = stable_prefix(first)
-    second_stable = stable_prefix(second)
-    assert second_stable[: len(first_stable)] == first_stable
-    assert (
-        json.dumps(
-            second_stable[: len(first_stable)],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode()
-        == json.dumps(
-            first_stable,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode()
-    )
-    assert any(message.get("content") == "turn-system-two" for message in second)
-    assert any(message.get("content") == "turn-user-two" for message in second)
-    suffix_start = len(second_stable)
+    assert first[0] == second[0] == {"role": "system", "content": "system prompt"}
+    assert first[1]["content"] == "<workspace_binding_context>\nroot: one\n"
+    assert second[1]["content"] == "<workspace_binding_context>\nroot: two\n"
+    assert first[2:4] == second[2:4]
+    first_contents = [str(message.get("content") or "") for message in first]
     second_contents = [str(message.get("content") or "") for message in second]
-    for expected in ("First task.", "Second task."):
-        assert expected in second_contents
-        assert second_contents.index(expected) < suffix_start
+    assert first_contents.index("First task.") > 3
+    assert second_contents.index("First task.") > 3
+    assert second_contents.index("Second task.") < second_contents.index("turn-system-two")
+    assert second_contents.index("turn-system-two") < second_contents.index("turn-user-two")
+    assert "turn-system-one" not in second_contents
+    assert "turn-user-one" not in second_contents
+    assert "<workspace_binding_context>\nroot: one\n" not in second_contents
+    assert all(message.get("content") != "turn-system-two" for message in session.messages)
 
 
 def test_session_close_persists_cache_efficiency_summary(tmp_path: Path) -> None:
@@ -1241,19 +1219,6 @@ def test_sequential_subagent_tool_duration_ignores_child_elapsed_time(tmp_path: 
 
 
 def test_sync_subagent_wait_refreshes_parent_cache_after_idle_threshold(tmp_path: Path) -> None:
-    tool = ToolDef(
-        name="subagent_run",
-        description="slow fake subagent",
-        parameters={"type": "object", "properties": {}, "required": []},
-        run=lambda _args: (
-            sleep(0.08)
-            or {
-                "subagent": "explorer",
-                "subagent_session_id": "slow-child",
-                "result": "mapped",
-            }
-        ),
-    )
     client = _KeepaliveAwareScriptedClient(
         [
             LLMResponse(
@@ -1269,6 +1234,21 @@ def test_sync_subagent_wait_refreshes_parent_cache_after_idle_threshold(tmp_path
             ),
             LLMResponse(content="done", tool_calls=[], raw={}),
         ]
+    )
+
+    def run_child(_args: dict[str, Any]) -> dict[str, str]:
+        assert client.keepalive_received.wait(timeout=5), "parent cache keepalive was not sent"
+        return {
+            "subagent": "explorer",
+            "subagent_session_id": "slow-child",
+            "result": "mapped",
+        }
+
+    tool = ToolDef(
+        name="subagent_run",
+        description="slow fake subagent",
+        parameters={"type": "object", "properties": {}, "required": []},
+        run=run_child,
     )
     session = _make_session(
         root=tmp_path,
@@ -1439,7 +1419,7 @@ def test_mixed_subagent_batch_runs_eligible_calls_first_and_preserves_result_ord
         ToolCall(
             id="call_deferred",
             name="subagent_run",
-            arguments={"name": "implementer", "task": "deferred", "mode": "review"},
+            arguments={"name": "general", "task": "deferred", "mode": "review"},
         ),
         *[
             ToolCall(
@@ -1513,7 +1493,7 @@ def test_mixed_subagent_batch_runs_eligible_calls_first_and_preserves_result_ord
     ]
     notices = [text for role, text in transcript.entries if role == "info"]
     assert notices == [
-        "Running 1 of 5 subagents one at a time: shared workspace can write (implementer)"
+        "Running 1 of 5 subagents one at a time: shared workspace can write (general)"
     ]
     serialized_events = [
         event
@@ -1526,7 +1506,7 @@ def test_mixed_subagent_batch_runs_eligible_calls_first_and_preserves_result_ord
         "deferred": 1,
         "reason": "shared workspace can write",
         "run_ids": [],
-        "deferred_roles": ["implementer"],
+        "deferred_roles": ["general"],
     }
 
 
@@ -1586,7 +1566,7 @@ def test_mixed_subagent_batch_cancellation_prevents_deferred_call(
                         id="call_deferred",
                         name="subagent_run",
                         arguments={
-                            "name": "implementer",
+                            "name": "general",
                             "task": "deferred",
                             "mode": "review",
                         },
@@ -1647,7 +1627,7 @@ def test_nonwriting_shared_batch_mutation_is_reported_as_batch_failure(
 
     def _run_subagent(args: dict[str, Any]) -> dict[str, Any]:
         name = str(args["name"])
-        if name == "implementer":
+        if name == "general":
             deferred_started.set()
             return {
                 "subagent": name,
@@ -1686,7 +1666,7 @@ def test_nonwriting_shared_batch_mutation_is_reported_as_batch_failure(
                         id="call_implement",
                         name="subagent_run",
                         arguments={
-                            "name": "implementer",
+                            "name": "general",
                             "task": "do not start",
                             "mode": "review",
                         },
@@ -1821,7 +1801,7 @@ def test_run_turn_serializes_same_batch_review_subagents(
         execution_order.append(f"start:{task}")
         execution_order.append(f"end:{task}")
         return {
-            "subagent": "implementer",
+            "subagent": "general",
             "subagent_session_id": f"sub-{task}",
             "result": f"result for {task}",
         }
@@ -1850,7 +1830,7 @@ def test_run_turn_serializes_same_batch_review_subagents(
                         id="call_a",
                         name="subagent_run",
                         arguments={
-                            "name": "implementer",
+                            "name": "general",
                             "task": "alpha",
                             "mode": "review",
                         },

@@ -28,6 +28,7 @@ from alysis_code.verify_gate import (
     VerifyError,
     command_is_docs_doctest,
     repair_invalid_verify_command_selection,
+    required_verify_commands,
     resolve_verify_command_selection,
 )
 from alysis_code.workspace_context import resolve_workspace_context
@@ -47,7 +48,7 @@ def _inferred_selection(commands: tuple[str, ...]) -> ResolvedVerifyCommands:
     return ResolvedVerifyCommands(
         commands=commands,
         source="repo_scan.likely_test_commands",
-        reason="repo scan discovered authoritative repo-native verification commands",
+        reason="repo scan suggested verification commands from the workspace layout",
         contract_type="repo_native",
     )
 
@@ -224,12 +225,18 @@ def test_a_refused_command_still_fails_fast(tmp_path: Path, command: str, reason
         repair_invalid_verify_command_selection(selection, root=tmp_path)
 
 
-def test_a_refused_command_fails_fast_even_when_inferred(tmp_path: Path) -> None:
-    with pytest.raises(VerifyError, match="vacuous_verifier"):
-        repair_invalid_verify_command_selection(
-            _inferred_selection(("true",)),
-            root=tmp_path,
-        )
+def test_a_refused_inferred_command_is_dropped_without_certifying_it(tmp_path: Path) -> None:
+    (tmp_path / "test_mathlet.py").write_text("def test_ok():\n    pass\n", "utf-8")
+
+    repair = repair_invalid_verify_command_selection(
+        _inferred_selection(("true",)),
+        root=tmp_path,
+    )
+
+    assert repair.dropped_commands == ("true",)
+    assert repair.selection.commands == ("pytest -q",)
+    assert required_verify_commands(repair.selection) == ()
+    assert "vacuous_verifier" in repair.warning
 
 
 def test_valid_selection_is_returned_untouched(tmp_path: Path) -> None:
@@ -405,7 +412,8 @@ def test_normal_pytest_repo_selection_is_unchanged(tmp_path: Path) -> None:
 
     assert selection.commands == ("pytest -q",)
     assert selection.source == "repo_scan.likely_test_commands"
-    assert selection.contract_type == "repo_native"
+    assert selection.contract_type == "selected"
+    assert required_verify_commands(selection) == ()
     assert selection.best_effort is False
 
 

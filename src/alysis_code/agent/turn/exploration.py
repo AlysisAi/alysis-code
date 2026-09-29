@@ -7,6 +7,7 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
+from ...llm.tool_call_markup import contains_tool_call_markup
 from ...text_normalization import normalize_for_matching
 from ...tools.registry import get_builtin_tool_metadata
 from ...verification_command_analysis import (
@@ -23,7 +24,6 @@ from ..verification import _runtime_message
 MAX_RECENT_EXPLORATION_PATHS = 12
 _EXPLORATION_FALLBACK_TOOL_NAMES = {
     "fs_read",
-    "fs_read_lines",
     "fs_list",
     "symbol_search",
     "repo_map",
@@ -185,12 +185,7 @@ def _append_recent_exploration_path(
 
 
 def _looks_like_unexecuted_tool_call_markup(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    if "dsml" in normalized and ("tool_calls" in normalized or "invoke" in normalized):
-        return True
-    return any(marker in normalized for marker in _UNEXECUTED_TOOL_CALL_MARKUP_MARKERS)
+    return contains_tool_call_markup(str(text or ""))
 
 
 def _extract_successful_exploration_paths(
@@ -284,6 +279,73 @@ def _is_successful_subagent_run(
     if status == "failed":
         return False
     return bool(str(result.get("subagent") or arguments.get("name") or "").strip())
+
+
+def _subagent_orchestration_observations(
+    *,
+    tool_name: str,
+    status: str,
+    result: dict[str, Any] | None,
+) -> dict[str, tuple[str, int]]:
+    """Return typed background-run state observed by a successful tool call.
+
+    Repository exploration and background-child coordination are different
+    kinds of progress. This extracts the coordinator's structured lifecycle
+    fields so the turn loop can detect a real state transition without trying
+    to infer intent from prompt or report text.
+    """
+
+    if status == "failed" or not isinstance(result, dict) or result.get("error"):
+        return {}
+
+    normalized = _normal_tool_name(tool_name)
+    observations: dict[str, tuple[str, int]] = {}
+    if normalized == "subagent_spawn":
+        if result.get("coalesced") is True:
+            return observations
+        run_id = str(result.get("run_id") or "").strip()
+        if run_id:
+            observations[run_id] = (
+                str(result.get("state") or "spawned").strip().lower(),
+                0,
+            )
+        return observations
+
+    if normalized == "subagent_status":
+        children = result.get("children")
+        if not isinstance(children, list):
+            return observations
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            run_id = str(child.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            raw_steps = child.get("steps_completed")
+            steps = raw_steps if isinstance(raw_steps, int) and raw_steps >= 0 else 0
+            observations[run_id] = (
+                str(child.get("state") or "unknown").strip().lower(),
+                steps,
+            )
+        return observations
+
+    if normalized == "subagent_wait":
+        results = result.get("results")
+        if not isinstance(results, dict):
+            return observations
+        for raw_run_id, child_result in results.items():
+            if not isinstance(child_result, dict):
+                continue
+            run_id = str(raw_run_id or child_result.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            raw_steps = child_result.get("steps_completed")
+            steps = raw_steps if isinstance(raw_steps, int) and raw_steps >= 0 else 0
+            observations[run_id] = (
+                str(child_result.get("status") or "joined").strip().lower(),
+                steps,
+            )
+    return observations
 
 
 def _build_post_explore_bootstrap_nudge(
@@ -562,6 +624,17 @@ def _is_exploration_only_tool(
     focused: bool = False,
 ) -> bool:
     normalized = _normal_tool_name(tool_name)
+    if (
+        normalized == "subagent_wait"
+        and isinstance(result, dict)
+        and result.get("wait_pending") is True
+        and result.get("results") == {}
+        and not result.get("error")
+    ):
+        # A scheduler wait that returns no report is coordination, not another
+        # repository read. It also earns no action or lifecycle progress; those
+        # classifiers still require observed effects or a state transition.
+        return False
     if normalized in (_SUBAGENT_READ_CONTROL_TOOL_NAMES | _SUBAGENT_EFFECT_CLASSIFIED_TOOL_NAMES):
         return not _is_action_progress_tool(
             normalized,

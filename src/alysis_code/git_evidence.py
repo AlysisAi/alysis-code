@@ -4,11 +4,13 @@ import hashlib
 import os
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from .file_classification import classify_path, is_generated_or_vendor_path
+from .git_ops import GitOpsError
 from .git_safe import build_git_cmd, build_git_process_env
 from .runtime_artifacts import is_runtime_artifact_path
 
@@ -262,6 +264,7 @@ class CandidateGitState:
     raw_changed_file_count: int = 0
     evidence_filter_policy_version: str = "candidate-working-tree-delta-v1"
     working_tree_delta: CandidateWorkingTreeDelta | None = None
+    retained_ignored_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         material = _sorted_unique(self.material_changed_paths or self.changed_files)
@@ -335,6 +338,7 @@ class CandidateGitState:
             "untracked_generated_paths": list(self.untracked_generated_paths),
             "unknown_binary_or_large_paths": list(self.unknown_binary_or_large_paths),
             "material_patch_complete": self.material_patch_complete,
+            "retained_ignored_paths": list(self.retained_ignored_paths),
             "patch_text_sha256": self.patch_text_sha256,
             "material_changed_file_count": self.material_changed_file_count,
             "raw_changed_file_count": self.raw_changed_file_count,
@@ -370,6 +374,7 @@ class CandidateGitState:
             ),
             "patch_capture_status": self.patch_capture_status,
             "material_patch_complete": self.material_patch_complete,
+            "retained_ignored_paths": list(self.retained_ignored_paths),
             "state_descriptors": list(self.state_descriptors),
             "reason_codes": list(self.reason_codes),
             "patch_text_sha256": self.patch_text_sha256,
@@ -424,7 +429,200 @@ class CandidateGitState:
                 payload.get("evidence_filter_policy_version") or "candidate-working-tree-delta-v1"
             ),
             working_tree_delta=delta,
+            retained_ignored_paths=_tuple_strs(payload.get("retained_ignored_paths")),
         )
+
+
+class WorkspaceSnapshotError(GitOpsError):
+    def __init__(self, reason: str, *, paths: tuple[str, ...] = (), detail: str = "") -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+        self.paths = paths
+
+
+def _snapshot_git(
+    root: Path,
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    try:
+        result = subprocess.run(
+            build_git_cmd(root, args, env=env, disable_filters=True),
+            env=build_git_process_env(env),
+            capture_output=True,
+            check=False,
+        )
+        output = result.stdout.decode("utf-8")
+    except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
+        raise WorkspaceSnapshotError("workspace_snapshot_unreadable") from exc
+    if result.returncode:
+        raise WorkspaceSnapshotError(
+            "workspace_snapshot_git_failed",
+            detail=(
+                "Git snapshot failed (external Git filters are disabled): "
+                + result.stderr.decode("utf-8", errors="replace").strip()
+            ),
+        )
+    return output
+
+
+def ignored_workspace_paths(root: Path) -> tuple[str, ...]:
+    return tuple(
+        path.rstrip("/")
+        for path in _snapshot_git(
+            root, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]
+        ).split("\0")
+        if path
+    )
+
+
+def _check_snapshot_files(root: Path, *, excluded_paths: tuple[str, ...]) -> None:
+    """Do not let Git's silent omission of special files prove an empty delta."""
+    ignored = ignored_workspace_paths(root)
+    excluded = {path.rstrip("/") for path in (*ignored, *excluded_paths) if path}
+    # Git's own administrative namespace is not candidate output.
+    excluded.add(".git")
+    unsupported: list[str] = []
+    pending = [root]
+    try:
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    relative = path.relative_to(root).as_posix()
+                    if relative in excluded:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                    elif not (entry.is_file(follow_symlinks=False) or entry.is_symlink()):
+                        unsupported.append(relative)
+    except OSError as exc:
+        raise WorkspaceSnapshotError("workspace_snapshot_unreadable") from exc
+    if unsupported:
+        raise WorkspaceSnapshotError("unsupported_workspace_file", paths=tuple(sorted(unsupported)))
+
+
+def _working_tree_snapshot(
+    root: Path, *, base_ref: str, excluded_paths: tuple[str, ...] = ()
+) -> str:
+    _check_snapshot_files(root, excluded_paths=excluded_paths)
+    # A separate index preserves both staged and unstaged parent work. Git handles
+    # binary data, modes, names and ignored paths; no filename classifier is used.
+    with tempfile.TemporaryDirectory(prefix="alysis-git-snapshot-") as scratch:
+        env = build_git_process_env()
+        env["GIT_INDEX_FILE"] = os.fspath(Path(scratch) / "index")
+        _snapshot_git(root, ["read-tree", base_ref], env=env)
+        pathspecs = [".", *(f":(top,exclude,literal){path}" for path in excluded_paths)]
+        _snapshot_git(root, ["add", "--all", "--", *pathspecs], env=env)
+        tree = _snapshot_git(root, ["write-tree"], env=env).strip()
+        gitlinks = tuple(
+            entry.split("\t", 1)[1]
+            for entry in _snapshot_git(root, ["ls-tree", "-r", "-z", tree]).split("\0")
+            if entry.startswith("160000 ") and "\t" in entry
+        )
+        if gitlinks:
+            # A gitlink cannot preserve nested working files in a detached
+            # worktree. Refuse instead of advertising an incomplete snapshot.
+            raise WorkspaceSnapshotError("unsupported_workspace_submodule", paths=gitlinks)
+        return tree
+
+
+def snapshot_workspace_baseline(
+    *, root: Path, parent_head: str, excluded_paths: tuple[str, ...] = ()
+) -> str:
+    """Return a private commit for a stable parent working state, without moving refs."""
+    tree = _working_tree_snapshot(root, base_ref=parent_head, excluded_paths=excluded_paths)
+    if tree != _working_tree_snapshot(root, base_ref=parent_head, excluded_paths=excluded_paths):
+        raise WorkspaceSnapshotError("workspace_changed_during_snapshot")
+    if _snapshot_git(root, ["rev-parse", "HEAD"]).strip() != parent_head:
+        raise WorkspaceSnapshotError("workspace_changed_during_snapshot")
+    if tree == _snapshot_git(root, ["rev-parse", f"{parent_head}^{{tree}}"]).strip():
+        return parent_head
+    env = build_git_process_env()
+    # Stable metadata makes equal working states against the same HEAD share a
+    # baseline identity. commit-tree creates an object, not a parent commit/ref.
+    for role in ("AUTHOR", "COMMITTER"):
+        env[f"GIT_{role}_NAME"] = "Alysis workspace snapshot"
+        env[f"GIT_{role}_EMAIL"] = "snapshot@alysis.invalid"
+        env[f"GIT_{role}_DATE"] = "2000-01-01T00:00:00+0000"
+    return _snapshot_git(
+        root,
+        [
+            "commit-tree",
+            "--no-gpg-sign",
+            tree,
+            "-p",
+            parent_head,
+            "-m",
+            "Isolated workspace baseline",
+        ],
+        env=env,
+    ).strip()
+
+
+def capture_isolated_workspace_git_state(
+    *, worktree_path: Path, base_ref: str
+) -> CandidateGitState:
+    """Capture the net child delta, including new binary files, from its baseline."""
+    head_ref: str | None = None
+    paths: tuple[str, ...] = ()
+    try:
+        head_ref = _snapshot_git(worktree_path, ["rev-parse", "HEAD"]).strip()
+        tree = _working_tree_snapshot(worktree_path, base_ref=head_ref)
+        if tree != _working_tree_snapshot(worktree_path, base_ref=head_ref):
+            raise WorkspaceSnapshotError("workspace_changed_during_snapshot")
+        paths = tuple(
+            path
+            for path in _snapshot_git(
+                worktree_path, ["diff", "--no-renames", "--name-only", "-z", base_ref, tree]
+            ).split("\0")
+            if path
+        )
+        patch = _snapshot_git(
+            worktree_path,
+            [
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--no-color",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                base_ref,
+                tree,
+            ],
+        )
+        # Ignored parent setup is absent from the initial child worktree. Any
+        # ignored child output could be the requested deliverable; preserve it
+        # without guessing intent from filenames or embedding it in a patch.
+        ignored_paths = ignored_workspace_paths(worktree_path)
+    except WorkspaceSnapshotError as exc:
+        return CandidateGitState(
+            base_ref=base_ref,
+            head_ref=head_ref,
+            patch_capture_status="failed",
+            material_patch_complete=False,
+            raw_changed_paths=exc.paths or paths,
+            omitted_material_paths=exc.paths or paths,
+            reason_codes=(exc.reason,),
+        )
+    return CandidateGitState(
+        base_ref=base_ref,
+        head_ref=head_ref,
+        base_ref_available=True,
+        git_commit_created=head_ref != base_ref,
+        patch_text=patch,
+        material_changed_paths=paths,
+        raw_changed_paths=tuple(sorted(set(paths) | set(ignored_paths))),
+        retained_ignored_paths=ignored_paths,
+        patch_capture_status="complete" if patch or not paths else "failed",
+        material_patch_complete=bool(patch) or not paths,
+        evidence_filter_policy_version="isolated-workspace-git-snapshot-v1",
+    )
 
 
 def capture_candidate_git_state(

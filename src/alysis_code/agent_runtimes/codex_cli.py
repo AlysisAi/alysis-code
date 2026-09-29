@@ -245,6 +245,10 @@ class CodexCliRuntimeAdapter:
         if not settings.provider_managed_auth:
             raise ValueError("The Codex account runtime requires provider-managed authentication.")
         sandbox = _codex_sandbox(request.mode)
+        # Reject malformed resume ids before probing an optional executable.
+        # An unavailable CLI must not turn an invalid request into a benign
+        # missing-executable result.
+        _validated_session_id(request.session_id)
         cwd = Path(request.cwd).expanduser().resolve()
         if not cwd.is_dir():
             return RuntimeTurnResult(
@@ -253,9 +257,6 @@ class CodexCliRuntimeAdapter:
                 exit_code=_INVALID_REQUEST_EXIT_CODE,
                 error=f"Delegated runtime cwd is not a directory: {cwd}",
             )
-        # Validate resume identifiers before probing the host executable. Invalid
-        # option-shaped input is a request error even on hosts without Codex.
-        _validated_session_id(request.session_id)
         executable = _resolve_executable(settings.executable)
         if executable is None:
             return RuntimeTurnResult(

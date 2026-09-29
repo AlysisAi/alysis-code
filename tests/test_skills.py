@@ -10,7 +10,6 @@ from rich.console import Console
 from alysis_code.agent_loop import build_tools, create_session
 from alysis_code.config import AppConfig
 from alysis_code.llm.openai_compat import LLMResponse, ToolCall
-from alysis_code.request_estimation import estimate_message_tokens
 from alysis_code.session_store import SessionStore
 from alysis_code.skills import (
     SkillBundle,
@@ -512,7 +511,9 @@ def test_conventions_loader_stays_separate_from_skills(tmp_path: Path) -> None:
     assert all(doc.name.casefold() not in discovered.skills for doc in conventions)
 
 
-def test_conventions_loader_skips_symlinks_outside_workspace(tmp_path: Path) -> None:
+def test_conventions_loader_skips_symlinks_outside_workspace(
+    tmp_path: Path, require_symlinks
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     outside = tmp_path / "outside-agents.md"
@@ -526,7 +527,9 @@ def test_conventions_loader_skips_symlinks_outside_workspace(tmp_path: Path) -> 
     assert all("Host-only instructions." not in doc.content for doc in conventions)
 
 
-def test_conventions_loader_allows_symlinks_within_workspace(tmp_path: Path) -> None:
+def test_conventions_loader_allows_symlinks_within_workspace(
+    tmp_path: Path, require_symlinks
+) -> None:
     repo = tmp_path / "repo"
     rules_dir = repo / "docs"
     rules_dir.mkdir(parents=True)
@@ -696,8 +699,8 @@ def test_skill_advertise_block_distinguishes_auto_activation_from_manual_access(
     assert "honor exclusions" in automatic
     assert "narrowest fit" in automatic
     assert "broad skills are fallbacks" in automatic
-    assert "call skill_read(name) before any other task action" in automatic
-    assert "otherwise continue without a skill" in automatic
+    assert "Read a chosen workflow with skill_read(name)" in automatic
+    assert "Otherwise continue directly" in automatic
     assert "skill_read only loads instructions; it never executes them" in automatic
     assert "Use skill_read(name, path)" in automatic
     assert "optional attachable context" not in automatic
@@ -987,7 +990,7 @@ def test_create_session_adds_skill_advertise_and_separate_repo_conventions(tmp_p
     assert "Compare all descriptions" in skill_blocks[0]
     assert "requested outcome and workflow" in skill_blocks[0]
     assert "broad skills are fallbacks" in skill_blocks[0]
-    assert "call skill_read(name) before any other task action" in skill_blocks[0]
+    assert "Read a chosen workflow with skill_read(name)" in skill_blocks[0]
     assert "optional attachable context" not in skill_blocks[0]
     assert "Deep Python instructions" not in skill_blocks[0]
     assert "AGENTS.md" in convention_blocks[0]
@@ -1118,7 +1121,7 @@ def test_run_turn_explicit_skill_context_is_request_only(tmp_path: Path) -> None
         for message in request_messages
     )
     assert not any(
-        "Before the first task tool" in str(message.get("content") or "")
+        "Compare skills to the requested workflow" in str(message.get("content") or "")
         for message in request_messages
     )
 
@@ -1162,7 +1165,7 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_auto_invoke_di
         for message in client.calls[0]["messages"]
     )
     assert not any(
-        "Before the first task tool" in str(message.get("content") or "")
+        "Compare skills to the requested workflow" in str(message.get("content") or "")
         for message in client.calls[0]["messages"]
     )
 
@@ -1207,34 +1210,25 @@ def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
     skill_context_index = next(
         index
         for index, message in enumerate(first_request)
-        if "<skill_context>" in str(message.get("content") or "")
+        if str(message.get("content") or "").lstrip().startswith("<skill_context>")
     )
     task_index = next(
         index
         for index, message in enumerate(first_request)
         if str(message.get("content") or "") == "Debug the pytest failure in parser.py."
     )
-    reminder_indexes = [
-        index
-        for index, message in enumerate(first_request)
-        if "Before the first task tool" in str(message.get("content") or "")
-    ]
-
-    assert skill_context_index < task_index < reminder_indexes[0]
-    assert len(reminder_indexes) == 1
-    assert first_request[reminder_indexes[0]]["role"] == "system"
-    assert "First call skill_read(name)" in str(
-        first_request[reminder_indexes[0]].get("content") or ""
-    )
-    reminder = str(first_request[reminder_indexes[0]].get("content") or "")
-    assert "compare all skills with the requested outcome and workflow" in reminder
-    assert "not shared steps" in reminder
-    assert "Honor exclusions" in reminder
-    assert "narrowest fit without its broad fallback" in reminder
-    assert estimate_message_tokens([first_request[reminder_indexes[0]]]) <= 60
+    assert skill_context_index < task_index
+    catalog = str(first_request[skill_context_index].get("content") or "")
+    assert "Compare all descriptions with the requested outcome and workflow" in catalog
+    assert "Honor explicit user skill requests" in catalog
+    assert "Read a chosen workflow with skill_read(name)" in catalog
+    assert "unless its instructions are already in context" in catalog
+    assert "Otherwise continue directly" in catalog
+    assert first_request[skill_context_index] == second_request[skill_context_index]
+    # Skill selection lives in the stable catalog, with no extra turn reminder.
     assert not any(
-        "Before the first task tool" in str(message.get("content") or "")
-        for message in second_request
+        "Compare skills to the requested workflow" in str(message.get("content") or "")
+        for message in first_request
     )
     assert not any(
         "<matched_skill_context>" in str(message.get("content") or "") for message in first_request
@@ -1249,7 +1243,9 @@ def test_run_turn_uses_default_auto_invoke_without_host_matched_context(
     assert "requested actions" in skill_read_description
     assert "concept mentions" in skill_read_description
     assert "most specific" in skill_read_description
-    assert "before any other task tool" in skill_read_description
+    assert "before relying on" in skill_read_description
+    assert "already in context" in skill_read_description
+    assert "before any other task tool" not in skill_read_description
 
 
 def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disabled(
@@ -1291,7 +1287,7 @@ def test_run_turn_does_not_auto_attach_matched_skill_context_when_skills_disable
         for message in client.calls[0]["messages"]
     )
     assert not any(
-        "Before the first task tool" in str(message.get("content") or "")
+        "Compare skills to the requested workflow" in str(message.get("content") or "")
         for message in client.calls[0]["messages"]
     )
 
@@ -1332,7 +1328,7 @@ def test_run_turn_omits_auto_skill_reminder_when_provider_cannot_call_tools(
     assert exit_code == 0
     assert client.calls[0]["tools"] is None
     assert not any(
-        "Before the first task tool" in str(message.get("content") or "")
+        "Compare skills to the requested workflow" in str(message.get("content") or "")
         for message in client.calls[0]["messages"]
     )
 

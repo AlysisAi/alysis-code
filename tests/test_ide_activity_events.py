@@ -165,3 +165,70 @@ def test_protocol_surface_semantic_tool_events_are_opt_in_and_legacy_names_are_s
     assert completed["duration_ms"] == 9
     assert completed["metadata"] == {"output_bytes": 42, "worker_id": None}
     assert "rs.read" not in json.dumps(emitted)
+
+
+def test_protocol_surface_emits_tool_activity_on_the_canonical_emit_path() -> None:
+    # The agent core drives this surface through emit_tool_call_started/completed only
+    # (canonical_message_tool_events) and never calls on_tool_start/on_tool_end. The semantic
+    # activity therefore has to come from the canonical path, or the IDE advertises
+    # activity_update while verify_run / shell_run reach it as legacy events alone.
+    emitted: list[dict] = []
+    surface = ProtocolEventSurface(
+        context=EventContext(session_id="session-1"),
+        emit=emitted.append,
+        semantic_activity_events=True,
+    )
+
+    surface.emit_tool_call_started(
+        "call-verify",
+        "verify_run",
+        json.dumps({"commands": ["python -m pytest -q"]}, sort_keys=True),
+    )
+    surface.emit_tool_call_completed("call-verify", False, json.dumps({"exit_code": 1}))
+
+    assert [event["type"] for event in emitted] == [
+        "tool_call_started",
+        "activity_update",
+        "tool_call_completed",
+        "activity_update",
+    ]
+    started = emitted[1]["payload"]
+    completed = emitted[3]["payload"]
+    assert started["activity_id"] == "call-verify"
+    assert started["status"] == "running"
+    assert started["kind"] == completed["kind"]
+    assert completed["activity_id"] == "call-verify"
+    assert completed["status"] == "failed"
+    assert completed["metadata"] == {"worker_id": None}
+
+
+def test_protocol_surface_canonical_completion_without_a_start_adds_no_activity() -> None:
+    emitted: list[dict] = []
+    surface = ProtocolEventSurface(
+        context=EventContext(session_id="session-1"),
+        emit=emitted.append,
+        semantic_activity_events=True,
+    )
+
+    surface.emit_tool_call_completed("call-orphan", True, "{}")
+
+    assert [event["type"] for event in emitted] == ["tool_call_completed"]
+
+
+def test_protocol_surface_legacy_delivery_does_not_double_emit_activity() -> None:
+    emitted: list[dict] = []
+    surface = ProtocolEventSurface(
+        context=EventContext(session_id="session-1"),
+        emit=emitted.append,
+        semantic_activity_events=True,
+    )
+
+    surface.on_tool_start(
+        ToolStartEvent(tool_call_id="call-2", name="shell_run", args={"cmd": "pytest -q"}, step=2)
+    )
+    surface.on_tool_end(
+        ToolEndEvent(tool_call_id="call-2", name="shell_run", status="done", elapsed_ms=5, meta={})
+    )
+
+    assert [event["type"] for event in emitted].count("activity_update") == 2
+    assert emitted[1]["payload"]["metadata"] == {"step": 2, "worker_id": None}

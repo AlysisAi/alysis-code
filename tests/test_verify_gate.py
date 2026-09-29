@@ -826,14 +826,16 @@ def test_verify_gate_marks_go_no_tests_to_run_as_non_executing(
     )
     payload = verify_run_result_to_payload(root=tmp_path, result=result)
 
-    assert result.all_passed is True
+    assert result.all_passed is False
+    assert result.status == "not_run"
     assert result.failed_commands == []
     item = result.command_results[0]
     assert item.status == VerificationCommandStatus.SKIPPED
     assert item.ok is True
     assert item.real_execution is False
     assert item.non_execution_reason == "go_test_no_tests_to_run"
-    assert payload["all_passed"] is True
+    assert payload["all_passed"] is False
+    assert payload["status"] == "not_run"
     assert payload["failed_commands"] == []
     assert payload["command_results"][0]["status"] == "skipped"
     assert payload["command_results"][0]["ok"] is True
@@ -867,7 +869,8 @@ def test_verify_gate_treats_pytest_exit_5_no_tests_as_skipped_pass(
     )
     payload = verify_run_result_to_payload(root=tmp_path, result=result)
 
-    assert result.all_passed is True
+    assert result.all_passed is False
+    assert result.status == "not_run"
     assert result.failed_commands == []
     assert result.summary == "verification skipped: nothing to verify (1/1)"
     item = result.command_results[0]
@@ -875,7 +878,8 @@ def test_verify_gate_treats_pytest_exit_5_no_tests_as_skipped_pass(
     assert item.ok is True
     assert item.real_execution is False
     assert item.non_execution_reason == "pytest_no_tests_collected"
-    assert payload["all_passed"] is True
+    assert payload["all_passed"] is False
+    assert payload["status"] == "not_run"
     assert payload["failed_commands"] == []
     assert payload["summary"] == "verification skipped: nothing to verify (1/1)"
     assert payload["command_results"][0]["status"] == "skipped"
@@ -937,7 +941,8 @@ def test_verify_gate_treats_nothing_to_do_as_skipped_pass(
     )
     payload = verify_run_result_to_payload(root=tmp_path, result=result)
 
-    assert result.all_passed is True
+    assert result.all_passed is False
+    assert result.status == "not_run"
     assert result.failed_commands == []
     assert result.summary == "verification skipped: nothing to verify (1/1)"
     item = result.command_results[0]
@@ -1000,14 +1005,16 @@ def test_verify_gate_marks_go_no_test_files_as_non_executing(
     )
     payload = verify_run_result_to_payload(root=tmp_path, result=result)
 
-    assert result.all_passed is True
+    assert result.all_passed is False
+    assert result.status == "not_run"
     assert result.failed_commands == []
     item = result.command_results[0]
     assert item.status == VerificationCommandStatus.SKIPPED
     assert item.ok is True
     assert item.real_execution is False
     assert item.non_execution_reason == "go_test_no_test_files"
-    assert payload["all_passed"] is True
+    assert payload["all_passed"] is False
+    assert payload["status"] == "not_run"
     assert payload["failed_commands"] == []
     assert payload["command_results"][0]["status"] == "skipped"
     assert payload["command_results"][0]["ok"] is True
@@ -2556,7 +2563,9 @@ def test_task_aware_verify_resolution_suppresses_generic_fallback_for_pathless_p
             commands=("npm run build",),
             source="repo_scan.likely_test_commands",
         )
-        assert resolved.contract_type == "repo_native"
+        assert resolved.contract_type == "selected"
+        assert not is_authoritative_verify_command_selection(resolved)
+        assert verify_gate_mod.required_verify_commands(resolved) == ()
         assert "pytest" not in " ".join(resolved.commands)
         return
 
@@ -2638,7 +2647,9 @@ def test_task_aware_verify_resolution_keeps_repo_grounded_invalidation_for_neutr
             commands=("npm run build",),
             source="repo_scan.likely_test_commands",
         )
-        assert resolved.contract_type == "repo_native"
+        assert resolved.contract_type == "selected"
+        assert not is_authoritative_verify_command_selection(resolved)
+        assert verify_gate_mod.required_verify_commands(resolved) == ()
         assert "pytest" not in " ".join(resolved.commands)
         return
 
@@ -2763,7 +2774,7 @@ def test_task_aware_verify_resolution_keeps_repo_grounded_invalidation_for_mixed
         ),
     ],
 )
-def test_task_aware_verify_resolution_keeps_authoritative_commands_for_mixed_workspaces(
+def test_task_aware_verify_resolution_keeps_recommendations_for_mixed_workspaces(
     tmp_path: Path,
     files: dict[str, str],
     expected_commands: tuple[str, ...],
@@ -2784,8 +2795,12 @@ def test_task_aware_verify_resolution_keeps_authoritative_commands_for_mixed_wor
         commands=expected_commands,
         source="repo_scan.likely_test_commands",
     )
-    assert resolved.contract_type == "repo_native"
-    assert resolved.reason == "repo scan discovered authoritative repo-native verification commands"
+    assert resolved.contract_type == "selected"
+    assert not is_authoritative_verify_command_selection(resolved)
+    assert verify_gate_mod.required_verify_commands(resolved) == ()
+    assert (
+        resolved.reason == "repo scan suggested verification commands from the existing workspace"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2838,7 +2853,9 @@ def test_task_aware_verify_resolution_keeps_task_specific_no_authoritative_behav
             commands=("npm run build",),
             source="repo_scan.likely_test_commands",
         )
-        assert resolved.contract_type == "repo_native"
+        assert resolved.contract_type == "selected"
+        assert not is_authoritative_verify_command_selection(resolved)
+        assert verify_gate_mod.required_verify_commands(resolved) == ()
         assert "pytest" not in " ".join(resolved.commands)
         return
 
@@ -2889,7 +2906,9 @@ def test_task_aware_verify_resolution_keeps_js_bootstrap_paths_non_authoritative
         commands=("npm run build",),
         source="repo_scan.likely_test_commands",
     )
-    assert resolved.contract_type == "repo_native"
+    assert resolved.contract_type == "selected"
+    assert not is_authoritative_verify_command_selection(resolved)
+    assert verify_gate_mod.required_verify_commands(resolved) == ()
     assert "pytest" not in " ".join(resolved.commands)
 
 
@@ -2948,7 +2967,7 @@ def test_task_aware_verify_resolution_suppresses_generic_pytest_for_static_html_
         ),
     ],
 )
-def test_task_aware_verify_resolution_keeps_repo_native_commands_for_pathless_prompts(
+def test_task_aware_verify_resolution_keeps_recommendations_for_pathless_prompts(
     tmp_path: Path,
     files: dict[str, str],
     instruction: str,
@@ -2970,8 +2989,12 @@ def test_task_aware_verify_resolution_keeps_repo_native_commands_for_pathless_pr
         commands=expected_commands,
         source="repo_scan.likely_test_commands",
     )
-    assert resolved.contract_type == "repo_native"
-    assert resolved.reason == "repo scan discovered authoritative repo-native verification commands"
+    assert resolved.contract_type == "selected"
+    assert not is_authoritative_verify_command_selection(resolved)
+    assert verify_gate_mod.required_verify_commands(resolved) == ()
+    assert (
+        resolved.reason == "repo scan suggested verification commands from the existing workspace"
+    )
 
 
 def test_task_aware_verify_resolution_uses_node_build_and_lint_scripts(
@@ -3001,7 +3024,9 @@ def test_task_aware_verify_resolution_uses_node_build_and_lint_scripts(
         commands=("npm run build", "npm run lint"),
         source="repo_scan.likely_test_commands",
     )
-    assert resolved.contract_type == "repo_native"
+    assert resolved.contract_type == "selected"
+    assert not is_authoritative_verify_command_selection(resolved)
+    assert verify_gate_mod.required_verify_commands(resolved) == ()
     assert "pytest" not in " ".join(resolved.commands)
 
 
@@ -3164,7 +3189,9 @@ def test_non_python_repo_with_make_check_selects_project_native_command(
         commands=("make check",),
         source="repo_scan.likely_test_commands",
     )
-    assert resolved.contract_type == "repo_native"
+    assert resolved.contract_type == "selected"
+    assert not is_authoritative_verify_command_selection(resolved)
+    assert verify_gate_mod.required_verify_commands(resolved) == ()
 
 
 def test_verify_command_refinement_prefers_node_test_targets_over_pytest_text_mentions() -> None:
@@ -3418,6 +3445,9 @@ def test_verify_gate_default_strict_without_backend_records_failure(
         raise AssertionError("host subprocess should not run when verify sandbox is unavailable")
 
     monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "docker")
+    # Windows platform discovery may invoke `ver`; this test observes execution,
+    # not OS discovery, so make that independent of the machine running it.
+    monkeypatch.setattr(sandbox_runner_mod.platform, "system", lambda: "Windows")
     monkeypatch.setattr(sandbox_runner_mod.shutil, "which", lambda _name: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -3447,6 +3477,7 @@ def test_verify_gate_warn_without_backend_fails_closed_without_host_subprocess(
         )
 
     monkeypatch.setenv("ALYSIS_SHELL_SANDBOX_BACKEND", "docker")
+    monkeypatch.setattr(sandbox_runner_mod.platform, "system", lambda: "Windows")
     monkeypatch.setattr(sandbox_runner_mod.shutil, "which", lambda _name: None)
     monkeypatch.setattr(subprocess, "run", fake_run)
 

@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from alysis_code.cancellation import (
+    CooperativeCancellationError,
+    EventCancellationToken,
+    InteractiveCancellationToken,
+)
 from alysis_code.cli_impl.commands.chat_resume_helpers import _load_chat_resume_messages
 from alysis_code.compaction.conversation_compactor import ConversationCompactor
 from alysis_code.llm.anthropic_messages import AnthropicMessagesClient
 from alysis_code.llm.gemini_generate_content import GeminiGenerateContentClient
+from alysis_code.llm.gemini_interactions import GeminiInteractionsClient
 from alysis_code.llm.metadata import (
     PROVIDER_METADATA_KEY,
     assistant_message_from_response,
     strip_provider_metadata_from_message,
 )
+from alysis_code.llm.openai_compat import OpenAICompatClient
 from alysis_code.llm.openai_responses import OpenAIResponsesClient
+from alysis_code.llm.provider_limits import ProviderRetrySettings
 from alysis_code.llm.types import LLMError, LLMResponse
 from alysis_code.request_estimation import sanitize_messages_for_estimation
 from alysis_code.session_store import SessionStore, read_session_events
@@ -57,6 +66,178 @@ def _web_search_tool() -> dict[str, Any]:
 
 def _assistant_message_from_response(response: LLMResponse) -> dict[str, Any]:
     return assistant_message_from_response(response)
+
+
+class _BlockedNativeProviderTransport(httpx.BaseTransport):
+    def __init__(self, *, block_before_headers: bool) -> None:
+        self.block_before_headers = block_before_headers
+        self.request_started = threading.Event()
+        self.body_started = threading.Event()
+        self.close_called = threading.Event()
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.request_started.set()
+        if self.block_before_headers:
+            assert self.close_called.wait(timeout=2), "live HTTP client was not aborted"
+            raise httpx.ReadError("request closed before response headers", request=request)
+
+        transport = self
+
+        class _BlockedBody(httpx.SyncByteStream):
+            def __iter__(self):
+                transport.body_started.set()
+                assert transport.close_called.wait(timeout=2), "live response was not aborted"
+                raise httpx.ReadError("response body closed", request=request)
+                yield b""  # pragma: no cover - makes this a byte iterator
+
+            def close(self) -> None:
+                transport.close_called.set()
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_BlockedBody(),
+            request=request,
+        )
+
+    def close(self) -> None:
+        self.close_called.set()
+
+
+def _native_cancellation_client(
+    provider: str,
+    transport: httpx.BaseTransport,
+) -> tuple[Any, bool]:
+    common = {
+        "api_key": "test-key",
+        "transport": transport,
+        "provider_retry_settings": ProviderRetrySettings(max_retries=0),
+    }
+    if provider == "openai_responses":
+        return (
+            OpenAIResponsesClient(
+                base_url="https://api.openai.com/v1",
+                model="gpt-5.5",
+                **common,
+            ),
+            True,
+        )
+    if provider == "openai_compat":
+        return (
+            OpenAICompatClient(
+                base_url="https://openai-compatible.example/v1",
+                model="compatible-model",
+                **common,
+            ),
+            True,
+        )
+    if provider == "anthropic_messages":
+        return (
+            AnthropicMessagesClient(
+                base_url="https://api.anthropic.com/v1",
+                model="claude-sonnet-4-6",
+                **common,
+            ),
+            True,
+        )
+    if provider == "gemini_generate_content":
+        return (
+            GeminiGenerateContentClient(
+                base_url="https://generativelanguage.googleapis.com/v1beta",
+                model="gemini-3.1-pro",
+                **common,
+            ),
+            True,
+        )
+    return (
+        GeminiInteractionsClient(
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            model="gemini-3.1-pro",
+            **common,
+        ),
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "openai_responses",
+        "openai_compat",
+        "anthropic_messages",
+        "gemini_generate_content",
+        "gemini_interactions",
+    ],
+)
+@pytest.mark.parametrize("block_before_headers", [True, False])
+def test_native_provider_cancellation_aborts_every_blocking_http_phase(
+    provider: str,
+    block_before_headers: bool,
+) -> None:
+    transport = _BlockedNativeProviderTransport(block_before_headers=block_before_headers)
+    client, stream = _native_cancellation_client(provider, transport)
+    token = InteractiveCancellationToken()
+    outcome: list[BaseException | LLMResponse] = []
+
+    def _chat() -> None:
+        try:
+            outcome.append(
+                client.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=stream,
+                    cancellation_token=token,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - cancellation is the assertion
+            outcome.append(exc)
+
+    worker = threading.Thread(target=_chat, daemon=True)
+    worker.start()
+    wait_event = transport.request_started if block_before_headers else transport.body_started
+    assert wait_event.wait(timeout=1)
+
+    token.cancel()
+    worker.join(timeout=1)
+
+    assert transport.close_called.is_set()
+    assert not worker.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], KeyboardInterrupt)
+    assert "cancelled_by_user" in str(outcome[0])
+    assert token._abort is None  # noqa: SLF001
+
+
+def test_event_backed_cancellation_aborts_request_before_headers() -> None:
+    transport = _BlockedNativeProviderTransport(block_before_headers=True)
+    client, _stream = _native_cancellation_client("anthropic_messages", transport)
+    cancellation_event = threading.Event()
+    token = EventCancellationToken(cancellation_event)
+    outcome: list[BaseException | LLMResponse] = []
+
+    def _chat() -> None:
+        try:
+            outcome.append(
+                client.chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=True,
+                    cancellation_token=token,
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - cancellation is the assertion
+            outcome.append(exc)
+
+    worker = threading.Thread(target=_chat, daemon=True)
+    worker.start()
+    assert transport.request_started.wait(timeout=1)
+
+    cancellation_event.set()
+    worker.join(timeout=1)
+
+    assert transport.close_called.is_set()
+    assert not worker.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], CooperativeCancellationError)
+    assert "cancelled_by_user" in str(outcome[0])
 
 
 @pytest.mark.parametrize(

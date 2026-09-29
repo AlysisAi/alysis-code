@@ -70,7 +70,7 @@ def test_derived_stub_is_never_promoted_to_full_read_cache(tmp_path: Path) -> No
     line_request = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "package-lock.json", "start_line": 1},
     )
     assert line_request is None
@@ -81,7 +81,7 @@ def test_byte_truncated_line_reads_are_not_remembered(tmp_path: Path) -> None:
     _remember(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "wide.txt", "start_line": 1},
         result={
             "path": "wide.txt",
@@ -93,8 +93,8 @@ def test_byte_truncated_line_reads_are_not_remembered(tmp_path: Path) -> None:
             "byte_truncated": True,
         },
     )
-    assert cache.exact_fs_read_lines == {}
-    assert cache.fs_read_lines_by_path == {}
+    assert cache.exact_read_windows == {}
+    assert cache.read_windows_by_path == {}
 
 
 def test_complete_line_reads_are_still_remembered_and_reused(tmp_path: Path) -> None:
@@ -110,14 +110,14 @@ def test_complete_line_reads_are_still_remembered_and_reused(tmp_path: Path) -> 
     _remember(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1},
         result=result,
     )
     reused = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1},
     )
     assert reused is not None
@@ -138,7 +138,7 @@ def test_reuse_key_distinguishes_max_bytes(tmp_path: Path) -> None:
     _remember(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": 2000},
         result=result,
     )
@@ -146,7 +146,7 @@ def test_reuse_key_distinguishes_max_bytes(tmp_path: Path) -> None:
     small_request = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": 10},
     )
     assert small_request is None, "10-byte request must not reuse a 1000+-byte cached result"
@@ -154,7 +154,7 @@ def test_reuse_key_distinguishes_max_bytes(tmp_path: Path) -> None:
     same_request = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": 2000},
     )
     assert same_request is not None
@@ -175,7 +175,7 @@ def test_invalid_max_bytes_is_never_served_from_cache(tmp_path: Path) -> None:
     _remember(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1},
         result=result,
     )
@@ -183,7 +183,7 @@ def test_invalid_max_bytes_is_never_served_from_cache(tmp_path: Path) -> None:
     zero = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": 0},
     )
     assert zero is None
@@ -191,20 +191,21 @@ def test_invalid_max_bytes_is_never_served_from_cache(tmp_path: Path) -> None:
     negative = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": -5},
     )
     assert negative is None
 
     # And an invalid result is never remembered under a defaulted key either.
+    prior_keys = set(cache.exact_read_windows)
     _remember(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "other.txt", "start_line": 1, "max_bytes": 0},
         result=dict(result, path="other.txt"),
     )
-    assert all(key[0] != "other.txt" for key in cache.exact_fs_read_lines)
+    assert set(cache.exact_read_windows) == prior_keys
 
 
 def test_rebuilt_windows_respect_the_byte_ceiling(tmp_path: Path) -> None:
@@ -225,7 +226,7 @@ def test_rebuilt_windows_respect_the_byte_ceiling(tmp_path: Path) -> None:
     capped = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1, "max_bytes": 50},
     )
     assert capped is None, "rebuild larger than max_bytes must fall through to the real tool"
@@ -233,7 +234,7 @@ def test_rebuilt_windows_respect_the_byte_ceiling(tmp_path: Path) -> None:
     uncapped = _reuse(
         cache,
         tmp_path,
-        tool_name="fs_read_lines",
+        tool_name="fs_read",
         arguments={"path": "normal.txt", "start_line": 1},
     )
     assert uncapped is not None

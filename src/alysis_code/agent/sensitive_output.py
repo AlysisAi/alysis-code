@@ -385,6 +385,24 @@ def _redact_tainted_value(value: Any, taints: tuple[str, ...]) -> Any:
     return value
 
 
+def redact_sensitive_exception_taints(error: BaseException, taints: Collection[str]) -> None:
+    """Scrub approved request values echoed by provider errors before logging."""
+    normalized = tuple(sorted((value for value in taints if value), key=len, reverse=True))
+    if not normalized:
+        return
+    pending = [error]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        current.args = _redact_tainted_value(current.args, normalized)
+        for nested in (current.__cause__, current.__context__):
+            if nested is not None:
+                pending.append(nested)
+
+
 def redact_sensitive_response_taints(response: Any, taints: Collection[str]) -> Any:
     """Redact exact approved values from every provider-response channel."""
 
@@ -620,6 +638,7 @@ __all__ = [
     "inject_ephemeral_sensitive_tool_messages",
     "redact_assistant_tool_call_message",
     "redact_consumed_sensitive_tool_messages",
+    "redact_sensitive_exception_taints",
     "redact_sensitive_tool_arguments",
     "redact_sensitive_tool_result",
     "redact_sensitive_response_for_persistence",

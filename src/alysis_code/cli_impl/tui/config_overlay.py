@@ -39,6 +39,7 @@ from prompt_toolkit.layout.containers import (
     Window,
 )
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.processors import (
     BeforeInput,
@@ -71,8 +72,11 @@ class ConfigOverlay:
         on_error: Callable[[str], None] | None = None,
         on_switch_workspace: Callable[[str], None] | None = None,
         focus_chat: Callable[[], None] | None = None,
+        input_multiline: bool = False,
+        label: str = "configuration",
     ) -> None:
         self._flow_factory = flow_factory
+        self._label = label
         self._on_saved = on_saved
         self._on_error = on_error
         self._on_switch = on_switch_workspace
@@ -103,7 +107,9 @@ class ConfigOverlay:
             height=1,
             style=_BG,
         )
-        # Mask the input whenever the active input screen asks for it.
+        # Mask the input whenever the active input screen asks for it (its
+        # ``input_password`` flag) — generic across flows, so both ConfigFlow's
+        # api_key stage and PowerConfigFlow's paste-key stage hide the secret.
         _is_password = Condition(
             lambda: (
                 self._open["on"]
@@ -113,9 +119,9 @@ class ConfigOverlay:
             )
         )
         self._input = TextArea(
-            height=1,
-            multiline=False,
-            wrap_lines=False,
+            height=Dimension(min=1, preferred=4, max=5) if input_multiline else 1,
+            multiline=input_multiline,
+            wrap_lines=input_multiline,
             style="class:tui.input",
             input_processors=[
                 ConditionalProcessor(PasswordProcessor(), filter=_is_password),
@@ -205,8 +211,9 @@ class ConfigOverlay:
             for line in _wrap_line(scr.title, width):
                 rows.append([("class:setup.title", line)])
         if scr.subtitle:
-            for line in _wrap_line(scr.subtitle, width):
-                rows.append([("class:setup.subtitle", line)])
+            for paragraph in scr.subtitle.split("\n"):
+                for line in _wrap_line(paragraph, width):
+                    rows.append([("class:setup.subtitle", line)])
         rows.append([("", "")])
         header_lines = len(rows)
         sel_line = header_lines
@@ -332,7 +339,7 @@ class ConfigOverlay:
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the chat UI
             if self._on_error is not None:
                 try:
-                    self._on_error(f"configuration could not open: {exc}")
+                    self._on_error(f"{self._label} could not open: {exc}")
                 except Exception:
                     pass
             self.flow = None

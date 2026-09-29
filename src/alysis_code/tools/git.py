@@ -285,6 +285,8 @@ def git_diff(
     offset: int = 0,
     diff_id: str | None = None,
 ) -> dict[str, Any]:
+    if type(staged) is not bool:
+        raise GitError("staged must be a boolean")
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         raise GitError("offset must be a non-negative integer")
     if offset and not diff_id:
@@ -318,6 +320,7 @@ def git_diff(
     end = min(offset + 20000, len(diff))
     truncated = end < len(diff)
     return {
+        "view": "staged" if staged else "unstaged",
         "diff_id": current_id,
         "offset": offset,
         "next_offset": end if truncated else None,

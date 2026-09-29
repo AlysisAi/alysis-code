@@ -784,7 +784,15 @@ def _compute_swarm_run_outcome(
     reason_codes: list[str] = []
     exit_code = 0
     status = "clean"
-    verification_status = "passed" if integration_results else "not_run"
+    # Tri-state (see the PR #26 review): "may the batch proceed" and
+    # "did verification observe anything" are separate questions. Gates whose
+    # commands all skipped proceed, but they verified nothing - the run outcome
+    # must say not_run, not passed.
+    verification_status = (
+        "passed"
+        if any(item.policy_outcome != "not_run" for item in integration_results)
+        else "not_run"
+    )
 
     if review_blocked:
         reason_codes.append("review_blocked")
@@ -811,7 +819,11 @@ def _compute_swarm_run_outcome(
         reason_codes.append("tasks_remaining")
 
     if final_integration is not None:
-        if final_integration.passed:
+        if final_integration.policy_outcome == "not_run":
+            # The final gate proceeded without executing anything: honest
+            # outcome is not_run (continuation policy already let it through).
+            verification_status = "not_run"
+        elif final_integration.passed:
             verification_status = "passed"
         elif final_integration.mode == "warn":
             verification_status = "failed_tolerated_by_warn_policy"

@@ -90,13 +90,34 @@ class _FakeTerminalManager:
 class _FakeDurableServiceManager:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = dict(payload)
+        self.status_calls: list[str] = []
 
-    def status(self, service_id: str) -> dict[str, Any]:
+    def status(self, service_id: str, *, timeout_s: float | None = None) -> dict[str, Any]:
+        _ = timeout_s
         assert service_id == self.payload["service_id"]
+        self.status_calls.append(service_id)
         return dict(self.payload)
 
     def list_active(self) -> list[dict[str, Any]]:
         return [dict(self.payload)]
+
+
+def _failed_edit_response() -> LLMResponse:
+    """Record a real mutation attempt without producing file changes."""
+    return LLMResponse(
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="attempt-initial-edit",
+                name="fs_edit",
+                arguments={
+                    "path": "missing-edit-target.py",
+                    "edits": [{"op": "replace_exact", "target": "before", "replacement": "after"}],
+                },
+            )
+        ],
+        raw={},
+    )
 
 
 def _event_payloads(path: Path, event_type: str) -> list[dict[str, Any]]:
@@ -114,7 +135,7 @@ def _controller_details(path: Path) -> list[str]:
     ]
 
 
-def _create_one_shot_session(tmp_path: Path, *, session_id: str):
+def _create_one_shot_session(tmp_path: Path, *, session_id: str, one_shot_execution: bool = True):
     sessions_dir = tmp_path / "sessions"
     session = create_session(
         cfg=AppConfig(model="test-model", routing_mode="code_only"),
@@ -124,7 +145,8 @@ def _create_one_shot_session(tmp_path: Path, *, session_id: str):
         max_steps=8,
         no_log=False,
         api_key_override="override-key",
-        one_shot_execution=True,
+        one_shot_execution=one_shot_execution,
+        enable_chat_turn_step_budget=True,
         verification_enabled=False,
         session_log_dir_override=sessions_dir,
         session_id_override=session_id,
@@ -205,7 +227,16 @@ def test_ready_durable_outcome_finishes_without_redundant_spec_advisory(
         "ownership": "DURABLE_SERVICE",
         "status": "running",
         "alive": True,
-        "readiness": {"type": "tcp", "status": "ready", "port": 8080},
+        "identity_valid": True,
+        "readiness": {
+            "type": "tcp",
+            "status": "ready",
+            "strength": "owned_endpoint",
+            "endpoint_owned": True,
+            "host": "127.0.0.1",
+            "port": 8080,
+            "listener_pids": [123],
+        },
     }
     session.durable_service_manager = _FakeDurableServiceManager(payload)  # type: ignore[assignment]
     session.tools["shell_service_start"] = ToolDef(
@@ -244,6 +275,8 @@ def test_ready_durable_outcome_finishes_without_redundant_spec_advisory(
     assert client.calls == 2
     assert "spec_faithfulness_advisory" not in _controller_details(log_path)
     assert _event_payloads(log_path, "completion_gate_nudge") == []
+    assert session.durable_service_manager.status_calls
+    assert set(session.durable_service_manager.status_calls) == {"svc_ready"}
     final_events = _event_payloads(log_path, "final")
     assert final_events[-1]["content"] == final_text
 
@@ -411,10 +444,17 @@ def test_interactive_file_work_finishes_without_optional_model_review(tmp_path: 
     assert client.calls == 2
     assert _event_payloads(log_path, "completion_gate_nudge") == []
     assert _event_payloads(log_path, "optional_finalization_failure_fallback") == []
-    assert _event_payloads(log_path, "final")[-1]["content"] == accepted_text
+    assert _event_payloads(log_path, "final")[-1]["content"].startswith(
+        accepted_text + "\n\nVerification status: unverified."
+    )
+    assert session.last_turn_outcome["verified_success"] is False
 
 
-def test_assistant_prose_does_not_change_completion_gate_decisions(tmp_path: Path) -> None:
+@pytest.mark.parametrize("one_shot_execution", [False, True])
+@pytest.mark.parametrize("attempted_mutation", [False, True])
+def test_assistant_prose_does_not_change_completion_gate_decisions(
+    tmp_path: Path, one_shot_execution: bool, attempted_mutation: bool
+) -> None:
     texts = {
         "which-file": "Which file?",
         "file-name": "I need the file name before continuing.",
@@ -438,9 +478,12 @@ def test_assistant_prose_does_not_change_completion_gate_decisions(tmp_path: Pat
     for case_id, final_text in texts.items():
         case_root = tmp_path / case_id
         case_root.mkdir()
-        sessions_dir, session = _create_one_shot_session(case_root, session_id=case_id)
+        sessions_dir, session = _create_one_shot_session(
+            case_root, session_id=case_id, one_shot_execution=one_shot_execution
+        )
         client = _RecordingClient(
             [
+                *([_failed_edit_response()] if attempted_mutation else []),
                 LLMResponse(content=final_text, tool_calls=[], raw={}),
                 LLMResponse(content="Finished.", tool_calls=[], raw={}),
                 LLMResponse(content="Finished.", tool_calls=[], raw={}),
@@ -479,13 +522,15 @@ def test_assistant_prose_does_not_change_completion_gate_decisions(tmp_path: Pat
             )
 
         assert exit_code == 0
-        assert client.calls == 2
-        assert _controller_details(log_path).count("completion_gate_checklist") == 1
+        assert client.calls == (3 if attempted_mutation else 1)
+        assert _controller_details(log_path).count("completion_gate_checklist") == (
+            1 if attempted_mutation else 0
+        )
         assert _event_payloads(log_path, "completion_gate_blocker_accepted") == []
         signatures[case_id] = tuple(decision_events)
 
     baseline = signatures["which-file"]
-    assert baseline
+    assert bool(baseline) is attempted_mutation
     assert all(signature == baseline for signature in signatures.values())
 
 

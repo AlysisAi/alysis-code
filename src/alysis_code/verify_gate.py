@@ -49,6 +49,7 @@ from .verification_command_analysis import (
 )
 from .verification_contract import (
     VerificationCommandExecutionMode,
+    VerificationCommandRequirement,
     VerificationCommandSpec,
     VerificationCommandValidationStatus,
     build_verification_command_specs,
@@ -371,12 +372,55 @@ class VerifyRunResult:
     failure_category: FailureCategory | str | None = None
 
     @property
+    def executed_count(self) -> int:
+        """Commands that produced a real pass/fail outcome (skips excluded)."""
+        return len(
+            [
+                item
+                for item in self.command_results
+                if item.status
+                in {VerificationCommandStatus.PASSED, VerificationCommandStatus.FAILED}
+            ]
+        )
+
+    @property
+    def skipped_count(self) -> int:
+        return len(
+            [
+                item
+                for item in self.command_results
+                if item.status == VerificationCommandStatus.SKIPPED
+            ]
+        )
+
+    @property
+    def status(self) -> str:
+        """Tri-state run outcome: ``passed`` / ``failed`` / ``not_run``.
+
+        A skip is not a pass: an empty command list, or a run
+        where every command was benignly skipped, is ``not_run`` — never a
+        green light. Any non-ok command (failed, inconclusive, not-executed,
+        stale) makes the run ``failed``.
+        """
+        if any(not item.ok for item in self.command_results):
+            return "failed"
+        if self.executed_count > 0:
+            return "passed"
+        return "not_run"
+
+    @property
     def all_passed(self) -> bool:
-        return all(item.ok for item in self.command_results)
+        """True only when at least one command really ran and everything is ok.
+
+        Previously ``all([])`` made an empty or all-skipped run vacuously True
+        . Consumers that need to distinguish "failed" from
+        "never ran" should read ``status`` instead of this boolean.
+        """
+        return self.status == "passed"
 
     @property
     def failure_category_value(self) -> str | None:
-        if self.all_passed:
+        if self.status != "failed":
             return None
         return (
             failure_category_value(self.failure_category)
@@ -398,13 +442,26 @@ class VerifyRunResult:
             for item in self.command_results
             if item.status == VerificationCommandStatus.SKIPPED
         ]
-        if self.all_passed:
-            if skipped and len(skipped) == total:
-                return f"verification skipped: nothing to verify ({passed}/{total})"
+        if self.status == "not_run":
+            return f"verification skipped: nothing to verify ({passed}/{total})"
+        if self.status == "passed":
             if skipped:
                 return f"verification passed ({passed}/{total}); skipped: {', '.join(skipped)}"
             return f"verification passed ({passed}/{total})"
         return f"verification failed ({passed}/{total}); failed: {', '.join(self.failed_commands)}"
+
+
+def verify_run_status(result: object) -> str:
+    """Tri-state run status for any VerifyRunResult-like object.
+
+    Falls back to deriving from ``all_passed`` for legacy or test-stub results
+    that predate the ``status`` property, preserving their old semantics
+    (a stub claiming ``all_passed=True`` keeps meaning "passed").
+    """
+    status = str(getattr(result, "status", "") or "")
+    if status in {"passed", "failed", "not_run"}:
+        return status
+    return "passed" if bool(getattr(result, "all_passed", False)) else "failed"
 
 
 @dataclass(frozen=True)
@@ -437,8 +494,10 @@ def _default_verify_contract_type(source: str, *, commands: tuple[str, ...]) -> 
         return "authoritative_override"
     if source == "cli.verify_cmd":
         return "explicit_override"
-    if source in {"config.verify_commands", "repo_scan.likely_test_commands"}:
+    if source == "config.verify_commands":
         return "repo_native"
+    if source == "repo_scan.likely_test_commands":
+        return "selected"
     if source.startswith(
         (
             "task_refinement.node_test",
@@ -463,7 +522,7 @@ def _default_verify_selection_reason(source: str) -> str:
         "cli.verify_cmd": "explicit verification override supplied by the user",
         "config.verify_commands": "repo-specific verify_commands configuration is authoritative",
         "repo_scan.likely_test_commands": (
-            "repo scan discovered authoritative repo-native verification commands"
+            "repo scan suggested verification commands from the existing workspace"
         ),
         CONFIG_VERIFY_COMMANDS_FALLBACK_SOURCE: (
             "using the configured generic fallback because repo scan found no repo-native command"
@@ -551,6 +610,15 @@ def verification_command_specs_payload(
     return {"verification_command_specs": command_specs_payload(specs)}
 
 
+def required_verify_commands(selection: ResolvedVerifyCommands | None) -> tuple[str, ...]:
+    """Keep recommendations available without turning them into requirements."""
+    return tuple(
+        spec.original_text
+        for spec in verification_command_specs_for_selection(selection)
+        if spec.requirement == VerificationCommandRequirement.REQUIRED
+    )
+
+
 def trusted_shell_expression_command_set(selection: ResolvedVerifyCommands | None) -> set[str]:
     return {
         " ".join(spec.original_text.split())
@@ -632,7 +700,10 @@ def verification_selection_payload(
 
 
 def is_authoritative_verify_command_selection(selection: ResolvedVerifyCommands) -> bool:
-    return selection.contract_type in AUTHORITATIVE_VERIFY_CONTRACT_TYPES
+    return selection.contract_type in AUTHORITATIVE_VERIFY_CONTRACT_TYPES and all(
+        spec.requirement == VerificationCommandRequirement.REQUIRED
+        for spec in verification_command_specs_for_selection(selection)
+    )
 
 
 def is_generic_fallback_verify_command_selection(selection: ResolvedVerifyCommands) -> bool:
@@ -1447,7 +1518,6 @@ def refine_generic_fallback_verify_command_selection(
             commands=node_project_script_commands,
             source="repo_scan.likely_test_commands",
             reason="repo scan discovered package.json verification scripts",
-            contract_type="repo_native",
         )
 
     if (
@@ -1632,7 +1702,8 @@ def build_primary_verification_failure(
     output_preview_chars: int = VERIFY_OUTPUT_PREVIEW_CHARS,
     snippet_chars: int = VERIFICATION_FAILURE_SNIPPET_MAX_CHARS,
 ) -> dict[str, object] | None:
-    if result.all_passed:
+    if result.status != "failed":
+        # not_run has nothing to report as a failure; it is a skip, not a fail.
         return None
 
     preview_chars = max(1, int(output_preview_chars))
@@ -2229,6 +2300,9 @@ def verify_run_result_to_payload(
         "commands": list(result.commands),
         "command_results": command_results,
         "all_passed": result.all_passed,
+        "status": result.status,
+        "executed_count": result.executed_count,
+        "skipped_count": result.skipped_count,
         "failed_commands": list(result.failed_commands),
         "summary": result.summary,
         "failure_category": result.failure_category_value,
@@ -2437,12 +2511,12 @@ def resolve_verify_command_selection(
                 commands=inferred,
                 source="repo_scan.likely_test_commands",
                 reason=(
-                    "managed host verifier is unavailable, but repo scan discovered "
-                    "authoritative repo-native verification commands"
+                    "managed host verifier is unavailable; repo scan suggested "
+                    "verification commands from the existing workspace"
                     if managed_host_verifier_unavailable
                     else (
-                        "configured verify_commands is empty, but repo scan discovered "
-                        "authoritative repo-native verification commands"
+                        "configured verify_commands is empty; repo scan suggested "
+                        "verification commands from the existing workspace"
                     )
                 ),
             )
@@ -2583,7 +2657,7 @@ def repair_invalid_verify_command_selection(
             selection=_resolved_verify_commands(
                 commands=detected,
                 source=VERIFICATION_FALLBACK_DETECTED_SOURCE,
-                contract_type="repo_native",
+                contract_type="selected",
             ),
             dropped_commands=invalid,
             warning=(
@@ -2630,7 +2704,7 @@ def _detect_fallback_verify_commands(
         detected = _valid_verify_commands(
             layer(),
             source=VERIFICATION_FALLBACK_DETECTED_SOURCE,
-            contract_type="repo_native",
+            contract_type="selected",
         )
         if detected:
             return detected

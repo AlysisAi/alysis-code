@@ -18,6 +18,65 @@ def _ledger(workspace: Path, storage: Path, **kwargs: object) -> ChangeLedger:
     return ChangeLedger(workspace, storage_root=storage, **kwargs)
 
 
+def test_checkpoint_presence_probe_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    data = tmp_path / "data"
+    monkeypatch.setenv("ALYSIS_DATA_DIR", str(data))
+    assert change_ledger_module.checkpoint_storage_exists(workspace) is False
+    assert not data.exists()
+    ChangeLedger(workspace)
+    assert change_ledger_module.checkpoint_storage_exists(workspace) is True
+
+
+def test_missing_git_has_a_safe_checkpoint_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def missing_git(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("private command path must not be displayed")
+
+    monkeypatch.setattr(change_ledger_module.subprocess, "run", missing_git)
+    with pytest.raises(ChangeLedgerError, match="Install Git") as error:
+        _ledger(workspace, tmp_path / "checkpoints")
+    assert "private command path" not in str(error.value)
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_local_blob_hashes_match_git_without_per_file_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    object_format: str,
+) -> None:
+    monkeypatch.setenv("GIT_DEFAULT_HASH", object_format)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ledger = _ledger(workspace, tmp_path / "external")
+    samples = [b"", b"hello\n", b"windows\r\nlines\r\n", bytes(range(256)), "γειά 🌍".encode()]
+    for data in samples:
+        expected = (
+            ledger._git(["hash-object", "--stdin"], input_bytes=data, check=True)
+            .stdout.decode()
+            .strip()
+        )
+        assert ledger._blob_oid(data) == expected
+        target = workspace / "sample.bin"
+        target.write_bytes(data)
+        original_git = ledger._git
+
+        def no_git(*args: object, **kwargs: object) -> None:
+            pytest.fail("File identity must not spawn Git")
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(ledger, "_git", no_git)
+            assert ledger._path_identity(target) == ("100644", expected)
+        assert ledger._git == original_git
+
+
 def test_capture_revert_redo_and_restart(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     storage = tmp_path / "external"

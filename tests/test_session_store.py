@@ -14,6 +14,7 @@ from alysis_code.config import AppConfig
 from alysis_code.execution_deadline import ExecutionDeadline
 from alysis_code.session_store import (
     SessionStore,
+    SessionStoreUnavailableError,
     list_sessions,
     make_session_id,
     read_session_events,
@@ -138,9 +139,13 @@ def test_session_store_events_since_concurrent_appends_are_conserved(
     assert observed_ids == [f"concurrent-events:{index}" for index in range(1, 501)]
 
 
-def test_session_store_disables_logging_when_sessions_dir_is_read_only(
+def test_session_store_refuses_to_exist_when_sessions_dir_is_read_only(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """A durable log was requested (``enabled=True``) and cannot be opened:
+    the store refuses at construction instead of silently degrading into
+    what would look like a deliberate ``--no-log`` session."""
+
     sid = make_session_id()
     sessions_dir = tmp_path / "sessions"
     real_mkdir = Path.mkdir
@@ -152,8 +157,22 @@ def test_session_store_disables_logging_when_sessions_dir_is_read_only(
 
     monkeypatch.setattr(Path, "mkdir", fail_sessions_dir_mkdir)
 
+    with pytest.raises(SessionStoreUnavailableError) as excinfo:
+        SessionStore(
+            enabled=True,
+            sessions_dir=sessions_dir,
+            session_id=sid,
+            cwd=".",
+            repo_root=".",
+        )
+    assert excinfo.value.outcome == "unavailable"
+    assert "Read-only file system" in str(excinfo.value)
+    assert not (sessions_dir / f"{sid}.jsonl").exists()
+
+    # Deliberate no-log operation is unchanged: the same directory problem is
+    # irrelevant because no durable log was requested.
     store = SessionStore(
-        enabled=True,
+        enabled=False,
         sessions_dir=sessions_dir,
         session_id=sid,
         cwd=".",
@@ -161,9 +180,7 @@ def test_session_store_disables_logging_when_sessions_dir_is_read_only(
     )
     store.append("user_message", {"content": "hi"})
     store.close()
-
     assert store.enabled is False
-    assert store.artifact_persistence_enabled is False
     assert not (sessions_dir / f"{sid}.jsonl").exists()
 
 
@@ -689,6 +706,56 @@ def test_session_store_fetchable_urls_lists_search_sources_then_user_urls(
         assert store.classify_web_fetch_url(url) is not None
     # The bound is honored.
     assert store.fetchable_web_fetch_urls(limit=1) == ["https://www.fifa.com/worldcup/news"]
+
+
+def test_session_store_trusted_domain_allowlist_classification(tmp_path: Path) -> None:
+    store = SessionStore(
+        enabled=False,
+        sessions_dir=tmp_path,
+        session_id="trusted-domains",
+        cwd=".",
+        repo_root=".",
+    )
+    # No allowlist configured: unknown URLs stay unfetchable.
+    assert store.classify_web_fetch_url("https://registry.npmjs.org/vite/latest") is None
+
+    store.configure_web_fetch_trusted_domains(
+        [
+            "https://Registry.NPMJS.org/some/path",  # URL form, mixed case
+            "*.example-registry.dev",  # wildcard form
+            "  ",  # dropped
+            "user@host.example",  # credentials: dropped
+        ]
+    )
+
+    assert (
+        store.classify_web_fetch_url("https://registry.npmjs.org/vite/latest")
+        == "trusted_domain_allowlist"
+    )
+    # Subdomains of a configured host match.
+    assert (
+        store.classify_web_fetch_url("https://mirror.registry.npmjs.org/vite")
+        == "trusted_domain_allowlist"
+    )
+    assert (
+        store.classify_web_fetch_url("https://sub.example-registry.dev/pkg")
+        == "trusted_domain_allowlist"
+    )
+    # Suffix spoofing does not match: the allowlisted host is not a dot-suffix here.
+    assert store.classify_web_fetch_url("https://registry.npmjs.org.evil.com/x") is None
+    assert store.classify_web_fetch_url("https://evilregistry.npmjs.org/x") is None
+    # Session provenance evidence still wins over the static allowlist label.
+    store.append(
+        "user_message",
+        {"content": "Fetch https://registry.npmjs.org/vite/latest for me."},
+    )
+    assert store.classify_web_fetch_url("https://registry.npmjs.org/vite/latest") == "user_provided"
+    # Reconfiguring replaces the previous allowlist.
+    store.configure_web_fetch_trusted_domains([])
+    assert store.classify_web_fetch_url("https://sub.example-registry.dev/pkg") is None
+    # Allowlisted domains are a host set, not URLs: fetchable_web_fetch_urls only
+    # lists concrete session evidence (here, the user-provided npm URL).
+    assert store.fetchable_web_fetch_urls(limit=1) == ["https://registry.npmjs.org/vite/latest"]
 
 
 def test_session_store_reopen_preserves_search_returned_web_url_classification(

@@ -271,6 +271,14 @@ def sanitize_context_blocks(
     kinds: list[ContextKind] = []
     any_truncated = bool(dropped)
 
+    # A single context block whose path is git-ignored, or that resolved outside the workspace, must
+    # not abort the whole turn: the IDE attaches whatever the user has open, and a git-ignored editor
+    # among many is the common case that used to fail the entire message. Such a block is DROPPED —
+    # its content is still excluded, which is the point of the ignore policy — and the rest proceed.
+    # A policy that *throws* (path_policy_failed) stays fail-closed and still raises, because an
+    # unevaluable policy is an internal fault, not ordinary user content; likewise a sensitive-path
+    # deny and every structural/format error still raise.
+    droppable_reasons = {"ignored_path", "path_outside_workspace"}
     for index, raw_block in enumerate(raw_blocks[:accepted_count]):
         if not isinstance(raw_block, Mapping):
             raise ContextValidationError(
@@ -278,14 +286,21 @@ def sanitize_context_blocks(
                 "Each context block must be an object.",
                 block_index=index,
             )
-        block = _normalize_block(
-            raw_block,
-            roots=roots,
-            limits=active_limits,
-            is_ignored=is_ignored,
-            path_policy=path_policy,
-            block_index=index,
-        )
+        try:
+            block = _normalize_block(
+                raw_block,
+                roots=roots,
+                limits=active_limits,
+                is_ignored=is_ignored,
+                path_policy=path_policy,
+                block_index=index,
+            )
+        except ContextValidationError as error:
+            if error.code in droppable_reasons:
+                dropped += 1
+                any_truncated = True
+                continue
+            raise
         fitted, did_truncate = _fit_block(block, active_limits.max_block_bytes)
         normalized.append(fitted)
         kinds.append(fitted["type"])

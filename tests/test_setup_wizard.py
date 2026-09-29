@@ -859,7 +859,7 @@ def test_model_picker_rows_include_preset_suggestions(monkeypatch, tmp_path: Pat
 def test_deepseek_model_picker_uses_v4_models(monkeypatch, tmp_path: Path) -> None:
     _config_env(tmp_path, monkeypatch)
     _patch_console(monkeypatch)
-    picker = PickerScript(["deepseek", "deepseek-v4-flash"])
+    picker = PickerScript(["deepseek", "deepseek-flash"])
     monkeypatch.setattr(setup_wizard_mod, "_run_wizard_picker", picker)
     monkeypatch.setattr(
         setup_wizard_mod.typer, "prompt", PromptScript(["", "sk-test-1234", os.fspath(tmp_path)])
@@ -868,7 +868,7 @@ def test_deepseek_model_picker_uses_v4_models(monkeypatch, tmp_path: Path) -> No
     assert setup_wizard_mod.run_setup_wizard() is True
     model_values = [value for value, _label, _description in picker.calls[1]["rows"]]
     assert "deepseek-v4-pro" in model_values
-    assert "deepseek-v4-flash" in model_values
+    assert "deepseek-flash" in model_values
     assert "deepseek-coder" not in model_values
 
 

@@ -1,12 +1,112 @@
 # Changelog
 
+
+## 0.14.4 — IDE integrations and release tooling
+
+- Add the VS Code 0.3.0 integration with a shared sidebar, provider management, bounded editor
+  context, reviewed changes, recovery checkpoints, and native host actions.
+- Add shared UI transport and a JetBrains development preview using the same Python IDE bridge.
+- Isolate provider credentials, handle physical workspace paths, and keep unit tests portable.
+- Add six-target managed-runtime packaging, Azure OIDC Windows signing verification, Apple
+  notarization/provenance contracts, and protected evidence and Marketplace promotion workflows.
+- Update pinned sandbox build inputs; fresh image scans remain required.
+
+This is a CLI/source release. Production signed VSIX packages and Marketplace publication remain
+pending the [documented signing and acceptance gates](vscode-marketplace-launch.md).
+
 Notable user-facing changes to Alysis Code are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while the public API remains pre-1.0.
 
 ## [Unreleased]
 
-No user-facing changes yet.
+## [0.14.3] - 2026-09-29
+
+### Added
+
+- Add Claude Sonnet 5.5 to the Alysis account model picker, using native Messages
+  transport, streaming, signed reasoning and tool continuation, and the shared
+  hosted credit allowance.
+
+### Changed
+
+- Default hosted accounts to automatic prompt caching. Migrate legacy Manual
+  settings only when their other cache settings match the old defaults; preserve
+  Off, customized settings, and subsequent explicit choices.
+- Use five-minute cache controls for hosted Sonnet and provider-managed caching
+  for hosted DeepSeek, GLM, and Luna. See the
+  [caching guide](hosted-prompt-caching.md) for migration details and controls.
+
+### Fixed
+
+- Resolve cache previews and diagnostics using each model's actual protocol,
+  preserve hosted credit-limit error details, and report Sonnet reasoning usage
+  without counting it twice.
+- Honor the configured HTTP MCP startup timeout for initialization acknowledgements.
+  Report MCP startup errors once and exit cleanly without retrying through classic chat.
+
+## [0.14.2] - 2026-09-28
+
+### Fixed
+
+- Show only supported reasoning efforts for hosted Luna and clear incompatible
+  settings inherited from another model. Map saved or environment-provided
+  `minimal` and `ultra` settings to `low` and `max`, preventing invalid-effort
+  errors during the free-credit campaign.
+- Preserve the hosted gateway's capacity retry guidance and account request-limit
+  messages so users can distinguish temporary capacity from exhausted credits.
+- Cancel working-tip link clicks when a fast mouse drag arrives before the next
+  screen repaint.
+
+## [0.14.1] - 2026-09-25
+
+### Added
+
+- Add GPT-6 Luna to the Alysis Code account model picker, with hosted Responses
+  routing, configurable reasoning, and stateless function-tool continuation.
+  Luna uses the account's shared credit allowance alongside the Flash models.
+
+### Fixed
+
+- Rebuild the correct chat and compactor transports when switching between hosted
+  Luna and Flash models during a conversation, while preserving the session on a
+  failed switch.
+- Keep hosted web search as a function tool and show the gateway's capacity,
+  request, and credit-limit reasons instead of a generic rate-limit message.
+
+## [0.14.0] - 2026-09-24
+
+### Added
+
+- Add GPT-6 Sol and GPT-6 Luna to the OpenAI API and ChatGPT subscription model
+  choices, with pricing, context limits, and reasoning settings. Subscription
+  availability follows the live account catalog.
+- Add Claude Opus 5.5 to Anthropic and OpenRouter, Grok 4.7 to xAI and OpenRouter,
+  Mistral's hosted GLM 5.3, and current OpenRouter model routes.
+- Show DeepSeek V4.1 Flash and GLM 5.3 Flash as hosted account model choices.
+- Add `/objective` commands to inspect, replace, and amend the current task across
+  retries and resumed sessions.
+- Allow a configurable set of public package registries for `web_fetch` while
+  retaining URL and network safety checks.
+
+### Changed
+
+- Show clearer model names in setup and move the request timeout control to
+  Advanced settings.
+- Improve subagent scheduling, task evidence, and verification reporting.
+
+### Fixed
+
+- Suppress unexecuted tool-call markup in replies, retry once with structured
+  tool calls, and report a failure if the model repeats the malformed output.
+- Require AnyIO 4.14.2 or newer in the HTTP runtime dependency set.
+- Keep hosted account credentials on the selected gateway when an unsupported
+  model is chosen, and preserve retired Xiaomi selections without silently
+  redirecting them to a different provider's model.
+- Omit unsupported temperature settings for GPT-6 reasoning requests and reject
+  attempts to disable reasoning for always-thinking OpenRouter models.
+- Improve session recovery and deadline handling for long running work.
+- Verify durable service listener ownership on macOS without requiring root access.
 
 ## [0.13.8] - 2026-09-16
 
@@ -308,7 +408,9 @@ Public launch and repository-layout refresh.
 Release notes for versions before 0.9.8 remain available in the
 [GitHub Releases archive](https://github.com/AlysisAi/alysis-code/releases).
 
-[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...HEAD
+[Unreleased]: https://github.com/AlysisAi/alysis-code/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/AlysisAi/alysis-code/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/AlysisAi/alysis-code/compare/v0.13.8...v0.14.0
 [0.13.8]: https://github.com/AlysisAi/alysis-code/compare/v0.13.7...v0.13.8
 [0.13.7]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.2...v0.13.7
 [0.13.6.2]: https://github.com/AlysisAi/alysis-code/compare/v0.13.6.1...v0.13.6.2

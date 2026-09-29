@@ -13,7 +13,8 @@ from alysis_code.config import AppConfig
 from alysis_code.ide import stdio_bridge
 from alysis_code.ide.prompt_queue import DurablePromptQueue
 from alysis_code.ide.stdio_bridge import ApprovalScopeRecord, StdioBridge
-from alysis_code.permission_policy import PermissionPolicyStore
+from alysis_code.permission_policy import PermissionPolicyError, PermissionPolicyStore
+from alysis_code.surface.types import ApprovalRequest
 
 
 def _request(method: str, params: dict[str, Any], request_id: str) -> str:
@@ -146,6 +147,7 @@ def test_permission_sensitive_override_and_session_grant_revocation(
         "specificity": 2_147_483_647,
     }
 
+    assert "error" not in _response(output, "create"), _response(output, "create")
     session = bridge._sessions["permission-session"]
     session.approved_approval_scopes.append(
         ApprovalScopeRecord(
@@ -212,3 +214,167 @@ def test_permission_evaluate_detects_workspace_symlink_escape(
     assert result["reason"] == "external_directory_requires_approval"
     assert result["matched_rule_id"] == "override:external_directory"
     bridge.close()
+
+
+@pytest.fixture
+def approval_bridge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text("[project]\nname='approval-fixture'\n")
+    monkeypatch.setenv("ALYSIS_DATA_DIR", os.fspath(tmp_path / "data"))
+    monkeypatch.setattr(stdio_bridge, "load_config", lambda: AppConfig(model="test-model"))
+    fake = SimpleNamespace(
+        store=SimpleNamespace(session_artifact_root=tmp_path / "artifacts"), close=lambda: None
+    )
+    store = PermissionPolicyStore(tmp_path / "permission.json")
+    bridge = StdioBridge(
+        stdout=io.StringIO(),
+        create_session_fn=lambda **_kwargs: fake,
+        permission_policy_store=store,
+        prompt_queue=DurablePromptQueue(tmp_path / "queue.sqlite3"),
+    )
+    bridge.process_line(
+        _request(
+            "session.create",
+            {
+                "workspace": os.fspath(workspace),
+                "mode": "review",
+                "session_id": "approval-session",
+            },
+            "create",
+        )
+    )
+    try:
+        yield bridge, bridge._sessions["approval-session"], store
+    finally:
+        bridge.close()
+
+
+@pytest.mark.parametrize(
+    "path,metadata,ask_rule",
+    [
+        (".env", {}, False),
+        ("../external.txt", {}, False),
+        ("safe.txt", {"mandatory_explicit_approval": True}, False),
+        ("safe.txt", {"allow_for_session_disabled": True}, False),
+        ("safe.txt", {}, True),
+    ],
+)
+def test_one_time_safety_and_explicit_ask_override_cached_grants(
+    approval_bridge,
+    path: str,
+    metadata: dict,
+    ask_rule: bool,
+) -> None:
+    bridge, session, store = approval_bridge
+    request = ApprovalRequest(
+        kind="fs_write", reason="write", preview="write fixture", files=[path], metadata=metadata
+    )
+    scope, key, _ = stdio_bridge._approval_scope_for_request("fs_write", request)
+    session.approved_approval_scopes.append(
+        ApprovalScopeRecord(kind="fs_write", scope=scope, key=key)
+    )
+    if ask_rule:
+        store.grant("ask", tool_pattern="fs_write", path_pattern=path)
+    prompts = []
+
+    def respond(event):
+        if getattr(event, "payload", {}).get("kind") != "approval":
+            return
+        prompts.append(event.payload)
+        bridge._resolve_approval(
+            session=session,
+            approval_id=event.payload["approval_id"],
+            allow=False,
+            allow_for_session=False,
+            request_id="decision",
+        )
+
+    decision = bridge._request_approval(session, request, respond)
+    assert decision.allow is False
+    assert len(prompts) == 1
+    assert prompts[0]["allow_for_session_supported"] is False
+
+
+def test_sensitive_approval_cannot_create_a_session_grant(approval_bridge) -> None:
+    bridge, session, _ = approval_bridge
+    prompts = []
+
+    def respond(event):
+        if getattr(event, "payload", {}).get("kind") == "approval":
+            prompts.append(event.payload)
+            bridge._resolve_approval(
+                session=session,
+                approval_id=event.payload["approval_id"],
+                allow=True,
+                allow_for_session=True,
+                request_id="decision",
+            )
+
+    request = ApprovalRequest(
+        kind="fs_read", reason="read", preview="sensitive fixture", files=[".env"]
+    )
+    for _ in range(2):
+        decision = bridge._request_approval(session, request, respond)
+        assert decision.allow and not decision.allow_for_session
+    assert len(prompts) == 2
+    assert session.approved_approval_scopes == []
+
+
+def test_revoked_grant_is_not_resurrected_by_approval_waiter(approval_bridge) -> None:
+    bridge, session, _ = approval_bridge
+
+    def respond(event):
+        if getattr(event, "payload", {}).get("kind") == "approval":
+            bridge._resolve_approval(
+                session=session,
+                approval_id=event.payload["approval_id"],
+                allow=True,
+                allow_for_session=True,
+                request_id="decision",
+            )
+            grants = bridge._permission_session_list(
+                stdio_bridge.ProtocolRequest(
+                    protocol_version="1",
+                    id="list",
+                    method="permission.session.list",
+                    params={"session_id": session.session_id},
+                )
+            )["grants"]
+            bridge.process_line(
+                _request(
+                    "permission.session.revoke",
+                    {"session_id": session.session_id, "grant_id": grants[0]["id"]},
+                    "revoke",
+                )
+            )
+
+    decision = bridge._request_approval(
+        session,
+        ApprovalRequest(kind="fs_write", reason="write", preview="fixture", files=["safe.txt"]),
+        respond,
+    )
+    assert decision.allow
+    assert session.approved_approval_scopes == []
+
+
+def test_policy_failure_denies_even_a_cached_session_grant(
+    approval_bridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge, session, store = approval_bridge
+    request = ApprovalRequest(
+        kind="fs_write", reason="write", preview="fixture", files=["safe.txt"]
+    )
+    scope, key, _ = stdio_bridge._approval_scope_for_request("fs_write", request)
+    session.approved_approval_scopes.append(
+        ApprovalScopeRecord(kind="fs_write", scope=scope, key=key)
+    )
+
+    def fail(_request):
+        raise PermissionPolicyError("invalid policy request")
+
+    monkeypatch.setattr(store, "evaluate", fail)
+    events = []
+    decision = bridge._request_approval(session, request, events.append)
+    assert not decision.allow
+    assert not any(getattr(event, "payload", {}).get("kind") == "approval" for event in events)

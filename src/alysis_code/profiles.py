@@ -181,6 +181,36 @@ def subscription_selection_supported(profile: ProfileSpec, models: Any) -> bool:
     return not supported or profile.reasoning_effort in supported
 
 
+def apply_hosted_prompt_cache_defaults(cfg: AppConfig, profile: ProfileSpec) -> bool:
+    """Upgrade untouched hosted cache settings once, without saving during reads.
+
+    Old releases serialized Manual even when it was never selected. For the
+    hosted service, migrate that otherwise-default configuration to Auto. Keep
+    Off, customized settings and choices made after this migration intact.
+    Other providers retain their existing defaults.
+    """
+    if cfg.hosted_prompt_cache_defaults_applied:
+        return False
+    from .profile_presets import find_preset_for_profile
+
+    preset = find_preset_for_profile(profile)
+    if preset is None or preset.provider_key != "alysis":
+        return False
+    cfg.hosted_prompt_cache_defaults_applied = True
+    if (
+        str(cfg.prompt_cache_mode or "manual").strip().lower() == "manual"
+        and not str(cfg.prompt_cache_key or "").strip()
+        and not str(cfg.prompt_cache_retention or "").strip()
+        and not cfg.anthropic_prompt_cache_enabled
+        and str(cfg.anthropic_prompt_cache_ttl or "5m").strip().lower() == "5m"
+        and cfg.cache.prompt_cache_key_enabled
+        and not cfg.cache.keepalive_enabled
+        and (profile.cache_capability is None or not profile.cache_capability.has_values())
+    ):
+        cfg.prompt_cache_mode = "auto"
+    return True
+
+
 def sync_active_profile_to_config(cfg: AppConfig) -> bool:
     """Mirror the active profile connection defaults onto legacy top-level fields."""
     active = str((cfg.extra_fields or {}).get("active_profile") or "").strip()
@@ -190,7 +220,7 @@ def sync_active_profile_to_config(cfg: AppConfig) -> bool:
     if profile is None:
         return False
 
-    changed = False
+    changed = apply_hosted_prompt_cache_defaults(cfg, profile)
     if profile.base_url and not _same_base_url(getattr(cfg, "base_url", ""), profile.base_url):
         cfg.base_url = profile.base_url
         changed = True
@@ -276,6 +306,7 @@ def set_active_profile(cfg: AppConfig, name: str) -> None:
             else:
                 cfg.extra_fields.pop(section, None)
     cfg.extra_fields["active_profile"] = profile.name
+    apply_hosted_prompt_cache_defaults(cfg, profile)
     if profile.base_url:
         cfg.base_url = profile.base_url
     if profile.default_model or profile.auth_provider:
@@ -358,6 +389,19 @@ def update_active_profile_defaults(
         cfg.llm_reasoning_effort = effective_effort
         cfg.llm_enable_thinking = None if effective_effort is None else effective_effort != "none"
     return True
+
+
+def apply_runtime_base_url_override(cfg: AppConfig, base_url: str) -> None:
+    """Apply an explicit launch endpoint to the actual transient provider profile.
+
+    Updating only the legacy top-level field leaves the transport pointing at the
+    saved profile endpoint. Keep both representations aligned without persisting
+    the user's launch override or inferring a different protocol/provider.
+    """
+    normalized = validate_base_url(base_url, key="base_url")
+    get_active_profile(cfg)
+    update_active_profile_defaults(cfg, base_url=normalized)
+    cfg.base_url = normalized
 
 
 def update_profile(

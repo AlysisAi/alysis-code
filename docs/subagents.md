@@ -23,6 +23,18 @@ non-editing helpers without opening recursive delegation.
 Default behavior is ON for top-level chat/run sessions. Use `--no-subagents` or
 `alysis config set subagents_enabled false` to disable it.
 
+The parent is guided to work directly by default and choose a subagent when its
+contribution justifies the extra context, coordination and latency. It can make
+that choice autonomously without an explicit user request. Explicit requests to
+delegate remain valid, and waiting for a useful child's result is appropriate
+when the parent reaches a real dependency. This preference applies to all prompt
+densities in both chat and one-shot sessions; it adds no spawn gate, permission
+step or model-specific quota.
+
+Subagents receive family-specific working guidance plus their role instructions.
+The shared configuration and parent prompt profiles are described in
+[Agent system prompts](agent_prompts.md).
+
 Enable/disable options:
 
 - config: `alysis config set subagents_enabled true|false`
@@ -98,17 +110,31 @@ Top-level chat and one-shot sessions can start independent work and continue whi
 - `subagent_cancel` cancels one child or all children. A queued child is cancelled without ever
   launching a nested session. Its result separates runs that actually transitioned under
   `cancelled_run_ids` from `already_finished_run_ids` and `unknown_run_ids`.
-- `subagent_resume` relaunches a failed, incomplete, or cancelled terminal child as a new linked
-  background run.
+- `subagent_resume` continues a terminal child's retained conversation as a new linked background
+  run. Successful or degraded children require a nonempty follow-up task; failed, incomplete, or cancelled
+  work can resume with its original task or a revised brief.
 
 Use background spawning only when the investigation is independent of the parent's next decision.
-Use synchronous `subagent_run` when the result is needed immediately; its input, output, event,
-sanitization, deadline, and usage contracts are unchanged.
+Use synchronous `subagent_run` when the result is needed immediately. Both paths return a stable
+run ID for inspection and follow-up.
+
+Completed background reports are delivered automatically at a safe parent model boundary as
+bounded, screened, untrusted evidence. Delivery joins that result; `subagent_wait` can still retrieve
+the full report. Completion status describes the child's execution, not verified correctness or
+integration. The parent continues independent work and uses focused evidence to assess the result.
+Internal exit cleanup and cancellation preserve undelivered report evidence. Ready reports are
+recorded before acknowledgement even when the current turn cannot make another model call, so
+the next interactive turn or saved-session history can use them.
+
+Process exit status alone is not a completion signal. Existing budget policy returns exit zero for
+some graceful stops, including exhausted empty-response recovery. Such stops retain their structured
+stop reason and degraded/internal-fallback status; runtime fallback summaries do not qualify as a
+successful child deliverable.
 
 Synchronous and background children share one parent-session run-ID namespace. Status, live-pane
 inspection, and resume resolve either kind identically, including a retained synchronous run that stopped
-incomplete. This registry unification is bookkeeping-only: existing lifecycle events retain their
-order and payloads.
+incomplete. An isolated child's capture precedes its terminal event, so that event reflects an
+incomplete capture or a proven no-change result.
 
 An immediate child follows `spawned -> queued (if full) -> running -> joined|cancelled`. A chained
 child follows `spawned -> waiting -> queued -> running -> joined|cancelled`. The background cap
@@ -126,15 +152,23 @@ host sends at most two corrective messages asking it to wait or cancel. If it st
   model response.
 - `cancel`: the host cancels every child and appends a cancellation notice to the final response.
 
-User interruption cancels running and queued background children. Usage records are replayed
-incrementally while a child runs and once more at join, with a per-child cursor preventing double
-counting in `/usage` and the HUD.
+User interruption cancels running and queued background children. The TUI remains responsive and
+may queue the next prompt, but it does not start that prompt or rebuild Permissions until the
+retiring turn has released its session ownership. Exiting the TUI likewise waits for that unwind,
+so temporary narrower Permissions cannot be restored underneath a still-running turn. The footer's
+cancellation timer starts when interruption is requested rather than reusing the age of the turn or
+active child. Durable logs record `cancellation_requested` before `turn_interrupted`, which separates
+request-to-unwind latency from total turn duration. Usage records are replayed incrementally while a
+child runs and once more at join, with a per-child cursor preventing double counting in `/usage` and
+the HUD.
 
 Joining an isolated child does not discard its candidate. Unapplied results are retained across
-turns, named in the injected results/final notice and the next `<subagent_turn_context>`, and remain
-available to apply or discard. The terminal `final` event keeps the complete assistant report and
-appends this notice, so event-only consumers do not lose the report. Closing the parent session
-releases every remaining worktree.
+turns and remain available through the coordinator status and apply/discard tools. They are not
+re-advertised as synthetic user instructions on later model calls. The terminal `final` event keeps
+the complete assistant report and appends any retained-workspace notice, so event-only consumers do
+not lose the report. Closing the parent session releases ordinary remaining candidates and records
+a cleanup summary. Incomplete captures and candidates containing ignored output remain retained;
+a failed cleanup remains pending for an explicit retry.
 
 Resumption restores the original persisted conversation, synthesizes missing tool results when a
 turn ended mid-call, and re-evaluates the role against the current parent mode, sandbox, deadline,
@@ -142,12 +176,23 @@ and step budget. The new result and lifecycle events carry `resumed_from=<old_ru
 an unreleased isolated candidate is transferred to the new run at the same worktree path, so only
 the new run can later be applied or discarded. Pass `reattach_workspace=false` to start from the
 role's normal workspace view instead; the old patch artifact is still named in the resume context.
-Active, successful, degraded, unknown, and already-released isolated runs return structured errors.
+Successful or degraded children can continue with a nonempty follow-up task. Each run can be continued once;
+a repeated request returns `continuation_run_id` identifying the chain's next run. The original
+report remains retrievable, while the new run ID owns transferred work and further follow-ups.
+Active and unknown runs return structured errors. Applied, discarded, or duplicate
+worktrees cannot be reattached; explicitly use `reattach_workspace=false` to retain conversation
+history while starting a fresh workspace.
 An incomplete result and its `subagent_end` event name the actual `stop_reason`, steps used and
 resolved ceiling, deadline remaining, retained run ID, and an exact `subagent_resume(run_id=...)`
 affordance when resumption is possible. Resume or steer retained work instead of rebuilding it.
 Resume also carries forward content-hashed read-ledger entries that still match the attached
 worktree, so unchanged ranges are not returned again; changed files are read normally.
+
+Child continuation requires the original live parent session. Restarting or resuming a saved parent
+session does not restart workers or rebuild their run-ID registry. Automatically delivered reports
+are restored as bounded, untrusted historical evidence, with a reminder to check current state;
+stale callable child locators are omitted. Retained worktree files survive as described below, but
+their recorded locations do not recreate live apply/discard/resume handles after restart.
 
 ### Steering background children
 
@@ -165,11 +210,11 @@ with `dependency_failed`; the child never launches. Duplicate, unknown, self-ref
 dependencies are rejected. Waiting children remain part of turn-end wait/cancel enforcement, and
 their deadline eligibility is checked again when they become runnable.
 
-The one-response candidate flow is: spawn an isolated implementer with `run_id=impl`, then spawn a
+The one-response candidate flow is: spawn an isolated general worker with `run_id=impl`, then spawn a
 verifier with `depends_on=[impl]` and `workspace_from_run=impl`; wait for both and call
 `subagent_apply(impl)` only after the verifier passes. Caller-selected IDs accept only 1-64 ASCII
 letters, digits, underscores, or hyphens and must be unique in the parent session. Pinned-worktree
-resolution is deferred until the implementer joins and captures its candidate.
+resolution is deferred until the writer joins and captures its candidate.
 
 Each completed same-response parallel batch and dependency chain emits one additive
 `subagent_batch_summary` event with ordered run IDs, statuses, wall time, summed usage, and workspace
@@ -186,16 +231,27 @@ alysis config set subagent_orchestration.parallel_nonwriting_shared false
 ### Isolated workspaces
 
 Pass `workspace_view=isolated` to `subagent_run` when a child should work away from the parent's
-working tree. Alysis Code creates a detached Git worktree at the parent's current `HEAD` under the
-session artifact directory: `subagent_worktrees/<run_id>`. The child keeps its normal mode,
+working tree. Alysis Code snapshots the parent's current files into an internal Git commit and
+creates a detached worktree under the session artifact directory: `subagent_worktrees/<run_id>`.
+The snapshot includes tracked edits and deletions plus nonignored untracked files, without modifying
+the parent's HEAD, index, or files; staging intent is not copied. Files requiring configured external
+Git clean, smudge, or process filters are refused rather than executing those commands on the host
+or silently substituting unfiltered content. Unused filter configuration remains supported.
+Checkout checks the child's effective configuration too. Failed checkout is cleaned up; incomplete
+capture retains child output for inspection. Git-ignored dependencies, local configuration,
+and other setup files are excluded, so the child may need its own setup. The active parent's session
+log and artifact directory are excluded too. Launch refuses detected concurrent snapshot changes.
+Isolated submodules and nested repositories are currently unsupported and are refused at launch.
+The child keeps its normal mode,
 allow/deny write scopes, and workspace-mutation reconciliation; those policies are evaluated
 inside the worktree.
 
-An isolated child cannot see uncommitted parent edits because its base is `HEAD`. The prepare event
-and returned `workspace` metadata therefore include `parent_dirty_paths`, the paths hidden from the
-child at launch. The result also contains a patch summary (files, insertions, deletions, SHA-256,
-and an internal artifact locator). The complete unified patch is persisted as a session artifact
-and is never placed in the model-facing tool result.
+The prepare event and returned `workspace` metadata identify the snapshot as `base_commit`, the
+original `parent_head_commit`, and `parent_dirty_paths`.
+The result contains a patch summary (files, insertions, deletions, SHA-256, and an internal artifact
+locator) for only the child's net changes relative to that snapshot. The complete Git patch,
+including binary patches for regular files when needed, is persisted as a session artifact and is
+never placed in the model-facing tool result.
 
 After reviewing the result, use:
 
@@ -206,24 +262,51 @@ After reviewing the result, use:
   returns its status, stop reason, and unfinished-work summary without changing the parent tree.
 - `subagent_discard(run_id)` to delete the worktree without changing the parent.
 
-Worktrees remain available until applied, discarded, or the parent session closes. Repeated,
-unknown, already-released, and empty-patch actions return structured errors. Version 1 supports
-Git repositories only; a plain directory returns
+The captured candidate must still match the child workspace at apply time. Apply and close
+re-capture its files and retain material changes made since capture; apply returns
+`workspace_changed_after_capture`. Continue the child to capture and assess its current work before applying.
+Ignored-only additions retain their files while leaving the ordinary Git patch applicable.
+
+Complete candidates normally remain available until applied, discarded, or the parent session closes.
+Git-ignored child outputs are reported separately as `retained_ignored_paths`; they are not applied
+to the parent. Their worktrees survive apply and session close until explicitly discarded, including
+when the ignored outputs are only caches. Incomplete or failed captures also survive close and
+cannot be applied. A child whose
+complete capture establishes no changes is host-classified as `no_changes`, marked as semantic
+no-progress, and released automatically. Incomplete capture retains the candidate and reports the
+limitation; ignored-only output also prevents automatic no-change release. Candidates with ignored
+output are not automatically deduplicated. Other materially identical results are identified from their base commit, changed paths,
+and patch digest—not from task wording. The first result remains the canonical candidate; later
+duplicates keep their run provenance and patch evidence but do not retain another physical
+worktree after successful cleanup. If cleanup fails, the duplicate is marked `cleanup_pending` and
+its worktree remains until an explicit discard or the parent session's close-time retry. Applying a
+duplicate resolves through the canonical candidate exactly once, while discarding a duplicate
+leaves the canonical candidate intact. Unknown and already-released actions return structured
+errors. Version 1 supports Git repositories only; a plain directory returns
 `workspace_view=isolated requires a git repository`. Disable the feature with:
 
 ```text
 alysis config set subagent_orchestration.workspace_isolation_enabled false
 ```
 
-The workspace provider never creates commits, and applying a result never commits the parent tree.
+When a depth-0 full-screen TUI turn receives a fully typed captured duplicate as its first and only
+tool call, the host finishes that turn locally and durably arms one model-history rollover. At the
+turn boundary it clears stale model-visible conversation, compactor memory, and read-ledger state,
+then retains one allowlisted lifecycle capsule for the next request. The rendered transcript and
+queued images remain visible. Classic chat, one-shot runs, and nested sessions keep their existing
+history behavior, and session resume treats an armed rollover as a durable history boundary.
+
+The provider creates private snapshot commits without advancing parent refs. Applying a result
+never stages or commits the parent tree.
 
 ### Parallel writers and pinned verification
 
 The recommended isolated implementation flow is:
 
-1. Run or spawn an `implementer` with `workspace_view=isolated`.
-2. Run or spawn a non-writing verifier with `workspace_from_run=<implementer_run_id>`.
-3. Call `subagent_apply(<implementer_run_id>)` only after verification passes; otherwise discard it.
+1. Run or spawn a `general` writer with `workspace_view=isolated`.
+2. Run or spawn a non-writing verifier with `workspace_from_run=<writer_run_id>`.
+3. Continue the writer with `subagent_resume` to address findings, or discard an unwanted candidate.
+   Apply the final candidate only after its verification passes.
 
 `workspace_from_run` mounts the completed, unreleased candidate worktree as the verifier's root, so
 the verifier sees the candidate while the parent tree remains unchanged. It is available to roles
@@ -246,9 +329,9 @@ that writer's worktree; a shared writer's helper reads the shared root. Helper r
 and never replace the writer's own verification duty. Helpers cannot spawn, wait for, apply, or
 discard children, and depth-2 sessions expose no `subagent_run`, so nesting stops absolutely there.
 
-Defaults are two helper calls per writer, 20 steps per helper, and 120 seconds per helper. The
-effective deadline is the earlier of that timeout and the writer's remaining deadline. Calls are
-sequential, and an exhausted budget returns a structured `helper_budget_exhausted` result. Helper
+The default allows two helper calls per writer, without a helper-specific step or wall-clock
+ceiling. A helper still inherits an active writer deadline. Calls are sequential, and an exhausted
+call-count budget returns a structured `helper_budget_exhausted` result. When a deadline is active,
 launch also requires enough remaining time for twice the writer's current robust per-call latency
 estimate. A helper that cannot plausibly complete two model calls is refused before launch so the
 writer can continue directly. Deadline-blocked child events make the terminal
@@ -260,17 +343,19 @@ writer and helper records once. The writer result and `subagent_end` event summa
 ```text
 alysis config set subagent_orchestration.helpers_enabled true
 alysis config set subagent_orchestration.helper_max_total_per_child 2
-alysis config set subagent_orchestration.helper_max_steps 20
-alysis config set subagent_orchestration.helper_timeout_s 120
+alysis config set subagent_orchestration.helper_max_steps unlimited
+alysis config set subagent_orchestration.helper_timeout_s unlimited
 ```
+
+Numeric helper limits remain available as explicit operator policy.
 
 Built-in subagents:
 
 - `explorer` (read-only repository investigation with concise evidence-first findings)
 - `dependency-scout` (read-only external dependency research grounded in pinned local versions and
   cited web evidence; `scout` is an alias)
-- `implementer` (write-capable implementation of one clearly scoped change, followed by verification)
-- `frontend-engineer` (write-capable web UI implementation with responsive, interaction-state, accessibility, and evidence-based visual-QA requirements)
+- `general` (bounded research, diagnosis, implementation, refactoring, or mixed work within inherited permissions)
+- `frontend-engineer` (optional web UI specialist with responsive, interaction-state, accessibility, and evidence-based visual-QA requirements; disabled by default)
 - `debugger` (diagnostic reproduction and root-cause isolation without source edits)
 - `verifier` (evidence-based proof that a finished candidate meets its acceptance criteria, using the repository's real checks without source edits)
 - `code-reviewer` (strict read-only review with verdict + blocking/non-blocking issues)
@@ -278,14 +363,14 @@ Built-in subagents:
 
 Built-in prompt behavior:
 
-- gives each role a non-overlapping contract: investigate, implement general code, implement frontend UX, diagnose, verify a finished candidate, review, or generate raster assets
+- gives general workers a broad assignment contract and specialists distinct investigation, frontend, diagnosis, verification, review, or raster-generation contracts
 - keeps `explorer` and `code-reviewer` strictly read-only
 - lets `debugger` run targeted diagnostics and verification while prohibiting repository edits; a host-observed material mutation degrades the run with `unexpected_workspace_mutation`
 - lets `verifier` run the repository's authoritative checks while prohibiting edits, then return an evidence-backed pass, fail, or inconclusive verdict; `debugger` finds the cause of an unexplained failure, while `verifier` proves a finished candidate
 - requires `shell_run` for `debugger` and `verify_run` for `verifier`; if the requested mode or
   host capability removes a required tool, launch is refused before the child runs and reports the
   smallest sufficient mode
-- lets `implementer` make the smallest scoped change allowed by the parent session
+- lets `general` investigate without editing or make the smallest requested change allowed by the parent session; frontend quality guidance also applies to general workers
 - makes `frontend-engineer` use the repository's existing frontend stack and explicitly cover responsive layout, accessibility, and loading/empty/error/disabled states
 - prevents `frontend-engineer` from calling `image_generate`; raster work belongs to `visual-designer`
 - prevents `frontend-engineer` from returning a generator prompt as a substitute for an image request
@@ -299,10 +384,10 @@ Built-in prompt behavior:
 ### Evaluation-informed working methods
 
 For uncommitted work, `code-reviewer` starts with `git_status` and a path-scoped `git_diff`. It
-reads only the surrounding lines needed to interpret a hunk and the tests covering the changed
-behavior through `fs_read_lines`; `fs_read` is absent from this role's sandbox. Whole-file reads
-and `git_history` are absent from this role's sandbox; other readonly roles retain their history
-tool when history is part of their task.
+reads the surrounding lines needed to interpret a hunk and the tests covering the changed
+behavior through `fs_read` with `start_line`/`end_line`. It expands the read when the
+review needs more context. `git_history` remains absent from this role's sandbox;
+other readonly roles retain their history tool when history is part of their task.
 `verifier` follows the same diff-first discovery rule before choosing authoritative checks.
 
 Treat review and verification as separate decision points when review findings may change the
@@ -310,16 +395,22 @@ tree: review, fix, then verify. Reuse a child's evidenced verification while the
 unchanged instead of running the same command again. Host-structured `verify_run` results are the
 authority for pass/fail; truncated raw output can add detail but cannot contradict `all_passed`.
 
-Direct implementation is normally cheaper for one scoped change because a delegated implementer
-pays for fresh context and its own cache. Delegate writes when independent work can run in
+Direct work avoids a fresh child's context and coordination overhead for a simple assignment.
+Delegate writes when independent work can run in
 parallel, when a clean isolated candidate enables verify-before-apply, or when risk justifies that
 isolation.
 
 For repository-mapping tasks, `explorer` ends its report with a compact `Map:` of up to 15
 `path - one-line role` entries. The parent should navigate from that handoff and use targeted
-confirmation reads instead of repeating the repository walk. Truncated `fs_read` and
-`fs_read_lines` results report the total line count, returned range, exact next non-overlapping
-range, and any offload artifact reference so continuation does not overlap prior reads.
+confirmation reads instead of repeating the repository walk. Truncated `fs_read`
+results report returned and next ranges. A byte-clipped line remains in the next
+range because its suffix has not been read; increase `max_bytes` if that line alone
+exceeds the ceiling. Whole-file and window reads share the same 12,000-byte default.
+Line totals are `null` until the reader observes EOF; a focused read does not scan
+the remainder just to count lines. Reaching a later line still scans its prefix,
+using bounded memory. Cross-turn read-ledger deduplication applies only to files
+within the default byte budget; larger files remain readable and are returned
+without that optional suppression.
 
 When a managed-browser capability is attached, `verifier` also receives the approved browser
 inspection surface plus `browser_start`, `browser_navigate`, `browser_click`, and `browser_type`.
@@ -400,9 +491,14 @@ Discoverability:
 - when subagents are enabled, the `subagent_run` tool schema exposes autonomously routable subagent names in `name.enum`
 - enum values are built from the loaded registry, so available custom subagents with automatic routing visibility are included automatically
 - the main agent also gets a pinned `<subagent_context>` message with autonomously routable and capability-gated subagents plus delegation guidance, so it can decide when to delegate or report a grounded blocker
-- repo turns also get a bounded turn-scoped `<subagent_turn_context>` containing the routable roles when subagents are available; natural-language delegation requests are advisory to the model
+- repo turns also get bounded, system-layer `<subagent_turn_context>` capability metadata when
+  subagents are available. It is not newer user input and does not recommend delegation; the model
+  follows the actual user request.
 - use `--no-subagents` or `alysis config set subagents_enabled false` for a hard disable
-- interactive repo execution turns that spend multiple read-only steps without subagent delegation receive a runtime nudge to delegate focused exploration or move to implementation/verification
+- general phase-budget guidance may suggest implementation, focused delegation, or reporting a
+  blocker after repeated exploration only when observed mutation activity authorizes execution
+  pressure. Invocation mode and Permissions do not establish that the user requested mutation;
+  inspection remains a valid outcome in both one-shot and interactive sessions.
 - when enabled, the main system prompt also adds short delegation guidance for autonomous subagent_run use (disabled sessions keep baseline prompt behavior)
 
 Routing visibility controls autonomous discovery, not whether a custom role remains registered:
@@ -412,6 +508,60 @@ Routing visibility controls autonomous discovery, not whether a custom role rema
 - Custom subagents can set `routing_visibility: auto` or `routing_visibility: manual` in
   frontmatter. Manual custom roles stay registered but are omitted from the autonomous enum and
   parent routing context. Unknown values normalize to `auto`.
+
+### Enablement and specialist models
+
+`enabled: false` disables a built-in role, including direct calls by name. This is separate from
+`routing_visibility: manual`, which only hides automatic discovery. The default roles are `general`,
+`explorer`, `code-reviewer`, `verifier`, and `debugger`, subject to their permissions and tool
+requirements. Research and image roles still require their capabilities.
+
+`frontend-engineer` is disabled by default. Explicit `enabled: true` or an explicit `model` for
+that specialist enables it; `enabled: false` wins even when a model is set. Changing the parent's
+model does not change this decision. A `model_role` fallback alone is not an explicit specialist
+model. General workers retain frontend quality instructions when this specialist is off.
+
+Built-in roles support metadata-only overrides. For example, create
+`.alysis_agents/frontend-engineer.md` with:
+
+```md
+---
+name: frontend-engineer
+model: your-frontend-model
+---
+```
+
+This keeps the built-in prompt and tool restrictions. Alternatively, use `enabled: true` with no
+model to inherit the normal model selection. Set `enabled: false` to disable the role. Start a new
+session after changing role files. A Markdown body still replaces the role's instructions as a
+custom definition; review its tool and permission settings accordingly.
+
+An optional `profile` selects an existing saved provider connection for that child:
+
+```md
+---
+name: code-reviewer
+profile: your-review-profile
+model: your-review-model
+---
+```
+
+The runtime clones the parent configuration, selects this profile, then resolves the explicit
+`model`, `model_role`, or profile default through the normal model rules. A model ID alone never
+changes providers. Omitting `profile` inherits the parent's connection. Switching profiles uses
+the target's explicit endpoint, model/reasoning defaults and its own stored key or profile-scoped environment key;
+parent overrides and legacy/global key fallbacks are not forwarded. Subscription profiles retain
+their provider-owned authentication. Missing profiles or target credentials fail explicitly.
+An unset target model needs an explicit model/role selection, and unset target reasoning does
+not inherit the parent's provider-specific setting. Naming the active profile preserves the current
+invocation's model and thinking settings; an explicit child `model` still takes precedence.
+This applies to foreground children, background children, continuations and permitted helpers;
+it does not change tool permissions or expand helper depth. Child start/end evidence identifies
+the effective profile and model without recording credentials. Saved configuration is not modified.
+
+The built-in `implementer` has been replaced by `general` without an alias. Rename built-in role
+references and model override files to `general`. An existing custom definition named `implementer`
+remains a custom agent and is not automatically migrated.
 
 Custom subagents can be defined with YAML frontmatter + markdown body in:
 
@@ -428,14 +578,13 @@ mode: readonly
 allow_workspace_writes: false
 allow_tools:
   - fs_read
-  - fs_read_lines
   - fs_list
   - symbol_search
   - search_rg
 deny_tools:
   - shell_run
 # Claude-style aliases are also supported:
-# tools: [fs_read, fs_read_lines, fs_list, symbol_search, search_rg]
+# tools: [fs_read, fs_list, symbol_search, search_rg]
 # disallowedTools: [shell_run]
 model_role: review
 routing_visibility: auto
@@ -451,16 +600,21 @@ Notes:
 - Main agent gets only the final subagent result, not intermediate nested tool outputs.
 - Only eligible depth-1 writers can invoke bounded non-editing helpers; depth-2 recursion is blocked.
 - Tool permissions are sandboxed by per-subagent allow/deny lists.
- - The parent catalog labels each autonomously routable role with
+- Explicit `allow_tools` lists (including `tools_allow` and `tools` aliases) fail
+  before a child model call if an entry is unavailable. This also applies to
+  metadata-only overrides of built-in roles. Omitted lists retain the role's
+  existing scope; built-in optional capabilities may narrow to the host's tools.
+  Resuming a child validates its current configured list again.
+- The parent catalog labels each autonomously routable role with
   `parallel_batch_eligible=yes|no`. This is scheduling metadata only: choose roles by task fit;
-  batch eligibility does not determine which role to pick. Shared-view calls are eligible only in
-  exact `readonly` mode; isolated calls are eligible in any post-clamp mode. Same-batch calls run
-  concurrently only when every call is eligible. The host runs at most four concurrently, queues
-  any excess, preserves result order, and prevents queued children from launching after parent
-  cancellation. Shared `review`, `auto`, and `fullaccess` calls remain sequential.
+  batch eligibility does not determine which role to pick. Shared-view calls need exact `readonly`
+  mode or the explicit non-writing opt-in described above; isolated calls are eligible in any
+  post-clamp mode. Eligible calls can run as a parallel subset while remaining calls are deferred.
+  The host runs at most four concurrently, preserves result order, and prevents queued children
+  from launching after parent cancellation.
 - Nested tool-event IDs include the per-invocation subagent run ID, so parallel calls to the same
   role cannot overwrite one another's UI/protocol state even when providers reuse child-local IDs.
- - Parent cancellation reaches both synchronous model-directed batches and background child runs.
+- Parent cancellation reaches both synchronous model-directed batches and background child runs.
 - Write-capable child runs are wrapped in a host-owned before/after workspace reconciliation.
   Snapshot-observed changes are unioned with tool-reported paths and returned as
   `touched_repo_paths`, `material_touched_repo_paths`, mutation classifications, and `effects` on
@@ -484,18 +638,30 @@ Notes:
   Identical calls whose outcomes change are legitimate re-checks and reset the consecutive count.
   Tools that embed wall-clock fields in otherwise stable outcomes, such as background-process
   snapshot or wait payloads containing `elapsed_ms`, cannot produce identical fingerprints and are
-  therefore invisible to this sensor; the finite child run deadline remains the guard for them.
-- Every ordinary subagent has a finite wall-clock ceiling. Its effective
-  deadline is the earlier of the active parent deadline and the
-  `subagent_timeout_s` fallback (900 seconds by default). An earlier parent
-  deadline is reused exactly, so delegation cannot extend the parent run; when
-  the parent has no active deadline, the fallback supplies the child ceiling.
-  Configure it with, for example,
-  `alysis config set subagent_timeout_s 600`. The value must be finite and
-  greater than zero.
+  therefore invisible to this sensor; cancellation, provider no-progress detection, and any
+  explicitly configured or inherited deadline remain independent safeguards.
+- The root turn separately tracks terminal subagent outcomes as structured semantic evidence.
+  Volatile run IDs, timings, usage, and report prose do not make an identical material result look
+  new. Repeated equivalent outcomes use the existing configurable repetition nudge/stop policy;
+  there is no subagent-specific step or wall-clock cap. A real parent-visible apply/discard or a
+  materially different result advances the objective state and resets the comparison.
+- The root turn also indexes each accepted background launch by its typed objective. Run IDs,
+  display labels, timings, and operational limits do not turn the same launch objective into new
+  work. Exact replicas requested together in one assistant tool batch remain valid deliberate
+  fan-out. The same normalized objective requested again in a later assistant generation is
+  coalesced to the canonical run and terminates the stagnant turn, even when the new call rotates
+  or omits its run ID. Profile aliases, surrounding task whitespace, default modes, and parent
+  mode clamps are normalized exactly as launch preflight normalizes them; the remaining task bytes
+  and substantive typed inputs stay exact. The host never guesses task equivalence from English
+  keywords or a fixed phrase list.
+- Ordinary subagents have no default wall-clock ceiling. An active parent deadline is inherited
+  exactly, so delegation cannot extend an explicitly bounded parent run. Operators can opt into a
+  child-specific ceiling with, for example, `alysis config set subagent_timeout_s 600`, or restore
+  the default with `alysis config set subagent_timeout_s unlimited`.
 - Child LLM and tool-call timeouts clamp against that resolved child deadline.
-  Lifecycle telemetry records `subagent_timeout_s`, `resolved_timeout_s`,
-  `resolved_deadline_source`, and the full resolved `deadline` snapshot.
+  Lifecycle telemetry records the optional `subagent_timeout_s`, `resolved_timeout_s`,
+  `resolved_deadline_source`, and the full resolved `deadline` snapshot, including disabled
+  deadlines.
 - Next-call admission estimates duration from the median of the latest five completed calls rather
   than one historical maximum. Telemetry records the estimator, window, samples, and estimate. A
   call that overruns into the reserve proceeds directly to finalization; admission is still refused
@@ -505,9 +671,9 @@ Notes:
   error-shaped result with deadline metadata such as
   `failure_category: "deadline"`, `deadline_prevented_launch`,
   `deadline_start_decision`, and `remaining_seconds`.
-- Release changes to subagent deadline propagation should include focused
-  regression coverage and follow the project [release process](RELEASING.md).
-- For precise inspection, prefer `symbol_search` for Python/JS/TS symbol navigation, `search_rg` for broader text hits, `fs_read_lines` to read the exact surrounding range, and `fs_read` when broader file context is needed.
+- Release changes to subagent deadline propagation should follow the focused
+  [release checklist](release_checklist.md).
+- For precise inspection, prefer `symbol_search` for Python/JS/TS symbol navigation, `search_rg` for broader text hits, `fs_read` with line options to read the exact surrounding range, and the same reader without line options for a bounded raw head.
 - For history or regression questions, prefer `git_history` over raw shell commands.
 - Subagent execution mode is capped by the parent session mode (no privilege escalation): readonly < review < auto < fullaccess. Built-in definitions additionally restrict their visible tools; for example, `debugger` has diagnostic tools but no direct file-edit tools.
 - Subagent token/cost usage is replayed into the parent session one child model call at a time, including failed subagent runs, so `/usage` and the chat HUD preserve call counts and api-vs-estimate attribution.

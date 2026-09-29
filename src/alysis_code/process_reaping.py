@@ -539,10 +539,16 @@ def run_in_tracked_process_group(
             # Killing only the leader is what orphans the children today. That is
             # left as-is on purpose: the group stays registered, and finalization
             # reaps it under the single audited decision path.
-            process.kill()
             if os.name == "nt":  # pragma: no cover - exercised on Windows
-                exc.stdout, exc.stderr = process.communicate()
+                # Kill while the owned parent is still alive: once it exits,
+                # Windows can no longer walk its children and inherited output
+                # pipes can keep communicate() blocked indefinitely.
+                from .terminal_manager import _kill_windows_process_tree
+
+                _kill_windows_process_tree(process)
+                exc.stdout, exc.stderr = process.communicate(timeout=1.0)
             else:
+                process.kill()
                 process.wait()
             raise
         except BaseException:
@@ -550,7 +556,12 @@ def run_in_tracked_process_group(
             # the whole foreground group, so interrupting a command killed its
             # children too; now that the command leads its own session the runner
             # has to do that itself, or an interrupted test run would keep going.
-            process.kill()
+            if os.name == "nt":
+                from .terminal_manager import _kill_windows_process_tree
+
+                _kill_windows_process_tree(process)
+            else:
+                process.kill()
             if tracked is not None:
                 reap_process_group(tracked, grace_seconds=1.0)
             raise

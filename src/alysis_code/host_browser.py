@@ -37,15 +37,21 @@ def open_url(url: str, *, quiet: bool = False) -> bool:
         # Browser helpers can print directly to inherited file descriptors. Run
         # the fallback in an isolated process so they cannot overwrite a TUI or
         # read its input. Never redirect the parent process's shared streams.
+        # A frozen sys.executable is the CLI, so let its entry point dispatch
+        # the helper before initializing the application instead of passing -c.
+        command = (
+            [sys.executable, "--alysis-internal-open-url", target]
+            if getattr(sys, "frozen", False)
+            else [
+                sys.executable,
+                "-c",
+                "import sys, webbrowser; sys.exit(0 if webbrowser.open(sys.argv[1], new=2) else 1)",
+                target,
+            ]
+        )
         try:
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import sys, webbrowser; "
-                    "sys.exit(0 if webbrowser.open(sys.argv[1], new=2) else 1)",
-                    target,
-                ],
+                command,
                 check=False,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

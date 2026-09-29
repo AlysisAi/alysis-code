@@ -569,9 +569,10 @@ _VERIFICATION_REJECTION_GUIDANCE: dict[str, str] = {
     ),
     "disallowed_shell_control_flow": (
         "verify_run needs a single command whose own exit code is the result, so "
-        "`&&`, `||`, `;` and `&` are not allowed. Drop the chaining and pass just "
-        "the test command (a leading `cd <dir> &&` is fine; put any setup in a "
-        "separate shell_run first). This is not a failure of your code."
+        "`&&`, `||`, `;`, `&` and multi-line scripts are not allowed. Drop the "
+        "chaining and pass just the test command (a leading `cd <dir> &&` is "
+        "fine; put any setup in a separate shell_run first, and move a multi-line "
+        "script into a file and run that file). This is not a failure of your code."
     ),
     "non_assertive_observation": (
         "This command only observes state (e.g. `ls`, `cat`, `grep`) and cannot "
@@ -582,10 +583,6 @@ _VERIFICATION_REJECTION_GUIDANCE: dict[str, str] = {
         "The command could not be parsed as a single shell command (often "
         "unbalanced quotes). Simplify it to one runnable command, or run it with "
         "shell_run first to confirm it parses."
-    ),
-    "multi_line_shell_expression": (
-        "Pass a single-line command. Move a multi-line script into a file and run "
-        "that file as the verification command."
     ),
 }
 
@@ -665,7 +662,9 @@ def _analysis(
 
 
 def _normalize_command(command: str) -> str:
-    return " ".join(str(command or "").strip().split())
+    # The shell parser handles spacing between tokens; spacing inside an
+    # operand, quoted expression, or inline program must reach it unchanged.
+    return str(command or "").strip()
 
 
 def _shell_tokens(command: str) -> list[str] | None:
