@@ -1,0 +1,258 @@
+name: vscode-extension-component-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      vscode_test_version:
+        description: "Minimum supported VS Code version for @vscode/test-electron when no executable is provided."
+        required: true
+        default: "1.90.0"
+      vscode_current_test_version:
+        description: "Current VS Code version/channel for the compatibility run when no executable is provided."
+        required: true
+        default: "stable"
+      dogfood_extension_host:
+        description: "Use run for network-enabled release checks or require-cached for offline/cached release checks."
+        required: true
+        default: "run"
+        type: choice
+        options:
+          - run
+          - require-cached
+      vscode_executable_path:
+        description: "Optional absolute path to a cached minimum-version VS Code executable."
+        required: false
+        default: ""
+      vscode_current_executable_path:
+        description: "Optional absolute path to a cached current VS Code executable."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vscode-extension-release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  component-candidate:
+    name: VS Code extension component candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+
+      - name: Install frozen Python bridge dependencies
+        run: uv sync --frozen --no-editable --extra dev
+
+      - name: Install extension dependencies
+        working-directory: extensions/vscode-alysis
+        run: npm ci
+
+      - name: Validate IDE CLI parity contract
+        run: uv run --frozen --no-sync python scripts/qa/check_ide_cli_parity.py
+
+      - name: Python IDE parity, protocol, and bridge tests
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_ide_cli_parity_matrix.py tests/test_ide_protocol.py tests/test_ide_stdio_bridge.py tests/test_ide_protocol_contract.py tests/test_vscode_extension_dogfood.py
+
+      - name: Python Windows console encoding tests
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_surface_console_encoding.py
+
+      - name: Python Forge baseline tests
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_cli_impl_forge.py tests/test_forge.py
+
+      - name: Python Forge execution suite
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_forge_exec.py
+
+      - name: Python Forge swarm suite
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_forge_swarm.py
+
+      - name: Python Forge review suite
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_forge_review.py
+
+      - name: Python combined Forge release gate
+        run: uv run --frozen --no-sync python -m pytest -q tests/test_forge_exec.py tests/test_forge_swarm.py tests/test_forge_review.py
+
+      - name: Python dependency audit
+        run: uv run --frozen --no-sync python scripts/qa/check_deps.py
+
+      - name: Compile extension
+        working-directory: extensions/vscode-alysis
+        run: npm run compile
+
+      - name: Test extension
+        working-directory: extensions/vscode-alysis
+        run: npm test
+
+      - name: Lint extension
+        working-directory: extensions/vscode-alysis
+        run: npm run lint
+
+      - name: Audit extension dependencies
+        working-directory: extensions/vscode-alysis
+        run: npm audit --audit-level=high
+
+      - name: Package component pre-release VSIX (no managed runtime)
+        working-directory: extensions/vscode-alysis
+        run: npm run package:dev-vsix -- --pre-release
+
+      - name: Verify pre-release VSIX marker and contents
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import json
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          vsix_dir = Path("extensions/vscode-alysis")
+          candidates = sorted(
+              vsix_dir.glob("*.vsix"),
+              key=lambda path: (path.stat().st_mtime, path.name),
+              reverse=True,
+          )
+          if not candidates:
+              raise SystemExit("No VSIX produced by package:pre-release.")
+          vsix = candidates[0]
+          with ZipFile(vsix) as archive:
+            names = set(archive.namelist())
+            manifest = archive.read("extension.vsixmanifest").decode("utf-8")
+            package = json.loads(archive.read("extension/package.json"))
+          marker = 'Property Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"'
+          if marker not in manifest:
+            raise SystemExit(f"{vsix} is missing the Marketplace pre-release marker.")
+          required = {
+              "extension/package.json",
+              "extension/dist/extension.js",
+              "extension/media/startView.css",
+              "extension/media/startView.js",
+              "extension/resources/icon.png",
+              "extension/resources/alysis-logo.svg",
+          }
+          missing = sorted(required - names)
+          if missing:
+            raise SystemExit(f"{vsix} is missing required runtime files: {missing}")
+          main = "extension/" + package["main"].removeprefix("./")
+          if main not in names:
+            raise SystemExit(f"{vsix} manifest main is not packaged: {main}")
+          forbidden_prefixes = (
+              "extension/node_modules/",
+              "extension/src/",
+              "extension/test/",
+              "extension/.vscode-test/",
+              "extension/design/",
+          )
+          forbidden = sorted(
+              name for name in names
+              if name.startswith(forbidden_prefixes)
+              or name.endswith(".map")
+              or name in {
+                  "extension/package-lock.json",
+                  "extension/tsconfig.json",
+                  "extension/tsconfig.webview.json",
+              }
+          )
+          if forbidden:
+            raise SystemExit(f"{vsix} contains development-only files: {forbidden}")
+          if "extension/resources/managed-cli/manifest.json" in names:
+            raise SystemExit("Generic component gate must not package a production-trusted managed runtime.")
+          print(f"Verified pre-release marker and {len(names)} packaged entries in {vsix}")
+          PY
+
+      - name: Validate cached VS Code input
+        if: inputs.dogfood_extension_host == 'require-cached' && (inputs.vscode_executable_path == '' || inputs.vscode_current_executable_path == '')
+        run: |
+          echo "dogfood_extension_host=require-cached requires both vscode_executable_path and vscode_current_executable_path."
+          echo "Provide absolute cached executables for minimum and current VS Code, or rerun with dogfood_extension_host=run."
+          exit 1
+
+      - name: Test extension host (minimum supported VS Code)
+        working-directory: extensions/vscode-alysis
+        env:
+          VSCODE_TEST_EXECUTABLE_PATH: ${{ inputs.vscode_executable_path }}
+          VSCODE_TEST_VERSION: ${{ inputs.vscode_test_version }}
+        run: xvfb-run -a npm run test:integration
+
+      - name: Test extension host (current VS Code)
+        working-directory: extensions/vscode-alysis
+        env:
+          VSCODE_TEST_EXECUTABLE_PATH: ${{ inputs.vscode_current_executable_path }}
+          VSCODE_TEST_VERSION: ${{ inputs.vscode_current_test_version }}
+        run: xvfb-run -a npm run test:integration
+
+      - name: Packaged component Extension Host dogfood
+        env:
+          DOGFOOD_EXTENSION_HOST: ${{ inputs.dogfood_extension_host }}
+          VSCODE_TEST_EXECUTABLE_PATH: ${{ inputs.vscode_executable_path }}
+          VSCODE_TEST_VERSION: ${{ inputs.vscode_test_version }}
+        run: |
+          args=(--mode mock --package-mode require --extension-host "$DOGFOOD_EXTENSION_HOST")
+          if [ -n "${VSCODE_TEST_EXECUTABLE_PATH:-}" ]; then
+            args+=(--vscode-executable "$VSCODE_TEST_EXECUTABLE_PATH")
+          fi
+          xvfb-run -a uv run --frozen --no-sync python scripts/qa/vscode_extension_dogfood.py "${args[@]}"
+
+      - name: Write and validate component dogfood summary artifact
+        if: always()
+        run: |
+          uv run --frozen --no-sync python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from scripts.qa import vscode_extension_dogfood as dogfood
+
+          report_root = Path("qa_reports/vscode_dogfood")
+          summaries = sorted(
+              report_root.glob("*/summary.json"),
+              key=lambda path: path.stat().st_mtime,
+              reverse=True,
+          )
+          if not summaries:
+              raise SystemExit("No dogfood summary.json was produced.")
+          latest = summaries[0]
+          payload = json.loads(latest.read_text(encoding="utf-8"))
+          payload["source_summary"] = str(latest)
+          dogfood.validate_component_valid_summary(payload)
+          target = report_root / "component_candidate_summary.json"
+          target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(f"Wrote {target}")
+          print(f"Dogfood status: {payload.get('status')}")
+          print(f"Component valid: {payload.get('component_valid')}")
+          PY
+
+      - name: Confirm no Marketplace publish
+        run: |
+          echo "Component-candidate workflow never produces a releasable VSIX."
+          echo "Only the target-specific managed CLI workflow can produce production candidates."
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vscode-alysis-component-vsix-not-for-release
+          path: extensions/vscode-alysis/*.vsix
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload dogfood reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vscode-alysis-component-dogfood-reports
+          path: qa_reports/vscode_dogfood/**
+          if-no-files-found: ignore
+          retention-days: 30

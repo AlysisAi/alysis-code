@@ -1511,6 +1511,9 @@ def resolve_profile_api_key(
     profile = get_profile(cfg, profile_name)
     if profile is None:
         return ApiKeyResolution(key=None, source="missing")
+    ide_key = _resolve_ide_profile_api_key(cfg, profile_name)
+    if ide_key.key:
+        return ide_key
     stored_profile_key = _resolve_stored_profile_api_key(cfg, profile_name)
     if stored_profile_key.key:
         return stored_profile_key
@@ -1528,6 +1531,21 @@ def resolve_profile_api_key(
         openai_key = str(os.environ.get("OPENAI_API_KEY") or "").strip()
         if openai_key:
             return ApiKeyResolution(key=openai_key, source="env:OPENAI_API_KEY")
+    return ApiKeyResolution(key=None, source="missing")
+
+
+def _resolve_ide_profile_api_key(cfg: AppConfig, profile_name: str) -> ApiKeyResolution:
+    """Honor an IDE's explicitly supplied profile key without overwriting CLI credentials."""
+    from .profiles import get_profile
+
+    profile = get_profile(cfg, profile_name)
+    if profile is not None:
+        # Match the extension's encoding; plain env-var names can collide between two profiles.
+        encoded = profile.name.encode("utf-8").hex().upper()
+        env_name = f"ALYSIS_IDE_PROFILE_{encoded}_API_KEY"
+        key = str(os.environ.get(env_name) or "").strip()
+        if key:
+            return ApiKeyResolution(key=key, source=f"env:{env_name}")
     return ApiKeyResolution(key=None, source="missing")
 
 
@@ -1552,6 +1570,9 @@ def resolve_api_key(
     if profile_name is None:
         profile_name = str((effective_cfg.extra_fields or {}).get("active_profile") or "").strip()
     if profile_name:
+        ide_key = _resolve_ide_profile_api_key(effective_cfg, profile_name)
+        if ide_key.key:
+            return ide_key
         stored_profile_key = _resolve_stored_profile_api_key(effective_cfg, profile_name)
         if stored_profile_key.key:
             return stored_profile_key

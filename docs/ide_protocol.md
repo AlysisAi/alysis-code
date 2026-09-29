@@ -101,14 +101,20 @@ The machine-readable method contract lives in
 [`docs/generated/ide_protocol_methods.json`](generated/ide_protocol_methods.json). It records each
 advertised IDE method, required and optional params, forbidden secret field names, mutation and
 Workspace Trust metadata, workspace requirements, and selected result redaction expectations.
+CLI-to-IDE parity is governed separately by
+[`docs/generated/ide_cli_parity_matrix.json`](generated/ide_cli_parity_matrix.json), with the
+generated burn-down in
+[`docs/generated/ide_cli_parity_burndown.md`](generated/ide_cli_parity_burndown.md).
 
-The fixture is validated against `health.py`, `management_protocol.py`, the stdio dispatcher, and
-the protocol documentation so route and schema drift fails in CI instead of reaching users.
+The fixture is validated against `health.py`, `management_protocol.py`, protocol docs, and the VS
+Code backend action registry. TypeScript action tests collect deterministic params for every
+registered action and validate them against this fixture, so route/schema drift such as renamed
+params or contradictory options fails in CI instead of reaching users.
 
 VS Code slash aliases stay on typed protocol methods: `/clear` maps to `session.clear`, `/context`
 (with `/ctx` as an alias) maps to
 `session.context`, `/status` to `session.status`, `/feedback` to `report.create`, `/model-info`
-to `session.modelInfo`, and the IDE-only `/subagent status|on|off` aliases to
+to `session.modelInfo`, and the IDE-only `/subagents status|on|off` aliases to
 `session.subagents.*`; those bridge methods survive independently of the terminal
 chat command. `/trace` maps to
 `session.trace.*`, `/terminals` to `session.terminals.*`, and `/paste-image` to the same path-only
@@ -244,6 +250,11 @@ exact process-tree kill only if the bounded graceful attempt fails.
 
 ### session.create
 
+Optional `sandbox_profile` accepts `default`, `strict`, `warn` or `off`. It applies to the new
+session's shell and verification configuration; runtime environment policy takes precedence.
+The response includes `sandbox_mode` with the resolved shell mode. Existing sessions keep their
+policy until a new session is created.
+
 Creates an Alysis Code session bound to a workspace. Client-provided `session_id` values are optional;
 the bridge rejects duplicate active ids instead of replacing an existing session. Client-provided ids
 must be 1-128 characters and use only letters, digits, `_`, `-`, `.`, or `:`.
@@ -297,7 +308,32 @@ one redacted prompt record, and `chat.queue.delete` cancels a pending prompt. Ru
 fenced leases so a stale bridge process cannot complete a prompt claimed by a replacement process.
 Pending and expired-running prompts are recovered when a retained session is resumed.
 
+
+The optional `task_relation` field declares how the prompt relates to the session's host-owned
+task (the objective the pinned `<task_brief>` is rendered from). Omitted or `null` keeps the
+current task and delivers the message as this turn's instruction; the first accepted prompt of a
+session always becomes its objective. `"new_task"` makes this prompt the new objective before its
+first model request while keeping the conversation history, `"amendment"` adds the prompt as a
+constraint on the current task, and `"continuation"` explicitly keeps it. Any other value is
+rejected with `invalid_field` before the prompt is enqueued; the bridge never coerces an unknown
+relation into a new task. The stable `prompt_id` is the request identity for task purposes: the
+same prompt dispatched again (for example after a provider failure) stays on the task it created,
+while a different prompt with identical text does not. A prompt is a request whatever it starts
+with (a path-first `"/work/app.py: review the input validation."` with `"new_task"` becomes that
+objective); slash commands are the extension's native routes and are never forwarded as prompts.
+In a session whose saved task could not be recovered (`task_state_recovery: "unrecoverable"` or
+`"refused"` after `session.resume`), prompts without a relation and `"continuation"` prompts are
+delivered but do not establish a task; send `"new_task"` to establish one. Task identity grants no
+permission and is not a completion signal. `run.start` forwards `task_relation` like the other
+turn fields.
+
 ### checkpoint.list, checkpoint.diff, checkpoint.revert, checkpoint.redo, checkpoint.branch
+
+Audited file and native Git reads do not initialize snapshots. Before the first tool that may
+change files, the bridge waits up to ten seconds for a restore baseline, with cancellation checks.
+If setup is pending or failed, that action is not executed (`checkpoint_unavailable`); reads remain
+available. The next request reuses a pending worker or retries failed storage. A background worker
+never attaches a baseline after tool execution has begun. The extension shows a recovery card.
 
 Successful real-session turns capture a bounded change checkpoint in Alysis Code-owned external
 storage; the workspace's own Git repository and refs are never modified. Sensitive files and files
@@ -341,6 +377,11 @@ corrupt policy fails closed.
 `permission.session.list` exposes privacy-safe ids for exact, session-only approval grants.
 `permission.session.revoke` immediately removes one such grant. It does not reveal command text or
 file-set contents, and it never converts a one-time sensitive-file approval into a reusable grant.
+The approval executor rechecks sensitive/external paths before consulting session grants. Explicit
+Ask rules require a fresh decision even if the same scope was previously approved for the session.
+Mandatory one-time approvals never create reusable grants, including when a client requests
+`allow_for_session: true`; the response reports the effective one-time decision. Policy evaluation
+errors deny the operation, and a revoked grant cannot be recreated by a delayed approval waiter.
 
 ### run.start
 
@@ -584,6 +625,8 @@ pretending compaction occurred. Provider/model failures are returned as structur
 
 ### session.resume
 
+The optional `emit_history: true` replays bounded user/assistant dialogue as `message_end` events for a cold IDE window. Resumed history is persisted in the destination log, so subsequent restarts keep the same conversation.
+
 Replays bounded retained-session log history into a live IDE session using the existing CLI resume
 helpers. `session_id` is the active live IDE session that receives the replay, and
 `target_session_id` is the retained/historical session selected by the user. Creating the live IDE
@@ -593,11 +636,28 @@ capped by the bridge. The result reports `bounded`, `history_count`, `history_co
 `resume_context_loaded`, `resume_context_skipped_reason`, and `source:
 "retained_session_log_replay"`. When the retained history exceeds `max_messages`, the bridge skips
 the auxiliary resume-context summary so it cannot reintroduce unbounded history into model context.
-Clients must not replay terminal output to simulate a resume.
+The retained session's host-owned task identity is restored into the live session only when the
+live session holds no accepted task yet (the extension calls this on a fresh live session for
+crash recovery, so the retained task becomes the live task); a live session that already holds an
+accepted task keeps it and the result reports `skipped_live_task_active`. The result reports
+`task_state_recovery` (`event`, `legacy_user_events`, `none`, `unrecoverable`, `refused`, or
+`skipped_live_task_active`) and the restored `task_id`. `unrecoverable` means the retained log's
+latest task-state record could not be validated (malformed, missing its state, unsupported
+schema) or records an earlier unrecoverable or refused resume; no older task is guessed in its
+place, the outcome persists across further resumes, and the client establishes a task with
+`chat.send` `task_relation: "new_task"`. `refused` means the retained log was written by a
+different session than the one requested and its saved task was not attached. `none` with a
+retained user message means that message was never accepted as a task (for example a
+conversational-only turn); only logs written before task state existed recover their first user
+request (`legacy_user_events`). Clients must not replay terminal output to simulate a resume.
 
 ```json
 {"protocol_version":"1","id":"resume-1","method":"session.resume","params":{"session_id":"20260519T100000Z_abcd1234","target_session_id":"20260518T090000Z_deadbeef"}}
 ```
+
+### session.fork
+
+Copies dialogue from a live `source_session_id` into a fresh `session_id`. Both sessions must be trusted, idle, and belong to different worktrees of the same Git repository. Returns `session_id`, `source_session_id`, and `history_count`. Transfer is limited to 200 text messages and 256,000 UTF-8 bytes; messages are redacted before persistence and emitted as `message_end` events. Destination startup instructions remain authoritative. Tool calls/results, approvals, queued jobs, browser ownership, and checkpoint lineage are not transferred. A nonempty or already-forked destination is rejected. The source conversation remains intact.
 
 ### session.images.list
 
@@ -636,6 +696,15 @@ Changes the live bridge session mode to `readonly`, `review`, or `auto` and retu
 {"protocol_version":"1","id":"mode-1","method":"session.setMode","params":{"session_id":"20260519T100000Z_abcd1234","mode":"readonly"}}
 ```
 
+### session.setProfile
+
+Switch an idle conversation and the saved default to a configured provider. Requires
+`session_id`, profile `name`, and `workspace_trusted=true`; optional `model` also
+updates that profile's default model. The method replaces protocol-specific clients
+and credentials while preserving history, workspace, and permissions. A running turn
+returns `session_busy`. Configuration or persistence failures keep the prior live
+provider. Clients must check method support before offering a live provider switch.
+
 ### session.setModel
 
 Changes the live session model and optional `base_url` override. Secret-bearing URL userinfo is
@@ -644,6 +713,21 @@ rejected.
 ```json
 {"protocol_version":"1","id":"model-1","method":"session.setModel","params":{"session_id":"20260519T100000Z_abcd1234","model":"gpt-4o-mini"}}
 ```
+
+### session.fork
+
+Copies user and assistant dialogue from `source_session_id` into the fresh target
+`session_id`. Both sessions must be trusted, idle, and in different worktrees of
+the same repository. Approvals, tool state, and checkpoints are not copied.
+
+### session.setProfile
+
+Switches an idle, trusted live session to the saved provider profile named by
+`name`, with an optional `model` override. The request requires `session_id`.
+It preserves the conversation, workspace, permissions, and budgets, rebuilds the
+provider clients, persists the active profile, and returns session status. An
+unknown profile or active task is rejected; a failed configuration update restores
+the previous live clients.
 
 ### session.personas.list
 
@@ -1664,8 +1748,8 @@ Regenerates the active persisted Forge plan through the typed planner adapter. I
 `changed`, redacted `summary`, `warnings`, validation metadata, `redacted: true`, and
 `secret_values_included: false`. A stale `expected_revision` returns a structured
 `stale_plan_revision` error instead of overwriting newer plan state. This is the IDE route for
-Forge-context `/plan` regeneration via `/plan regenerate` and `/forge plan regenerate`; global
-`/plan <instruction>` remains new plan creation. The method does not expose Forge swarm, broad
+Forge-context plan regeneration via `/forge plan regenerate`;
+`/forge plan <instruction>` remains new plan creation. The method does not expose Forge swarm, broad
 execution, auto/fullaccess execution, terminal scraping, or arbitrary shell execution.
 
 The bridge runs the planner outside its dispatch state lock (snapshot → compute → commit): other

@@ -20,9 +20,13 @@ attestations as described in the sandbox guide.
 ## Supply-chain contract
 
 - Debian repositories use a dated snapshot, and the Python base and uv helper
-  images are digest-pinned.
+  images are digest-pinned. Inherited Debian packages are upgraded from that same
+  snapshot before installing additional tools.
 - Node, Go, and rustup downloads are version-pinned and SHA-256 verified for
   both `linux/amd64` and `linux/arm64`; the Rust toolchain is an exact version.
+- npm is independently version- and digest-pinned because Node's bundled npm can
+  lag security fixes. Replace its complete upstream distribution, verify both
+  `npm` and `npx`, and never patch individual bundled dependencies in place.
 - The server variant installs from `uv.lock` with network downloads of a
   replacement Python interpreter disabled.
 - Release candidates are scanned and runtime-smoked on both architectures
@@ -30,6 +34,8 @@ attestations as described in the sandbox guide.
 
 Changing a pinned version requires changing its matching digest in the same
 review and passing the sandbox release-contract tests.
+The [September security remediation record](../../docs/sandbox-image-security-remediation.md)
+distinguishes verified source inputs from the still-required rebuilt-image scans.
 
 ## Development
 

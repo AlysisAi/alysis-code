@@ -19,6 +19,7 @@ from ..assets.surface import (
     build_asset_surface,
 )
 from ..diff_paths import parse_patch_changed_files
+from ..execution_context import ExecutionContextBudgetError
 from ..execution_shared import (
     build_task_execution_instruction_bundle,
     build_task_local_workspace_reporting_diff,
@@ -1627,22 +1628,34 @@ def _run_single_review_task(
         attempt_count=_task_attempt_count(task),
         image_count=0,
     )
-    instruction_bundle = build_task_execution_instruction_bundle(
-        plan=plan,
-        task=task,
-        root=paths.root,
-        cfg=cfg,
-        role_model=str(getattr(cfg, "model", "") or ""),
-        mode="review",
-        yes=False,
-        deny_write_prefixes=[".alysis"],
-        allow_write_globs=allowed_scope,
-        non_interactive=True,
-        verification_enabled=bool(verify_commands),
-        authoritative_verification_commands=verify_commands or None,
-        api_key=None,
-        subagents_enabled=False,
-    )
+    try:
+        instruction_bundle = build_task_execution_instruction_bundle(
+            plan=plan,
+            task=task,
+            root=paths.root,
+            cfg=cfg,
+            role_model=str(getattr(cfg, "model", "") or ""),
+            mode="review",
+            yes=False,
+            deny_write_prefixes=[".alysis"],
+            allow_write_globs=allowed_scope,
+            non_interactive=True,
+            verification_enabled=bool(verify_commands),
+            authoritative_verification_commands=verify_commands or None,
+            api_key=None,
+            subagents_enabled=False,
+        )
+    except ExecutionContextBudgetError as exc:
+        budget_payload = exc.to_payload()
+        budget_payload["step_budget"] = task_step_budget.to_payload()
+        write_execution_budget_artifact(run_paths=paths, task_id=task_id, payload=budget_payload)
+        return _block_review_task(
+            record=record,
+            plan=plan,
+            task=task,
+            summary=str(exc),
+            surface=surface,
+        )
     context_path = write_execution_context_artifact(
         run_paths=paths,
         task_id=task_id,
@@ -1768,7 +1781,14 @@ def _run_single_review_task(
                 worker_id=task_id,
                 role="forge_execute_review",
             )
-            if not verify_result.all_passed:
+            if verify_result.status == "not_run":
+                # Tri-state: nothing executed. Not a pass (the pre-fix
+                # vacuous True treated it as one), but not a command failure
+                # either - report it distinctly.
+                success = False
+                status = "verify_not_run"
+                summary_parts.append(f"verification did not execute: {verify_summary}")
+            elif not verify_result.all_passed:
                 success = False
                 status = "verify_failed"
                 summary_parts.append(f"verification failed: {verify_summary}")

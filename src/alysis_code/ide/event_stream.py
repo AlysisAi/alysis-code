@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -57,6 +57,20 @@ ApprovalHandler = Callable[[ApprovalRequest, ApprovalEmitter], ApprovalDecision]
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _arguments_from_preview(arguments_preview: str) -> dict[str, Any]:
+    """Recover structured tool arguments from the canonical JSON preview, best effort.
+
+    The canonical emit path only carries the serialized preview. It is the same JSON the
+    core produced from the tool arguments, so it round-trips unless it was truncated, in
+    which case the activity simply has no target to show.
+    """
+    try:
+        parsed = json.loads(arguments_preview)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _bounded_lifecycle_text(value: object, *, maximum: int) -> str:
@@ -128,6 +142,10 @@ class ProtocolEventSurface(NoopSurface):
         self._semantic_activity_events = semantic_activity_events
         self._thread_context = threading.local()
         self._trace_level = "compact"
+        # Tool names by call id for calls whose start we announced as a semantic activity, so the
+        # canonical completion (which carries no tool name) can close the same activity row.
+        self._activity_tool_names: dict[str, str] = {}
+        self._activity_tool_names_lock = threading.Lock()
 
     @property
     def context(self) -> EventContext:
@@ -186,6 +204,8 @@ class ProtocolEventSurface(NoopSurface):
         *,
         worker_id: str | None = None,
         role: str | None = None,
+        arguments: Mapping[str, Any] | None = None,
+        activity_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self._emit_event(
             ToolCallStarted(
@@ -196,6 +216,27 @@ class ProtocolEventSurface(NoopSurface):
                 role=role,
             )
         )
+        # The agent core talks to this surface through the canonical emit_* path only
+        # (`canonical_message_tool_events`), so the semantic activity has to be produced here —
+        # not in on_tool_start, which the core never calls for this surface. Without this the IDE
+        # advertised semantic activity while emitting it for patches and prompts alone, and every
+        # verify_run/shell_run silently disappeared from the transcript.
+        if self._semantic_activity_events:
+            with self._activity_tool_names_lock:
+                self._activity_tool_names[call_id] = name
+            self.emit_activity(
+                tool_activity(
+                    call_id=call_id,
+                    name=name,
+                    arguments=(
+                        arguments
+                        if arguments is not None
+                        else _arguments_from_preview(arguments_preview)
+                    ),
+                    status="running",
+                    metadata={**dict(activity_metadata or {}), "worker_id": worker_id},
+                )
+            )
 
     def emit_activity(self, event: ActivityEvent) -> None:
         self._emit_event(ProtocolPayloadEvent(ACTIVITY_EVENT_TYPE, event.to_payload()))
@@ -220,6 +261,9 @@ class ProtocolEventSurface(NoopSurface):
         *,
         worker_id: str | None = None,
         role: str | None = None,
+        status: str | None = None,
+        duration_ms: int | None = None,
+        activity_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self._emit_event(
             ToolCallCompleted(
@@ -230,6 +274,22 @@ class ProtocolEventSurface(NoopSurface):
                 role=role,
             )
         )
+        if self._semantic_activity_events:
+            with self._activity_tool_names_lock:
+                name = self._activity_tool_names.pop(call_id, None)
+            if name is None:
+                # No activity row was opened for this call (start predates this surface, or the
+                # start was never announced); do not invent a terminal row without a kind.
+                return
+            self.emit_activity(
+                tool_activity(
+                    call_id=call_id,
+                    name=name,
+                    status=status or ("done" if success else "failed"),
+                    duration_ms=duration_ms,
+                    metadata={**dict(activity_metadata or {}), "worker_id": worker_id},
+                )
+            )
 
     def emit_status_update(
         self,
@@ -419,23 +479,17 @@ class ProtocolEventSurface(NoopSurface):
         self.emit_message_end(text)
 
     def on_tool_start(self, event: ToolStartEvent) -> None:
+        # Legacy delivery path (surfaces without canonical_message_tool_events). The semantic
+        # activity is emitted by emit_tool_call_started itself, with the structured arguments.
         self.emit_tool_call_started(
             event.tool_call_id,
             event.name,
             json.dumps(event.args, ensure_ascii=True, sort_keys=True),
             worker_id=event.subagent_name,
             role=event.subagent_mode,
+            arguments=event.args,
+            activity_metadata={"step": event.step},
         )
-        if self._semantic_activity_events:
-            self.emit_activity(
-                tool_activity(
-                    call_id=event.tool_call_id,
-                    name=event.name,
-                    arguments=event.args,
-                    status="running",
-                    metadata={"step": event.step, "worker_id": event.subagent_name},
-                )
-            )
 
     def on_tool_output(self, event: ToolOutputEvent) -> None:
         self.emit_tool_call_progress(
@@ -446,6 +500,12 @@ class ProtocolEventSurface(NoopSurface):
         )
 
     def on_tool_end(self, event: ToolEndEvent) -> None:
+        # Legacy delivery path; the terminal semantic activity is emitted by emit_tool_call_completed.
+        # A tool whose start this surface never saw still gets its activity row: register the name
+        # so the completion can close it.
+        if self._semantic_activity_events:
+            with self._activity_tool_names_lock:
+                self._activity_tool_names.setdefault(event.tool_call_id, event.name)
         self.emit_tool_call_completed(
             event.tool_call_id,
             str(event.status).strip().lower() in {"completed", "done", "success"},
@@ -460,17 +520,10 @@ class ProtocolEventSurface(NoopSurface):
             ),
             worker_id=event.subagent_name,
             role=event.subagent_mode,
+            status=event.status,
+            duration_ms=event.elapsed_ms,
+            activity_metadata=dict(event.meta),
         )
-        if self._semantic_activity_events:
-            self.emit_activity(
-                tool_activity(
-                    call_id=event.tool_call_id,
-                    name=event.name,
-                    status=event.status,
-                    duration_ms=event.elapsed_ms,
-                    metadata={**event.meta, "worker_id": event.subagent_name},
-                )
-            )
 
     def on_patch_generated(self, event: PatchEvent) -> None:
         self.emit_activity(patch_activity(event))

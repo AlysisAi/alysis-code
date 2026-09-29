@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ..session_artifacts import ARTIFACT_HANDLE_INDEX_DIR
 from .protocol import ProtocolError, redact_secrets
 
 DEFAULT_MAX_ARTIFACT_BYTES = 64 * 1024
@@ -50,6 +51,8 @@ class ArtifactStore:
                 except OSError:
                     continue
                 for path in entries:
+                    if depth == 0 and path.name == ARTIFACT_HANDLE_INDEX_DIR:
+                        continue
                     if path.is_symlink():
                         continue
                     if path.is_dir():

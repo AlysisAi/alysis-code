@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG PYTHON_IMAGE=python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9
+ARG PYTHON_IMAGE=python:3.12.14-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 ARG VARIANT=dev
 ARG SOURCE_URL=https://github.com/AlysisAi/alysis-code
 ARG GIT_SHA=dev
@@ -16,7 +16,7 @@ ARG GIT_SHA
 ARG VERSION
 ARG SOURCE_DATE_EPOCH
 # Freeze Debian package indexes instead of resolving against a moving mirror.
-ARG DEBIAN_SNAPSHOT=20260701T000000Z
+ARG DEBIAN_SNAPSHOT=20260927T000000Z
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,6 +30,10 @@ LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.description="Minimal Alysis Code shell sandbox runtime image." \
       org.opencontainers.image.licenses="Apache-2.0"
 
+# Upgrade inherited libraries as well as installing tools, using the same
+# immutable snapshot for both. Installing tools alone leaves old base packages.
+# The official Python base already supplies python/python3, pip, and venv.
+# Installing Debian python3-venv would add a second, unused interpreter and wheels.
 RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         -exec sed -ri \
           -e "s#https?://(deb|security)\.debian\.org/debian-security#https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/#g" \
@@ -37,7 +41,8 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
           {} +; \
     printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot; \
     apt-get update; \
-    packages="bash ca-certificates curl git ripgrep build-essential python3 python3-venv tini xz-utils"; \
+    apt-get upgrade -y --with-new-pkgs --no-install-recommends; \
+    packages="bash ca-certificates curl git ripgrep build-essential tini xz-utils"; \
     case "${TARGETPLATFORM:-linux/amd64}" in \
         linux/*) packages="${packages} bubblewrap" ;; \
         *) echo "Skipping bubblewrap for TARGETPLATFORM=${TARGETPLATFORM:-unknown}" ;; \
@@ -56,6 +61,12 @@ RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
     apt-mark manual ${packages}; \
     rm -rf /var/lib/apt/lists/*
 
+# Exercise the provided interpreter and its bundled venv support at build time.
+RUN test "$(command -v python3)" = /usr/local/bin/python3; \
+    python3 -m venv /tmp/alysis-venv-smoke; \
+    /tmp/alysis-venv-smoke/bin/python -m pip --version; \
+    rm -rf /tmp/alysis-venv-smoke
+
 RUN groupadd --gid 1000 alysis; \
     useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash alysis; \
     install -d -m 0755 -o 1000 -g 1000 /workspace
@@ -72,12 +83,16 @@ USER root
 
 ARG TARGETARCH
 # Each downloaded tool is version- and digest-pinned for both supported platforms.
-ARG NODE_VERSION=24.18.1
-ARG NODE_LINUX_AMD64_SHA256=d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
-ARG NODE_LINUX_ARM64_SHA256=7201e3a09dc825bac57867c81913e2b8f0ef87d04cb9082af4cda82f6ff3d88c
-ARG GO_VERSION=1.26.4
-ARG GO_LINUX_AMD64_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
-ARG GO_LINUX_ARM64_SHA256=ef758ae7c6cf9267c9c0ef080b8965f453d89ab2d25d9eb22de4405925238768
+ARG NODE_VERSION=24.21.0
+ARG NODE_LINUX_AMD64_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+ARG NODE_LINUX_ARM64_SHA256=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+# Node's bundled npm still contains affected transitive packages. Replace the
+# complete upstream npm distribution instead of patching its dependency tree.
+ARG NPM_VERSION=11.20.0
+ARG NPM_SHA256=d1a92f40e6c407b84c3a00c3cf978a10b24fd42f153c527e2016cef7bb34a483
+ARG GO_VERSION=1.26.8
+ARG GO_LINUX_AMD64_SHA256=d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
+ARG GO_LINUX_ARM64_SHA256=211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0
 ARG RUSTUP_VERSION=1.28.2
 ARG RUSTUP_LINUX_AMD64_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
 ARG RUSTUP_LINUX_ARM64_SHA256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
@@ -116,6 +131,16 @@ RUN case "${TARGETARCH:-amd64}" in \
     rm /tmp/node.tar.xz; \
     node --version; \
     npm --version
+
+RUN curl --proto '=https' --tlsv1.2 -fsSLo /tmp/npm.tgz \
+        "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"; \
+    echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -; \
+    rm -rf /usr/local/lib/node_modules/npm; \
+    mkdir -p /usr/local/lib/node_modules/npm; \
+    tar -xzf /tmp/npm.tgz -C /usr/local/lib/node_modules/npm --strip-components=1; \
+    rm /tmp/npm.tgz; \
+    test "$(npm --version)" = "${NPM_VERSION}"; \
+    test "$(npx --version)" = "${NPM_VERSION}"
 
 RUN case "${TARGETARCH:-amd64}" in \
         amd64) go_arch=amd64; go_sha="${GO_LINUX_AMD64_SHA256}" ;; \

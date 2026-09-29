@@ -138,22 +138,42 @@ def test_context_rejects_unknown_fields_and_invalid_ranges(tmp_path: Path) -> No
     assert invalid_range.value.code == "invalid_range"
 
 
-def test_context_rejects_outside_ignored_and_sensitive_paths(tmp_path: Path) -> None:
+def test_context_drops_outside_and_ignored_paths_without_failing_the_turn(tmp_path: Path) -> None:
+    # A path the ignore policy excludes, or one that resolved outside the workspace, is dropped
+    # from the bundle — it must not abort the whole turn. The IDE attaches whatever the user has
+    # open, and one git-ignored editor among many is the common case that used to fail the message.
     outside = tmp_path.parent / "outside.txt"
-    with pytest.raises(ContextValidationError) as outside_error:
-        sanitize_context_blocks(
-            [{"type": "file", "path": str(outside), "content": "x"}],
-            workspace_roots=[tmp_path],
-        )
-    assert outside_error.value.code == "path_outside_workspace"
+    outside_bundle = sanitize_context_blocks(
+        [{"type": "file", "path": str(outside), "content": "x"}],
+        workspace_roots=[tmp_path],
+    )
+    assert outside_bundle.blocks == ()
+    assert outside_bundle.dropped_block_count == 1
+    assert outside_bundle.truncated is True
 
-    with pytest.raises(ContextValidationError) as ignored_error:
-        sanitize_context_blocks(
-            [{"type": "file", "path": "ignored.txt", "content": "x"}],
-            workspace_roots=[tmp_path],
-            is_ignored=lambda path: path.name == "ignored.txt",
-        )
-    assert ignored_error.value.code == "ignored_path"
+    ignored_bundle = sanitize_context_blocks(
+        [{"type": "file", "path": "ignored.txt", "content": "x"}],
+        workspace_roots=[tmp_path],
+        is_ignored=lambda path: path.name == "ignored.txt",
+    )
+    assert ignored_bundle.blocks == ()
+    assert ignored_bundle.dropped_block_count == 1
+
+    # The regression the user hit: a mix of good and ignored blocks keeps every good one and drops
+    # only the ignored path, instead of failing the entire message on the first bad block.
+    mixed = sanitize_context_blocks(
+        [
+            {"type": "file", "path": "keep_before.py", "content": "a = 1\n"},
+            {"type": "file", "path": "build/ignored.py", "content": "secret\n"},
+            {"type": "file", "path": "keep_after.py", "content": "b = 2\n"},
+        ],
+        workspace_roots=[tmp_path],
+        is_ignored=lambda path: "build" in path.parts,
+    )
+    kept = [str(block.data.get("path")) for block in mixed.blocks]
+    assert kept == ["keep_before.py", "keep_after.py"]
+    assert mixed.dropped_block_count == 1
+    assert all("secret" not in json.dumps(block.data) for block in mixed.blocks)
 
     for sensitive_path in (".env", ".kube/config", "keys/deploy.ppk"):
         with pytest.raises(ContextValidationError) as sensitive_error:

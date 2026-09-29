@@ -179,6 +179,12 @@ def test_docker_toolchains_and_external_images_are_immutable_inputs() -> None:
     assert re.search(r"ARG NODE_VERSION=\d+\.\d+\.\d+", dockerfile)
     assert re.search(r"ARG NODE_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG NODE_LINUX_ARM64_SHA256=[0-9a-f]{64}", dockerfile)
+    assert re.search(r"ARG NPM_VERSION=\d+\.\d+\.\d+", dockerfile)
+    assert re.search(r"ARG NPM_SHA256=[0-9a-f]{64}", dockerfile)
+    npm_install = dockerfile.split("RUN curl --proto", 1)[1].split("RUN case", 1)[0]
+    assert npm_install.index("sha256sum -c -") < npm_install.index("tar -xzf")
+    assert 'test "$(npm --version)" = "${NPM_VERSION}"' in npm_install
+    assert 'test "$(npx --version)" = "${NPM_VERSION}"' in npm_install
     assert re.search(r"ARG GO_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG GO_LINUX_ARM64_SHA256=[0-9a-f]{64}", dockerfile)
     assert re.search(r"ARG RUSTUP_LINUX_AMD64_SHA256=[0-9a-f]{64}", dockerfile)

@@ -188,6 +188,74 @@ jobs:
           env -i HOME="$install_home" SHELL=/bin/bash PATH="$install_home/.local/bin:/usr/bin:/bin" sh scripts/install.sh
           "$install_home/.local/bin/alysis" --help > /dev/null
 
+  vscode-extension:
+    name: VS Code extension (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extensions/vscode-alysis/package-lock.json
+
+      - name: Install uv for packaged extension dogfood
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.23"
+
+      - name: Sync locked bridge dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Install extension dependencies
+        working-directory: extensions/vscode-alysis
+        run: npm ci
+
+      - name: Compile, lint, and run extension unit tests
+        working-directory: extensions/vscode-alysis
+        run: npm run compile && npm run lint && npm test
+
+      - name: Test real Extension Host on Linux
+        if: runner.os == 'Linux'
+        working-directory: extensions/vscode-alysis
+        run: xvfb-run -a npm run test:integration
+
+      - name: Test real Extension Host on Windows and macOS
+        if: runner.os != 'Linux'
+        working-directory: extensions/vscode-alysis
+        run: npm run test:integration
+
+      - name: Package the pre-release VSIX on every supported desktop OS
+        working-directory: extensions/vscode-alysis
+        run: npm run package:dev-vsix -- --pre-release
+
+      - name: Dogfood unpacked VSIX on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a uv run --frozen python scripts/qa/vscode_extension_dogfood.py --mode mock --package-mode require --extension-host run
+
+      - name: Dogfood unpacked VSIX on Windows and macOS
+        if: runner.os != 'Linux'
+        run: uv run --frozen python scripts/qa/vscode_extension_dogfood.py --mode mock --package-mode require --extension-host run
+
+      - name: Audit production extension dependencies
+        if: runner.os == 'Linux'
+        working-directory: extensions/vscode-alysis
+        run: npm audit --audit-level=high
+
   uv-project-workflow:
     name: uv project workflow
     runs-on: ubuntu-latest
@@ -217,6 +285,7 @@ jobs:
       - reliability-qualification
       - macos-smoke
       - uv-project-workflow
+      - vscode-extension
 
     steps:
       - name: Check out repository

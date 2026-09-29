@@ -1,5 +1,19 @@
 # Changelog
 
+
+## 0.14.4 — IDE integrations and release tooling
+
+- Add the VS Code 0.3.0 integration with a shared sidebar, provider management, bounded editor
+  context, reviewed changes, recovery checkpoints, and native host actions.
+- Add shared UI transport and a JetBrains development preview using the same Python IDE bridge.
+- Isolate provider credentials, handle physical workspace paths, and keep unit tests portable.
+- Add six-target managed-runtime packaging, Azure OIDC Windows signing verification, Apple
+  notarization/provenance contracts, and protected evidence and Marketplace promotion workflows.
+- Update pinned sandbox build inputs; fresh image scans remain required.
+
+This is a CLI/source release. Production signed VSIX packages and Marketplace publication remain
+pending the [documented signing and acceptance gates](vscode-marketplace-launch.md).
+
 Notable user-facing changes to Alysis Code are recorded here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while the public API remains pre-1.0.

@@ -1,0 +1,24 @@
+{
+  "entries": [
+    {
+      "origins": [
+        "https://api.deepseek.com"
+      ],
+      "provider": "deepseek"
+    },
+    {
+      "origins": [
+        "https://api.openai.com"
+      ],
+      "provider": "openai"
+    },
+    {
+      "origins": [
+        "https://api.openai.com"
+      ],
+      "provider": "openai-responses"
+    }
+  ],
+  "schema_name": "vscode-live-provider-origin-policy",
+  "schema_version": 1
+}

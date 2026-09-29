@@ -135,6 +135,8 @@ Persona changes made during a running turn apply after that turn finishes.
 
 Apache-2.0. You're free to use, modify, and distribute this code, including commercially, as long as
 you keep the attribution and license notices. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The shared editor sidebar includes MIT-licensed adaptations from Kilo Code/OpenCode; retain its
+[third-party notices](extensions/shared-ui/THIRD_PARTY_NOTICES.txt).
 
 ## FAQ
 
@@ -157,3 +159,11 @@ More questions? See the [full FAQ](https://alysiscode.com/docs/faq).
 ---
 
 **Join the community** — [X](https://x.com/alysiscode) | [GitHub Issues](https://github.com/AlysisAi/alysis-code/issues)
+
+
+## Editor integrations
+
+[VS Code](extensions/vscode-alysis/README.md) uses the shared Alysis sidebar and Python IDE bridge.
+[JetBrains](extensions/jetbrains-alysis/README.md) is a development preview with a smaller feature set.
+The VS Code Marketplace pre-release is pending production signing and acceptance; see the
+[IDE release status](docs/vscode-marketplace-launch.md) before installing component packages.

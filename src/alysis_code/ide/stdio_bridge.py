@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -28,6 +29,7 @@ from ..agent.prompt_context import (
     set_session_active_workdir,
 )
 from ..agent.session import create_session
+from ..agent.task_state import TASK_RELATIONS
 from ..approval_scope import (
     SCOPE_EXACT_COMMAND_HASH,
     SCOPE_EXACT_FILE_SET,
@@ -43,7 +45,13 @@ from ..code_review import (
     InvalidReviewRequest,
     ReviewRequest,
 )
-from ..config import ConfigError, _apply_legacy_temperature_override, clone_cfg, load_config
+from ..config import (
+    ConfigError,
+    _apply_legacy_temperature_override,
+    clone_cfg,
+    load_config,
+    save_config,
+)
 from ..host_actions import (
     HOST_ACTION_MAX_ARGUMENT_BYTES,
     HOST_ACTION_MAX_RESULT_BYTES,
@@ -60,6 +68,7 @@ from ..llm.protocols import OPENAI_COMPAT_PROTOCOL
 from ..mcp.errors import McpError
 from ..mcp.manager import McpManager
 from ..permission_policy import (
+    PermissionEvaluation,
     PermissionPolicyError,
     PermissionPolicyStore,
     PermissionRequest,
@@ -79,7 +88,9 @@ from ..personas import (
 )
 from ..profiles import ProfileSpec, add_profile, set_active_profile, validate_base_url
 from ..request_estimation import estimate_request_token_breakdown, estimate_request_tokens
+from ..run_outcome import task_outcome_fields
 from ..runtime_kind import RuntimeKind
+from ..sandbox_settings import apply_sandbox_mode_to_config, resolve_shell_sandbox_settings
 from ..session_store import make_session_id, resolve_sessions_dir
 from ..surface.console import make_console
 from ..surface.events import InfoEmitted
@@ -93,7 +104,13 @@ from ..workspace_binding_ui import resolve_startup_workspace_binding
 from .activity_events import ActivityEvent
 from .artifacts import ArtifactRoot, ArtifactStore
 from .cdp_websocket_transport import WebSocketCdpTransportFactory
-from .change_ledger import ChangeLedger, ChangeLedgerError, Checkpoint, StaleWorkspaceError
+from .change_ledger import (
+    ChangeLedger,
+    ChangeLedgerError,
+    Checkpoint,
+    StaleWorkspaceError,
+    checkpoint_storage_exists,
+)
 from .context_blocks import ContextValidationError, sanitize_context_blocks
 from .event_stream import EventContext, EventSequencer, ProtocolEventSurface, ProtocolPayloadEvent
 from .forge_protocol import (
@@ -163,6 +180,7 @@ from .mcp_oauth_coordinator import (
     McpOAuthIdeCoordinator,
 )
 from .mcp_oauth_lifecycle import OAuthFlowStateError, OAuthFlowStatus, OAuthValidationError
+from .parent_watchdog import start_parent_watchdog
 from .prompt_queue import (
     DEFAULT_LEASE_SECONDS,
     DurablePromptQueue,
@@ -225,6 +243,8 @@ EVENT_REPLAY_RESPONSE_MAX = 500
 DEFAULT_CLOSED_SESSION_HISTORY_MAX = 100
 DEFAULT_JOB_HISTORY_MAX = 1_000
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+# Extra time the parent watchdog allows the normal shutdown to finish before os._exit.
+PARENT_EXIT_GRACE_SECONDS = 5.0
 TRACE_EVENT_RESPONSE_MAX = 500
 TRACE_ARTIFACT_DEFAULT_MAX_BYTES = 32 * 1024
 TRACE_ARTIFACT_MAX_BYTES = 256 * 1024
@@ -262,6 +282,7 @@ CHAT_SEND_ALLOWED_FIELDS = frozenset(
         "image_paths",
         "context_blocks",
         "idempotency_key",
+        "task_relation",
     }
 )
 RUN_START_SESSION_FIELDS = frozenset(
@@ -414,11 +435,16 @@ class BridgeSession:
     agent_session: Any
     artifact_store: ArtifactStore
     change_ledger: ChangeLedger | None = None
+    checkpoint_guard: _CheckpointToolDispatchGuard | None = None
+    checkpoint_setup: tuple[threading.Event, dict[str, Any]] | None = field(
+        default=None, repr=False
+    )
     structured_state: DurableStructuredState | None = None
     resumable_swarm: DurableResumableSwarmCoordinator | None = None
     managed_browser: ManagedBrowserService | None = None
     active_job: BridgeJob | None = None
     last_job: BridgeJob | None = None
+    forked_from_session_id: str | None = None
     # How the session's current persona was chosen ("config" until the IDE
     # sets one via session.persona.set, then "user"), mirroring the source
     # vocabulary of the persona_changed event.
@@ -439,6 +465,52 @@ class BridgeSession:
     resolved_host_actions: dict[str, ResolvedHostActionRecord] = field(default_factory=dict)
     host_action_lock: threading.RLock = field(default_factory=threading.RLock)
     close_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+
+_CHECKPOINT_FREE_READ_TOOLS = frozenset(
+    {"fs_read", "fs_read_lines", "fs_list", "git_status", "git_diff", "session_artifact_read"}
+)
+
+
+class _CheckpointToolDispatchGuard:
+    """Prepare rollback storage before tools that can change the workspace."""
+
+    def __init__(self, session_ref: dict[str, BridgeSession]) -> None:
+        self._session_ref = session_ref
+        self._prepared_job_id: str | None = None
+        self._ready = False
+        self._lock = threading.Lock()
+
+    def check_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        resolve_rel_path: Callable[..., str] | None = None,
+    ) -> None:
+        session = self._session_ref.get("session")
+        if session is None or not _checkpointing_supported(session):
+            return
+        job = session.active_job
+        if job is None:
+            return
+        _check_job_cancelled(job)
+        # Only audited built-ins bypass setup. Unknown tools, shell, MCP and
+        # delegation can edit indirectly and must still share a baseline.
+        if tool_name in _CHECKPOINT_FREE_READ_TOOLS:
+            return
+        with self._lock:
+            _check_job_cancelled(job)
+            if self._prepared_job_id != job.job_id:
+                self._ready = _prepare_change_ledger_with_deadline(session)
+                self._prepared_job_id = job.job_id
+            _check_job_cancelled(job)
+            if not self._ready:
+                raise ChangeLedgerError(
+                    "checkpoint_unavailable: This action was not run because restore "
+                    "snapshots are not ready. File reading and Git review remain available. "
+                    "Wait for setup to finish, then send your request again."
+                )
 
 
 class _TurnTouchedPathSet(set[str]):
@@ -757,6 +829,8 @@ class StdioBridge:
                 str(result["session_id"]), request_id=request.id
             )
             return result, lambda: self._resume_prompt_queue(resumed_session)
+        if method == "session.fork":
+            return self._session_fork(request), None
         if method == "session.images.list":
             return self._session_images_list(request), None
         if method == "session.images.add":
@@ -767,6 +841,8 @@ class StdioBridge:
             return self._session_set_mode(request), None
         if method == "session.setModel":
             return self._session_set_model(request), None
+        if method == "session.setProfile":
+            return self._session_set_profile(request), None
         if method == "session.setStream":
             return self._session_set_stream(request), None
         if method == "session.setActiveWorkdir":
@@ -1097,6 +1173,7 @@ class StdioBridge:
                 self._remove_session_locked(session_id)
         cfg = clone_cfg(load_config())
         _apply_config_overrides(cfg, params, request_id=request.id)
+        _apply_session_sandbox_profile(cfg, params, request_id=request.id)
         if not cfg.model:
             raise ProtocolError("config_error", "Model is not set.", request_id=request.id)
         yes = _optional_bool(params, "yes", default=False, request_id=request.id)
@@ -1130,6 +1207,7 @@ class StdioBridge:
             actions=host_actions,
         )
         session_ref: dict[str, BridgeSession] = {}
+        checkpoint_guard = _CheckpointToolDispatchGuard(session_ref)
 
         # Compose the browser service into the agent up front so model tools and
         # explicit browser.* protocol calls share one owner-scoped lifecycle.
@@ -1191,6 +1269,7 @@ class StdioBridge:
                 host_action_handler=_host_action_handler if host_actions else None,
                 host_action_capabilities=host_actions,
                 session_id_override=session_id,
+                tool_dispatch_guard=checkpoint_guard,
             )
             active_workdir = _optional_str(params, "active_workdir", request_id=request.id)
             if active_workdir is None:
@@ -1231,6 +1310,7 @@ class StdioBridge:
             surface=surface,
             agent_session=agent_session,
             artifact_store=ArtifactStore(roots),
+            checkpoint_guard=checkpoint_guard,
             managed_browser=managed_browser,
             workspace_trusted=workspace_trusted,
             host_actions=host_actions,
@@ -1244,6 +1324,7 @@ class StdioBridge:
             "session_id": session_id,
             "workspace_root": os.fspath(root),
             "mode": mode,
+            "sandbox_mode": resolve_shell_sandbox_settings(cfg).mode,
             "host_actions": _host_actions_session_payload(
                 bridge_session,
                 request_timeout_seconds=self._host_action_timeout_seconds,
@@ -1381,6 +1462,7 @@ class StdioBridge:
                 "invalid_field", "idempotency_key must be a string.", request_id=request.id
             )
         idempotency_key = str(raw_idempotency_key or uuid.uuid4().hex).strip()
+        task_relation = _task_relation_param(params, request_id=request.id)
         with self._state_lock:
             _reconcile_session_job_state(session)
             basket_image_paths = list(session.pending_images)
@@ -1392,6 +1474,8 @@ class StdioBridge:
             "context": context_bundle.to_dict(),
             "context_prompt": context_bundle.to_prompt(),
         }
+        if task_relation is not None:
+            queue_payload["task_relation"] = task_relation
         if run_start_fingerprint is not None:
             queue_payload["run_start_fingerprint"] = run_start_fingerprint
         try:
@@ -2165,11 +2249,13 @@ class StdioBridge:
             image_paths = payload.get("image_paths", [])
             basket_image_paths = payload.get("basket_image_paths", [])
             context_prompt = payload.get("context_prompt", "")
+            task_relation = payload.get("task_relation")
             if (
                 not isinstance(message, str)
                 or not isinstance(context_prompt, str)
                 or not _is_string_list(image_paths)
                 or not _is_string_list(basket_image_paths)
+                or not _is_valid_queued_task_relation(task_relation)
             ):
                 with suppress(PromptQueueError):
                     self._prompt_queue.fail(
@@ -2260,6 +2346,7 @@ class StdioBridge:
                     context_prompt,
                     lease,
                 ),
+                kwargs={"task_relation": task_relation},
                 name=f"alysis-ide-{job.job_id}",
                 daemon=True,
             )
@@ -2285,6 +2372,8 @@ class StdioBridge:
         basket_image_paths: list[str],
         context_prompt: str = "",
         prompt_lease: PromptLease | None = None,
+        *,
+        task_relation: str | None = None,
     ) -> None:
         session.surface.with_job(job.job_id)
         heartbeat_stop = threading.Event()
@@ -2292,6 +2381,32 @@ class StdioBridge:
         heartbeat: threading.Thread | None = None
         checkpoint_supported = _checkpointing_supported(session)
         turn_touched_paths: set[str] = set()
+        previous_outcome = getattr(session.agent_session, "last_turn_outcome", None)
+
+        def turn_outcome_fields(exit_code: int, reason: str = "completed") -> dict[str, Any]:
+            current = getattr(session.agent_session, "last_turn_outcome", None)
+            # Rejected input and failures before run_turn must not reuse a
+            # prior accepted task's verdict or attribute its identity here.
+            fields = task_outcome_fields(
+                None if current is previous_outcome else current,
+                exit_code=exit_code,
+                reason=reason,
+            )
+            outcome = fields["task_outcome"]
+            if reason == "cancelled":
+                outcome.update(
+                    outcome="cancelled", verified_success=False, reason=reason, exit_code=exit_code
+                )
+            elif exit_code != 0 and outcome["outcome"] in {
+                "verified_success",
+                "completed_unverified",
+            }:
+                outcome.update(
+                    outcome="incomplete", verified_success=False, reason=reason, exit_code=exit_code
+                )
+            fields["verified_success"] = outcome["verified_success"]
+            return fields
+
         try:
             if prompt_lease is not None:
                 self._prompt_queue.mark_execution_started(
@@ -2323,10 +2438,11 @@ class StdioBridge:
                     status="running",
                 )
             )
-            if checkpoint_supported:
-                if session.change_ledger is None:
-                    session.change_ledger = ChangeLedger(session.root)
-                session.change_ledger.ensure_baseline(session.session_id)
+            if checkpoint_supported and session.checkpoint_guard is None:
+                # Alternate session implementations without a dispatch hook still
+                # need an eager baseline. Production sessions prepare it lazily,
+                # before the first tool; text-only replies never need Git storage.
+                _prepare_change_ledger_with_deadline(session)
             _check_job_cancelled(job)
             cumulative_touched = getattr(session.agent_session, "workspace_touched_paths", set())
             tracker = _TurnTouchedPathSet(
@@ -2334,16 +2450,24 @@ class StdioBridge:
             )
             session.agent_session.workspace_touched_paths = tracker
             turn_touched_paths = tracker.recorded
-            effective_message = (
-                f"{message}\n\n{context_prompt}" if context_prompt.strip() else message
-            )
+            # Captured files, diagnostics and terminal output are context,
+            # never the accepted instruction or its durable task identity.
+            # Keep their untrusted wrapper in the existing per-turn channel.
+            context_messages = [context_prompt] if context_prompt.strip() else None
+            # The durable prompt id is the host's identity for this accepted
+            # request: a re-dispatch of the same prompt keeps the task it
+            # created, a different prompt with the same text does not.
+            task_request_id = str(job.prompt_id or job.job_id or "").strip() or None
             if image_paths:
                 exit_code = int(
                     _run_agent_turn_with_optional_cancellation(
                         session.agent_session,
-                        effective_message,
+                        message,
                         image_paths=image_paths,
+                        ephemeral_user_messages=context_messages,
                         cancellation_token=BridgeCancellationToken(job.cancellation_event),
+                        task_relation=task_relation,
+                        task_request_id=task_request_id,
                     )
                     or 0
                 )
@@ -2351,20 +2475,26 @@ class StdioBridge:
                 exit_code = int(
                     _run_agent_turn_with_optional_cancellation(
                         session.agent_session,
-                        effective_message,
+                        message,
+                        ephemeral_user_messages=context_messages,
                         cancellation_token=BridgeCancellationToken(job.cancellation_event),
+                        task_relation=task_relation,
+                        task_request_id=task_request_id,
                     )
                     or 0
                 )
             if heartbeat_lost.is_set():
                 raise PromptLeaseLost("Prompt lease is no longer valid.")
             _check_job_cancelled(job)
+            outcome_fields = turn_outcome_fields(exit_code)
             if not checkpoint_supported:
                 # Lightweight protocol test/fallback sessions do not own a durable
                 # SessionStore. Preserve the historical observable completion timing
                 # while the queue transaction settles immediately afterward.
                 with self._state_lock:
-                    _mark_job_completed(job, status="completed", exit_code=exit_code)
+                    _mark_job_completed(
+                        job, status="completed", exit_code=exit_code, result=outcome_fields
+                    )
             checkpoint = (
                 session.change_ledger.capture(
                     session.session_id,
@@ -2373,7 +2503,7 @@ class StdioBridge:
                     message="IDE chat turn",
                     paths=turn_touched_paths,
                 )
-                if session.change_ledger is not None
+                if session.change_ledger is not None and turn_touched_paths
                 else None
             )
             completed_recorded = _append_prompt_store_event(
@@ -2399,6 +2529,7 @@ class StdioBridge:
                     status="completed",
                     exit_code=exit_code,
                     result={
+                        **outcome_fields,
                         "checkpoint_id": (
                             checkpoint.checkpoint_id if checkpoint is not None else None
                         ),
@@ -2426,8 +2557,20 @@ class StdioBridge:
                     activity_id=f"prompt-{job.prompt_id or job.job_id}",
                     kind="plan",
                     operation="execute_prompt",
-                    display_title="Request completed",
-                    status="succeeded",
+                    display_title=(
+                        "Request verified"
+                        if outcome_fields["verified_success"]
+                        else "Request finished · unverified"
+                    ),
+                    status=(
+                        "succeeded"
+                        if outcome_fields["verified_success"]
+                        else "completed_unverified"
+                    ),
+                    metadata={
+                        "task_outcome": outcome_fields["task_outcome"]["outcome"],
+                        "verified_success": outcome_fields["verified_success"],
+                    },
                     summary=(
                         f"Checkpoint {checkpoint.checkpoint_id[:8]} recorded."
                         if checkpoint is not None
@@ -2456,7 +2599,11 @@ class StdioBridge:
                     )
             with self._state_lock:
                 _mark_job_completed(
-                    job, status="cancelled", exit_code=130, error=error_message_text
+                    job,
+                    status="cancelled",
+                    exit_code=130,
+                    error=error_message_text,
+                    result=turn_outcome_fields(130, "cancelled"),
                 )
                 _reconcile_session_job_state(session)
             session.surface.emit_warning(f"job_cancelled {job.job_id} reason={error_message_text}")
@@ -2477,7 +2624,13 @@ class StdioBridge:
                         ),
                     )
             with self._state_lock:
-                _mark_job_completed(job, status="failed", exit_code=1, error=safe_error)
+                _mark_job_completed(
+                    job,
+                    status="failed",
+                    exit_code=1,
+                    error=safe_error,
+                    result=turn_outcome_fields(1, "terminal_error"),
+                )
                 _reconcile_session_job_state(session)
             session.surface.emit_error("job_failed", safe_error, False)
         finally:
@@ -2518,7 +2671,7 @@ class StdioBridge:
         *,
         paths: Iterable[str],
     ) -> None:
-        if session.change_ledger is None:
+        if session.change_ledger is None or not paths:
             return
         try:
             session.change_ledger.capture(
@@ -2874,6 +3027,131 @@ class StdioBridge:
             "pins_after": pins_after,
         }
 
+    def _session_fork(self, request: ProtocolRequest) -> dict[str, Any]:
+        """Copy dialogue to a fresh sibling worktree, never approvals, tools or checkpoints."""
+        import subprocess
+
+        source = self._require_session(
+            _required_str(request.params, "source_session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        target = self._require_session(
+            _required_str(request.params, "session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        if source is target or not source.workspace_trusted or not target.workspace_trusted:
+            raise ProtocolError(
+                "invalid_fork", "Fork requires two trusted sessions.", request_id=request.id
+            )
+
+        def common_dir(root: Path) -> Path:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key
+                not in {
+                    "GIT_DIR",
+                    "GIT_COMMON_DIR",
+                    "GIT_WORK_TREE",
+                    "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                }
+            }
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+                env=env,
+            )
+            return (root / result.stdout.strip()).resolve(strict=True)
+
+        try:
+            related = common_dir(source.root) == common_dir(target.root)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProtocolError(
+                "invalid_fork", "Cannot verify worktree ownership.", request_id=request.id
+            ) from exc
+        if not related or source.root == target.root:
+            raise ProtocolError(
+                "invalid_fork",
+                "Sessions must belong to different worktrees of the same repository.",
+                request_id=request.id,
+            )
+        with self._state_lock:
+            for session in (source, target):
+                _reconcile_session_job_state(session)
+                if _job_is_active(session.active_job):
+                    raise ProtocolError(
+                        "session_busy",
+                        "Finish or stop the active task before moving it.",
+                        request_id=request.id,
+                    )
+            messages = getattr(target.agent_session, "messages", None)
+            startup = getattr(target.agent_session, "startup_messages", None)
+            fresh = (
+                messages == startup
+                if isinstance(startup, list)
+                else not any(
+                    m.get("role") in {"user", "assistant", "tool"}
+                    for m in messages or []
+                    if isinstance(m, dict)
+                )
+            )
+            if (
+                not isinstance(messages, list)
+                or not fresh
+                or target.last_job is not None
+                or target.forked_from_session_id
+            ):
+                raise ProtocolError(
+                    "invalid_fork",
+                    "The destination must be a new conversation.",
+                    request_id=request.id,
+                )
+            history = []
+            size = 0
+            source_messages = getattr(source.agent_session, "messages", [])
+            source_startup = getattr(source.agent_session, "startup_messages", [])
+            if source_startup and source_messages[: len(source_startup)] == source_startup:
+                source_messages = source_messages[len(source_startup) :]
+            for message in reversed(source_messages):
+                if not isinstance(message, dict) or message.get("role") not in {
+                    "user",
+                    "assistant",
+                }:
+                    continue
+                content = message.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                content = str(redact_secrets(content))
+                size += len(content.encode("utf-8"))
+                if len(history) >= 200 or size > 256_000:
+                    break
+                history.append({"role": message["role"], "content": content})
+            history.reverse()
+            store = getattr(target.agent_session, "store", None)
+            if store is None or not callable(getattr(store, "append", None)):
+                raise ProtocolError(
+                    "invalid_fork",
+                    "Conversation persistence is unavailable.",
+                    request_id=request.id,
+                )
+            for message in history:
+                store.append(f"{message['role']}_message", {"content": message["content"]})
+            messages.extend(history)
+            target.forked_from_session_id = source.session_id
+            for message in history:
+                target.surface.emit_message_end(message["content"], role=message["role"])
+            return {
+                "session_id": target.session_id,
+                "source_session_id": source.session_id,
+                "history_count": len(history),
+            }
+
     def _session_resume(self, request: ProtocolRequest) -> dict[str, Any]:
         params = request.params
         session = self._require_session(
@@ -2884,6 +3162,7 @@ class StdioBridge:
         from ..cli_impl.commands.chat_resume_helpers import (
             _build_chat_resume_context_message,
             _insert_chat_resume_context_message,
+            _is_chat_resume_context_message,
             _load_chat_resume_messages,
             _normalize_chat_resume_session_id,
             _resolve_chat_resume_session_path,
@@ -2926,10 +3205,19 @@ class StdioBridge:
                 request_id=request.id,
             )
         try:
-            checkpoint_lineage = self._change_ledger_for_session(session).adopt_session(
-                session.session_id,
-                normalized_target,
-            )
+            checkpoint_lineage = None
+            if shutil.which("git") is None and not checkpoint_storage_exists(session.root):
+                # A fresh machine can restore a conversation without Git. Existing checkpoint
+                # state must still take the normal adoption path and fail closed if unavailable.
+                session.surface.emit_warning(
+                    "Conversation history can be restored, but file checkpoints need Git. "
+                    "Install Git to use checkpoint recovery."
+                )
+            else:
+                checkpoint_lineage = self._change_ledger_for_session(session).adopt_session(
+                    session.session_id,
+                    normalized_target,
+                )
         except ChangeLedgerError as exc:
             raise ProtocolError(
                 "checkpoint_recovery_failed", str(exc), request_id=request.id
@@ -2952,7 +3240,7 @@ class StdioBridge:
         resume_context_message = (
             None if bounded else _build_chat_resume_context_message(target_path)
         )
-        context_message = resume_context_message or ""
+        context_message = resume_context_message
         context_inserted = False
         if context_message:
             context_inserted = _insert_chat_resume_context_message(
@@ -2961,6 +3249,43 @@ class StdioBridge:
             )
         target_messages.extend(replay_messages)
         after_count = len(target_messages)
+        store = getattr(session.agent_session, "store", None)
+        if store is not None and callable(getattr(store, "append", None)):
+            startup = getattr(session.agent_session, "startup_messages", [])
+            retained_messages = [message for message in target_messages if message not in startup]
+            store.append(
+                "conversation_summary_updated", {"active_conversation_messages": retained_messages}
+            )
+        if _optional_bool(params, "emit_history", default=False, request_id=request.id):
+            for message in replay_messages:
+                if _is_chat_resume_context_message(message):
+                    continue
+                if message.get("role") in {"user", "assistant"} and isinstance(
+                    message.get("content"), str
+                ):
+                    session.surface.emit_message_end(message["content"], role=message["role"])
+        # Task identity travels with the adopted lineage. The live session's
+        # own accepted task (if any) is never silently replaced: the retained
+        # task is installed only into a session that holds no task yet.
+        task_state_recovery = "skipped_live_task_active"
+        task_id_restored: str | None = None
+        live_task_state = getattr(session.agent_session, "task_state", None)
+        if live_task_state is None:
+            from ..cli_impl.commands.chat_resume_helpers import (
+                _restore_chat_resume_task_state,
+            )
+
+            try:
+                task_note = _restore_chat_resume_task_state(
+                    session.agent_session,
+                    path=target_path,
+                    source_session_id=normalized_target,
+                )
+            except Exception as exc:  # noqa: BLE001 - identity restore must not fail replay
+                task_state_recovery = f"failed:{type(exc).__name__}"
+            else:
+                task_state_recovery = str(task_note.get("task_state_recovery") or "")
+                task_id_restored = task_note.get("task_id")
         try:
             queue_recovery = self._prompt_queue.rebind_recoverable(
                 source_session_id=normalized_target,
@@ -2990,6 +3315,8 @@ class StdioBridge:
             "active_prompts_observed": queue_recovery["active"],
             "checkpoint_lineage_adopted": checkpoint_lineage is not None,
             "checkpoint_lineage_session_id": checkpoint_lineage,
+            "task_state_recovery": task_state_recovery,
+            "task_id": task_id_restored,
         }
 
     def _session_images_list(self, request: ProtocolRequest) -> dict[str, Any]:
@@ -3050,8 +3377,19 @@ class StdioBridge:
             request_id=request.id,
         )
         mode = _mode_param(request.params, request_id=request.id)
-        _apply_agent_session_mode(session.agent_session, mode)
-        session.mode = str(getattr(session.agent_session, "mode", mode) or mode)
+        # The stdio protocol has no next-message staging handshake. Keep its
+        # contract explicit: an idle session may switch immediately; an active
+        # turn is rejected instead of rebuilding the tools underneath it.
+        with self._state_lock:
+            _reconcile_session_job_state(session)
+            if _job_is_active(session.active_job):
+                raise ProtocolError(
+                    "session_busy",
+                    "Cancel or wait for the active turn before changing Permissions.",
+                    request_id=request.id,
+                )
+            _apply_agent_session_mode(session.agent_session, mode)
+            session.mode = str(getattr(session.agent_session, "mode", mode) or mode)
         session.surface.emit_status_update(
             mode=session.mode,
             model=str(getattr(getattr(session.agent_session, "cfg", None), "model", "") or ""),
@@ -3075,6 +3413,48 @@ class StdioBridge:
             _apply_config_overrides(cfg, {"base_url": base_url}, request_id=request.id)
         _refresh_agent_session_config(session.agent_session, cfg)
         session.surface.emit_status_update(mode=session.mode, model=model)
+        return _session_status_payload(session)
+
+    def _session_set_profile(self, request: ProtocolRequest) -> dict[str, Any]:
+        from ..profiles import get_profile
+        from .provider_switch import switch_session_provider
+
+        self._require_workspace_trusted(request)
+        session = self._require_session(
+            _required_str(request.params, "session_id", request_id=request.id),
+            request_id=request.id,
+        )
+        name = _required_str(request.params, "name", request_id=request.id)
+        model = _optional_str(request.params, "model", request_id=request.id)
+        with self._state_lock:
+            _reconcile_session_job_state(session)
+            if _job_is_active(session.active_job):
+                raise ProtocolError(
+                    "session_busy",
+                    "Finish or stop the current task before switching providers.",
+                    request_id=request.id,
+                )
+            saved_cfg = clone_cfg(load_config())
+            profile = get_profile(saved_cfg, name)
+            if profile is None:
+                raise ProtocolError(
+                    "config_error", f"Unknown provider profile: {name}", request_id=request.id
+                )
+            if model:
+                profile = replace(profile, default_model=model)
+                add_profile(saved_cfg, profile, allow_auth_profile_update=True)
+            set_active_profile(saved_cfg, name)
+            # Keep this conversation's permissions, budgets, and workspace settings.
+            cfg = clone_cfg(session.agent_session.cfg)
+            add_profile(cfg, profile, allow_auth_profile_update=True)
+            set_active_profile(cfg, name)
+            switch_session_provider(
+                session.agent_session,
+                cfg,
+                refresh=_refresh_agent_session_config,
+                persist=lambda: save_config(saved_cfg),
+            )
+        session.surface.emit_status_update(mode=session.mode, model=cfg.model)
         return _session_status_payload(session)
 
     def _session_set_stream(self, request: ProtocolRequest) -> dict[str, Any]:
@@ -7036,11 +7416,19 @@ class StdioBridge:
                 float("inf") if persistent else time.monotonic() + self._approval_timeout_seconds
             ),
         )
-        mandatory_explicit_approval = pending.metadata.get("mandatory_explicit_approval") is True
+        mandatory_explicit_approval = (
+            pending.metadata.get("mandatory_explicit_approval") is True
+            or pending.metadata.get("allow_for_session_disabled") is True
+        )
 
         sensitive, external_directory = _permission_path_safety_flags(
             pending.files, os.fspath(session.root)
         )
+        mandatory_explicit_approval = mandatory_explicit_approval or sensitive or external_directory
+        if mandatory_explicit_approval:
+            pending.allow_for_session_supported = False
+            pending.allow_for_session_warning = "This operation requires one-time approval."
+            pending.metadata["allow_for_session_disabled"] = True
         try:
             policy_evaluation = self._permission_policy_store.evaluate(
                 PermissionRequest.create(
@@ -7053,9 +7441,15 @@ class StdioBridge:
                 )
             )
         except PermissionPolicyError:
-            policy_evaluation = None
+            policy_evaluation = PermissionEvaluation(
+                decision=PolicyEffect.DENY,
+                reason="permission_policy_error",
+                matched_rule_id="override:policy_error",
+                matched_rule_source="builtin_safety",
+                specificity=2_147_483_647,
+            )
 
-        if policy_evaluation is not None and policy_evaluation.decision is PolicyEffect.DENY:
+        if policy_evaluation.decision is PolicyEffect.DENY:
             decision = ApprovalDecision(allow=False, allow_for_session=False)
             pending.decision = decision
             pending.result_status = "denied_by_policy"
@@ -7070,11 +7464,7 @@ class StdioBridge:
             emit_event(_approval_result_event(pending, decision, "denied_by_policy"))
             return decision
 
-        if (
-            not mandatory_explicit_approval
-            and policy_evaluation is not None
-            and policy_evaluation.decision is PolicyEffect.ALLOW
-        ):
+        if not mandatory_explicit_approval and policy_evaluation.decision is PolicyEffect.ALLOW:
             emit_event(
                 InfoEmitted(
                     message=(
@@ -7085,11 +7475,24 @@ class StdioBridge:
             )
             return ApprovalDecision(allow=True, allow_for_session=False)
 
+        if (
+            policy_evaluation.decision is PolicyEffect.ASK
+            and policy_evaluation.matched_rule_id is not None
+        ):
+            pending.allow_for_session_supported = False
+            pending.allow_for_session_warning = (
+                pending.allow_for_session_warning
+                or "The permission rule requires approval each time."
+            )
+            pending.metadata["allow_for_session_disabled"] = True
+
         auto_allowed = False
         with session.approval_lock:
             self._prune_resolved_approvals_locked(session, time.monotonic())
-            if not mandatory_explicit_approval and _approved_scope_matches(
-                session.approved_approval_scopes, kind, scope
+            if (
+                pending.allow_for_session_supported
+                and policy_evaluation.matched_rule_id is None
+                and _approved_scope_matches(session.approved_approval_scopes, kind, scope)
             ):
                 auto_allowed = True
             else:
@@ -7137,8 +7540,8 @@ class StdioBridge:
             with session.approval_lock:
                 decision = pending.decision or ApprovalDecision(allow=False)
                 result_status = pending.result_status or ("allowed" if decision.allow else "denied")
-                if decision.allow and decision.allow_for_session:
-                    self._remember_approval_scope_locked(session, pending)
+                # _resolve_approval records a session grant exactly once. Adding it
+                # again here could resurrect a grant revoked before this waiter ran.
             emit_event(_approval_result_event(pending, decision, result_status))
             if swarm_task_id:
                 session.surface.emit_swarm_worker_state_changed(
@@ -8279,6 +8682,19 @@ def _code_review_request(params: dict[str, Any], *, request_id: RequestId) -> Re
         ) from exc
 
 
+def _apply_session_sandbox_profile(
+    cfg: Any, params: dict[str, Any], *, request_id: RequestId
+) -> None:
+    if "sandbox_profile" in params:
+        profile = _optional_str(params, "sandbox_profile", request_id=request_id) or "default"
+        if profile not in {"default", "strict", "warn", "off"}:
+            raise ProtocolError(
+                "invalid_field", "Unsupported sandbox_profile.", request_id=request_id
+            )
+        if profile != "default":
+            apply_sandbox_mode_to_config(cfg, profile)
+
+
 def _apply_config_overrides(cfg: Any, params: dict[str, Any], *, request_id: RequestId) -> None:
     model = str(params.get("model") or "").strip()
     base_url = str(params.get("base_url") or "").strip()
@@ -8351,10 +8767,46 @@ def _activate_transient_native_profile(cfg: Any, *, model: str, base_url: str) -
     set_active_profile(cfg, profile.name)
 
 
-def _apply_agent_session_mode(agent_session: Any, mode: str) -> None:
-    from ..cli_impl.chat.loop import _apply_chat_effective_mode
+def _ensure_chat_loop_facade() -> Any:
+    """Inject the chat-loop globals the interactive CLI facade normally provides.
 
-    _apply_chat_effective_mode(
+    ``cli_impl.chat.loop`` resolves a handful of helpers from its module
+    globals (``_rebuild_session_tools_for_mode``,
+    ``refresh_session_environment_context_message``, ...) that the
+    interactive ``alysis chat`` startup copies in from the CLI module. The
+    bridge reuses the loop's mutation primitives (``_apply_chat_effective_mode``,
+    ``_apply_chat_persona``, ``_apply_config_menu_changes_to_session``) without
+    that startup, so every session mutation from the IDE (Plan/Act switch,
+    model picker, stream toggle) died with ``NameError`` and surfaced as
+    "The IDE bridge encountered an unexpected internal error". ``setdefault``
+    keeps a facade that already ran authoritative.
+    """
+    from ..agent.prompt_context import (
+        refresh_session_environment_context_message,
+        refresh_session_workspace_binding_context_message,
+    )
+    from ..cli_impl.chat import loop as chat_loop
+    from ..cli_impl.commands.startup import _refresh_chat_hud_context_cache
+    from ..cli_impl.commands.welcome import _rebuild_session_tools_for_mode
+
+    loop_globals = chat_loop.__dict__
+    loop_globals.setdefault("_rebuild_session_tools_for_mode", _rebuild_session_tools_for_mode)
+    loop_globals.setdefault(
+        "refresh_session_environment_context_message",
+        refresh_session_environment_context_message,
+    )
+    loop_globals.setdefault(
+        "refresh_session_workspace_binding_context_message",
+        refresh_session_workspace_binding_context_message,
+    )
+    loop_globals.setdefault("_refresh_chat_hud_context_cache", _refresh_chat_hud_context_cache)
+    return chat_loop
+
+
+def _apply_agent_session_mode(agent_session: Any, mode: str) -> None:
+    """Switch a bridge session's mode through the chat loop's mutation primitive."""
+    chat_loop = _ensure_chat_loop_facade()
+    chat_loop._apply_chat_effective_mode(
         session=agent_session,
         next_mode=mode,
         persist_default_mode=False,
@@ -8369,13 +8821,7 @@ def _apply_agent_session_persona(agent_session: Any, *, persona: str, source: st
     injection shim as ``_refresh_agent_session_config`` covers bridges
     embedded without the full CLI facade wiring.
     """
-    from ..cli_impl.chat import loop as chat_loop
-    from ..cli_impl.commands.welcome import _rebuild_session_tools_for_mode
-
-    chat_loop.__dict__.setdefault(
-        "_rebuild_session_tools_for_mode",
-        _rebuild_session_tools_for_mode,
-    )
+    chat_loop = _ensure_chat_loop_facade()
     return str(
         chat_loop._apply_chat_persona(
             session=agent_session,
@@ -8409,16 +8855,8 @@ def _attach_session_persona_registry(agent_session: Any, *, cfg: Any, root: Path
 
 
 def _refresh_agent_session_config(agent_session: Any, cfg: Any) -> None:
-    from ..cli_impl.chat import loop as chat_loop
-    from ..cli_impl.commands.welcome import _rebuild_session_tools_for_mode
-
-    chat_loop.__dict__.setdefault(
-        "_rebuild_session_tools_for_mode",
-        _rebuild_session_tools_for_mode,
-    )
-    _apply_config_menu_changes_to_session = chat_loop._apply_config_menu_changes_to_session
-
-    _apply_config_menu_changes_to_session(session=agent_session, cfg=cfg)
+    chat_loop = _ensure_chat_loop_facade()
+    chat_loop._apply_config_menu_changes_to_session(session=agent_session, cfg=cfg)
 
 
 def _resolve_workspace(path: Path, *, request_id: RequestId) -> Any:
@@ -9331,6 +9769,73 @@ def _checkpointing_supported(session: BridgeSession) -> bool:
     )
 
 
+# Checkpoint storage shells out to git several times during first-turn setup. On hosts
+# where process spawn is slow — cold antivirus scans of git.exe were the observed case,
+# at 10-20 seconds per spawn — that setup silently froze the whole turn. Reads stay
+# available, but possible writes must wait for a usable restore baseline.
+_CHANGE_LEDGER_SETUP_DEADLINE_SECONDS = 10.0
+
+
+def _prepare_change_ledger_with_deadline(
+    session: BridgeSession,
+    *,
+    deadline_seconds: float = _CHANGE_LEDGER_SETUP_DEADLINE_SECONDS,
+) -> bool:
+    """Wait a bounded, cancellable time for one shared baseline worker.
+
+    A slow worker is retained for the next request. It never attaches itself to a
+    session and cannot race a second initializer. The dispatch guard blocks writes
+    until a caller has adopted its completed baseline.
+    """
+    setup = getattr(session, "checkpoint_setup", None)
+    if setup is None:
+        existing_ledger = session.change_ledger
+        session.change_ledger = None
+        outcome: dict[str, Any] = {}
+        done = threading.Event()
+        session.checkpoint_setup = (done, outcome)
+
+        def _build() -> None:
+            try:
+                ledger = (
+                    existing_ledger if existing_ledger is not None else ChangeLedger(session.root)
+                )
+                ledger.ensure_baseline(session.session_id)
+                outcome["ledger"] = ledger
+            except Exception as exc:  # noqa: BLE001 - reported and retried on the next request
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=_build, name="alysis-ledger-init", daemon=True).start()
+    else:
+        done, outcome = setup
+    deadline = time.monotonic() + max(0.0, deadline_seconds)
+    while True:
+        job = getattr(session, "active_job", None)
+        if job is not None:
+            _check_job_cancelled(job)
+        remaining = deadline - time.monotonic()
+        if done.wait(timeout=max(0.0, min(0.1, remaining))):
+            break
+        if remaining <= 0:
+            session.surface.emit_warning(
+                "Restore snapshots are still being prepared. Actions that may change files "
+                "are paused; file reading and Git review remain available. "
+                "Wait a moment, then send your request again."
+            )
+            return False
+    session.checkpoint_setup = None
+    error = outcome.get("error")
+    if error is not None:
+        session.surface.emit_warning(
+            f"Restore snapshots are unavailable; actions that may change files are paused: {error}"
+        )
+        return False
+    session.change_ledger = outcome["ledger"]
+    return True
+
+
 def _prompt_completed_in_store(session: BridgeSession, prompt_id: str) -> bool:
     return _prompt_event_in_store(session, prompt_id, "ide_prompt_completed")
 
@@ -9492,15 +9997,70 @@ def _run_agent_turn_with_optional_cancellation(
     message: str,
     *,
     image_paths: list[str] | None = None,
+    ephemeral_user_messages: list[str] | None = None,
     cancellation_token: BridgeCancellationToken,
+    task_relation: str | None = None,
+    task_request_id: str | None = None,
 ) -> Any:
     run_turn = agent_session.run_turn
     kwargs: dict[str, Any] = {}
     if image_paths is not None:
         kwargs["image_paths"] = image_paths
+    if ephemeral_user_messages:
+        if not _call_accepts_keyword(run_turn, "ephemeral_user_messages"):
+            raise RuntimeError(
+                "This session runtime does not support IDE context; the prompt was not run."
+            )
+        kwargs["ephemeral_user_messages"] = ephemeral_user_messages
     if _call_accepts_keyword(run_turn, "cancellation_token"):
         kwargs["cancellation_token"] = cancellation_token
+    # Task identity metadata is host-owned and optional for the session: a
+    # caller-declared relation is forwarded only to runtimes that own a task
+    # state, and a declared relation that cannot be honoured is an error
+    # rather than a silently dropped instruction.
+    if task_relation is not None:
+        if not _call_accepts_keyword(run_turn, "task_relation"):
+            raise RuntimeError(
+                "This session runtime does not support task_relation; the prompt was not run."
+            )
+        kwargs["task_relation"] = task_relation
+    if task_request_id is not None and _call_accepts_keyword(run_turn, "task_request_id"):
+        kwargs["task_request_id"] = task_request_id
     return run_turn(message, **kwargs)
+
+
+def _task_relation_param(params: dict[str, Any], *, request_id: RequestId) -> str | None:
+    """Validate the optional ``task_relation`` chat.send field.
+
+    Absent or ``null`` means the caller declares nothing (the session keeps
+    its task and delivers the message as this turn's instruction). Any other
+    value must be one of the supported relations; unknown values are rejected
+    here so an invalid relation can never be read as ``auto`` or as a new task.
+    """
+
+    raw = params.get("task_relation")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ProtocolError(
+            "invalid_field",
+            "task_relation must be a string.",
+            request_id=request_id,
+        )
+    normalized = raw.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in TASK_RELATIONS:
+        raise ProtocolError(
+            "invalid_field",
+            "task_relation must be one of: " + ", ".join(TASK_RELATIONS) + ".",
+            request_id=request_id,
+        )
+    return normalized
+
+
+def _is_valid_queued_task_relation(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and value in TASK_RELATIONS)
 
 
 def _list_of_strings(value: Any) -> list[str]:
@@ -9931,5 +10491,19 @@ def run_stdio_bridge() -> int:
     # this dedicated bridge process. StdioBridge writes through the captured handle.
     protocol_stdout = sys.stdout
     bridge = StdioBridge(stdout=protocol_stdout)
+    # Backstop for a hard-killed extension host: stdin EOF is the normal exit path,
+    # this guarantees the interpreter cannot outlive its parent when that path stalls.
+    start_parent_watchdog(
+        grace_seconds=DEFAULT_SHUTDOWN_TIMEOUT_SECONDS + PARENT_EXIT_GRACE_SECONDS,
+        on_parent_exit=lambda pid: _close_orphaned_bridge(bridge, pid),
+    )
     with redirect_stdout(sys.stderr):
         return bridge.run()
+
+
+def _close_orphaned_bridge(bridge: StdioBridge, parent_pid: int) -> None:
+    print(
+        f"IDE extension host (pid {parent_pid}) exited; shutting the bridge down",
+        file=sys.stderr,
+    )
+    bridge.close()

@@ -92,10 +92,11 @@ jobs:
             test "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}"
           fi
 
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
           {
             echo "release_tag=${release_tag}"
             echo "sha12=${GITHUB_SHA::12}"
-            echo "source_date_epoch=$(git show -s --format=%ct HEAD)"
+            echo "source_date_epoch=${source_date_epoch}"
           } >> "${GITHUB_OUTPUT}"
 
   build-scan-pr:

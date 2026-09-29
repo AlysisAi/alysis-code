@@ -1,0 +1,46 @@
+{
+  "record": {
+    "schemaVersion": 3,
+    "release": {
+      "tag": "v1.2.3",
+      "sourceRepository": "https://github.com/AlysisAi/Sylliptor",
+      "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "artifactVersion": "cli-1.2.3",
+    "cliVersion": "1.2.3",
+    "compatibility": {
+      "extension": {
+        "min": "0.1.1",
+        "max": "0.1.1"
+      },
+      "protocol": {
+        "min": "1",
+        "max": "1"
+      },
+      "cli": {
+        "min": "1.2.3",
+        "max": "1.2.3"
+      }
+    },
+    "signingKeyId": "contract-fixture",
+    "provenance": {
+      "issuer": "https://token.actions.githubusercontent.com",
+      "builderId": "https://github.com/AlysisAi/Sylliptor/.github/workflows/managed-cli-vsix-release.yml@refs/tags/v1.2.3"
+    },
+    "artifact": {
+      "target": "linux-x64",
+      "url": "https://github.com/AlysisAi/Sylliptor/releases/download/v1.2.3/sylliptor-linux-x64",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 123,
+      "executable": "sylliptor-linux-x64",
+      "sbomSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "nativeSignature": {
+        "evidenceSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "policy": "not-applicable",
+        "signerIdentity": "not-applicable"
+      }
+    }
+  },
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9+JVT9ZnUmS8QVaaqchTzJvprFHP\neeE1JgZAEcZBNcGoj8OeMTyXPx1cymyqD2o19wBv9v+JiEo6kRfKAm4Taw==\n-----END PUBLIC KEY-----\n",
+  "signature": "MEUCIQC83KvN6udk5a0d4e5ByOQC2FBwI2wVLUWtuwazBhThlAIgUqgiHokj/KUXDpjxbRxd5GWSm4D1F2R/n0naaXsoNl4="
+}
