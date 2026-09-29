@@ -101,14 +101,20 @@ def test_checkpoint_excludes_credentials_and_rejects_expired_or_oversized_candid
     manager = _manager(tmp_path, max_total_bytes=1024)
     (manager.root / "deliverable.py").write_text("pass\n")
     (manager.root / ".env").write_text("SECRET=private\n")
-    manager.consider(outcome=_outcome(0), result={}, accepted_commands=set())
+    # Exercise actual snapshot bytes without making these data-policy checks
+    # depend on a cold worker starting within its two-second production budget.
+    # Real worker execution/deadlines are covered in test_checkpoint_deadline_boundaries.
+    event = manager._consider_inline(outcome=_outcome(0), result={}, accepted_commands=set())
+    assert event["status"] == "verified_checkpoint_preserved", event
     with zipfile.ZipFile(manager.best["archive_path"]) as archive:
         assert ".env" not in archive.namelist()
     assert ".env" in manager.best["omitted_paths"]
     original = manager.best.copy()
     (manager.root / "deliverable.py").write_bytes(b"x" * 2048)
     other = _manager(tmp_path, max_total_bytes=1024)
-    event = other.consider(outcome=_outcome(1, task_id="new"), result={}, accepted_commands=set())
+    event = other._consider_inline(
+        outcome=_outcome(1, task_id="new"), result={}, accepted_commands=set()
+    )
     assert event["status"] == "checkpoint_unavailable"
     assert "size_budget" in event["reason"]
     expired = other.consider(
@@ -121,13 +127,17 @@ def test_checkpoint_excludes_credentials_and_rejects_expired_or_oversized_candid
 def test_mutated_archive_cannot_be_resumed_as_verified(tmp_path):
     manager = _manager(tmp_path)
     (manager.root / "deliverable.py").write_text("pass\n")
-    manager.consider(outcome=_outcome(0), result={}, accepted_commands=set())
+    # Isolate corruption rejection from worker startup. A failed worker must
+    # never count as successful archive-integrity validation.
+    event = manager._consider_inline(outcome=_outcome(0), result={}, accepted_commands=set())
+    assert event["status"] == "verified_checkpoint_preserved", event
     Path(manager.best["archive_path"]).write_bytes(b"corrupted")
     resumed = AnytimeCheckpointManager(
         root=manager.root, layout=manager.layout, config=manager.config
     )
-    resumed.select_task("task-one", acknowledged_checkpoint=manager.best)
+    resumed._select_task_inline("task-one", acknowledged_checkpoint=manager.best)
     assert resumed.best is None
+    assert resumed._attempted == set(), "Archive validation must finish without granting recovery"
 
 
 @pytest.mark.parametrize("stop", ["provider", "deadline"])
