@@ -161,6 +161,14 @@ The DER fingerprint observed on 28 September 2026 is
 This is the expected public identity, not proof of private-key custody or a configured
 GitHub environment. The resource PEM and embedded trust anchor remain unchanged.
 
+On 4 October 2026, the owner approved Perdikis10 as recovery custodian and a separate
+organization-controlled Azure Key Vault copy. Retrieval inside Azure Cloud Shell
+passed this checker against the unchanged public pin; private material went directly
+through stdin without a file or secret output. Access logging was verified from
+delivered records and temporary network access removed. The private operations
+record holds the vault/version coordinates and recovery procedure. This proves
+recovery custody, not the protected workflow's provisioned key or native signing.
+
 Once the custodian locates the approved backup, run the same checker **inside the
 approved secret-management boundary** with `--private-key-stdin` and
 `--approved-fingerprint <reviewed-public-DER-SHA256>`. Pipe the secret manager's export

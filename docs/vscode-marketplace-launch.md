@@ -20,10 +20,15 @@ JetBrains preview setup and limitations are documented in
 1. Verify the configured signing credentials in production. As of 29 September 2026, the
    dedicated Azure OIDC identity, profile-scoped signer role, seven protected Windows variables,
    and matching managed-runtime manifest key/fingerprint are configured. Apple credential names
-   are present. An independent encrypted manifest-key recovery copy and custody procedure still
-   need confirmation. Configuration and secret presence do not prove successful signing.
-2. Build and scan the pinned sandbox images for both architectures; source dependency updates
-   alone are not security scan evidence.
+   are present. An independent encrypted manifest-key recovery copy and custody
+   procedure were verified on 4 October inside the approved Azure boundary, against
+   the unchanged public key; audit delivery was also confirmed. Configuration,
+   custody and secret presence do not prove successful production signing.
+2. Build and scan the pinned sandbox images for both architectures. Six-image private
+   qualification passed, including actual Docker-default ACL boundaries and offline
+   APK/Rust installation. The production Dockerfile now uses those frozen inputs
+   and the complete npm rebuild. Public image qualification, signing, attestations
+   and protected promotion are still required.
 3. Build six signed runtime/VSIX candidates from an immutable public source tag. Verify Windows
    Authenticode, Apple notarization, manifests, SBOMs, and GitHub attestations.
 4. Install the exact candidates and complete live-provider, real WSL/Remote SSH, and untrusted
