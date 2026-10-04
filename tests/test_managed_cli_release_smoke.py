@@ -8,6 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+import yaml
 
 from scripts.release.smoke_managed_cli import smoke
 
@@ -435,9 +436,22 @@ def test_container_release_uses_job_scoped_github_token_instead_of_a_pat() -> No
     )
 
     assert "secrets.GHCR_PAT" not in workflow
-    assert workflow.count("secrets.GITHUB_TOKEN") == 2
-    assert "packages: write" in workflow
-    assert "packages: read" in workflow
+    jobs = yaml.safe_load(workflow)["jobs"]
+    expected_permissions = {
+        "build-verify-candidate": "write",
+        "qualify-runtime-boundaries": "read",
+        "promote": "write",
+    }
+    login_jobs = set()
+    for job_id, job in jobs.items():
+        for step in job["steps"]:
+            if not step.get("uses", "").startswith("docker/login-action@"):
+                continue
+            login_jobs.add(job_id)
+            assert step["with"]["password"] == "${{ secrets.GITHUB_TOKEN }}"
+            assert step["with"]["username"] == "${{ github.actor }}"
+            assert job["permissions"]["packages"] == expected_permissions[job_id]
+    assert login_jobs == set(expected_permissions)
 
 
 def test_managed_release_verifies_exact_runtime_and_vsix_sbom_predicates() -> None:
