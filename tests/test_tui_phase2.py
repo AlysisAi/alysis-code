@@ -1105,6 +1105,11 @@ def _run_ctrl_p_away_from_paste_tokens(monkeypatch, payloads):
 
     def capture_application(*args, **kwargs):
         application = PromptToolkitApplication(*args, **kwargs)
+        # Pipe input delivers each escape sequence atomically. Keep both parser
+        # delays short so cancelling the editor does not spend 1.5 seconds of
+        # the two-second assertion deadline waiting for hypothetical more keys.
+        application.ttimeoutlen = 0.05
+        application.timeoutlen = 0.05
         captured["application"] = application
         captured["input_buffer"] = application.layout.current_buffer
         return application
