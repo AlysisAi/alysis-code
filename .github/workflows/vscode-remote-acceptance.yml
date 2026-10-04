@@ -132,6 +132,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python before policy and provenance validation
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
       - name: Revalidate remote acceptance policy after approval
         shell: pwsh
         env:
@@ -238,11 +243,6 @@ jobs:
             --predicate-type 'https://cyclonedx.org/bom' `
             --expected-predicate $sbom
           if ($LASTEXITCODE -ne 0) { throw 'Candidate SBOM receipt is invalid.' }
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
