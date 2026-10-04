@@ -206,7 +206,9 @@ def test_native_acl_and_filesystem_qualification_are_required_before_promotion()
     workflow = _workflow()
     verification = workflow.split("  verify-candidates:", 1)[1].split("    steps:", 1)[0]
     assert "- qualify-runtime-boundaries" in verification
-    qualification = workflow.split("  qualify-runtime-boundaries:", 1)[1].split("  verify-candidates:", 1)[0]
+    qualification = workflow.split("  qualify-runtime-boundaries:", 1)[1].split(
+        "  verify-candidates:", 1
+    )[0]
     assert "variant: [base, dev, server]" in qualification
     assert "arch: amd64, runner: ubuntu-latest" in qualification
     assert "arch: arm64, runner: ubuntu-24.04-arm" in qualification
