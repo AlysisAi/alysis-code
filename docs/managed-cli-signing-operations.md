@@ -107,8 +107,12 @@ Integration references: [Azure OIDC setup](https://github.com/Azure/artifact-sig
 and [short-lived certificate management](https://learn.microsoft.com/en-us/azure/artifact-signing/concept-certificate-management).
 
 The Apple build imports its identity into an ephemeral runner keychain, checks the exact authority,
-submits the signed standalone executable to Apple, requires an `Accepted` response, and runs both
-`codesign` and `spctl`. Standalone Mach-O files use Apple's online notarization ticket and cannot be
+passes that identity to PyInstaller so embedded libraries are signed before the one-file archive
+is sealed, submits the signed executable to Apple, and requires an `Accepted` response. It checks
+the signature with `codesign --verify --strict` and the online ticket with
+`codesign --verify --strict -R="notarized" --check-notarization`. Apple documents this check for
+[non-app code](https://developer.apple.com/forums/thread/130560); `spctl --type execute` expects
+an app bundle and rejects standalone tools even after notarization. Standalone Mach-O files cannot be
 described as directly stapled. The manifest builder reads the validated evidence file directly;
 signer identity is never transferred through `GITHUB_ENV`.
 
@@ -213,7 +217,8 @@ Revoke affected certificates and access immediately if compromise is suspected.
 
 For planned Apple rotation, update the PKCS#12, password, and exact Developer ID authority together.
 Rotate the notary `.p8`, key ID, and issuer as one tested set when the API key changes. Require both
-macOS targets to pass `codesign`, notarization, and `spctl`; retain the certificate SHA-256 and Apple
+macOS targets to pass strict `codesign` verification, notarization, and the explicit
+`notarized` requirement with `--check-notarization`; retain the certificate SHA-256 and Apple
 submission IDs in the release record. Revoke replaced or exposed material in the Apple/CA portals
 after the clean run is verified.
 
@@ -330,7 +335,8 @@ After the run:
 - [ ] Independently download and hash all six VSIX files and managed runtimes. Re-run
       `gh attestation verify` with the repository, signer workflow, source tag, and source commit
       constraints used by CI.
-- [ ] Re-run `Get-AuthenticodeSignature` for Windows and `codesign --verify` plus `spctl --assess`
+- [ ] Re-run `Get-AuthenticodeSignature` for Windows and strict `codesign --verify` plus
+      `codesign --verify --strict -R="notarized" --check-notarization` for macOS
       for macOS; compare identities with the signed manifest and release record.
 - [ ] Preserve the workflow URL, approvals, logs, Apple submission IDs, manifest/public-key
       fingerprint, dependency and final SBOMs, production-dogfood summaries, and exact SHA-256

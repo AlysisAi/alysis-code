@@ -140,7 +140,8 @@ Confirm release notes and Marketplace copy do not overclaim these IDE v1 limits:
 - [ ] Security review confirms no inline secrets, raw provider headers, or unredacted reports.
 - [ ] Marketplace copy avoids stable/production availability claims unless stable release approval is complete.
 - [ ] Windows managed runtimes are Authenticode-signed and verified; ECDSA manifest attestation alone is not accepted as an OS code signature.
-- [ ] macOS managed runtimes are Developer ID signed, notarized, and pass `codesign` plus `spctl`.
+- [ ] macOS managed runtimes and embedded libraries are Developer ID signed, notarized, and pass
+      strict `codesign` plus `-R="notarized" --check-notarization` verification.
       Standalone Mach-O executables use Apple's online notarization ticket and are not claimed to
       support direct stapling; unsigned/unnotarized Darwin bundles block promotion.
 
