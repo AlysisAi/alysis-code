@@ -55,6 +55,40 @@ def test_managed_cli_workflow_cannot_publish_unsigned_platform_binaries() -> Non
     assert "must not publish release assets" in workflow
 
 
+def test_signed_upload_keeps_raw_interpreter_receipts_out_of_promotion_inventory(
+    tmp_path: Path,
+) -> None:
+    from scripts.release.build_managed_cli_manifest import TARGETS
+
+    root = tmp_path / "managed-cli-artifacts"
+    root.mkdir()
+    expected = {"manifest.json"}
+    for target in TARGETS:
+        executable = f"alysis-{target}" + (".exe" if target.startswith("win32-") else "")
+        expected.update({executable, f"{target}.cdx.json", f"{target}.native-signature.json"})
+        (root / f"{target}.python-runtime.json").write_text("{}", encoding="utf-8")
+    for name in expected:
+        (root / name).write_bytes(b"candidate fixture")
+    repository_root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (repository_root / ".github/workflows/managed-cli-vsix-release.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    upload = next(
+        step
+        for step in workflow["jobs"]["sign-and-assemble"]["steps"]
+        if step.get("with", {}).get("name") == "signed-managed-cli-release"
+    )
+    selected = {
+        path.name
+        for pattern in upload["with"]["path"].splitlines()
+        for path in tmp_path.glob(pattern)
+    }
+    assert selected == expected
+    assert len(selected) == 19
+
+
 def test_protected_signing_jobs_require_unprivileged_exact_source_validation() -> None:
     repository_root = Path(__file__).resolve().parents[1]
     workflow = (
