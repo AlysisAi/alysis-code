@@ -6,18 +6,19 @@ docker run --rm \
   --env HOME=/tmp \
   --env UV_CACHE_DIR=/tmp/uv-cache \
   --env UV_PROJECT_ENVIRONMENT=/tmp/alysis-venv \
-  --env UV_PYTHON=3.11.15 \
-  --env UV_PYTHON_INSTALL_DIR=/tmp/alysis-python \
-  --env UV_MANAGED_PYTHON=true \
+  --env UV_PYTHON=/tmp/alysis-python/python/bin/python3 \
+  --env UV_PYTHON_DOWNLOADS=never \
   --env OUTPUT_NAME="$OUTPUT_NAME" \
   --volume "$PWD:/workspace" \
   --volume "$uv_executable:/usr/local/bin/uv:ro" \
   --workdir /workspace \
   "$MANYLINUX_IMAGE" \
   bash -euxo pipefail -c '
-    # The image Python is static-only. Pinned uv verifies its bundled
-    # checksum for the exact shared-library-capable Astral distribution.
-    uv python install 3.11.15
+    # Bootstrap with the image interpreter, then package only the patched,
+    # hash-pinned distribution that includes the required shared library.
+    /opt/python/cp311-cp311/bin/python scripts/release/install_managed_cli_python.py \
+      --target "${OUTPUT_NAME#alysis-}" --destination /tmp/alysis-python \
+      --receipt "managed-cli-out/${OUTPUT_NAME#alysis-}.python-runtime.json"
     uv sync --frozen --no-editable --extra managed-build
     uv run --frozen --no-sync python -m PyInstaller \
       --noconfirm \

@@ -1,4 +1,4 @@
-"""Add the verified static OpenSSL build to the Windows ARM64 dependency SBOM."""
+"""Add the verified static OpenSSL build to the native dependency SBOM."""
 
 from __future__ import annotations
 

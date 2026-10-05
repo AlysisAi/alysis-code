@@ -1,6 +1,6 @@
 # IDE release status
 
-CLI source release: **0.14.4**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
+CLI source version: **0.14.5**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
 
 This source release includes the VS Code integration, shared sidebar, JetBrains development
 preview, and the CLI protocol and release tooling they require. It does not include production
@@ -24,13 +24,17 @@ JetBrains preview setup and limitations are documented in
    procedure were verified on 4 October inside the approved Azure boundary, against
    the unchanged public key; audit delivery was also confirmed. Configuration,
    custody and secret presence do not prove successful production signing.
-2. Build and scan the pinned sandbox images for both architectures. Six-image private
-   qualification passed, including actual Docker-default ACL boundaries and offline
-   APK/Rust installation. The production Dockerfile now uses those frozen inputs
-   and the complete npm rebuild. Public image qualification, signing, attestations
-   and protected promotion are still required.
-3. Build six signed runtime/VSIX candidates from an immutable public source tag. Verify Windows
-   Authenticode, Apple notarization, manifests, SBOMs, and GitHub attestations.
+2. Sandbox qualification and publication passed on `a0ef8fff`, public run
+   `37221977397`, including six native isolation/full-filesystem checks, zero
+   HIGH/CRITICAL scan findings, signatures, and independently verified attestations.
+   The native packaging fixes in 0.14.5 do not alter these published image bytes.
+3. Build six signed runtime/VSIX candidates from a new immutable public source tag.
+   Candidate `37276107624` from protected `v0.14.4` failed native packaging before
+   manifest signing. Both Apple notarizations succeeded. The replacement version
+   adds patched native Python, static OpenSSL where source builds require it,
+   and platform-specific packaging repairs. Validate native unsigned builds before
+   creating `v0.14.5`; never move `v0.14.4`. Windows Authenticode, Apple notarization,
+   manifests, SBOMs, GitHub attestations, and clean installation must all pass.
 4. Install the exact candidates and complete live-provider, real WSL/Remote SSH, and untrusted
    workspace acceptance, with dedicated credentials and an approved provider spending limit.
 5. Collect candidate-bound signoff and rollback evidence before explicit Marketplace promotion.

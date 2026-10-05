@@ -44,6 +44,30 @@ closed.
 
 ## GitHub environments and credential inventory
 
+### Native build inputs
+
+Managed executables bundle CPython 3.12.15 from the six checksum- and size-pinned
+Astral distributions in `scripts/release/managed_cli_python.lock.json`. The installer
+checks the downloaded archive before extraction and probes the installed version,
+platform, architecture, OpenSSL, and Expat. The build SBOM binds that receipt to the
+committed distribution pin. This packaging interpreter is independent of the
+project's supported Python range and the interpreter used to bootstrap CI tools.
+
+Linux builds and executable smoke tests use the pinned manylinux glibc 2.28 images.
+The interpreter inside the image only bootstraps the pinned distribution; it is not
+the Python embedded in the executable. Windows ARM64 and Intel macOS build
+checksum-pinned OpenSSL 3.5.9, run its native test suite, and link it statically into
+cryptography. This supplies the missing Windows ARM64 development libraries and
+avoids an Intel macOS collision between cryptography and Python's `libssl.3.dylib`.
+The resulting OpenSSL component and dependency edge are recorded in the SBOM.
+
+The unsigned `managed-cli-build-check.yml` workflow exercises the same native build
+helpers, executable version/health/stdio checks, and runtime inventory before a new
+immutable release tag is created. It receives no signing environment and does not
+replace the signed candidate's provenance, signature, or installation checks.
+
+### Protected environments
+
 Create two GitHub environments. Both environments must have at least one required release
 maintainer and contain exactly the custom deployment tag pattern `v*`, with administrator bypass
 disabled. Self-review is normally prevented. The owner-authorized single-maintainer exception

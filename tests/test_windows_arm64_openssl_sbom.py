@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.release.add_windows_arm64_openssl_sbom import add_openssl
+from scripts.release.add_native_openssl_sbom import add_openssl
 
 
 def _sbom() -> dict:

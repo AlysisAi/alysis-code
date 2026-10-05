@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.5 — native managed-runtime packaging
+
+- Pin the six bundled runtimes to checksum-verified CPython 3.12.15 distributions,
+  including their observed OpenSSL and Expat versions in each dependency SBOM.
+- Build Linux executables with shared-library-capable Python on the existing
+  glibc 2.28 baseline, and build tested, static OpenSSL 3.5.9 for Windows ARM64
+  and Intel macOS cryptography.
+- Sign embedded macOS libraries during packaging and verify notarization using
+  Apple's documented check for standalone code. Preserve Windows API paths in Git Bash.
+- Add an unsigned native build and executable smoke check for all six targets.
+
+This source version prepares a replacement candidate after the protected `v0.14.4`
+native build failed. Marketplace pre-release 0.3.0 remains subject to the documented
+signing, installation, acceptance, and promotion gates.
 
 ## 0.14.4 — IDE integrations and release tooling
 
