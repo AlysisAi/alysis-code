@@ -20,6 +20,7 @@ interface RuntimeEvidence {
   cliPathOverride?: unknown;
   health?: {
     status?: unknown;
+    reason?: unknown;
     protocolVersion?: unknown;
     alysisVersion?: unknown;
   };
@@ -60,7 +61,7 @@ export async function run(): Promise<void> {
   );
   assert.ok(evidence && typeof evidence === "object", "Runtime evidence command returned no object.");
   assert.equal(evidence.extensionMode, "production");
-  assert.equal(evidence.origin, "managed");
+  assert.equal(evidence.origin, "managed", String(evidence.health?.reason ?? "Managed runtime unavailable."));
   assert.equal(evidence.production, true);
   assert.equal(evidence.target, expectedTarget);
   assert.equal(evidence.cliPathOverride, "");

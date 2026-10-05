@@ -225,6 +225,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Alysis
       : runtimeValidatingConfig(managedRuntime.apply(readBaseConfig()));
   context.subscriptions.push(
     vscode.commands.registerCommand("alysis.runtimeEvidence", async () => {
+      // Activation returns before the bundled runtime has finished validation.
+      // Report its settled identity instead of a transient "unavailable" state.
+      await runtimeValidation;
       const baseConfig = readBaseConfig();
       const config = managedRuntime.apply(baseConfig);
       const evidence = managedRuntime.evidence();

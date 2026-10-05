@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.14.6 — final VSIX SBOM attestation
+## 0.14.6 — final VSIX attestation and startup validation
 
 - Give each final VSIX dependency report an RFC 4122 document ID accepted by
   GitHub's attestation parser. Derive it from the exact package bytes so promotion
   can reproduce the signed report without changing its identity.
+- Wait for startup runtime validation before reporting installed runtime evidence,
+  so a fresh installation does not report the bundled CLI as temporarily unavailable.
 
 All six 0.14.5 native runtimes and their assembled manifest passed signing, but
 final VSIX attestation failed before installation testing. This replacement
