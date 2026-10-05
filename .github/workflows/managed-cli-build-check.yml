@@ -3,7 +3,7 @@ name: managed-cli-build-check
 on:
   workflow_dispatch:
   push:
-    branches: [main, codex/managed-cli-build-fixes]
+    branches: [main]
     paths:
       - .github/workflows/managed-cli-build-check.yml
       - .github/workflows/managed-cli-vsix-release.yml

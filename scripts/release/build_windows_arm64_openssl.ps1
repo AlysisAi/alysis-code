@@ -35,7 +35,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSL configuration failed.' }
     & nmake
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSL compilation failed.' }
-    & nmake test
+    # Upstream supports parallel recipes; retain the complete native test suite.
+    & nmake HARNESS_JOBS=4 test
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSL native tests failed.' }
     & nmake install_sw
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSL installation failed.' }

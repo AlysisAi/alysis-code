@@ -740,9 +740,10 @@ jobs:
       - name: Validate manifest without exposing signing material
         run: |
           uv run --frozen --no-sync python -m json.tool managed-cli-artifacts/manifest.json >/dev/null
-          test "$(find managed-cli-artifacts -maxdepth 1 -type f | wc -l)" -eq 19
+          test "$(find managed-cli-artifacts -maxdepth 1 -type f | wc -l)" -eq 25
           test "$(find managed-cli-artifacts -maxdepth 1 -name '*.cdx.json' -type f | wc -l)" -eq 6
           test "$(find managed-cli-artifacts -maxdepth 1 -name '*.native-signature.json' -type f | wc -l)" -eq 6
+          test "$(find managed-cli-artifacts -maxdepth 1 -name '*.python-runtime.json' -type f | wc -l)" -eq 6
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-managed-cli-release
@@ -941,7 +942,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          uv run --frozen --no-sync python scripts/release/build_vscode_vsix_sbom.py \
+          uv run --frozen --no-sync python -m scripts.release.build_vscode_vsix_sbom \
             --vsix "extensions/vscode-alysis/vscode-alysis-${TARGET}.vsix" \
             --target "$TARGET" \
             --manifest managed-cli-release/manifest.json \

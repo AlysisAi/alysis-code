@@ -17,7 +17,7 @@ tar -xzf "$archive" -C "$RUNNER_TEMP"
 cd "$RUNNER_TEMP/openssl-$openssl_version"
 ./Configure darwin64-x86_64-cc no-shared no-module -fPIC "--prefix=$prefix" --libdir=lib
 make -j3
-make test
+make HARNESS_JOBS=3 test
 make install_sw
 test -f "$prefix/lib/libssl.a"
 test -f "$prefix/lib/libcrypto.a"

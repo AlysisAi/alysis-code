@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from zipfile import ZipFile
@@ -326,10 +328,30 @@ def test_final_target_vsix_has_verified_sbom_provenance_before_dogfood() -> None
     )
     install_index = workflow.index("Clean-install production VSIX on minimum VS Code (Linux)")
     assert build_index < provenance_index < sbom_index < verify_index < install_index
-    assert "scripts/release/build_vscode_vsix_sbom.py" in workflow
+    assert "python -m scripts.release.build_vscode_vsix_sbom" in workflow
     assert '--dependency-sbom "managed-cli-release/${TARGET}.cdx.json"' in workflow
     assert "ALYSIS_RELEASE_SIGNATURE_CHECK: passed" in workflow
     assert "vscode-alysis-${{ matrix.target }}.cdx.json" in workflow
+
+    # Execute the workflow's entry point without relying on pytest's import path.
+    steps = yaml.safe_load(workflow)["jobs"]["package-platform-vsix"]["steps"]
+    command = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Generate final target VSIX SBOM from verified package bytes"
+    )
+    arguments = shlex.split(command.splitlines()[0].removesuffix("\\").strip())
+    entry_point = arguments[arguments.index("python") + 1 :]
+    result = subprocess.run(
+        [sys.executable, "-E", *entry_point, "--help"],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--dependency-sbom" in result.stdout
 
 
 def test_only_validated_release_workflow_can_publish_python_distribution() -> None:
