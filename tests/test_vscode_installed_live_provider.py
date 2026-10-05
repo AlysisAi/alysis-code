@@ -323,7 +323,7 @@ def test_installed_live_provider_workflow_is_manual_protected_and_six_target() -
     assert "pull_request:" not in workflow
     assert "schedule:" not in workflow
     assert "environment: vscode-installed-live-provider-qa" in workflow
-    assert "timeout-minutes: ${{ matrix.target == 'win32-arm64' && 90 || 45 }}" in workflow
+    assert "timeout-minutes: 90" in workflow
     assert "needs: validate-release-source" in workflow
     assert "validate_github_environment_policy.py" in workflow
     assert 'GH_API_VERSION: "2026-03-10"' in workflow

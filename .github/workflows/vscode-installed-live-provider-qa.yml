@@ -98,7 +98,7 @@ jobs:
     needs: validate-release-source
     environment: vscode-installed-live-provider-qa
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.target == 'win32-arm64' && 90 || 45 }}
+    timeout-minutes: 90
     permissions:
       actions: read
       contents: read
