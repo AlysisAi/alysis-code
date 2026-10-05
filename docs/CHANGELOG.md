@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.6 — final VSIX SBOM attestation
+
+- Give each final VSIX dependency report an RFC 4122 document ID accepted by
+  GitHub's attestation parser. Derive it from the exact package bytes so promotion
+  can reproduce the signed report without changing its identity.
+
+All six 0.14.5 native runtimes and their assembled manifest passed signing, but
+final VSIX attestation failed before installation testing. This replacement
+preserves the existing tags; Marketplace pre-release 0.3.0 still requires the
+documented installation, acceptance, and promotion gates.
+
 ## 0.14.5 — native managed-runtime packaging
 
 - Pin the six bundled runtimes to checksum-verified CPython 3.12.15 distributions,
