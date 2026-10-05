@@ -87,12 +87,12 @@ jobs:
             gh api \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-              "/repos/${GITHUB_REPOSITORY}/environments/${environment}" \
+              "repos/${GITHUB_REPOSITORY}/environments/${environment}" \
               > "${environment}.json"
             gh api \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-              "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+              "repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
               > "${environment}-branch-policies.json"
             python scripts/release/validate_github_environment_policy.py \
               "${environment}.json" "${environment}-branch-policies.json" \
@@ -178,6 +178,18 @@ jobs:
         with:
           version: "0.11.23"
       - name: Install frozen-build dependencies from the committed lock
+        if: matrix.target != 'win32-arm64'
+        run: uv sync --frozen --no-editable --extra managed-build
+      - name: Build pinned native OpenSSL for Windows ARM64
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        run: ./scripts/release/build_windows_arm64_openssl.ps1
+      - name: Install frozen Windows ARM64 build dependencies
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        env:
+          OPENSSL_DIR: ${{ runner.temp }}/alysis-openssl-arm64
+          OPENSSL_STATIC: "1"
         run: uv sync --frozen --no-editable --extra managed-build
       - name: Revalidate native-signing policy after approval
         shell: bash
@@ -188,9 +200,9 @@ jobs:
           set -euo pipefail
           environment=managed-cli-native-signing
           gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
+            "repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
           gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
             > "${environment}-branch-policies.json"
           python scripts/release/validate_github_environment_policy.py \
             "${environment}.json" "${environment}-branch-policies.json" \
@@ -198,7 +210,7 @@ jobs:
       - name: Reject vulnerabilities and unapproved adverse dependency statuses
         run: uv run --frozen --no-sync python scripts/release/audit_locked_dependencies.py
       - name: Build one-file CLI on native host
-        if: runner.os != 'Linux'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           uv run --frozen --no-sync python -m PyInstaller \
@@ -221,32 +233,7 @@ jobs:
           MANYLINUX_IMAGE: ${{ matrix.manylinux_image }}
           OUTPUT_NAME: ${{ matrix.executable }}
         run: |
-          set -euo pipefail
-          uv_executable="$(command -v uv)"
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --env HOME=/tmp \
-            --env UV_CACHE_DIR=/tmp/uv-cache \
-            --env UV_PROJECT_ENVIRONMENT=/tmp/alysis-venv \
-            --env UV_PYTHON=/opt/python/cp311-cp311/bin/python \
-            --env UV_PYTHON_DOWNLOADS=never \
-            --env OUTPUT_NAME="$OUTPUT_NAME" \
-            --volume "$PWD:/workspace" \
-            --volume "$uv_executable:/usr/local/bin/uv:ro" \
-            --workdir /workspace \
-            "$MANYLINUX_IMAGE" \
-            bash -euxo pipefail -c '
-              uv sync --frozen --no-editable --extra managed-build
-              uv run --frozen --no-sync python -m PyInstaller \
-                --noconfirm \
-                --clean \
-                --onefile \
-                --name alysis \
-                --collect-all alysis_code \
-                scripts/release/managed_cli_entry.py
-              mkdir -p managed-cli-out
-              mv dist/alysis "managed-cli-out/${OUTPUT_NAME}"
-            '
+          bash scripts/release/build_linux_managed_cli.sh
       - name: Export locked managed CLI dependency SBOM
         shell: bash
         run: |
@@ -257,6 +244,12 @@ jobs:
             --extra managed-build \
             --format cyclonedx1.5 \
             --output-file "managed-cli-out/${{ matrix.target }}.cdx.json"
+      - name: Record statically linked Windows ARM64 OpenSSL in the SBOM
+        if: matrix.target == 'win32-arm64'
+        shell: bash
+        run: |
+          uv run --frozen --no-sync python scripts/release/add_windows_arm64_openssl_sbom.py \
+            managed-cli-out/win32-arm64.cdx.json
       - name: Validate protected Azure signing configuration
         if: runner.os == 'Windows'
         shell: pwsh
@@ -379,8 +372,15 @@ jobs:
           security import "$p12" -k "$keychain" -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain"
+          # PyInstaller must sign embedded libraries before sealing its one-file
+          # archive; signing only the outer executable fails library validation.
+          uv run --frozen --no-sync python -m PyInstaller \
+            --noconfirm --clean --onefile --name alysis \
+            --collect-all alysis_code \
+            --codesign-identity "$APPLE_DEVELOPER_IDENTITY" \
+            scripts/release/managed_cli_entry.py
           executable="managed-cli-out/${{ matrix.executable }}"
-          codesign --force --options runtime --timestamp --sign "$APPLE_DEVELOPER_IDENTITY" "$executable"
+          mv dist/alysis "$executable"
           codesign --verify --strict --verbose=2 "$executable"
           actual_authority="$(codesign -dvv "$executable" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)"
           test "$actual_authority" = "$APPLE_DEVELOPER_IDENTITY"
@@ -407,6 +407,7 @@ jobs:
               submission_id,
           ) is None:
               raise SystemExit("Apple notarization response has an invalid submission ID")
+          print(f"Apple notarization Accepted: {submission_id}")
           evidence = {
               "schemaVersion": 2,
               "target": "${{ matrix.target }}",
@@ -423,9 +424,9 @@ jobs:
               json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8"
           )
           PY
-          # Apple issues online tickets for standalone Mach-O executables but does not support
-          # stapling them directly. `spctl` verifies the accepted ticket through Gatekeeper.
-          spctl --assess --type execute --verbose=4 "$executable"
+          # Apple's check for non-app code requires the online notarization ticket.
+          # https://developer.apple.com/forums/thread/130560
+          codesign --verify --strict --verbose=4 -R="notarized" --check-notarization "$executable"
       - name: Record Linux native policy evidence
         if: runner.os == 'Linux'
         shell: bash
@@ -505,9 +506,9 @@ jobs:
           set -euo pipefail
           environment=managed-cli-signing
           gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-            "/repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
+            "repos/${GITHUB_REPOSITORY}/environments/${environment}" > "${environment}.json"
           gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: $GH_API_VERSION" \
-            "/repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/environments/${environment}/deployment-branch-policies?per_page=100" \
             > "${environment}-branch-policies.json"
           python scripts/release/validate_github_environment_policy.py \
             "${environment}.json" "${environment}-branch-policies.json" \
@@ -764,6 +765,18 @@ jobs:
         with:
           version: "0.11.23"
       - name: Install frozen release-verification dependencies
+        if: matrix.target != 'win32-arm64'
+        run: uv sync --frozen --no-editable
+      - name: Build pinned native OpenSSL for Windows ARM64
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        run: ./scripts/release/build_windows_arm64_openssl.ps1
+      - name: Install frozen Windows ARM64 release-verification dependencies
+        if: matrix.target == 'win32-arm64'
+        shell: pwsh
+        env:
+          OPENSSL_DIR: ${{ runner.temp }}/alysis-openssl-arm64
+          OPENSSL_STATIC: "1"
         run: uv sync --frozen --no-editable
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -797,7 +810,7 @@ jobs:
           set -euo pipefail
           executable="managed-cli-release/alysis-${{ matrix.target }}"
           codesign --verify --strict --verbose=2 "$executable"
-          spctl --assess --type execute --verbose=4 "$executable"
+          codesign --verify --strict --verbose=4 -R="notarized" --check-notarization "$executable"
       - name: Install extension dependencies and run release unit gates
         working-directory: extensions/vscode-alysis
         run: npm ci && npm run compile && npm run lint && npm test && npm audit --audit-level=high
