@@ -1,6 +1,6 @@
 # IDE release status
 
-CLI source version: **0.14.7**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
+CLI source version: **0.14.8**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
 
 This source release includes the VS Code integration, shared sidebar, JetBrains development
 preview, and the CLI protocol and release tooling they require. It does not include production
@@ -28,13 +28,15 @@ JetBrains preview setup and limitations are documented in
    HIGH/CRITICAL scan findings, signatures, and independently verified attestations.
    The native packaging and VSIX SBOM fixes do not alter these published image bytes.
 3. Build six signed runtime/VSIX candidates from a new immutable public source tag.
-   Candidate `37306320809` from `v0.14.6` passed all six native signatures and
-   manifest assembly. Final packaging was blocked by the source-map-js audit
-   advisory and an Intel macOS sidebar rendering-time failure. Version 0.14.7
-   updates the dependency and avoids redundant sidebar work while retaining
-   the existing render-time budget. The replacement candidate still requires
-   all native signatures, manifests, SBOMs, GitHub attestations, and clean
-   installation checks to pass. Existing tags remain immutable.
+   Candidate `37443579929` from `v0.14.7` passed all six native signatures,
+   manifest assembly, and the corrected dependency/rendering gates. Linux and
+   Windows x64 clean installations passed, but final evidence validation used
+   Python outside its locked environment; current macOS testing also hit the
+   older test utility's executable-path bug. A Windows ARM64 interpreter download
+   was incomplete. Version 0.14.8 corrects the verification environment, updates
+   the test utility, and retries downloads without relaxing integrity checks.
+   The replacement candidate still requires all signatures, manifests, SBOMs,
+   attestations, and clean-installation evidence to pass. Existing tags remain immutable.
 4. Install the exact candidates and complete live-provider, real WSL/Remote SSH, and untrusted
    workspace acceptance, with dedicated credentials and an approved provider spending limit.
 5. Collect candidate-bound signoff and rollback evidence before explicit Marketplace promotion.

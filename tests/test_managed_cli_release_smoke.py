@@ -254,6 +254,14 @@ def test_each_target_vsix_is_clean_installed_in_production_mode() -> None:
     assert "VSCODE_TEST_VERSION: stable" in workflow
     assert 'combined["vscode_compatibility"]' in workflow
     assert "require_vscode_compatibility=True" in workflow
+    package_steps = yaml.safe_load(workflow)["jobs"]["package-platform-vsix"]["steps"]
+    binding_step = next(
+        step
+        for step in package_steps
+        if step.get("name") == "Validate and bind minimum/current-Stable production evidence"
+    )
+    # Candidate binding imports cryptography from the frozen verification environment.
+    assert binding_step["run"].startswith("uv run --frozen --no-sync python - ")
 
 
 def test_managed_cli_build_is_locked_attested_and_environment_fenced() -> None:
