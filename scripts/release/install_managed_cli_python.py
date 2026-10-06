@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,6 +25,31 @@ def verify_archive(path: Path, pin: dict) -> None:
         digest = hashlib.file_digest(archive, "sha256").hexdigest()
     if digest != pin["sha256"]:
         raise ValueError("Python distribution SHA-256 differs from the release pin")
+
+
+def download_verified_archive(path: Path, pin: dict) -> None:
+    """Retry incomplete transfers while requiring the same size and digest every time."""
+    for attempt in range(3):
+        try:
+            with (
+                urllib.request.urlopen(pin["url"], timeout=120) as response,
+                path.open("xb") as output,
+            ):
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+                    if output.tell() > pin["size"]:
+                        raise ValueError("Python download exceeds the pinned size")
+            verify_archive(path, pin)
+            return
+        except (urllib.error.URLError, http.client.IncompleteRead, TimeoutError, ValueError):
+            path.unlink(missing_ok=True)
+            if attempt == 2:
+                raise
+            print(
+                "Python archive download failed verification; retrying pinned download.",
+                file=sys.stderr,
+            )
+            time.sleep(attempt + 1)
 
 
 def validate_runtime(facts: dict, target: str, version: str) -> None:
@@ -54,15 +83,7 @@ def main() -> None:
     destination.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix="alysis-python-download-") as temporary:
         archive = Path(temporary) / "python.tar.gz"
-        with (
-            urllib.request.urlopen(pin["url"], timeout=120) as response,
-            archive.open("xb") as output,
-        ):
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
-                if output.tell() > pin["size"]:
-                    raise ValueError("Python download exceeds the pinned size")
-        verify_archive(archive, pin)
+        download_verified_archive(archive, pin)
         # Only the complete hash-verified upstream archive is extracted.
         with tarfile.open(archive, "r:gz") as bundle:
             bundle.extractall(destination, filter="data")

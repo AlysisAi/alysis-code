@@ -1050,7 +1050,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          python - <<'PY'
+          uv run --frozen --no-sync python - <<'PY'
           import json
           import os
           from pathlib import Path

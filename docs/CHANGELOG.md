@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.8 — production VSIX verification
+
+- Run final candidate evidence validation inside the frozen Python environment,
+  where its cryptographic verification dependencies are installed.
+- Update the VS Code test utility to 3.1.0 so current macOS releases resolve
+  their executable from the application metadata, while older versions remain supported.
+- Retry interrupted or incomplete pinned Python downloads up to three times,
+  requiring the original size and SHA-256 checks to pass before extraction.
+
+Version 0.14.7 passed main CI and PyPI publication. Its six native runtimes and
+signed manifest passed, but later VSIX verification exposed these harness issues.
+Existing release tags and published distributions remain unchanged. Marketplace
+promotion still requires the documented acceptance and signoff gates.
+
 ## 0.14.7 — VSIX dependency audit and sidebar rendering
 
 - Update the VS Code extension's locked source-map-js dependency to 1.2.2,
