@@ -101,7 +101,7 @@
   let taskRunning = false;
   let forgeRunning = false;
   let modeControlSignature = "";
-  let settingsSignature = "";
+  let settingsFilterSignature = "";
   let currentState = null;
   /** @type {Map<string, { signature: string, node: HTMLElement }>} */
   const renderedItems = new Map();
@@ -4547,11 +4547,6 @@
   }
 
   function renderSettings(state) {
-    // Search input filters directly; only host changes need to rebuild its results.
-    // Include Forge visibility so a capability change cannot leave stale matches.
-    const signature = JSON.stringify([state.commands, state.provider, state.workspace, state.engine, state.forgeEnabled]);
-    if (signature === settingsSignature) return;
-    settingsSignature = signature;
     if (Array.isArray(state.commands)) {
       for (const button of document.querySelectorAll("[data-command]")) {
         if (!(button instanceof HTMLButtonElement)) continue;
@@ -4566,7 +4561,13 @@
     setTone("providerSettings", state.provider?.tone);
     setTone("workspaceSettings", state.workspace?.tone);
     setTone("engineSettings", state.engine?.tone);
-    filterSettings();
+    // Command gates above still apply to newly rendered buttons. Only the static
+    // settings rows can reuse filtering; search input also filters them directly.
+    const signature = JSON.stringify([state.commands, state.provider, state.workspace, state.engine, state.forgeEnabled]);
+    if (signature !== settingsFilterSignature) {
+      settingsFilterSignature = signature;
+      filterSettings();
+    }
   }
 
   function filterSettings() {
