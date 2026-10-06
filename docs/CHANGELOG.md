@@ -6,6 +6,7 @@
   where its cryptographic verification dependencies are installed.
 - Update the VS Code test utility to 3.1.0 so current macOS releases resolve
   their executable from the application metadata, while older versions remain supported.
+- Exercise both minimum and current Stable VS Code in extension CI before tagging.
 - Retry interrupted or incomplete pinned Python downloads up to three times,
   requiring the original size and SHA-256 checks to pass before extraction.
 
