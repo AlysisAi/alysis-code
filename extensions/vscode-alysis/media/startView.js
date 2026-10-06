@@ -100,6 +100,8 @@
   let taskAckTimer = 0;
   let taskRunning = false;
   let forgeRunning = false;
+  let modeControlSignature = "";
+  let settingsFilterSignature = "";
   let currentState = null;
   /** @type {Map<string, { signature: string, node: HTMLElement }>} */
   const renderedItems = new Map();
@@ -1143,6 +1145,12 @@
       return;
     }
     taskMode.value = permissionMode;
+    persistDraft();
+    // Conversation, Forge, and readiness all synchronize these controls. Repainting
+    // identical permissions on every token dominates the sidebar's rendering cost.
+    const signature = JSON.stringify([permissionMode, taskRunning, forgeRunning, taskPending, workflow]);
+    if (signature === modeControlSignature) return;
+    modeControlSignature = signature;
     taskMode.disabled = taskRunning || forgeRunning || taskPending;
     if (permissionStrip) {
       // This picker controls chat permissions. Forge owns a separate review-only execution gate.
@@ -1176,7 +1184,6 @@
             ? "Alysis Code can proceed independently within its safety limits."
             : "You review important changes before they happen.";
     }
-    persistDraft();
   }
 
   function renderConversation(state) {
@@ -4554,7 +4561,13 @@
     setTone("providerSettings", state.provider?.tone);
     setTone("workspaceSettings", state.workspace?.tone);
     setTone("engineSettings", state.engine?.tone);
-    filterSettings();
+    // Command gates above still apply to newly rendered buttons. Only the static
+    // settings rows can reuse filtering; search input also filters them directly.
+    const signature = JSON.stringify([state.commands, state.provider, state.workspace, state.engine, state.forgeEnabled]);
+    if (signature !== settingsFilterSignature) {
+      settingsFilterSignature = signature;
+      filterSettings();
+    }
   }
 
   function filterSettings() {

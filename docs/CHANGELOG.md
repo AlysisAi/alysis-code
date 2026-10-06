@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.7 — VSIX dependency audit and sidebar rendering
+
+- Update the VS Code extension's locked source-map-js dependency to 1.2.2,
+  resolving GHSA-68fv-2mgg-jv7q and restoring the release audit gate.
+- Avoid repainting unchanged permission controls and settings filters during
+  conversation updates, reducing sidebar render cost on Intel macOS.
+- Run extension CI on Intel macOS as well as Apple Silicon before tagging releases.
+- Synchronize the queued-command overflow test with actual input receipt so
+  loaded CI runners exercise the intended full-inbox behavior reliably.
+
+This replacement preserves the published 0.14.6 source tag and distributions.
+The VS Code 0.3.0 beta still requires candidate installation, acceptance, and
+promotion gates before Marketplace publication.
+
 ## 0.14.6 — final VSIX attestation and startup validation
 
 - Give each final VSIX dependency report an RFC 4122 document ID accepted by

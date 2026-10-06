@@ -1,6 +1,6 @@
 # IDE release status
 
-CLI source version: **0.14.6**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
+CLI source version: **0.14.7**. VS Code extension: **0.3.0**, planned Marketplace pre-release.
 
 This source release includes the VS Code integration, shared sidebar, JetBrains development
 preview, and the CLI protocol and release tooling they require. It does not include production
@@ -28,12 +28,13 @@ JetBrains preview setup and limitations are documented in
    HIGH/CRITICAL scan findings, signatures, and independently verified attestations.
    The native packaging and VSIX SBOM fixes do not alter these published image bytes.
 3. Build six signed runtime/VSIX candidates from a new immutable public source tag.
-   The six native build fixes passed in `v0.14.5`, but final VSIX SBOM attestation
-   rejected a missing document ID before installation testing. Version 0.14.6 adds
-   a deterministic UUID for that report. Validate real packages against the pinned
-   attestation parser before creating protected `v0.14.6`; never move the existing
-   tags. The replacement candidate still requires all native signatures, manifests,
-   SBOMs, GitHub attestations, and clean installation checks to pass.
+   Candidate `37306320809` from `v0.14.6` passed all six native signatures and
+   manifest assembly. Final packaging was blocked by the source-map-js audit
+   advisory and an Intel macOS sidebar rendering-time failure. Version 0.14.7
+   updates the dependency and avoids redundant sidebar work while retaining
+   the existing render-time budget. The replacement candidate still requires
+   all native signatures, manifests, SBOMs, GitHub attestations, and clean
+   installation checks to pass. Existing tags remain immutable.
 4. Install the exact candidates and complete live-provider, real WSL/Remote SSH, and untrusted
    workspace acceptance, with dedicated credentials and an approved provider spending limit.
 5. Collect candidate-bound signoff and rollback evidence before explicit Marketplace promotion.

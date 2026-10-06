@@ -199,6 +199,7 @@ jobs:
           - ubuntu-latest
           - windows-latest
           - macos-14
+          - macos-15-intel
 
     steps:
       - name: Check out repository

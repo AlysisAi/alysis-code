@@ -1906,6 +1906,7 @@ def test_interrupt_rescues_messages_and_applies_both_operation_tiers() -> None:
 def test_full_step_inbox_falls_back_to_turn_end_without_dropping_command() -> None:
     started = threading.Event()
     release = threading.Event()
+    all_commands_resolved = threading.Event()
     applied: list[int] = []
     fallback_commands: list[str] = []
 
@@ -1916,7 +1917,7 @@ def test_full_step_inbox_falls_back_to_turn_end_without_dropping_command() -> No
         def run_turn(self, text: str, *, cancellation_token: Any = None) -> int:
             _ = text, cancellation_token
             started.set()
-            assert release.wait(timeout=3)
+            assert release.wait(timeout=10)
             return 0
 
     def command_runner(_session: Any, text: str, _width: int) -> tuple[Any, ...]:
@@ -1932,6 +1933,8 @@ def test_full_step_inbox_falls_back_to_turn_end_without_dropping_command() -> No
         if not text.startswith("/step "):
             return None
         value = int(text.split(maxsplit=1)[1])
+        if value == MAX_PENDING_OPS:
+            all_commands_resolved.set()
         return ResolvedOperation("test", value, f"step: {value}")
 
     def apply_step(_session: Any, operation: ResolvedOperation) -> None:
@@ -1942,11 +1945,13 @@ def test_full_step_inbox_falls_back_to_turn_end_without_dropping_command() -> No
         assert started.wait(timeout=2)
         for index in range(MAX_PENDING_OPS + 1):
             pipe.send_text(f"/step {index}\r")
-        time.sleep(0.15)
-        release.set()
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not fallback_commands:
-            time.sleep(0.01)
+        # Keep the turn running until the UI has received the overflowing command.
+        # A fixed sleep lets a loaded runner finish the turn with a partial inbox.
+        try:
+            assert all_commands_resolved.wait(timeout=5)
+        finally:
+            release.set()
+        assert _wait_until(lambda: bool(fallback_commands))
         pipe.send_text("/exit\r")
 
     _result, transcript = _run_live_tui(
