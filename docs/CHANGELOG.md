@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.9 — Claude Haiku 5.5 on Alysis Free — 2026-10-07
 
 - Add Claude Haiku 5.5 to the Alysis Free model picker and direct Anthropic
   profiles, with native Messages routing, a 1M context window, prompt caching,
