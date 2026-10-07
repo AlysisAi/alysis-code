@@ -324,6 +324,7 @@ def test_anthropic_preset_uses_native_messages_endpoint_and_current_models() -> 
     assert preset.extra_headers == {}
     assert preset.suggested_models == (
         "claude-sonnet-5",
+        "claude-haiku-5-5",
         "claude-opus-5-5",
         "claude-opus-5",
         "claude-fable-5-1",

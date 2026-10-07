@@ -132,6 +132,8 @@ def _uses_adaptive_thinking(model: str) -> bool:
         return False
     if version.family in {"fable", "mythos"}:
         return version.major >= 5
+    if version.family == "haiku":
+        return version.major == 5 and version.minor == 5
     if version.family not in {"opus", "sonnet"}:
         return False
     return version.major >= 5 or (
@@ -166,7 +168,12 @@ def _thinking_enabled_by_default(model: str) -> bool:
     version = _claude_model_version(model)
     if version is None or version.major < 5:
         return False
-    return version.family in {"fable", "mythos", "opus", "sonnet"}
+    return version.family in {
+        "fable",
+        "mythos",
+        "opus",
+        "sonnet",
+    } or version == _ClaudeModelVersion("haiku", 5, 5)
 
 
 def _supports_output_effort(model: str) -> bool:
@@ -176,6 +183,8 @@ def _supports_output_effort(model: str) -> bool:
     version = _claude_model_version(model)
     if version is None:
         return False
+    if version == _ClaudeModelVersion("haiku", 5, 5):
+        return True
     if version.family in {"fable", "mythos"}:
         return version.major >= 5
     if version.family == "opus":
@@ -193,6 +202,8 @@ def _supports_xhigh_effort(model: str) -> bool:
     version = _claude_model_version(model)
     if version is None:
         return False
+    if version == _ClaudeModelVersion("haiku", 5, 5):
+        return True
     if version.family in {"fable", "mythos"}:
         return version.major >= 5
     if version.family == "opus":
@@ -1631,7 +1642,11 @@ class AnthropicMessagesClient:
                 added_builtin_web_search=tool_mapping.added_builtin_web_search,
             )
             if mapped_tool_choice is not None:
-                if not (thinking_plan.active and mapped_tool_choice.get("type") in {"any", "tool"}):
+                if not (
+                    thinking_plan.active
+                    and _claude_model_version(self.model) != _ClaudeModelVersion("haiku", 5, 5)
+                    and mapped_tool_choice.get("type") in {"any", "tool"}
+                ):
                     payload["tool_choice"] = mapped_tool_choice
         count_cache_plan = RequestCachePlan(
             strategy=("anthropic_cache_control" if self.prompt_cache_control_enabled else "none"),
@@ -1791,7 +1806,11 @@ class AnthropicMessagesClient:
                 added_builtin_web_search=tool_mapping.added_builtin_web_search,
             )
             if mapped_tool_choice is not None:
-                if thinking_plan.active and mapped_tool_choice.get("type") in {"any", "tool"}:
+                if (
+                    thinking_plan.active
+                    and _claude_model_version(self.model) != _ClaudeModelVersion("haiku", 5, 5)
+                    and mapped_tool_choice.get("type") in {"any", "tool"}
+                ):
                     # Anthropic rejects forced tool use while extended thinking
                     # is active. Leaving the choice unset preserves automatic
                     # tool selection without failing the entire turn.

@@ -1610,6 +1610,26 @@ _OFFICIAL_PROVIDER_MODEL_METADATA["alysis"]["claude-sonnet-5-5"] = {
     "output_cost_per_token": 0.00001,
 }
 
+# Verified launch specifications, 2026-10-07. Flat metadata shows the <=100K
+# prompt tier; hosted settlement applies 5x to ALL tokens above that threshold.
+for _haiku_provider in ("anthropic", "alysis"):
+    _PROVIDER_CANONICAL_MODEL_IDS.setdefault(_haiku_provider, {})["claude-haiku-5-5"] = (
+        "claude-haiku-5-5"
+    )
+    _OFFICIAL_PROVIDER_MODEL_SOURCES.setdefault(_haiku_provider, {})["claude-haiku-5-5"] = (
+        "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+    )
+    _OFFICIAL_PROVIDER_MODEL_METADATA.setdefault(_haiku_provider, {})["claude-haiku-5-5"] = {
+        "context_window_tokens": 1_000_000,
+        "max_output_tokens": 128_000,
+        "supports_vision": _haiku_provider == "anthropic",
+        "supports_reasoning": True,
+        "input_cost_per_token": 0.0000001,
+        "cache_read_input_cost_per_token": 0.00000001,
+        "cache_creation_input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.0000005,
+    }
+
 _BUILT_IN_MODEL_METADATA: dict[str, dict[str, Any]] = {
     "deepseek-chat": {
         "context_window_tokens": 1_000_000,

@@ -489,7 +489,7 @@ def test_alysis_model_flow_shows_free_models_and_keeps_managed_endpoint(
         ("deepseek-flash", "DeepSeek V4.1 Flash"),
         ("glm-5.3-flash", "GLM 5.3 Flash"),
         ("gpt-6-luna", "GPT-6 Luna"),
-        ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+        ("claude-haiku-5-5", "Claude Haiku 5.5"),
     ]
     flow.choose_current()
     assert flow.stage == "model_thinking"

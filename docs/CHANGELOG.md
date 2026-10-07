@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add Claude Haiku 5.5 to the Alysis Free model picker and direct Anthropic
+  profiles, with native Messages routing, a 1M context window, prompt caching,
+  and adaptive thinking. Choose low, medium, high, xhigh, max, or off; Auto uses
+  the model's medium default. Pricing increases 5x above 100K total prompt tokens.
+- Replace the retired Sonnet Free campaign entry with Haiku 5.5. Existing
+  account credits and saved model preferences are retained.
+
 ## 0.14.8 — production VSIX verification
 
 - Run final candidate evidence validation inside the frozen Python environment,

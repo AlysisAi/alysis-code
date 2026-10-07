@@ -1017,7 +1017,7 @@ def test_alysis_model_picker_only_offers_named_v41_flash_despite_stale_gateway(
         ("deepseek-flash", "DeepSeek V4.1 Flash"),
         ("glm-5.3-flash", "GLM 5.3 Flash"),
         ("gpt-6-luna", "GPT-6 Luna"),
-        ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+        ("claude-haiku-5-5", "Claude Haiku 5.5"),
     ]
     assert calls == []
     assert config_menu_mod._preset_model_option_rows(preset) == rows
@@ -1045,7 +1045,7 @@ def test_default_model_rows_survive_alysis_discovery_failure(
     model_values = [
         value for value, _label, _description in config_menu_mod._default_model_rows(state)
     ]
-    assert model_values == ["deepseek-flash", "glm-5.3-flash", "gpt-6-luna", "claude-sonnet-5-5"]
+    assert model_values == ["deepseek-flash", "glm-5.3-flash", "gpt-6-luna", "claude-haiku-5-5"]
 
 
 def test_default_model_rows_fallback_to_base_url_provider() -> None:

@@ -159,6 +159,7 @@ _ANTHROPIC_CACHE_CONTROL_CAPABILITY = CacheCapabilitySpec(
         ("claude-opus-4-6", _cache_minimum(4096)),
         ("claude-opus-4-5", _cache_minimum(4096)),
         ("claude-haiku-4-5", _cache_minimum(4096)),
+        ("claude-haiku-5-5", _cache_minimum(512)),
     ),
     source="preset",
 )
@@ -486,6 +487,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="ANTHROPIC_API_KEY",
         model_choices=(
             ReviewedModel("claude-sonnet-5", "claude-normal"),
+            ReviewedModel("claude-haiku-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5", "claude-normal"),
             ReviewedModel("claude-fable-5-1", "claude-normal"),
@@ -499,6 +501,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             # aliased: 5.1 rejects forced tool_choice, so a silent swap could
             # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
+            "claude-haiku-5-5": "fast - 1M context, adaptive thinking; higher rates above 100K input",
             "claude-opus-5-5": "advanced - latest Opus, thinking always on, 1M context",
             "claude-opus-5": "fallback - previous Opus, 1M context",
             "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
@@ -540,6 +543,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="ANTHROPIC_API_KEY",
         model_choices=(
             ReviewedModel("claude-sonnet-5", "claude-normal"),
+            ReviewedModel("claude-haiku-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5", "claude-normal"),
             ReviewedModel("claude-fable-5-1", "claude-normal"),
@@ -553,6 +557,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             # aliased: 5.1 rejects forced tool_choice, so a silent swap could
             # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
+            "claude-haiku-5-5": "fast - 1M context, adaptive thinking; higher rates above 100K input",
             "claude-opus-5-5": "advanced - latest Opus, thinking always on, 1M context",
             "claude-opus-5": "fallback - previous Opus, 1M context",
             "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
@@ -597,6 +602,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
         api_key_env="ANTHROPIC_API_KEY",
         model_choices=(
             ReviewedModel("claude-sonnet-5", "claude-normal"),
+            ReviewedModel("claude-haiku-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5-5", "claude-normal"),
             ReviewedModel("claude-opus-5", "claude-normal"),
             ReviewedModel("claude-fable-5-1", "claude-normal"),
@@ -610,6 +616,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             # aliased: 5.1 rejects forced tool_choice, so a silent swap could
             # change request behaviour, not just billing.
             "claude-sonnet-5": "default - 1M context, best speed/intelligence mix",
+            "claude-haiku-5-5": "fast - 1M context, adaptive thinking; higher rates above 100K input",
             "claude-opus-5-5": "advanced - latest Opus, thinking always on, 1M context",
             "claude-opus-5": "fallback - previous Opus, 1M context",
             "claude-fable-5-1": "reasoning - Mythos-class, adaptive thinking always on",
@@ -1768,10 +1775,10 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             ReviewedModel("deepseek-flash", "deepseek-expanded"),
             ReviewedModel("glm-5.3-flash", "glm-normal"),
             ReviewedModel("gpt-6-luna", "gpt-expanded"),
-            ReviewedModel("claude-sonnet-5-5", "claude-normal"),
+            ReviewedModel("claude-haiku-5-5", "claude-normal"),
         ),
         suggested_model_descriptions={
-            "claude-sonnet-5-5": "Claude Sonnet 5.5 - coding and reasoning, included with free credits",
+            "claude-haiku-5-5": "Claude Haiku 5.5 - fast coding, 1M context, Free credits; 5x rates above 100K input",
             "gpt-6-luna": "GPT-6 Luna - efficient coding and reasoning, included with free credits",
             "deepseek-flash": (
                 "DeepSeek V4.1 Flash - vision and reasoning, 1M context, included with free credits"
@@ -1781,6 +1788,9 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             ),
         },
         validation_model="deepseek-flash",
+        cache_capability=CacheCapabilitySpec(
+            model_family_overrides=(("claude-haiku-5-5", _cache_minimum(512)),), source="preset"
+        ),
         # Migrate retired Flash/beta ids to the free default. Do not silently
         # redirect models from the retired Xiaomi trial to another provider.
         model_aliases={
@@ -1789,7 +1799,7 @@ PROFILE_PRESETS: tuple[ProfilePreset, ...] = (
             "deepseek-v4.1-flash-expires-on-0910": "deepseek-flash",
         },
         setup_warning="Run `alysis login` to connect your Alysis account and use free credits.",
-        notes="DeepSeek V4.1 Flash, GLM 5.3 Flash, GPT-6 Luna, and Claude Sonnet 5.5 with free credits. Authenticate with `alysis login`.",
+        notes="DeepSeek V4.1 Flash, GLM 5.3 Flash, GPT-6 Luna, and Claude Haiku 5.5 with free credits. Authenticate with `alysis login`.",
     ),
     ProfilePreset(
         key="ollama",
@@ -1845,6 +1855,7 @@ def model_display_name(model: str) -> str:
         "glm-5.3-flash": "GLM 5.3 Flash",
         "gpt-6-luna": "GPT-6 Luna",
         "claude-sonnet-5-5": "Claude Sonnet 5.5",
+        "claude-haiku-5-5": "Claude Haiku 5.5",
         "grok-4.7": "Grok 4.7",
     }.get(model.casefold(), model)
 

@@ -57,6 +57,9 @@ def documented_temperature_omit_reason(
     if sonnet is not None and int(sonnet.group("major")) >= 5:
         return ANTHROPIC_DEPRECATED_SAMPLING_PARAMETERS
 
+    if re.search(r"(?:^|[/.:_-])claude[-_.]haiku[-_.]5[-_.]5(?:$|[-_.])", normalized_model):
+        return ANTHROPIC_DEPRECATED_SAMPLING_PARAMETERS
+
     if _GEMINI_3_RE.search(normalized_model):
         return GEMINI_3_DEFAULT_TEMPERATURE
 

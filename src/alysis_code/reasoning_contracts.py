@@ -200,6 +200,18 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
         ),
     ),
     "anthropic": (
+        # https://platform.claude.com/docs/en/build-with-claude/effort
+        (
+            "claude-haiku-5-5",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_THINKING_ADAPTIVE,
+                values=("low", "medium", "high", "xhigh", "max"),
+                default="medium",
+                off=OFF_EXPLICIT,
+                notes="adaptive by default; disabled only at high or below; forced tools skip thinking",
+            ),
+        ),
         # Source: https://platform.claude.com/docs/en/models/fable-5-1/overview
         (
             "claude-fable-5-1",
@@ -356,6 +368,17 @@ _CONTRACTS: dict[str, tuple[tuple[str, ReasoningContract], ...]] = {
     ),
     # Hosted models retain their upstream reasoning and replay contracts.
     "alysis": (
+        (
+            "claude-haiku-5-5",
+            _C(
+                mode=OPTIONAL,
+                wire=WIRE_THINKING_ADAPTIVE,
+                values=("low", "medium", "high", "xhigh", "max"),
+                default="medium",
+                off=OFF_EXPLICIT,
+                notes="native Messages; disabled only at high or below; shared Free credits",
+            ),
+        ),
         (
             "claude-sonnet-5-5",
             _C(

@@ -117,7 +117,7 @@ def test_alysis_preset_offers_flash_and_luna_models_for_free_credits() -> None:
         "deepseek-flash",
         "glm-5.3-flash",
         "gpt-6-luna",
-        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
     )
     assert set(preset.suggested_model_descriptions) == set(preset.suggested_models)
     profile = make_profile_from_preset(preset, name="alysis")
